@@ -8437,6 +8437,7 @@ button{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;lett
 <button class="btn-go" id="readBtn" onclick="read()" disabled>Read</button>
 <button class="btn-ghost" onclick="document.getElementById('text').value='';">Clear</button>
 <button class="btn-ghost btn-sample" onclick="loadSample()">Load sample</button>
+<button class="btn-ghost" id="exportBtn" onclick="exportReading()" disabled>Export ⤓</button>
 </div>
 <div class="stats" id="stats"></div>
 <div class="tabs">
@@ -8450,7 +8451,7 @@ button{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;lett
 </div>
 <script>
 // ================= EO Reader UI =================
-let engine=null, model=null, STATE=null, RUNNING=false;
+let engine=null, model=null, STATE=null, RUNNING=false, lastRead=null;
 
 function boot(){
   try{
@@ -8517,6 +8518,37 @@ function read(){
   const text=document.getElementById('text').value.trim(); if(!text||!engine||RUNNING) return;
   if(PLAY){clearInterval(PLAY);PLAY=null;} scrubK=null; selNode=null;
   runPipeline(text);
+}
+
+// ---- export ----
+// Download the complete reading as a single JSON file: the source text + every band the
+// pipeline produced (entities, edges, the causal log, the meant-graph, and stats). The given
+// band is never mutated, so this is a faithful, re-loadable record of what was read.
+function exportReading(){
+  if(!STATE||!model){ return; }
+  const doc=(lastRead&&lastRead.docName)||(document.getElementById('docName')?document.getElementById('docName').value:'')||'';
+  const payload={
+    format:'eo-reader/reading',
+    version:1,
+    exportedAt:new Date().toISOString(),
+    docName:doc,
+    source:(lastRead&&lastRead.text)||'',
+    stats:STATE.stats,
+    entities:STATE.entities,
+    edges:STATE.edges,
+    pronOccs:STATE.pronOccs,
+    log:STATE.log,        // band 1–2: the given/structure (causal order)
+    meant:STATE.meant,    // band 3: DEF/EVA/REC — interpretation, revisable
+    events:STATE.events
+  };
+  const json=JSON.stringify(payload,null,2);
+  const blob=new Blob([json],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const slug=(doc||'reading').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60)||'reading';
+  const a=document.createElement('a');
+  a.href=url; a.download=slug+'-'+new Date().toISOString().slice(0,10)+'.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function renderStats(){
   const s=STATE.stats;
@@ -9182,6 +9214,7 @@ async function readCursorLoop(text, docName){
 async function runPipeline(text){
   RUNNING=true; GATE=null;
   const docName=(document.getElementById('docName')?document.getElementById('docName').value:'').trim();
+  lastRead={ docName, text };
   const btn=document.getElementById('readBtn'); if(btn){btn.disabled=true; btn.textContent='Running…';}
   try{
     const MAX_PASSES=2;   // initial read + at most one learn-and-reread (so learning can't loop forever)
@@ -9224,6 +9257,7 @@ async function runPipeline(text){
   }catch(e){ progress('pipeline error: '+e.message); console.error(e); }
   RUNNING=false; if(btn){btn.disabled=false; btn.textContent='Read';}
   STATE=model.summary(); renderStats(); layoutGraph(); setTab('log');
+  const xb=document.getElementById('exportBtn'); if(xb) xb.disabled=false;
 }
 
 boot();
