@@ -7516,23 +7516,258 @@ function buildSVO(nlp, its) {
 // No LLM, no embeddings.
 function buildEOReader(nlp, its, extractSVO) {
 
-  const ARTICLES = new Set(['the','a','an','this','that','these','those']);
-  const PRON = {
-    he:'M', him:'M', his:'M',
-    she:'F', her:'F', hers:'F',
-    they:'P', them:'P', their:'P',
-    it:'T', its:'T'
-    // 1st/2nd person (I/you/we) deliberately left unresolved — deictic, not anaphoric
+  // ===================== CANONICAL RULEBOOK =====================
+  // The single, auditable place where every STANDING rule lives. These rules used to be scattered across
+  // the source: hardcoded constants (PRON / titles / PERSON_NOUNS / salience weights / window size),
+  // structural branches buried inside candidateAnalysis / resolveNominal / slot, the rule-writing
+  // conditions in the typing pass, and the stage ordering in the pipeline. There was no one place to see
+  // them all, reason about them, or change one without hunting through the code. Now there is.
+  //
+  // The rulebook is DECLARATIVE (what fires when, not how to implement it) and INTERPRETED by the engine.
+  // It is NOT in the log: the log records EVENTS (that a rule fired, tagged byRule); the rule DEFINITIONS
+  // are standing instructions — a different kind of thing — and live here. A log-level DEF may still
+  // author a *more specific* rule (the learning loop) that takes precedence, but this is the baseline.
+  //
+  // Two classes, kept strictly separate:
+  //   class:'structural' (domains 1–5) — mechanical constraints, no LLM, the engine's INVARIANT behavior.
+  //                       NOT overridable by a log-level (LLM/human) DEF. This is the asymmetry the log
+  //                       analysis demanded made structural, not commentary: wrong PERSON corrupts the
+  //                       candidate pool and spawns a misfiring rule; wrong THING is merely an open
+  //                       question (see TYPE.ASYMMETRY).
+  //   class:'policy'     (domains 6–9) — meta-rules governing how the judgment layer operates. Overridable,
+  //                       but not by default.
+  //
+  // Each rule: { domain, class, enabled, fires, action, basis, trust, cost, version } plus the machine
+  // fields the engine actually consumes (set / map / regex / numeric params / order). TRUST and COST are
+  // independent axes (a zero-cost rule may be low-trust; a high-cost rule may be high-trust).
+  const EO_RULEBOOK = {
+    version: 1,
+    rules: {
+      // ---------- Domain 1: SKIP — what NOT to individuate (structural) ----------
+      'SKIP.DEICTIC': { domain:'skip', class:'structural', enabled:true,
+        fires:'single PRON token whose norm ∉ anaphoric set', action:'do not open a frame; do not mint an entity',
+        basis:'deictic pronouns have no anaphoric referent in the text; asserting one would be F.NUL×DEF',
+        trust:'high', cost:'zero', version:1,
+        set:['i','me','my','mine','myself','you','your','yours','yourself','we','us','our','ours','ourselves'] },
+      'SKIP.INDEFINITE': { domain:'skip', class:'structural', enabled:true,
+        fires:'single PRON token in the indefinite/negative class', action:'do not open a frame; do not mint an entity',
+        basis:'indefinite pronouns denote no specific referent; binding one would be F.NUL×DEF',
+        trust:'high', cost:'zero', version:1,
+        set:['nothing','something','anything','everything','nobody','somebody','anybody','everybody',
+             'none','one','someone','anyone','everyone','no one','noone'] },
+      'SKIP.DEMONSTRATIVE': { domain:'skip', class:'structural', enabled:true,
+        fires:'surface norm ∈ {this,that,these,those} and is the entire span', action:'do not mint an entity; record as demonstrative deixis',
+        basis:'bare demonstratives are deictic; stripped of their NP they individuate nothing',
+        trust:'high', cost:'zero', version:1, set:['this','that','these','those'] },
+      'SKIP.ADJECTIVAL': { domain:'skip', class:'structural', enabled:true,
+        fires:'surface consists entirely of ADJ tokens with no NOUN/PROPN', action:'do not mint an entity; record as predicate only',
+        basis:'adjective predicates are predications, not referents; minting them is F.INS.SPLIT',
+        trust:'high', cost:'zero', version:1 },
+      'SKIP.EMPTY_KEY': { domain:'skip', class:'structural', enabled:true,
+        fires:'surface after stripArticle + norm is empty', action:'do not mint an entity; discard',
+        basis:'no key means no stable referent', trust:'high', cost:'zero', version:1 },
+
+      // ---------- Domain 2: FRAME — what opens an active reference frame (structural) ----------
+      'FRAME.ANAPHORIC_PRONOUN': { domain:'frame', class:'structural', enabled:true,
+        fires:'surface norm ∈ anaphoric set', action:'open SIG frame with morphosyntactic constraints',
+        basis:'anaphoric pronouns are open reference frames by definition; their constraints are forced',
+        trust:'high', cost:'zero', version:1,
+        map:{ he:'M',him:'M',his:'M', she:'F',her:'F',hers:'F', they:'P',them:'P',their:'P',theirs:'P', it:'T',its:'T' } },
+      'FRAME.CONSTRAINTS.GENDER': { domain:'frame', class:'structural', enabled:true,
+        fires:'pronoun gender class (M/F/null)', action:'attach gender constraint to frame',
+        basis:'morphosyntactic gender agreement; forced', trust:'high', cost:'zero', version:1 },
+      'FRAME.CONSTRAINTS.ANIMACY': { domain:'frame', class:'structural', enabled:true,
+        fires:'pronoun animacy class (it/its → inanimate, else animate)', action:'attach animacy constraint to frame',
+        basis:'morphosyntactic animacy agreement; forced', trust:'high', cost:'zero', version:1 },
+      'FRAME.CONSTRAINTS.NUMBER': { domain:'frame', class:'structural', enabled:true,
+        fires:'pronoun number class (they/them/their/theirs → plural, else singular)', action:'attach number constraint to frame',
+        basis:'morphosyntactic number agreement; forced', trust:'high', cost:'zero', version:1 },
+      'FRAME.REFLEXIVE': { domain:'frame', class:'structural', enabled:true,
+        fires:'surface ∈ {himself,herself,themselves,itself,oneself}', action:'open SIG frame typed reflexive; candidate pool restricted to same-clause subject',
+        basis:'reflexive pronouns are locally bound; their antecedent is structurally forced to be the clause subject',
+        trust:'high', cost:'zero', version:1, map:{ himself:'M',herself:'F',themselves:'P',itself:'T',oneself:'P' } },
+
+      // ---------- Domain 3: TYPE — mechanical type-DEFs before the LLM (structural) ----------
+      'TYPE.TITLE_MASC': { domain:'type', class:'structural', enabled:true,
+        fires:'surface matches male honorific', action:'emit type-DEF PERSON gender M; agent morphosyntax',
+        basis:'male honorifics are unambiguous indicators of personhood and gender',
+        trust:'high', cost:'zero', version:1, regex:'\\b(mr|sir|lord|master|king|duke|earl)\\b' },
+      'TYPE.TITLE_FEM': { domain:'type', class:'structural', enabled:true,
+        fires:'surface matches female honorific', action:'emit type-DEF PERSON gender F; agent morphosyntax',
+        basis:'female honorifics are unambiguous indicators of personhood and gender (see TYPE.HOMOGRAPH_GUARD for Miss)',
+        trust:'high', cost:'zero', version:1, regex:'\\b(mrs|miss|ms|lady|madam|queen|duchess)\\b' },
+      'TYPE.HOMOGRAPH_GUARD': { domain:'type', class:'structural', enabled:true,
+        fires:'surface is the bare single token "miss" (title/verb homograph)', action:'suppress TYPE.TITLE_FEM unless multi-token or PROPN-adjacent',
+        basis:'"Miss" as title vs "miss" as verb is a genuine fork; the bare lowercase token is F.DEF quality, not morphosyntax',
+        trust:'low', cost:'zero', version:1 },
+      'TYPE.PERSON_NOUN': { domain:'type', class:'structural', enabled:true,
+        fires:'head lemma ∈ person-noun lexicon', action:'emit type-DEF PERSON gender null; agent rule',
+        basis:'kinship and social-role nouns lexically denote persons; clear indicator, lexicon may be incomplete',
+        trust:'medium', cost:'zero', version:1,
+        set:['father','mother','parent','parents','son','sons','daughter','daughters',
+             'sister','sisters','brother','brothers','wife','husband','lady','ladies','gentleman','gentlemen',
+             'man','men','woman','women','girl','girls','boy','boys','child','children','friend','friends',
+             'neighbour','neighbours','neighbor','neighbors','master','mistress','aunt','uncle','cousin','cousins',
+             'widow','widower','servant','servants','people','family','families','sir','madam','mother-in-law'] },
+      'TYPE.DEFAULT_THING': { domain:'type', class:'structural', enabled:true,
+        fires:'surface matches no TYPE rule and is not SKIP', action:'leave entity untyped (type=null); do NOT emit a THING type-DEF',
+        basis:'THING is the absence of a PERSON typing, not a positive predication; asserting THING on no knowledge is F.NUL×DEF',
+        trust:'n/a', cost:'zero', version:1 },
+      'TYPE.ASYMMETRY': { domain:'type', class:'structural', enabled:true,
+        fires:'LLM uncertain whether a surface is PERSON or THING', action:'default to untyped — never to PERSON, and not to THING unless confident',
+        basis:'wrong PERSON corrupts the coref candidate pool (F.DES) and spawns a persistent misfire rule (F.SYN); wrong THING is merely an open question — cost of false PERSON ≫ cost of false THING',
+        trust:'high', cost:'zero', version:1 },
+      'TYPE.NO_ABSTRACT_AS_PERSON': { domain:'type', class:'structural', enabled:true,
+        fires:'surface head is an abstract noun', action:'suppress PERSON typing; leave untyped',
+        basis:'abstract nouns are not persons; typing them PERSON/M is F.NUL×DEF + F.SYN (a known small-model bias)',
+        trust:'high', cost:'zero', version:1,
+        set:['attention','wish','value','consolation','affection','vanity','preference','attachment','disposition',
+             'character','manner','sentiment','felicity','chance','advantage','disadvantage','pride','prejudice',
+             'happiness','misery','hope','fear','love','hatred','sense','feeling','feelings','opinion','idea',
+             'thought','thoughts','spirits','temper','conduct','behaviour','behavior','virtue','folly','fortune'] },
+      'TYPE.NO_THING_RULE': { domain:'type', class:'structural', enabled:true,
+        fires:'LLM types entity as THING (or entity left untyped)', action:'do NOT write a type rule for THING; THING is the default',
+        basis:'THING rules fire on the default and consume rule-matching overhead with no discriminative value',
+        trust:'high', cost:'zero', version:1 },
+
+      // ---------- Domain 4: MERGE — when to SYN-collapse surfaces (structural) ----------
+      'MERGE.BARE_SURNAME': { domain:'merge', class:'structural', enabled:true,
+        fires:'incoming single PROPN token equals the trailing token of an existing PERSON key (token len > minLen)',
+        action:'SYN merge incoming → existing; update canonical if longer',
+        basis:'bare surname ≡ titled/full name is structurally near-forced in English prose; single-token criterion prevents merging two full names',
+        trust:'high', cost:'zero', version:1, minLen:2 },
+      'MERGE.GENDER_CONFLICT_BLOCK': { domain:'merge', class:'structural', enabled:true,
+        fires:'a bare-surname merge candidate has known gender that differs from the existing entity\'s known gender',
+        action:'block merge; keep distinct entities',
+        basis:'Mr. and Mrs. Bennet share a surname but are different people; gender conflict is a clear indicator of distinct individuation',
+        trust:'high', cost:'zero', version:1 },
+      'MERGE.FULL_NAME_BLOCK': { domain:'merge', class:'structural', enabled:true,
+        fires:'both incoming surface and existing entity are multi-token (full names)', action:'block merge regardless of shared surname token',
+        basis:'two full names sharing a surname denote different family members; forcing merge would be F.INS.MERGE',
+        trust:'high', cost:'zero', version:1 },
+
+      // ---------- Domain 5: CANDIDATE — scope, filtering, ranking for open frames (structural) ----------
+      'CANDIDATE.SCOPE_WINDOW': { domain:'candidate', class:'structural', enabled:true,
+        fires:'any open frame undergoing candidate analysis', action:'include entities mentioned in the last N cursors as the active working-memory set',
+        basis:'ACT-R working memory; recency bounds scope', trust:'medium', cost:'zero', version:1, N:6 },
+      'CANDIDATE.SCOPE_WIDEN': { domain:'candidate', class:'structural', enabled:true,
+        fires:'working-memory window yields zero candidates', action:'widen scope to all entities introduced before the frame cursor',
+        basis:'some references reach back beyond the working window; better too wide than no candidates',
+        trust:'medium', cost:'zero', version:1 },
+      'CANDIDATE.FILTER_ANIMACY': { domain:'candidate', class:'structural', enabled:true,
+        fires:'frame animacy known and entity type known and mismatched', action:'remove the entity (never exclude on absence of evidence)',
+        basis:'animacy agreement is forced where type is known; excluding on unknown type would be F.NUL×CON',
+        trust:'high', cost:'zero', version:1 },
+      'CANDIDATE.FILTER_GENDER': { domain:'candidate', class:'structural', enabled:true,
+        fires:'frame gender known and entity gender known and mismatched', action:'remove the entity (never exclude on absence of evidence)',
+        basis:'gender agreement is forced where gender is known; excluding on unknown gender would be F.NUL×CON',
+        trust:'high', cost:'zero', version:1 },
+      'CANDIDATE.RANK_SALIENCE': { domain:'candidate', class:'structural', enabled:true,
+        fires:'surviving candidates after filtering', action:'rank by recency*w.recency + log(1+freq) + subjecthood*w.subject + centrality*w.central',
+        basis:'ACT-R activation (recency, frequency, subjecthood) plus interpretive centrality; a deterministic function of the log, not a judgment',
+        trust:'high', cost:'zero', version:1, weights:{ recency:3, freq:1, subject:0.6, central:1.5 } },
+      'CANDIDATE.VERDICT': { domain:'candidate', class:'structural', enabled:true,
+        fires:'after filtering and ranking', action:'0 survivors → none; 1 → unique; 2+ → ambiguous',
+        basis:'cardinality of the filtered pool is a deterministic structural fact', trust:'high', cost:'zero', version:1 },
+
+      // ---------- Domain 6: BIND — commit mechanically vs escalate (policy) ----------
+      'BIND.UNIQUE_MECHANICAL': { domain:'bind', class:'policy', enabled:true,
+        fires:'frame verdict = unique', action:'emit coref DEF frame → sole survivor; agent morphosyntax; revisable',
+        basis:'one survivor after hard constraints = morphosyntactically forced; a high-trust mechanical DEF, not a guess',
+        trust:'high', cost:'zero', version:1 },
+      'BIND.NONE_FLAG': { domain:'bind', class:'policy', enabled:true,
+        fires:'frame verdict = none', action:'leave frame open; do NOT bind to anything (probable deictic / cataphoric / out-of-window)',
+        basis:'asserting a binding with no candidates would be F.NUL×DEF', trust:'high', cost:'zero', version:1 },
+      'BIND.AMBIGUOUS_LLM': { domain:'bind', class:'policy', enabled:true,
+        fires:'frame verdict = ambiguous (after context is applied)', action:'escalate to LLM with hypothesis, ranked candidates, clause text',
+        basis:'genuine fork requiring judgment; structure has been exhausted', trust:'low-medium', cost:'medium-high', version:1 },
+      'BIND.CONTEXT_REQUIRED': { domain:'bind', class:'policy', enabled:true,
+        fires:'ambiguous frame AND a single central survivor under the running hypothesis', action:'commit to that survivor as a high-trust CONTEXT bind, no LLM',
+        basis:'the running hypothesis narrows the effective ambiguity; it is already computed, free to include',
+        trust:'medium', cost:'zero', version:1 },
+
+      // ---------- Domain 7: RULE-WRITING — when/how to author generalizations (policy) ----------
+      'RULE.WRITE_ONLY_PERSON': { domain:'rule', class:'policy', enabled:true,
+        fires:'LLM types an entity PERSON', action:'author a type-rule keyed on the surface → PERSON (+gender); agent webllm',
+        basis:'converts a paid judgment into a free future reflex; worth generalizing', trust:'medium', cost:'zero', version:1 },
+      'RULE.WRITE_NEVER_THING': { domain:'rule', class:'policy', enabled:true,
+        fires:'LLM types an entity THING (or leaves it untyped)', action:'do NOT write a rule',
+        basis:'THING is the default; a THING rule fires on the default and produces nothing new — noise + F.SYN.OVER risk',
+        trust:'high', cost:'zero', version:1 },
+      'RULE.WRITE_ONLY_ON_CORRECTION': { domain:'rule', class:'policy', enabled:true,
+        fires:'LLM typing agrees with what classify() already returns', action:'do NOT write a rule',
+        basis:'rules for cases the system already handles add no value and risk F.SYN.OVER', trust:'high', cost:'zero', version:1 },
+      'RULE.REVOKE_ON_CONFLICT': { domain:'rule', class:'policy', enabled:true,
+        fires:'a rule-derived DEF conflicts with a later higher-trust DEF', action:'flag the rule as misfiring; add to EVA evidence; propose revocation on accumulation',
+        basis:'F.DES×SYN or F.SYN×CON×DEF detected; the rule is misfiring', trust:'high', cost:'zero', version:1 },
+      'RULE.NO_ABSTRACT_NOUN_RULE': { domain:'rule', class:'policy', enabled:true,
+        fires:'a proposed rule types an abstract noun as PERSON', action:'reject the rule; do not write it',
+        basis:'abstract nouns typed PERSON are F.NUL×DEF; generalizing them is F.NUL×DEF×SYN — the worst compound failure',
+        trust:'high', cost:'zero', version:1 },
+
+      // ---------- Domain 8: GATE — when to trigger EVA (policy) ----------
+      'GATE.SIGNAL_INPUTS': { domain:'gate', class:'policy', enabled:true,
+        fires:'after each pipeline pass', action:'compute the mechanical failure report (open frames, type/animacy conflicts, fragments, untyped proper nouns, hypothesis stability)',
+        basis:'these are the observable symptoms of the failure codes; gathering them is structural, judging significance is the gate',
+        trust:'high', cost:'zero', version:1 },
+      'GATE.THRESHOLD_IS_JUDGMENT': { domain:'gate', class:'policy', enabled:true,
+        fires:'gate is deciding whether to author rules', action:'send the failure report to an LLM evaluator; do NOT use a numeric threshold',
+        basis:'the threshold for "failing enough to learn" is itself a judgment; hardcoding it would be F.SYN', trust:'medium', cost:'low', version:1 },
+      'GATE.AUTHOR_ONLY_ON_LEARN': { domain:'gate', class:'policy', enabled:true,
+        fires:'gate verdict = keep', action:'do not author rules; continue reading',
+        basis:'premature rule-writing is F.SYN.OVER; the gate exists to prevent it', trust:'high', cost:'zero', version:1 },
+
+      // ---------- Domain 9: PIPELINE — stage ordering (policy) ----------
+      'PIPELINE.MECHANICAL_FIRST': { domain:'pipeline', class:'policy', enabled:true, order:1,
+        fires:'Read triggered', action:'run the full mechanical pass before any LLM call',
+        basis:'structure must be complete before any judgment; judgments read structural inputs', trust:'high', cost:'low', version:1 },
+      'PIPELINE.HYPOTHESIS_FOR_CONTEXT': { domain:'pipeline', class:'policy', enabled:true, order:2,
+        fires:'after mechanical pass', action:'run a quick document hypothesis for entity-typing context',
+        basis:'entity typing benefits from knowing what the document is about; cheap to run early', trust:'medium', cost:'low', version:1 },
+      'PIPELINE.TYPE_BEFORE_COREF': { domain:'pipeline', class:'policy', enabled:true, order:3,
+        fires:'after document hypothesis', action:'run entity typing before any reference binding',
+        basis:'typing changes the candidate pool; coref over untyped entities yields F.DES (Darcy untyped = invisible to masculine frames)',
+        trust:'high', cost:'medium', version:1 },
+      'PIPELINE.UNIQUE_BEFORE_LLM': { domain:'pipeline', class:'policy', enabled:true, order:4,
+        fires:'after entity typing', action:'bind all unique frames mechanically before calling the LLM for ambiguous ones',
+        basis:'typing may have converted ambiguous frames to unique; binding unique first reduces LLM calls', trust:'high', cost:'zero', version:1 },
+      'PIPELINE.COREF_BEFORE_CLAUSE_TYPING': { domain:'pipeline', class:'policy', enabled:true, order:5,
+        fires:'after unique binds', action:'resolve remaining ambiguous frames before clause-level typing',
+        basis:'coref is on the critical path for hypothesis coherence; clause typing is characterization', trust:'high', cost:'medium', version:1 },
+      'PIPELINE.CLAUSE_TYPING_LAST': { domain:'pipeline', class:'policy', enabled:true, order:6,
+        fires:'after coref', action:'type clauses (ACT/SITE/STANCE characterization)',
+        basis:'clause typing is not on any downstream critical path; it characterizes what happened, not who did it', trust:'high', cost:'medium', version:1 },
+      'PIPELINE.CURSOR_LOOP': { domain:'pipeline', class:'policy', enabled:true, order:7,
+        fires:'throughout the pipeline', action:'at each cursor process new introductions, open frames, update the hypothesis, carry it forward',
+        basis:'hypotheses exist as cursors, not as a terminal pass; earlier hypotheses inform later typing and coref', trust:'high', cost:'high', version:1 }
+    }
   };
-  const MALE_TITLE = /\b(mr|sir|lord|master|king|duke|earl)\b/i;
-  const FEM_TITLE  = /\b(mrs|miss|ms|lady|madam|queen|duchess)\b/i;
-  // common nouns that denote persons (kinship + social roles) — mechanical PERSON typing
-  const PERSON_NOUNS = new Set(['father','mother','parent','parents','son','sons','daughter','daughters',
-    'sister','sisters','brother','brothers','wife','husband','lady','ladies','gentleman','gentlemen',
-    'man','men','woman','women','girl','girls','boy','boys','child','children','friend','friends',
-    'neighbour','neighbours','neighbor','neighbors','master','mistress','aunt','uncle','cousin','cousins',
-    'widow','widower','servant','servants','people','family','families','sir','madam','mother-in-law']);
-  const DEMON = new Set(['this','that','these','those']);
+  // ---- Rulebook accessors. The engine reads the book through these; nothing else touches EO_RULEBOOK. ----
+  const RB = {
+    rule: id => EO_RULEBOOK.rules[id] || null,
+    enabled: id => { const r = EO_RULEBOOK.rules[id]; return r ? r.enabled !== false : true; },
+    set: id => { const r = EO_RULEBOOK.rules[id]; return new Set((r && r.set) || []); },
+    map: id => Object.assign({}, (EO_RULEBOOK.rules[id] || {}).map || {}),
+    regex: id => { const r = EO_RULEBOOK.rules[id]; return new RegExp((r && r.regex) || '(?!)', 'i'); },
+    num: (id, key, dflt) => { const r = EO_RULEBOOK.rules[id]; return (r && r[key] != null) ? r[key] : dflt; },
+    weights: id => Object.assign({}, (EO_RULEBOOK.rules[id] || {}).weights || {}),
+    structural: id => { const r = EO_RULEBOOK.rules[id]; return !!r && r.class === 'structural'; },
+    pipeline: () => Object.entries(EO_RULEBOOK.rules).filter(([, r]) => r.domain === 'pipeline')
+                      .sort((a, b) => (a[1].order || 0) - (b[1].order || 0)).map(([id, r]) => ({ id, ...r }))
+  };
+  try { if (typeof window !== 'undefined') window.EO_RULEBOOK = EO_RULEBOOK; } catch (e) {}
+
+  const ARTICLES = new Set(['the','a','an','this','that','these','those']);
+  // The former hardcoded constants are now DERIVED from the canonical rulebook — single source of truth.
+  const PRON       = RB.map('FRAME.ANAPHORIC_PRONOUN'); // {he:'M',…} — anaphoric pronoun → gender/number class
+  const REFLEX     = RB.map('FRAME.REFLEXIVE');         // {himself:'M',…} — reflexive → locally bound frame
+  const MALE_TITLE = RB.regex('TYPE.TITLE_MASC');
+  const FEM_TITLE  = RB.regex('TYPE.TITLE_FEM');
+  const PERSON_NOUNS = RB.set('TYPE.PERSON_NOUN');      // kinship + social roles → mechanical PERSON typing
+  const ABSTRACT_NOUNS = RB.set('TYPE.NO_ABSTRACT_AS_PERSON');
+  const DEMON  = RB.set('SKIP.DEMONSTRATIVE');
+  const DEICTIC = RB.set('SKIP.DEICTIC');
+  const INDEF  = RB.set('SKIP.INDEFINITE');
 
   const norm = s => s.toLowerCase().replace(/[^a-z0-9 .]/g,'').replace(/\s+/g,' ').trim();
   const stripArticle = s => { const p=s.split(' '); return ARTICLES.has(p[0]?.toLowerCase())?p.slice(1).join(' '):s; };
@@ -7551,8 +7786,11 @@ function buildEOReader(nlp, its, extractSVO) {
     // (no recency state — coreference is not done mechanically)
 
     // Mechanical constraints a pronoun-frame carries (NOT a referent — just the shape of the slot).
+    // The mechanical shape of a pronoun/reflexive slot — gender/number/animacy, all morphosyntactically
+    // forced (FRAME.CONSTRAINTS.*). Not a referent, just the constraints the open frame carries.
     function frameConstraints(surface){
-      const g = PRON[norm(surface)] || null;
+      const n = norm(surface);
+      const g = PRON[n] || REFLEX[n] || null;
       return {
         gender: g==='M'?'masculine':g==='F'?'feminine':null,
         number: g==='P'?'plural':'singular',
@@ -7582,7 +7820,7 @@ function buildEOReader(nlp, its, extractSVO) {
     // defaults are visible, revocable log events — not hidden constants. The LLM authors more (DEF→rule).
     function ruleEmit(ruleType, when, then, opts){
       opts=opts||{};
-      return mEmit('DEF', { kind:'rule', ruleType, when, then, scope:opts.scope||null, note:opts.note||'', _agent:opts.agent||'seed' });
+      return mEmit('DEF', { kind:'rule', ruleType, when, then, scope:opts.scope||null, note:opts.note||'', ruleId:opts.ruleId||null, _agent:opts.agent||'seed' });
     }
     function activeRules(ruleType){
       const dead = new Set(meant.filter(d=>d.content.supersedes).map(d=>d.content.supersedes));
@@ -7593,11 +7831,13 @@ function buildEOReader(nlp, its, extractSVO) {
     function setRule(ruleType, when, then, opts){ return ruleEmit(ruleType, when, then, opts); }
     function revokeRule(defId, agent){ return mEmit('REC',{ kind:'rule-revoke', revokes:defId, _agent:agent||'human' }); }
     function clearSeeds(){ activeRules().filter(r=>r.agent==='seed').forEach(r=>mEmit('REC',{kind:'rule-revoke',revokes:r.id,_agent:'human:clear-seeds'})); }
+    // Seed type-rules are the log-visible reflection of the canonical structural TYPE.* rules. Each is
+    // gated on its rulebook entry being enabled — disable TYPE.TITLE_MASC in the book and the seed is gone.
     function seedDefaults(){
       if (meant.some(d=>d.content.kind==='rule' && d.agent==='seed')) return; // once
-      ruleEmit('type', {titleMasc:true}, {type:'PERSON',gender:'M'}, {note:'male honorifics → person (Mr/Sir/Lord/Master…)'});
-      ruleEmit('type', {titleFem:true},  {type:'PERSON',gender:'F'}, {note:'female honorifics → person (Mrs/Miss/Lady/Madam…)'});
-      ruleEmit('type', {headLemmaIn:[...PERSON_NOUNS]}, {type:'PERSON'}, {note:'kinship/social common nouns → person'});
+      if (RB.enabled('TYPE.TITLE_MASC')) ruleEmit('type', {titleMasc:true}, {type:'PERSON',gender:'M'}, {note:'male honorifics → person (Mr/Sir/Lord/Master…)', ruleId:'TYPE.TITLE_MASC'});
+      if (RB.enabled('TYPE.TITLE_FEM'))  ruleEmit('type', {titleFem:true},  {type:'PERSON',gender:'F'}, {note:'female honorifics → person (Mrs/Miss/Lady/Madam…)', ruleId:'TYPE.TITLE_FEM'});
+      if (RB.enabled('TYPE.PERSON_NOUN')) ruleEmit('type', {headLemmaIn:[...PERSON_NOUNS]}, {type:'PERSON'}, {note:'kinship/social common nouns → person', ruleId:'TYPE.PERSON_NOUN'});
     }
 
     function headLemmaOf(surface){
@@ -7609,17 +7849,28 @@ function buildEOReader(nlp, its, extractSVO) {
     // NULL (untyped) — no rule fired means no clear indicator, so the type is a HARD fork left for the
     // LLM. This is what makes the mechanical pass "easy fork only": it commits a type ONLY when a rule
     // (title / person-noun / learned surface) actually matches.
+    // TYPE.HOMOGRAPH_GUARD: the bare single token "miss" is the title/verb fork. Only let TYPE.TITLE_FEM
+    // fire on it when the surface is multi-token ("Miss Bennet") or the token is capitalized as a name.
+    function femTitleFires(surface){
+      if(!FEM_TITLE.test(surface)) return false;
+      if(RB.enabled('TYPE.HOMOGRAPH_GUARD') && /^miss$/i.test(surface.trim()) && !/^Miss\b/.test(surface.trim())) return false;
+      return true;
+    }
+    // An entity whose head is an abstract noun must never be typed PERSON (TYPE.NO_ABSTRACT_AS_PERSON).
+    function isAbstractHead(surface){ const h=headLemmaOf(surface); return !!h && RB.enabled('TYPE.NO_ABSTRACT_AS_PERSON') && ABSTRACT_NOUNS.has(h); }
     function classify(surface){
       let type=null, gender=null;
       const head=headLemmaOf(surface);
       for(const r of activeRules('type')){
         const w=r.content.when||{}, th=r.content.then||{}; let hit=false;
-        if(w.titleMasc && MALE_TITLE.test(surface)) hit=true;
-        else if(w.titleFem && FEM_TITLE.test(surface)) hit=true;
+        if(w.titleMasc && RB.enabled('TYPE.TITLE_MASC') && MALE_TITLE.test(surface)) hit=true;
+        else if(w.titleFem && RB.enabled('TYPE.TITLE_FEM') && femTitleFires(surface)) hit=true;
         else if(w.headLemmaIn && head && w.headLemmaIn.includes(head)) hit=true;
         else if(w.surfaceRegex){ try{ if(new RegExp(w.surfaceRegex,'i').test(surface)) hit=true; }catch(e){} }
         if(hit){ if(th.type) type=th.type; if(th.gender) gender=th.gender; }
       }
+      // TYPE.NO_ABSTRACT_AS_PERSON — a clear indicator may not lift an abstract noun to PERSON.
+      if(type==='PERSON' && isAbstractHead(surface)){ type=null; gender=null; }
       return {type, gender};
     }
     function genderOf(surface){ return classify(surface).gender; }
@@ -7662,17 +7913,21 @@ function buildEOReader(nlp, its, extractSVO) {
       //     identity (shared surname, not both full names); it does NOT consult ontological type. A KNOWN
       //     gender conflict (set by a prior Band-3 type-DEF) still blocks the merge, since that judgment has
       //     already re-entered the structural filter.
-      if (proper) {
+      if (proper && RB.enabled('MERGE.BARE_SURNAME')) {
+        const minLen = RB.num('MERGE.BARE_SURNAME','minLen',2);
         const myToks = key.split(' ').filter(Boolean);
         const myLast = myToks[myToks.length-1];
+        const myGender = genderOf(raw);                               // known gender on the incoming surface, if any
         for (const ent of entities.values()) {
           const eToks = ent.key.split(' ').filter(Boolean);
           const eLast = eToks[eToks.length-1];
-          if (eLast!==myLast || myLast.length<=2) continue;            // must share surname
-          if (myToks.length>1 && eToks.length>1) continue;            // both full names → different people
+          if (eLast!==myLast || myLast.length<=minLen) continue;       // MERGE.BARE_SURNAME: must share surname
+          if (RB.enabled('MERGE.FULL_NAME_BLOCK') && myToks.length>1 && eToks.length>1) continue; // both full names → different people
+          // MERGE.GENDER_CONFLICT_BLOCK — a known gender clash (Mr. vs Mrs. Bennet) keeps them distinct.
+          if (RB.enabled('MERGE.GENDER_CONFLICT_BLOCK') && myGender && ent.gender && myGender!==ent.gender) continue;
           ent.surfaces.add(raw); ent.mentions.push(cursor); noteRole(ent);
           if (raw.length>ent.canonical.length) ent.canonical=raw;
-          gEmit(2,'SYN',{ _cursor:cursor, kind:'name-variant', merged:raw, into:ent.id, surface:ent.canonical });
+          gEmit(2,'SYN',{ _cursor:cursor, kind:'name-variant', merged:raw, into:ent.id, surface:ent.canonical, byRule:'MERGE.BARE_SURNAME' });
           return ent.id;
         }
       }
@@ -7722,15 +7977,17 @@ function buildEOReader(nlp, its, extractSVO) {
           // Binding it to an entity is a Tier-3 significance act (a coref DEF). SIG → (DEF) → bound.
           if (subj.pronoun) {
             const fid='frm_'+String(frameSeq++).padStart(4,'0');
-            gEmit(1,'SIG',{ _cursor:cursor, frame:fid, role:'subject', surface:t.subject,
-              verb:t.verb, constraints:frameConstraints(t.subject), conEvt:ev.id, clause:t.source });
-            pronOccs.push({ frame:fid, conEvt:ev.id, role:'subject', surface:t.subject, cursor, clause:t.source });
+            gEmit(1,'SIG',{ _cursor:cursor, frame:fid, role:'subject', surface:t.subject, reflexive:!!subj.reflexive,
+              verb:t.verb, constraints:frameConstraints(t.subject), conEvt:ev.id, clause:t.source,
+              byRule: subj.reflexive?'FRAME.REFLEXIVE':'FRAME.ANAPHORIC_PRONOUN' });
+            pronOccs.push({ frame:fid, conEvt:ev.id, role:'subject', surface:t.subject, cursor, clause:t.source, reflexive:!!subj.reflexive });
           }
           if (obj && obj.pronoun) {
             const fid='frm_'+String(frameSeq++).padStart(4,'0');
-            gEmit(1,'SIG',{ _cursor:cursor, frame:fid, role:'object', surface:t.object,
-              verb:t.verb, constraints:frameConstraints(t.object), conEvt:ev.id, clause:t.source });
-            pronOccs.push({ frame:fid, conEvt:ev.id, role:'object', surface:t.object, cursor, clause:t.source });
+            gEmit(1,'SIG',{ _cursor:cursor, frame:fid, role:'object', surface:t.object, reflexive:!!obj.reflexive,
+              verb:t.verb, constraints:frameConstraints(t.object), conEvt:ev.id, clause:t.source,
+              byRule: obj.reflexive?'FRAME.REFLEXIVE':'FRAME.ANAPHORIC_PRONOUN' });
+            pronOccs.push({ frame:fid, conEvt:ev.id, role:'object', surface:t.object, cursor, clause:t.source, reflexive:!!obj.reflexive });
           }
         }
         cursor++;
@@ -7746,26 +8003,33 @@ function buildEOReader(nlp, its, extractSVO) {
       d.tokens().each(t=>{const p=t.out(its.pos); if(p==='NOUN'||p==='PROPN'||p==='PRON')hasNominal=true; if(p==='ADJ')hasAdj=true;});
       return hasAdj && !hasNominal;
     }
-    // a single pronoun token that is NOT one of our anaphoric pronouns is deictic (I/you/we)
-    // or indefinite/negative (nothing/something/anyone) — skip it: no entity, no frame.
-    function isNonAnaphoricPronoun(s){
-      if (PRON[norm(s)]) return false; // anaphoric → handled as a frame
+    // A single pronoun token that is NOT one of our anaphoric pronouns. Classify WHY it is skipped so the
+    // right SKIP rule owns it: SKIP.DEICTIC (I/you/we), SKIP.INDEFINITE (nothing/something/anyone), or a
+    // tagger-identified bare PRON otherwise (treated as deictic). Returns the SKIP rule id, or null if it
+    // is not a skippable bare pronoun.
+    function nonAnaphoricPronounRule(s){
+      const low = norm(s);
+      if (PRON[low] || REFLEX[low]) return null;                 // anaphoric / reflexive → handled as frames
+      if (DEICTIC.has(low)) return RB.enabled('SKIP.DEICTIC') ? 'SKIP.DEICTIC' : null;
+      if (INDEF.has(low))   return RB.enabled('SKIP.INDEFINITE') ? 'SKIP.INDEFINITE' : null;
       const d=nlp.readDoc(s); let n=0, isPron=false, other=false;
       d.tokens().each(t=>{ const p=t.out(its.pos); n++; if(p==='PRON')isPron=true; else if(p!=='PUNCT')other=true; });
-      return n>=1 && isPron && !other;
+      return (n>=1 && isPron && !other && RB.enabled('SKIP.DEICTIC')) ? 'SKIP.DEICTIC' : null;
     }
     // PERSON vs THING typing is now rule-driven — see classify() above.
 
-    // Returns {anchor, pronoun} — pronouns get NO anchor in the log (honest unresolved reference)
-    // `role` is the POSITIONAL role of the span in its clause (subject / object / ground); it is
-    // structural (Band 2), not ontological. An adjectival span is a 'predicate'/'figure' but not an entity.
+    // Returns {anchor, pronoun, reflexive?, skip?} — pronouns get NO anchor in the log (honest unresolved
+    // reference). `role` is the POSITIONAL role of the span (subject/object/ground); structural, not
+    // ontological. Every branch is owned by a rulebook rule, recorded in `skip` for provenance.
     function slot(surface, cursor, role) {
       const low = norm(surface);
-      if (PRON[low]) return { anchor:null, pronoun:true };       // anaphoric pronoun → frame
-      if (DEMON.has(low)) return { anchor:null, pronoun:false };  // bare demonstrative (this/that/these/those) → skip
-      if (isNonAnaphoricPronoun(surface)) return { anchor:null, pronoun:false }; // deictic/indefinite → skip
-      if (isAdjectival(surface)) return { anchor:null, pronoun:false };          // predicate, not an entity
-      return { anchor: resolveNominal(surface, cursor, role), pronoun:false };
+      if (RB.enabled('FRAME.ANAPHORIC_PRONOUN') && PRON[low]) return { anchor:null, pronoun:true };           // anaphoric pronoun → frame
+      if (RB.enabled('FRAME.REFLEXIVE') && REFLEX[low]) return { anchor:null, pronoun:true, reflexive:true }; // reflexive → locally-bound frame
+      if (RB.enabled('SKIP.DEMONSTRATIVE') && DEMON.has(low)) return { anchor:null, pronoun:false, skip:'SKIP.DEMONSTRATIVE' };
+      const npr = nonAnaphoricPronounRule(surface);
+      if (npr) return { anchor:null, pronoun:false, skip:npr };                                                // deictic / indefinite → skip
+      if (RB.enabled('SKIP.ADJECTIVAL') && isAdjectival(surface)) return { anchor:null, pronoun:false, skip:'SKIP.ADJECTIVAL' }; // predicate, not an entity
+      return { anchor: resolveNominal(surface, cursor, role), pronoun:false };                                 // SKIP.EMPTY_KEY handled inside (null anchor)
     }
 
     // ---- Tier 3 boundary ----
@@ -7778,7 +8042,7 @@ function buildEOReader(nlp, its, extractSVO) {
       return pronOccs
         .filter(o => !answered.has(o.conEvt + ':' + o.role))
         .map(o => ({
-          conEvt: o.conEvt, role: o.role, pronoun: o.surface, cursor: o.cursor, clause: o.clause,
+          conEvt: o.conEvt, role: o.role, pronoun: o.surface, cursor: o.cursor, clause: o.clause, reflexive: !!o.reflexive,
           question: `What does "${o.surface}" refer to here?`,
           candidates: entitiesActiveBefore(o.cursor)   // mechanical aid: who's available, NOT an answer
         }));
@@ -7985,7 +8249,8 @@ function buildEOReader(nlp, its, extractSVO) {
     // This is fully mechanical. It NEVER excludes on unknown gender. Selection under ambiguity is a
     // separate, Tier-3 judgment (a coref DEF). verdict ∈ {none, unique, ambiguous}.
     function candidateAnalysis(occ, opts){
-      const N = (opts&&opts.window)||6;
+      // CANDIDATE.SCOPE_WINDOW — N is a rulebook parameter (an explicit opts.window overrides for tuning).
+      const N = (opts&&opts.window) || RB.num('CANDIDATE.SCOPE_WINDOW','N',6);
       const surface = occ.surface||occ.pronoun;
       const fr = frameConstraints(surface);
       const cur = occ.cursor;
@@ -7994,47 +8259,60 @@ function buildEOReader(nlp, its, extractSVO) {
       const before = e => e.mentions.some(m=>m<=cur);
       let scope = [...entities.values()].filter(inWin);
       let widened = false;
-      if (!scope.length){ scope = [...entities.values()].filter(before); widened = true; }
+      if (!scope.length && RB.enabled('CANDIDATE.SCOPE_WIDEN')){ scope = [...entities.values()].filter(before); widened = true; }
+      // FRAME.REFLEXIVE — a reflexive is locally bound: its only candidate is the subject of its own clause.
+      let reflexiveBound = false;
+      if (occ.reflexive){
+        const con = log.find(e=>e.id===occ.conEvt);
+        const subjId = con && con.content.subject;
+        scope = subjId ? scope.filter(e=>e.id===subjId) : [];
+        reflexiveBound = true;
+      }
 
       const excluded = [];
       const survivors = [];
       for (const e of scope){
-        // animacy: 'it' → things only; 'he/she/they' → persons only. Exclude only on a KNOWN type
-        // mismatch — an UNTYPED entity (type===null, not yet judged) is never excluded (it survives,
-        // exactly as unknown gender does). This keeps typing-precedes-coreference honest: the filter
-        // tightens only after a type-DEF has re-entered structure.
-        if (fr.animacy==='inanimate' && e.type==='PERSON'){ excluded.push({id:e.id,canonical:e.canonical,reason:'animacy (needs a thing)'}); continue; }
-        if (fr.animacy==='animate' && e.type==='THING'){ excluded.push({id:e.id,canonical:e.canonical,reason:'animacy (needs a person)'}); continue; }
-        // gender: exclude only on KNOWN mismatch (never on unknown)
-        if (fr.gender && e.gender){
+        // CANDIDATE.FILTER_ANIMACY — 'it' → things only; 'he/she/they' → persons only. Exclude only on a
+        // KNOWN type mismatch — an UNTYPED entity (type===null) is never excluded (it survives, exactly as
+        // unknown gender does). This keeps typing-precedes-coreference honest.
+        if (RB.enabled('CANDIDATE.FILTER_ANIMACY')){
+          if (fr.animacy==='inanimate' && e.type==='PERSON'){ excluded.push({id:e.id,canonical:e.canonical,reason:'animacy (needs a thing)',byRule:'CANDIDATE.FILTER_ANIMACY'}); continue; }
+          if (fr.animacy==='animate' && e.type==='THING'){ excluded.push({id:e.id,canonical:e.canonical,reason:'animacy (needs a person)',byRule:'CANDIDATE.FILTER_ANIMACY'}); continue; }
+        }
+        // CANDIDATE.FILTER_GENDER — exclude only on KNOWN mismatch (never on unknown)
+        if (RB.enabled('CANDIDATE.FILTER_GENDER') && fr.gender && e.gender){
           const eg = e.gender==='M'?'masculine':e.gender==='F'?'feminine':null;
-          if (eg && eg!==fr.gender){ excluded.push({id:e.id,canonical:e.canonical,reason:'gender mismatch ('+eg+')'}); continue; }
+          if (eg && eg!==fr.gender){ excluded.push({id:e.id,canonical:e.canonical,reason:'gender mismatch ('+eg+')',byRule:'CANDIDATE.FILTER_GENDER'}); continue; }
         }
         // number left soft (we don't track entity plurality reliably)
         survivors.push(e);
       }
-      // salience rank: recency + log frequency + subjecthood (ACT-R) + INTERPRETIVE CENTRALITY.
-      // The running hypothesis ("hypotheses as cursors") feeds back into the mechanical ranking: an
-      // entity the accumulated interpretation has made central is more salient than recency alone implies,
-      // so what is ambiguous on bare morphosyntax may be clearly ranked once the hypothesis is in hand.
+      // CANDIDATE.RANK_SALIENCE — ACT-R activation (recency, log frequency, subjecthood) + interpretive
+      // centrality. Weights are rulebook parameters. The running hypothesis ("hypotheses as cursors") feeds
+      // back in: an entity the accumulated interpretation has made central outranks bare recency, so a frame
+      // ambiguous on morphosyntax alone may rank cleanly once the hypothesis is in hand. Deterministic
+      // function of the log — structural, not a judgment.
+      const W = RB.weights('CANDIDATE.RANK_SALIENCE');
+      const wRec = W.recency!=null?W.recency:3, wFreq = W.freq!=null?W.freq:1, wSubj = W.subject!=null?W.subject:0.6, wCen = W.central!=null?W.central:1.5;
       const subjCount = id => log.filter(x=>x.op==='CON'&&x.cursor<=cur&&x.content.subject===id).length;
       const hypText = (activeDoc()||'').toLowerCase();
       const central = e => {
         if(!hypText) return 0;
         const c=e.canonical.toLowerCase(), last=c.split(' ').pop();
-        return (hypText.includes(c) || (last.length>2 && hypText.includes(last))) ? 1.5 : 0;
+        return (hypText.includes(c) || (last.length>2 && hypText.includes(last))) ? wCen : 0;
       };
       const scoreOf = e => {
         const ms = e.mentions.filter(m=>m<=cur);
         const recency = ms.length? 1/(1+(cur-Math.max(...ms))) : 0;
         const freq = ms.length;
-        return recency*3 + Math.log(1+freq) + subjCount(e.id)*0.6 + central(e);
+        return recency*wRec + wFreq*Math.log(1+freq) + subjCount(e.id)*wSubj + central(e);
       };
       survivors.sort((a,b)=>scoreOf(b)-scoreOf(a));
       const ranked = survivors.map(e=>({ id:e.id, canonical:e.canonical, type:e.type, gender:e.gender, score:+scoreOf(e).toFixed(2), central: central(e)>0 }));
+      // CANDIDATE.VERDICT — cardinality of the filtered pool is a deterministic structural fact.
       const verdict = ranked.length===0 ? 'none' : ranked.length===1 ? 'unique' : 'ambiguous';
-      return { frame:occ.frame||null, conEvt:occ.conEvt, role:occ.role, pronoun:surface, cursor:cur,
-        constraints:fr, window:N, widened, survivors:ranked, excluded, verdict };
+      return { frame:occ.frame||null, conEvt:occ.conEvt, role:occ.role, pronoun:surface, cursor:cur, reflexive:!!occ.reflexive,
+        constraints:fr, window:N, widened, reflexiveBound, survivors:ranked, excluded, verdict };
     }
     // analysis for every still-open frame
     function frameAnalysis(opts){
@@ -8178,7 +8456,8 @@ function buildEOReader(nlp, its, extractSVO) {
       setTyping, setEntityDef, setDocDef, setSpanDef, evaluate, recDef:setEntityDef, pinDef, confirmsOf, deriveFaces,
       activeDefForTarget, clausesForEntity, contextBefore, activeDoc, activeEntityDef,
       frames, framesAt, maxCursor, renderWorkingMemory, candidateAnalysis, frameAnalysis,
-      setRule, activeRules, revokeRule, clearSeeds, classify, failureReport, setEntityType, typeEntitiesMechanical, quoteSpeakerAt:(c)=>quoteSpeakerByCursor[c]||null,
+      setRule, activeRules, revokeRule, clearSeeds, classify, isAbstractHead, failureReport, setEntityType, typeEntitiesMechanical, quoteSpeakerAt:(c)=>quoteSpeakerByCursor[c]||null,
+      RB, rulebook:EO_RULEBOOK,
       MODES, DOMAINS, OBJECTS, _entities:entities, _meant:meant, _log:log, _events:events };
   }
   return makeEngine;
@@ -9046,18 +9325,31 @@ async function authorRulesFromFocus(focus){
   let arr; try{ arr=JSON.parse(text.replace(/```json|```/g,'').trim()); }catch(e){ return 0; }
   if(!Array.isArray(arr)) return 0;
   let n=0;
-  arr.forEach(r=>{ if(r&&r.ruleType&&r.when&&r.then){ model.setRule(r.ruleType,r.when,r.then,{scope:r.scope||null,agent:'webllm:'+mid,note:r.note||''}); n++; } });
+  arr.forEach(r=>{
+    if(!(r&&r.ruleType&&r.when&&r.then)) return;
+    // Domain 7 meta-rules gate what the gate is allowed to author:
+    if(r.ruleType==='type'){
+      // RULE.WRITE_NEVER_THING — a THING type-rule fires on the default and is pure noise.
+      if(model.RB.enabled('RULE.WRITE_NEVER_THING') && (r.then.type||'').toUpperCase()==='THING') return;
+      // RULE.NO_ABSTRACT_NOUN_RULE — never generalize an abstract noun to PERSON (the worst compound failure).
+      if(model.RB.enabled('RULE.NO_ABSTRACT_NOUN_RULE') && (r.then.type||'').toUpperCase()==='PERSON'){
+        const probe = (r.when.surfaceKey||r.when.surfaceRegex||(Array.isArray(r.when.headLemmaIn)?r.when.headLemmaIn.join(' '):'')||'').replace(/[\\^$.*+?()[\]{}|]/g,' ').trim();
+        if(probe && model.isAbstractHead(probe)) return;
+      }
+    }
+    model.setRule(r.ruleType,r.when,r.then,{scope:r.scope||null,agent:'webllm:'+mid,note:r.note||''}); n++;
+  });
   return n;
 }
 function notify(msg){ if(RUNNING){ console.warn('[pipeline]',msg); } else { alert(msg); } }
 
 // ---- autonomous pipeline: Read runs everything, no per-step clicks ----
 function progress(s){ const n=document.getElementById('engineNote'); if(n) n.textContent=s; }
-function bindUniqueFrames(){ model.frameAnalysis().filter(a=>a.verdict==='unique').forEach(a=>model.resolveCoref(a.conEvt,a.role,a.survivors[0].id,'morphosyntax','unique survivor of morphosyntactic search in working memory')); }
+function bindUniqueFrames(){ model.frameAnalysis().filter(a=>a.verdict==='unique').forEach(a=>model.resolveCoref(a.conEvt,a.role,a.survivors[0].id,'morphosyntax',(a.reflexiveBound?'reflexive bound to the clause subject (FRAME.REFLEXIVE); ':'')+'unique survivor of morphosyntactic search in working memory (BIND.UNIQUE_MECHANICAL)')); }
 function rereadWithRules(text){
   const authored=model.activeRules().filter(r=>r.agent!=='seed').map(r=>({c:r.content,agent:r.agent}));
   model=engine();
-  authored.forEach(o=>model.setRule(o.c.ruleType,o.c.when,o.c.then,{scope:o.c.scope||null,agent:o.agent,note:o.c.note||''}));
+  authored.forEach(o=>model.setRule(o.c.ruleType,o.c.when,o.c.then,{scope:o.c.scope||null,agent:o.agent,note:o.c.note||'',ruleId:o.c.ruleId||null}));
   STATE=model.read(text);
 }
 // BAND 3, HARD FORK — LLM typing of the entities the cheap mechanical pass could NOT type (genuine
@@ -9070,28 +9362,41 @@ async function typeEntitiesLLM(untypedList, docName, docHyp){
     const e=untypedList[i];
     progress('band 3 (hard) — typing ambiguous entities (LLM)… '+(i+1)+'/'+untypedList.length+' · '+e.canonical);
     const occ=model.clausesForEntity(e.id,4).map(s=>'- '+s).join('\n');
+    // TYPE.ASYMMETRY — wrong PERSON ≫ wrong THING, so the model is told to default to UNCERTAIN rather
+    // than guess PERSON. Only a confident PERSON/THING is asserted; UNCERTAIN leaves the entity untyped.
     const messages=[
-      {role:'system',content:'You type a referent from a text as PERSON or THING, and if a person, the gender. A group of people (e.g. "his sisters") is PERSON. A place, object, abstraction, or event is THING. Answer in the exact format, nothing else.'},
+      {role:'system',content:'You type a referent from a text as PERSON or THING, and if a person, the gender. A group of people (e.g. "his sisters") is PERSON. A place, object, abstraction, emotion, or event is THING. Calling something a PERSON when it is not is far more damaging than leaving it untyped — so if you are NOT confident it denotes a person, answer UNCERTAIN. Answer in the exact format, nothing else.'},
       {role:'user',content:
 `${docName?'Document: '+docName+'\n':''}${docHyp?'About: '+docHyp+'\n':''}Entity to type: "${e.canonical}"
 Example occurrences:
 ${occ||'(mentioned in the text)'}
 
 Reply exactly:
-TYPE: <PERSON|THING>
+TYPE: <PERSON|THING|UNCERTAIN>
 GENDER: <M|F|unknown>`}
     ];
     try{
       const {text,model:mid}=await window.EOLLM.chat('typer',messages,{temperature:0.1,max_tokens:24});
-      const tm=text.match(/TYPE:\s*(PERSON|THING)/i); if(!tm) continue;
-      const type=tm[1].toUpperCase();
+      const tm=text.match(/TYPE:\s*(PERSON|THING|UNCERTAIN)/i); if(!tm) continue;
+      let type=tm[1].toUpperCase();
+      if(type==='UNCERTAIN') continue;                                   // TYPE.ASYMMETRY → leave untyped
+      // TYPE.NO_ABSTRACT_AS_PERSON — an abstract-noun head may never be lifted to PERSON, whatever the model says.
+      if(type==='PERSON' && model.isAbstractHead(e.canonical)) continue;
       const gm=text.match(/GENDER:\s*(M|F|male|female|unknown)/i);
       let gender=gm?gm[1].toUpperCase():null; if(gender==='MALE')gender='M'; if(gender==='FEMALE')gender='F'; if(gender==='UNKNOWN'||gender==='')gender=null;
       model.setEntityType(e.id,type,gender,'webllm:'+mid,'hard fork: no clear indicator, model selected the type');
-      // FEEDBACK: author a type-rule keyed on this surface so the indicator fires mechanically next time
-      // (this hard case sinks into the easy/mechanical layer on the next read).
+      // FEEDBACK (Domain 7) — convert this paid judgment into a free future reflex, but only when the
+      // rule-writing meta-rules allow it:
+      //   RULE.WRITE_NEVER_THING        — never author a THING rule (THING is the default).
+      //   RULE.WRITE_ONLY_ON_CORRECTION — skip if classify() would already have returned this type.
+      //   RULE.NO_ABSTRACT_NOUN_RULE    — never author a PERSON rule for an abstract noun.
       const key=e.canonical.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
-      if(key) model.setRule('type',{surfaceRegex:'\\b'+key.replace(/ +/g,'\\s+')+'\\b'}, gender?{type,gender}:{type}, {agent:'webllm:'+mid,note:'learned: "'+e.canonical+'" is a '+(type==='PERSON'?'person':'thing')});
+      const writeRule = key
+        && type==='PERSON'
+        && (!model.RB.enabled('RULE.WRITE_NEVER_THING')   || type!=='THING')
+        && (!model.RB.enabled('RULE.NO_ABSTRACT_NOUN_RULE') || !model.isAbstractHead(e.canonical))
+        && (!model.RB.enabled('RULE.WRITE_ONLY_ON_CORRECTION') || model.classify(e.canonical).type!==type);
+      if(writeRule) model.setRule('type',{surfaceRegex:'\\b'+key.replace(/ +/g,'\\s+')+'\\b'}, gender?{type,gender}:{type}, {agent:'webllm:'+mid,note:'learned: "'+e.canonical+'" is a person',ruleId:'RULE.WRITE_ONLY_PERSON'});
     }catch(err){ console.warn('type entity',e.canonical,err); }
   }
   STATE=model.summary();
@@ -9140,17 +9445,19 @@ async function readCursorLoop(text, docName){
   for(let k=0;k<=maxK;k++){
     const clause=(STATE.log.find(e=>e.op==='SEG'&&e.cursor===k)?.content.text)||'';
     progress('reading clause '+(k+1)+'/'+(maxK+1)+(clause?' — “'+clause.slice(0,42)+(clause.length>42?'…':'')+'”':'')+' · type · resolve · hypothesize');
-    // 1) TYPE WHAT'S NEW — entities introduced at this cursor the mechanical pass could not type, with
-    //    the current running hypothesis (from the prior cursor) as context.
-    const newUntyped=STATE.entities.filter(e=>insAt[e.id]===k && !e.type);
-    if(newUntyped.length){ await typeEntitiesLLM(newUntyped, docName, model.activeDoc()); STATE=model.summary(); }
-    // 2) RESOLVE WHAT'S OPEN — each frame at this cursor passes through the gates, cheapest first.
+    // 1) TYPE WHAT'S NEW (PIPELINE.TYPE_BEFORE_COREF) — entities introduced at this cursor the mechanical
+    //    pass could not type, with the current running hypothesis (from the prior cursor) as context.
+    if(model.RB.enabled('PIPELINE.TYPE_BEFORE_COREF')){
+      const newUntyped=STATE.entities.filter(e=>insAt[e.id]===k && !e.type);
+      if(newUntyped.length){ await typeEntitiesLLM(newUntyped, docName, model.activeDoc()); STATE=model.summary(); }
+    }
+    // 2) RESOLVE WHAT'S OPEN — each frame at this cursor passes through the bind rules, cheapest first.
     const frames=model.frameAnalysis().filter(a=>a.cursor===k);
     for(const a of frames){
-      if(a.verdict==='none') continue;                         // no antecedent in scope → honestly left open
+      if(a.verdict==='none') continue;                         // BIND.NONE_FLAG — no antecedent in scope → honestly left open
       const top=a.survivors[0];
-      if(a.verdict==='unique'){                                 // bare structure forces it
-        model.resolveCoref(a.conEvt,a.role,top.id,'morphosyntax','unique survivor of morphosyntactic search in working memory');
+      if(a.verdict==='unique'){                                 // BIND.UNIQUE_MECHANICAL — bare structure forces it
+        model.resolveCoref(a.conEvt,a.role,top.id,'morphosyntax',(a.reflexiveBound?'reflexive bound to the clause subject (FRAME.REFLEXIVE); ':'')+'unique survivor of morphosyntactic search in working memory (BIND.UNIQUE_MECHANICAL)');
         continue;
       }
       // 'ambiguous' — structure is exhausted; close it with what we already know before paying the model.
@@ -9160,20 +9467,22 @@ async function readCursorLoop(text, docName){
         model.resolveCoref(a.conEvt,a.role,top.id,'reflex','recurring “'+sig.replace(/\|/g,' · ')+'” configuration the model has consistently resolved to the salient survivor this reading');
         continue;
       }
-      if(central.length===1 && central[0].id===top.id){        // GATE 1 — the running hypothesis singles one out
-        model.resolveCoref(a.conEvt,a.role,top.id,'context','resolved by the running hypothesis (narratively near-certain), not bare structure');
+      if(model.RB.enabled('BIND.CONTEXT_REQUIRED') && central.length===1 && central[0].id===top.id){ // GATE 1 / BIND.CONTEXT_REQUIRED — the running hypothesis singles one out
+        model.resolveCoref(a.conEvt,a.role,top.id,'context','resolved by the running hypothesis (narratively near-certain), not bare structure (BIND.CONTEXT_REQUIRED)');
         continue;
       }
-      // genuine ambiguity persists after applying everything known → pay for the LLM, and record the
-      // judgment as evidence that may promote this configuration to a reflex (GATE 2).
+      // BIND.AMBIGUOUS_LLM — genuine ambiguity persists after applying everything known → pay for the LLM,
+      // and record the judgment as evidence that may promote this configuration to a reflex (GATE 2).
       const refId=await resolveLLM(a.conEvt,a.role);
       if(refId&&refId!=='__none__'){ const rank=a.survivors.findIndex(s=>s.id===refId); recordLLMResolution(sig, rank); }
     }
     STATE=model.summary();
-    // 3) TYPE THE CLAUSE(S) at this cursor (IS/DOES/MEANS · domain · object)
-    const cons=STATE.log.filter(e=>e.op==='CON'&&e.cursor===k&&!model._meant.some(d=>d.content.kind==='typing'&&d.content.target.conEvt===e.id));
-    for(const c of cons){ await typeClause(c.id); }
-    STATE=model.summary();
+    // 3) TYPE THE CLAUSE(S) at this cursor (PIPELINE.CLAUSE_TYPING_LAST · IS/DOES/MEANS · domain · object)
+    if(model.RB.enabled('PIPELINE.CLAUSE_TYPING_LAST')){
+      const cons=STATE.log.filter(e=>e.op==='CON'&&e.cursor===k&&!model._meant.some(d=>d.content.kind==='typing'&&d.content.target.conEvt===e.id));
+      for(const c of cons){ await typeClause(c.id); }
+      STATE=model.summary();
+    }
     // 4) ISSUE / UPDATE THE RUNNING HYPOTHESIS at this cursor — carried forward as context for the next.
     if(clause) await formHypothesis(k);
   }
