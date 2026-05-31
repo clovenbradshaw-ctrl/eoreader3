@@ -8699,7 +8699,9 @@ function renderGraph(p){
     side+=`<div class="isub">surfaces: ${ent.surfaces.map(esc).join(', ')} · ${ent.mentions} mentions</div>`;
     const edef=model.activeEntityDef(n.id);
     side+=`<div class="ilabel">hypothesis (DEF)</div>`;
-    side+= edef? `<div class="edef">“${esc(edef)}”</div>` : `<div class="isub">characterized automatically while reading</div>`;
+    side+= edef? `<div class="edef">“${esc(edef)}”</div>` : `<div class="isub">not characterized yet — an on-demand interpretation, not part of a plain read</div>`;
+    if(window.EOLLM&&window.EOLLM.anyReady())
+      side+=`<button class="btn-ghost" style="margin-top:8px" onclick="manualCharacterize('${n.id}')">${edef?'re-characterize':'characterize'}</button>`;
     const w=model.walk(n.id,true);
     side+='<div class="ilabel">edges (solid=certain, dashed=via DEF)</div>';
     w.forEach(e=>{const sn=STATE.entities.find(x=>x.id===e.subject)?.canonical;const on=STATE.entities.find(x=>x.id===e.object)?.canonical;
@@ -8711,6 +8713,8 @@ function renderGraph(p){
     <div class="glegend"><span><i class="dot p"></i>person</span><span><i class="dot t"></i>thing</span><span><i class="ln"></i>certain (CON)</span><span><i class="ln dash"></i>bound frame (DEF)</span><span><i class="oc"></i>open frame (SIG)</span></div>`;
 }
 function selectNode(i){selNode=(selNode===i?null:i);renderGraph(document.getElementById('panel'));}
+// Manual, on-demand entity characterization (the only path that authors kind:'entity' DEFs).
+async function manualCharacterize(entId){ await characterize(entId); if(currentTab==='graph') renderGraph(document.getElementById('panel')); }
 let scrubK=null, PLAY=null;
 function setScrub(v){ scrubK=+v; if(currentTab==='graph') renderGraph(document.getElementById('panel')); }
 function stepCursor(d){ const mx=model.maxCursor(); scrubK=Math.max(0,Math.min(mx,(scrubK==null?mx:scrubK)+d)); renderGraph(document.getElementById('panel')); }
@@ -8898,8 +8902,10 @@ async function resolveLLM(conEvt,role){
     // lets a small model resolve a "he" correctly: the hard work of building it is already done.
     const wm=model.renderWorkingMemory(q.cursor);
     const hyp=model.activeDoc();
-    // competing alternatives = the morphosyntactic survivors, salience-ranked (the integration/control stage)
-    const cands=a.survivors;
+    // competing alternatives = the morphosyntactic survivors, salience-ranked (the integration/control
+    // stage). Cap at the top 4 — survivors are already salience-ranked, and a long list of (often
+    // untyped) candidates makes a small model name something parseCoref can't match, leaving the frame open.
+    const cands=a.survivors.slice(0,4);
     const list=cands.map(c=>'- '+c.canonical+' ('+(c.type==='PERSON'?(c.gender==='M'?'man':c.gender==='F'?'woman':'person'):'thing')+')').join('\n');
     const userPrompt=
 `${hyp?'Your working hypothesis for this text: "'+hyp+'"\n\n':''}You are holding in mind: ${wm||'(nothing yet)'}
@@ -8931,17 +8937,25 @@ Use a name copied exactly from the list, or the word none.`;
   }catch(e){ if(card){card.classList.remove('working');} notify('resolve failed: '+e.message); return null; }
 }
 function parseCoref(text,cands){
+  // normalize smart quotes / odd whitespace so matching is stable across model styles
+  const norm=s=>String(s||'').replace(/[“”„‟]/g,'"').replace(/[‘’‚‛]/g,"'").replace(/\s+/g,' ').trim();
+  text=norm(text);
   let ans='', reason='';
   const am=text.match(/ANSWER:\s*([^|\n]+)/i);
   const rm=text.match(/REASON:\s*(.+)/i);
   if(am) ans=am[1].trim(); else ans=text.split('\n')[0].trim();
   if(rm) reason=rm[1].trim(); else reason=text.trim();
-  ans=ans.replace(/^["'"]|["'"]$/g,'').replace(/[.|].*$/,'').trim();
+  // strip surrounding quotes, a trailing clause after . or |, and a leading article
+  ans=ans.replace(/^["']|["']$/g,'').replace(/[.|].*$/,'').replace(/^(the|a|an)\s+/i,'').trim();
   if(/^none$/i.test(ans)||!ans) return {refId:'__none__',reason};
   const low=ans.toLowerCase();
+  const lastTok=s=>s.toLowerCase().split(' ').pop();
   let best=cands.find(c=>c.canonical.toLowerCase()===low)
     ||cands.find(c=>{const cl=c.canonical.toLowerCase();return cl.includes(low)||low.includes(cl);})
-    ||cands.find(c=>{const lt=c.canonical.toLowerCase().split(' ').pop();return low.split(/\s+/).includes(lt)&&lt.length>2;});
+    ||cands.find(c=>{const lt=lastTok(c.canonical);return low.split(/\s+/).includes(lt)&&lt.length>2;})
+    // last-name fallback: the model's last word matches a candidate's last name
+    ||cands.find(c=>{const lt=lastTok(c.canonical), al=lastTok(low);return lt===al&&lt.length>2;});
+  if(!best) console.log('[coref] parse: no candidate for answer',JSON.stringify(ans),'raw:',text);
   return {refId: best?best.id:null, reason};
 }
 async function typeClause(conEvt){
@@ -9082,7 +9096,7 @@ async function gateDecision(){
   return { trigger:!!v&&/learn/i.test(v[1]), focus:f?f[1].trim().replace(/^none$/i,''):'', reason:w?w[1].trim():text.slice(0,120) };
 }
 async function authorRulesFromFocus(focus){
-  const ents=STATE.entities.map(e=>e.canonical+'['+e.type+(e.gender?'/'+e.gender:'')+']').join(', ');
+  const ents=STATE.entities.map(e=>e.canonical+'['+(e.type||'untyped')+(e.gender?'/'+e.gender:'')+']').join(', ');
   const messages=[
     {role:'system',content:'You author RULES for a mechanical text reader. Rules become unconscious/mechanical going forward. Output ONLY a JSON array, no prose. Each rule: {"ruleType":"type|merge","when":{...},"then":{...},"scope":null,"note":"<brief>"}. type-rule when: {"headLemmaIn":[".."]} or {"surfaceRegex":".."}; then:{"type":"PERSON|THING","gender":"M|F" optional}. merge-rule when:{"surfaceKey":"<lowercased surface>"}; then:{"sameAs":"<existing canonical>"}; scope may be {"inQuoteBy":"<name>"}. Only assert what the evidence supports. Max 5 rules.'},
     {role:'user',content:`Entities so far: ${ents}\n\nFailings:\n${compactReport()}\n\nFocus: ${focus||'the worst failings'}\n\nReturn the JSON array of rules.`}
@@ -9110,13 +9124,32 @@ function rereadWithRules(text){
 // pool is clean (Darcy=PERSON, not untyped). Mutates the entity (the judgment re-enters the structural
 // filter) and AUTHORS A REUSABLE TYPE-RULE keyed on the surface — so the same surface resolves
 // mechanically (the easy fork) next time. That is the feedback/learning loop: "the schema is in the log."
+// Abstract nouns that the typer keeps mislabelling as PERSON. A referent whose head lemma is in this
+// set is forced to untyped no matter what the model says (belt-and-suspenders behind the asymmetry
+// instruction in the system prompt). THING is the default, so leaving them untyped is the safe outcome.
+const ABSTRACT_NOUNS = new Set([
+  'attention','wish','value','consolation','affection','vanity','preference','attachment','disposition',
+  'manner','sentiment','felicity','advantage','superciliousness','pride','prejudice','civility','complaisance',
+  'regard','esteem','gratitude','resentment','indignation','admiration','approbation','curiosity','anxiety',
+  'happiness','misery','sorrow','joy','grief','hope','fear','despair','delight','pleasure','satisfaction',
+  'temper','spirits','feeling','feelings','emotion','passion','sense','reason','judgment','judgement','opinion',
+  'mind','heart','soul','conduct','behaviour','behavior','character','reputation','fortune','interest','duty'
+]);
+// Head lemma of an entity surface: drop a leading article, take the last word, strip non-letters.
+function headLemma(canonical){
+  return String(canonical||'').toLowerCase().replace(/^(the|a|an|this|that|these|those|his|her|its|their|my|your|our)\s+/,'')
+    .split(/\s+/).pop().replace(/[^a-z]/g,'');
+}
+
 async function typeEntitiesLLM(untypedList, docName, docHyp){
   for(let i=0;i<untypedList.length;i++){
     const e=untypedList[i];
     progress('band 3 (hard) — typing ambiguous entities (LLM)… '+(i+1)+'/'+untypedList.length+' · '+e.canonical);
+    // Belt-and-suspenders: never let an abstract noun reach the typer as a candidate PERSON.
+    if(ABSTRACT_NOUNS.has(headLemma(e.canonical))) continue;
     const occ=model.clausesForEntity(e.id,4).map(s=>'- '+s).join('\n');
     const messages=[
-      {role:'system',content:'You type a referent from a text as PERSON or THING, and if a person, the gender. A group of people (e.g. "his sisters") is PERSON. A place, object, abstraction, or event is THING. Answer in the exact format, nothing else.'},
+      {role:'system',content:'When uncertain whether a referent is a person or a thing, output THING. Only output PERSON when confident. A wrong PERSON corrupts all later reference resolution; a wrong THING is merely conservative. You type a referent from a text as PERSON or THING, and if a person, the gender. A group of people (e.g. "his sisters") is PERSON. A place, object, abstraction, or event is THING. Answer in the exact format, nothing else.'},
       {role:'user',content:
 `${docName?'Document: '+docName+'\n':''}${docHyp?'About: '+docHyp+'\n':''}Entity to type: "${e.canonical}"
 Example occurrences:
@@ -9127,16 +9160,19 @@ TYPE: <PERSON|THING>
 GENDER: <M|F|unknown>`}
     ];
     try{
-      const {text,model:mid}=await window.EOLLM.chat('typer',messages,{temperature:0.1,max_tokens:24});
+      const {text,model:mid}=await window.EOLLM.chat('typer',messages,{temperature:0.1,max_tokens:48});
       const tm=text.match(/TYPE:\s*(PERSON|THING)/i); if(!tm) continue;
       const type=tm[1].toUpperCase();
+      // Second guard: even if the model said PERSON, an abstract head lemma overrides to untyped.
+      if(type==='PERSON' && ABSTRACT_NOUNS.has(headLemma(e.canonical))) continue;
       const gm=text.match(/GENDER:\s*(M|F|male|female|unknown)/i);
       let gender=gm?gm[1].toUpperCase():null; if(gender==='MALE')gender='M'; if(gender==='FEMALE')gender='F'; if(gender==='UNKNOWN'||gender==='')gender=null;
       model.setEntityType(e.id,type,gender,'webllm:'+mid,'hard fork: no clear indicator, model selected the type');
       // FEEDBACK: author a type-rule keyed on this surface so the indicator fires mechanically next time
-      // (this hard case sinks into the easy/mechanical layer on the next read).
+      // (this hard case sinks into the easy/mechanical layer on the next read). Only PERSON is worth a
+      // rule — THING is the default, so a THING rule would be noise.
       const key=e.canonical.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
-      if(key) model.setRule('type',{surfaceRegex:'\\b'+key.replace(/ +/g,'\\s+')+'\\b'}, gender?{type,gender}:{type}, {agent:'webllm:'+mid,note:'learned: "'+e.canonical+'" is a '+(type==='PERSON'?'person':'thing')});
+      if(type==='PERSON' && key) model.setRule('type',{surfaceRegex:'\\b'+key.replace(/ +/g,'\\s+')+'\\b'}, gender?{type,gender}:{type}, {agent:'webllm:'+mid,note:'learned: "'+e.canonical+'" is a person'});
     }catch(err){ console.warn('type entity',e.canonical,err); }
   }
   STATE=model.summary();
@@ -9244,9 +9280,11 @@ async function runPipeline(text){
       if(window.EOLLM&&window.EOLLM.anyReady()){
         // the per-cursor interpretive loop (hard typing · coref · clause typing · running hypothesis)
         await readCursorLoop(text, docName);
-        // entity characterization — a finishing pass over the completed reading (entity DEFs)
         STATE=model.summary();
-        for(let i=0;i<STATE.entities.length;i++){ progress('characterizing entities… '+(i+1)+'/'+STATE.entities.length+' · '+STATE.entities[i].canonical); await characterize(STATE.entities[i].id); }
+        // NOTE: entity characterization (kind:'entity' DEFs) is intentionally NOT run here. A plain Read
+        // produces only structure + typing + coref + running hypotheses; per-entity characterization is an
+        // explicit, on-demand action via the characterize/evaluate buttons. Auto-running it here polluted
+        // every reading with 60+ characterization DEFs and put the deployed artifact out of sync.
 
         // ---- LEARN ON ITS OWN: the gate judges whether the mechanism is failing enough to learn; if so
         // it authors rules and we re-read to apply them mechanically (the schema sinks into the log). ----
