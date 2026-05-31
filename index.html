@@ -7605,9 +7605,12 @@ function buildEOReader(nlp, its, extractSVO) {
       d.tokens().each(t=>{ const p=t.out(its.pos); if(p==='NOUN'||p==='PROPN') h=t.out(its.lemma).toLowerCase(); });
       return h;
     }
-    // Typing/gender is now an INTERPRETATION of the active type-rules, not a hardcoded lexicon.
+    // Typing/gender is an INTERPRETATION of the active type-rules, not a hardcoded lexicon. Default is
+    // NULL (untyped) — no rule fired means no clear indicator, so the type is a HARD fork left for the
+    // LLM. This is what makes the mechanical pass "easy fork only": it commits a type ONLY when a rule
+    // (title / person-noun / learned surface) actually matches.
     function classify(surface){
-      let type='THING', gender=null;
+      let type=null, gender=null;
       const head=headLemmaOf(surface);
       for(const r of activeRules('type')){
         const w=r.content.when||{}, th=r.content.then||{}; let hit=false;
@@ -7628,16 +7631,19 @@ function buildEOReader(nlp, its, extractSVO) {
     }
 
     // Resolve a NON-pronoun surface to an entity, minting (INS) or reusing/merging (certain SYN only).
-    function resolveNominal(surface, cursor) {
+    // Band 2 (STRUCTURE): this mints ONLY positional/relational facts — an anchor, its surfaces, its
+    // mentions, and the positional ROLES it has filled (subject/object/ground). It assigns NO ontological
+    // type and NO gender. Those are Band-3 judgments (DEFs) that re-enter the entity later via setEntityType.
+    function resolveNominal(surface, cursor, role) {
       const raw = surface.trim();
       const key = stripArticle(norm(raw));
       if (!key) return null; // nothing referential left after stripping articles/determiners
+      const noteRole = ent => { if(role) ent.roles.add(role); };
       // exact key reuse
       for (const ent of entities.values()) {
-        if (ent.key === key) { ent.surfaces.add(raw); ent.mentions.push(cursor); return ent.id; }
+        if (ent.key === key) { ent.surfaces.add(raw); ent.mentions.push(cursor); noteRole(ent); return ent.id; }
       }
       const proper = isProper(raw);
-      const { type, gender:gType } = classify(raw);
       // (1) LLM/seed-authored MERGE RULES (scoped). A DEF tie-break can write these; the mechanism applies them.
       //     when:{surfaceKey|surfaceRegex}  then:{mergeInto:<entId>|sameAs:<canonical>}  scope:{inQuoteBy:<name>}
       for (const r of activeRules('merge')) {
@@ -7647,35 +7653,35 @@ function buildEOReader(nlp, its, extractSVO) {
         let target = r.content.then.mergeInto ? entities.get(r.content.then.mergeInto)
                    : [...entities.values()].find(e=>e.canonical===r.content.then.sameAs || e.key===stripArticle(norm(r.content.then.sameAs||'')));
         if (target){
-          target.surfaces.add(raw); target.mentions.push(cursor);
+          target.surfaces.add(raw); target.mentions.push(cursor); noteRole(target);
           gEmit(2,'SYN',{ _cursor:cursor, kind:'rule-merge', merged:raw, into:target.id, surface:target.canonical, byRule:r.id });
           return target.id;
         }
       }
-      // (2) structural name-variant merge — bare surname ≡ titled/full name, never across gender conflict
+      // (2) structural name-variant merge — bare surname ≡ titled/full name. This is a PURELY STRUCTURAL
+      //     identity (shared surname, not both full names); it does NOT consult ontological type. A KNOWN
+      //     gender conflict (set by a prior Band-3 type-DEF) still blocks the merge, since that judgment has
+      //     already re-entered the structural filter.
       if (proper) {
         const myToks = key.split(' ').filter(Boolean);
         const myLast = myToks[myToks.length-1];
-        const myGender = gType;
         for (const ent of entities.values()) {
-          if (ent.type!=='PERSON') continue;
           const eToks = ent.key.split(' ').filter(Boolean);
           const eLast = eToks[eToks.length-1];
           if (eLast!==myLast || myLast.length<=2) continue;            // must share surname
           if (myToks.length>1 && eToks.length>1) continue;            // both full names → different people
-          if (myGender && ent.gender && myGender!==ent.gender) continue; // gender conflict → different people
-          ent.surfaces.add(raw); ent.mentions.push(cursor);
+          ent.surfaces.add(raw); ent.mentions.push(cursor); noteRole(ent);
           if (raw.length>ent.canonical.length) ent.canonical=raw;
-          ent.gender = ent.gender || myGender;
           gEmit(2,'SYN',{ _cursor:cursor, kind:'name-variant', merged:raw, into:ent.id, surface:ent.canonical });
           return ent.id;
         }
       }
-      // mint INS
+      // mint INS — untyped: type=null (no PERSON/THING), gender=null, with its positional role recorded.
       const id = 'ent_'+key.replace(/[^a-z0-9]/g,'_').slice(0,24)+'_'+entities.size;
-      const ent = { id, key, canonical:raw, type, gender:gType, surfaces:new Set([raw]), mentions:[cursor] };
+      const ent = { id, key, canonical:raw, type:null, gender:null, proper, roles:new Set(role?[role]:[]), surfaces:new Set([raw]), mentions:[cursor] };
       entities.set(id, ent);
-      gEmit(1,'INS',{ _cursor:cursor, anchor:id, surface:raw, ner_type:type });
+      // figure (a discrete referent) vs ground is structural; the role records subject/object position.
+      gEmit(1,'INS',{ _cursor:cursor, anchor:id, surface:raw, unit:'figure', role:role||'ground' });
       return id;
     }
 
@@ -7696,8 +7702,10 @@ function buildEOReader(nlp, its, extractSVO) {
         }
         const tuples = extractSVO(sentText);
         for (const t of tuples) {
-          const subj = slot(t.subject, cursor);
-          const obj  = t.object ? slot(t.object, cursor) : null;
+          // Band 2 (structure): each span gets a POSITIONAL role (subject/object/ground),
+          // never an ontological type. Typing is deferred to Band-3 DEFs.
+          const subj = slot(t.subject, cursor, 'subject');
+          const obj  = t.object ? slot(t.object, cursor, 'object') : null;
           const ev = gEmit(2,'CON',{
             _cursor:cursor,
             subject: subj.anchor, subjectSurface: t.subject, subjectPronoun: subj.pronoun||false,
@@ -7749,13 +7757,15 @@ function buildEOReader(nlp, its, extractSVO) {
     // PERSON vs THING typing is now rule-driven — see classify() above.
 
     // Returns {anchor, pronoun} — pronouns get NO anchor in the log (honest unresolved reference)
-    function slot(surface, cursor) {
+    // `role` is the POSITIONAL role of the span in its clause (subject / object / ground); it is
+    // structural (Band 2), not ontological. An adjectival span is a 'predicate'/'figure' but not an entity.
+    function slot(surface, cursor, role) {
       const low = norm(surface);
       if (PRON[low]) return { anchor:null, pronoun:true };       // anaphoric pronoun → frame
       if (DEMON.has(low)) return { anchor:null, pronoun:false };  // bare demonstrative (this/that/these/those) → skip
       if (isNonAnaphoricPronoun(surface)) return { anchor:null, pronoun:false }; // deictic/indefinite → skip
       if (isAdjectival(surface)) return { anchor:null, pronoun:false };          // predicate, not an entity
-      return { anchor: resolveNominal(surface, cursor), pronoun:false };
+      return { anchor: resolveNominal(surface, cursor, role), pronoun:false };
     }
 
     // ---- Tier 3 boundary ----
@@ -7831,8 +7841,9 @@ function buildEOReader(nlp, its, extractSVO) {
       return ne;
     }
 
-    // Entity TYPE judgment (PERSON/THING + gender). Mutates the entity so the mechanical candidate
-    // filter sees the correction immediately, AND logs it as a revisable DEF (structure-shaping judgment).
+    // Entity TYPE judgment (PERSON/THING + gender) — a Band-3 DEF. Mutates the entity so the mechanical
+    // candidate filter sees it immediately (the judgment re-enters the structural filter), AND logs it as a
+    // revisable DEF. Structure (Band 2) never sets type; only this DEF path does.
     function setEntityType(entId, type, gender, agent, reason){
       const e = entities.get(entId); if(!e) return null;
       if(type) e.type = type;
@@ -7840,6 +7851,27 @@ function buildEOReader(nlp, its, extractSVO) {
       return mEmit('DEF', { kind:'entity-type', target:entId, type:e.type, gender:e.gender||null,
         hypothesis: e.canonical+' is a '+(e.type==='PERSON'?('person'+(e.gender?' ('+(e.gender==='M'?'male':'female')+')':'')):'thing'),
         grounding:[], reason:reason||'', _agent:agent||'human' });
+    }
+
+    // Band 3 — MECHANICAL type-DEFs (the "easy" fork). Structure leaves entities untyped; here we commit
+    // a type only where a CLEAR INDICATOR forces exactly one possibility: a title ("Mr."/"Mrs."…) or a
+    // person-denoting head noun. These are interpreted from the active type-rules (schema-in-the-log), so
+    // they are stamped 'morphosyntax' (title indicator) or 'rule' (a learned/authored rule fired). High
+    // trust, no model, still a revisable DEF. Genuinely-untyped entities are left for the LLM (hard fork).
+    // Returns the list of entities that remain untyped after the cheap pass.
+    function typeEntitiesMechanical(){
+      const remaining = [];
+      for (const e of entities.values()){
+        if (e.type) continue; // already judged
+        const { type, gender } = classify(e.canonical);
+        if (!type) { remaining.push({ id:e.id, canonical:e.canonical, proper:!!e.proper, roles:[...e.roles] }); continue; }
+        // which indicator forced it? a title is morphosyntactic; anything else is a rule firing.
+        const titled = MALE_TITLE.test(e.canonical) || FEM_TITLE.test(e.canonical);
+        const agent = titled ? 'morphosyntax' : 'rule';
+        const reason = titled ? 'title forces person (clear indicator)' : 'type-rule fired on a clear indicator';
+        setEntityType(e.id, type, gender, agent, reason);
+      }
+      return remaining;
     }
 
     // ===================== Tier-3 cross-tables (EO 27-cell) =====================
@@ -7961,9 +7993,12 @@ function buildEOReader(nlp, its, extractSVO) {
       const excluded = [];
       const survivors = [];
       for (const e of scope){
-        // animacy: 'it' → things only; 'he/she/they' → persons only
-        if (fr.animacy==='inanimate' && e.type!=='THING'){ excluded.push({id:e.id,canonical:e.canonical,reason:'animacy (needs a thing)'}); continue; }
-        if (fr.animacy==='animate' && e.type!=='PERSON'){ excluded.push({id:e.id,canonical:e.canonical,reason:'animacy (needs a person)'}); continue; }
+        // animacy: 'it' → things only; 'he/she/they' → persons only. Exclude only on a KNOWN type
+        // mismatch — an UNTYPED entity (type===null, not yet judged) is never excluded (it survives,
+        // exactly as unknown gender does). This keeps typing-precedes-coreference honest: the filter
+        // tightens only after a type-DEF has re-entered structure.
+        if (fr.animacy==='inanimate' && e.type==='PERSON'){ excluded.push({id:e.id,canonical:e.canonical,reason:'animacy (needs a thing)'}); continue; }
+        if (fr.animacy==='animate' && e.type==='THING'){ excluded.push({id:e.id,canonical:e.canonical,reason:'animacy (needs a person)'}); continue; }
         // gender: exclude only on KNOWN mismatch (never on unknown)
         if (fr.gender && e.gender){
           const eg = e.gender==='M'?'masculine':e.gender==='F'?'feminine':null;
@@ -8005,8 +8040,9 @@ function buildEOReader(nlp, its, extractSVO) {
       const tokIndex={};
       ents.forEach(e=>e.key.split(' ').forEach(t=>{ if(t.length>2)(tokIndex[t]=tokIndex[t]||new Set()).add(e.canonical); }));
       const fragments=Object.entries(tokIndex).filter(([t,cs])=>cs.size>1).map(([t,cs])=>({ token:t, entities:[...cs] }));
-      // proper nouns the mechanism could not type (defaulted to THING) — bare names
-      const untypedProperNouns=ents.filter(e=>e.type==='THING' && isProper(e.canonical)).map(e=>e.canonical);
+      // proper nouns the mechanism could not type (no clear indicator → still untyped) — bare names that
+      // need the hard (LLM) fork. Includes both the new untyped state (type===null) and any legacy THING.
+      const untypedProperNouns=ents.filter(e=>(!e.type || e.type==='THING') && isProper(e.canonical)).map(e=>e.canonical);
       return {
         clauses: maxCursor()+1, entities: ents.length, openFrames: openQuestions().length,
         verdicts, typeConflicts, fragments, untypedProperNouns,
@@ -8127,7 +8163,7 @@ function buildEOReader(nlp, its, extractSVO) {
       setTyping, setEntityDef, setDocDef, setSpanDef, evaluate, recDef:setEntityDef, pinDef, confirmsOf, deriveFaces,
       activeDefForTarget, clausesForEntity, contextBefore, activeDoc, activeEntityDef,
       frames, framesAt, maxCursor, renderWorkingMemory, candidateAnalysis, frameAnalysis,
-      setRule, activeRules, revokeRule, clearSeeds, classify, failureReport, setEntityType, quoteSpeakerAt:(c)=>quoteSpeakerByCursor[c]||null,
+      setRule, activeRules, revokeRule, clearSeeds, classify, failureReport, setEntityType, typeEntitiesMechanical, quoteSpeakerAt:(c)=>quoteSpeakerByCursor[c]||null,
       MODES, DOMAINS, OBJECTS, _entities:entities, _meant:meant, _log:log, _events:events };
   }
   return makeEngine;
@@ -8580,7 +8616,7 @@ function renderGraph(p){
   let side='<div class="ginspect">';
   if(selNode!=null){
     const n=NODES[selNode];const ent=STATE.entities.find(e=>e.id===n.id);
-    side+=`<div class="ititle">${esc(ent.canonical)} <span class="ttag ${ent.type==='PERSON'?'p':'t'}">${ent.type}${ent.gender?' · '+ent.gender:''}</span></div>`;
+    side+=`<div class="ititle">${esc(ent.canonical)} <span class="ttag ${ent.type==='PERSON'?'p':'t'}">${ent.type||'untyped'}${ent.gender?' · '+ent.gender:''}</span></div>`;
     side+=`<div class="isub">surfaces: ${ent.surfaces.map(esc).join(', ')} · ${ent.mentions} mentions</div>`;
     const edef=model.activeEntityDef(n.id);
     side+=`<div class="ilabel">hypothesis (DEF)</div>`;
@@ -9010,14 +9046,15 @@ function rereadWithRules(text){
   authored.forEach(o=>model.setRule(o.c.ruleType,o.c.when,o.c.then,{scope:o.c.scope||null,agent:o.agent,note:o.c.note||''}));
   STATE=model.read(text);
 }
-// entity TYPING pass — runs BEFORE coref so the candidate pool is clean (Darcy=PERSON, not THING).
-// Uses document metadata + the doc hypothesis + example occurrences. Mutates the entity (so the
-// mechanical filter sees it) and, when it corrects a bare name the seeds missed, authors a reusable type-rule.
-async function typeEntities(docName, docHyp){
-  const ents=STATE.entities;
-  for(let i=0;i<ents.length;i++){
-    const e=ents[i];
-    progress('typing entities (LLM)… '+(i+1)+'/'+ents.length+' · '+e.canonical);
+// BAND 3, HARD FORK — LLM typing of the entities the cheap mechanical pass could NOT type (genuine
+// ambiguity: a bare name with no title, a noun the rules don't cover). Runs BEFORE coref so the candidate
+// pool is clean (Darcy=PERSON, not untyped). Mutates the entity (the judgment re-enters the structural
+// filter) and AUTHORS A REUSABLE TYPE-RULE keyed on the surface — so the same surface resolves
+// mechanically (the easy fork) next time. That is the feedback/learning loop: "the schema is in the log."
+async function typeEntitiesLLM(untypedList, docName, docHyp){
+  for(let i=0;i<untypedList.length;i++){
+    const e=untypedList[i];
+    progress('band 3 (hard) — typing ambiguous entities (LLM)… '+(i+1)+'/'+untypedList.length+' · '+e.canonical);
     const occ=model.clausesForEntity(e.id,4).map(s=>'- '+s).join('\n');
     const messages=[
       {role:'system',content:'You type a referent from a text as PERSON or THING, and if a person, the gender. A group of people (e.g. "his sisters") is PERSON. A place, object, abstraction, or event is THING. Answer in the exact format, nothing else.'},
@@ -9036,12 +9073,11 @@ GENDER: <M|F|unknown>`}
       const type=tm[1].toUpperCase();
       const gm=text.match(/GENDER:\s*(M|F|male|female|unknown)/i);
       let gender=gm?gm[1].toUpperCase():null; if(gender==='MALE')gender='M'; if(gender==='FEMALE')gender='F'; if(gender==='UNKNOWN'||gender==='')gender=null;
-      const before=model.classify(e.canonical).type;
-      model.setEntityType(e.id,type,gender,'webllm:'+mid);
-      if(type==='PERSON' && before!=='PERSON'){
-        const key=e.canonical.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
-        if(key) model.setRule('type',{surfaceRegex:'\\b'+key.replace(/ +/g,'\\s+')+'\\b'}, gender?{type:'PERSON',gender}:{type:'PERSON'}, {agent:'webllm:'+mid,note:'learned: '+e.canonical+' is a person'});
-      }
+      model.setEntityType(e.id,type,gender,'webllm:'+mid,'hard fork: no clear indicator, model selected the type');
+      // FEEDBACK: author a type-rule keyed on this surface so the indicator fires mechanically next time
+      // (this hard case sinks into the easy/mechanical layer on the next read).
+      const key=e.canonical.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
+      if(key) model.setRule('type',{surfaceRegex:'\\b'+key.replace(/ +/g,'\\s+')+'\\b'}, gender?{type,gender}:{type}, {agent:'webllm:'+mid,note:'learned: "'+e.canonical+'" is a '+(type==='PERSON'?'person':'thing')});
     }catch(err){ console.warn('type entity',e.canonical,err); }
   }
   STATE=model.summary();
@@ -9052,18 +9088,32 @@ async function runPipeline(text){
   const docName=(document.getElementById('docName')?document.getElementById('docName').value:'').trim();
   const btn=document.getElementById('readBtn'); if(btn){btn.disabled=true; btn.textContent='Running…';}
   try{
-    progress('reading — ingestion · segmentation · structure (mechanical)…');
+    // ---- BAND 1 (observed) + BAND 2 (mechanical, untyped) ----
+    progress('band 1–2 — ingestion · structure (positional roles, no typing)…');
     model=engine(); STATE=model.read(text);
+
+    // ---- BAND 3, EASY FORK FIRST: mechanical type-DEFs from clear indicators (titles / type-rules) ----
+    // This always runs (no model needed). TYPING PRECEDES COREFERENCE: the type-DEFs re-enter the
+    // structural candidate filter before any frame is bound.
+    progress('band 3 (easy) — typing on clear indicators (mechanical)…');
+    let untyped = model.typeEntitiesMechanical(); STATE=model.summary();
+
     if(window.EOLLM&&window.EOLLM.anyReady()){
-      progress('hypothesizing the document (context for typing)…'); await hypothesizeDoc();
-      const docHyp=model.activeDoc();
-      await typeEntities(docName, docHyp);                 // 1) TYPE FIRST — clean the candidate pool
+      // ---- BAND 3, HARD FORK: the genuinely-ambiguous types go to the LLM (auto, no manual click) ----
+      if(untyped.length){
+        progress('hypothesizing the document (context for typing)…'); await hypothesizeDoc();
+        const docHyp=model.activeDoc();
+        await typeEntitiesLLM(untyped, docName, docHyp);  // types ONLY the survivors of the cheap pass
+      }
       progress('binding grammar-forced frames (type-corrected)…'); bindUniqueFrames(); STATE=model.summary();
-      const ambi=model.frameAnalysis().filter(a=>a.verdict==='ambiguous');   // 2) coref over the clean pool
+      const ambi=model.frameAnalysis().filter(a=>a.verdict==='ambiguous');   // coref over the clean pool
       for(let i=0;i<ambi.length;i++){ progress('resolving ambiguous references… '+(i+1)+'/'+ambi.length); await resolveLLM(ambi[i].conEvt,ambi[i].role); }
       const cons=STATE.log.filter(e=>e.op==='CON'&&!model._meant.some(d=>d.content.kind==='typing'&&d.content.target.conEvt===e.id));
-      for(let i=0;i<cons.length;i++){ progress('typing clauses… '+(i+1)+'/'+cons.length); await typeClause(cons[i].id); }   // 3) clause typing last (off critical path)
+      for(let i=0;i<cons.length;i++){ progress('typing clauses… '+(i+1)+'/'+cons.length); await typeClause(cons[i].id); }   // clause typing last (off critical path)
     } else {
+      // No model: easy forks already committed; bind the grammar-forced frames mechanically. Hard
+      // forks (untyped entities, ambiguous frames) are left as honest open DEFs — never a manual-click.
+      if(untyped.length) progress(untyped.length+' entit'+(untyped.length===1?'y':'ies')+' need the model to type — load one and Read again.');
       progress('binding grammar-forced frames (mechanical)…'); bindUniqueFrames(); STATE=model.summary();
     }
     progress('done — one log, '+(model._events?model._events.length:0)+' events.');
