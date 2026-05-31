@@ -7793,7 +7793,7 @@ function buildEOReader(nlp, its, extractSVO) {
     }
 
     // A significance agent answers an open question → creates a DEF (revisable).
-    function resolveCoref(conEvt, role, referentId, agent, reason) {
+    function resolveCoref(conEvt, role, referentId, agent, reason, prompt) {
       const con = log.find(e => e.id === conEvt); if (!con) return null;
       const occ = pronOccs.find(o => o.conEvt === conEvt && o.role === role); if (!occ) return null;
       const refName = referentId==='__none__' ? '∅ (no referent)' : (entities.get(referentId)?.canonical || referentId);
@@ -7803,6 +7803,7 @@ function buildEOReader(nlp, its, extractSVO) {
         hypothesis: `"${occ.surface}" refers to ${refName}`,
         referent: referentId,
         reason: reason || null,
+        prompt: prompt || null,
         grounding: [conEvt],
         supersedes: null,
         _agent: agent || 'human'
@@ -7924,9 +7925,14 @@ function buildEOReader(nlp, its, extractSVO) {
       return mEmit(prior?'REC':'DEF', { kind:'entity', target:entId, hypothesis,
         cursor:cursor??null, grounding:grounding||[], supersedes: prior?prior.id:null, _agent:agent });
     }
-    function setDocDef(hypothesis, agent, grounding) {
+    // Document hypothesis DEF. In the per-cursor loop this is the RUNNING hypothesis: it is issued
+    // (re)at each cursor, stamped with that cursor, superseding the prior one — so the log holds many
+    // hypothesis DEFs and you can watch the interpretation evolve clause by clause. The full prompt the
+    // model saw is stored on the DEF so it appears in the log.
+    function setDocDef(hypothesis, agent, grounding, cursor, prompt) {
       const prior = activeDefForTarget('document', '__doc__');
       return mEmit(prior?'REC':'DEF', { kind:'document', target:'__doc__', hypothesis,
+        cursor: cursor??null, prompt: prompt||null,
         grounding:grounding||[], supersedes: prior?prior.id:null, _agent:agent });
     }
     function setSpanDef(spanKey, hypothesis, agent, grounding) {
@@ -8007,16 +8013,25 @@ function buildEOReader(nlp, its, extractSVO) {
         // number left soft (we don't track entity plurality reliably)
         survivors.push(e);
       }
-      // salience rank: recency + log frequency + subjecthood (ACT-R)
+      // salience rank: recency + log frequency + subjecthood (ACT-R) + INTERPRETIVE CENTRALITY.
+      // The running hypothesis ("hypotheses as cursors") feeds back into the mechanical ranking: an
+      // entity the accumulated interpretation has made central is more salient than recency alone implies,
+      // so what is ambiguous on bare morphosyntax may be clearly ranked once the hypothesis is in hand.
       const subjCount = id => log.filter(x=>x.op==='CON'&&x.cursor<=cur&&x.content.subject===id).length;
+      const hypText = (activeDoc()||'').toLowerCase();
+      const central = e => {
+        if(!hypText) return 0;
+        const c=e.canonical.toLowerCase(), last=c.split(' ').pop();
+        return (hypText.includes(c) || (last.length>2 && hypText.includes(last))) ? 1.5 : 0;
+      };
       const scoreOf = e => {
         const ms = e.mentions.filter(m=>m<=cur);
         const recency = ms.length? 1/(1+(cur-Math.max(...ms))) : 0;
         const freq = ms.length;
-        return recency*3 + Math.log(1+freq) + subjCount(e.id)*0.6;
+        return recency*3 + Math.log(1+freq) + subjCount(e.id)*0.6 + central(e);
       };
       survivors.sort((a,b)=>scoreOf(b)-scoreOf(a));
-      const ranked = survivors.map(e=>({ id:e.id, canonical:e.canonical, type:e.type, gender:e.gender, score:+scoreOf(e).toFixed(2) }));
+      const ranked = survivors.map(e=>({ id:e.id, canonical:e.canonical, type:e.type, gender:e.gender, score:+scoreOf(e).toFixed(2), central: central(e)>0 }));
       const verdict = ranked.length===0 ? 'none' : ranked.length===1 ? 'unique' : 'ambiguous';
       return { frame:occ.frame||null, conEvt:occ.conEvt, role:occ.role, pronoun:surface, cursor:cur,
         constraints:fr, window:N, widened, survivors:ranked, excluded, verdict };
@@ -8341,7 +8356,7 @@ button{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;lett
 .qcard{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px;transition:.2s}.qcard.working{border-color:var(--certain);opacity:.6}
 .qq{font-size:16px;font-style:italic;margin-bottom:4px}.qclause{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim);margin-bottom:8px}
 .qcands{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim);display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}
-.cand{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 11px;font-size:11px}.cand:hover{border-color:var(--person);color:var(--person)}.cand.none:hover{border-color:var(--dim);color:var(--dim)}
+.cand{display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:5px 11px;font-size:11px}
 .defgroup{margin-bottom:8px}.defgroup.compete{border:1px dashed var(--hyp);border-radius:8px;padding:8px}
 .competehdr{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--hyp);margin-bottom:6px}
 .defcard{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--certain);border-radius:6px;padding:10px 14px;margin-bottom:8px;display:flex;gap:8px;align-items:flex-start}
@@ -8361,6 +8376,15 @@ button{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;lett
 .excl{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);opacity:.7;margin-bottom:6px}
 .bindb{border-color:var(--certain);color:var(--certain)}
 .llmb{border-color:var(--hyp);color:var(--hyp)}
+.defcard{flex-wrap:wrap}
+.promptbox{flex:1 1 100%;margin-top:6px;font-family:'IBM Plex Mono',monospace;font-size:10px}
+.promptbox summary{cursor:pointer;color:var(--hyp);opacity:.85}
+.promptbox pre{white-space:pre-wrap;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:8px;margin:6px 0 0;color:var(--dim);max-height:220px;overflow:auto;line-height:1.5}
+.hyptl{margin-top:8px;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.hyptl summary{cursor:pointer;color:var(--person);opacity:.85}
+.hyprow{padding:4px 0;border-top:1px solid var(--border);color:var(--text);font-size:12px}
+.hyprow .hypc{display:inline-block;min-width:32px;color:var(--hyp);font-family:'IBM Plex Mono',monospace;font-size:10px}
+.hyprow .ag{color:var(--dim);font-size:9px;font-family:'IBM Plex Mono',monospace;margin-left:6px}
 /* learn */
 .frgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
 .frcell{border:1px solid var(--border);border-radius:5px;padding:8px 10px;background:var(--panel2,rgba(255,255,255,.02))}
@@ -8620,11 +8644,7 @@ function renderGraph(p){
     side+=`<div class="isub">surfaces: ${ent.surfaces.map(esc).join(', ')} · ${ent.mentions} mentions</div>`;
     const edef=model.activeEntityDef(n.id);
     side+=`<div class="ilabel">hypothesis (DEF)</div>`;
-    side+= edef? `<div class="edef">“${esc(edef)}”</div>` : `<div class="isub">none yet</div>`;
-    if(window.EOLLM&&window.EOLLM.anyReady()){
-      side+=`<button class="mini" onclick="characterize('${n.id}')">${edef?'re-characterize':'characterize'} · Model B</button>`;
-      if(edef) side+=`<button class="mini" onclick="evaEntity('${n.id}')">still holds?</button>`;
-    }
+    side+= edef? `<div class="edef">“${esc(edef)}”</div>` : `<div class="isub">characterized automatically while reading</div>`;
     const w=model.walk(n.id,true);
     side+='<div class="ilabel">edges (solid=certain, dashed=via DEF)</div>';
     w.forEach(e=>{const sn=STATE.entities.find(x=>x.id===e.subject)?.canonical;const on=STATE.entities.find(x=>x.id===e.object)?.canonical;
@@ -8658,7 +8678,6 @@ function renderLog(p){
   ['ALL','given','structure','meaning'].forEach(o=>h+=`<button class="lf ${logFilter===o?'on':''}" onclick="setLogFilter('${o}')">${o}</button>`);
   h+='<span class="lfsep"></span>';
   ['SEG','INS','CON','SYN','SIG','DEF'].forEach(o=>h+=`<button class="lf ${logFilter===o?'on':''}" onclick="setLogFilter('${o}')">${o}</button>`);
-  if(window.EOLLM&&window.EOLLM.anyReady()) h+=`<button class="lf typeall" onclick="typeAll()">type all CON · Typer</button>`;
   h+='</div><div class="loglist">';
   const stream=(STATE.events||STATE.log);
   const show=e=> logFilter==='ALL' || e.band===logFilter || e.op===logFilter;
@@ -8667,7 +8686,6 @@ function renderLog(p){
     if(e.op==='CON' && (logFilter==='ALL'||logFilter==='structure'||logFilter==='CON')){
       const typ=model._meant.find(d=>d.content.kind==='typing'&&d.content.target.conEvt===e.id&&['DEF','REC'].includes(d.op));
       if(typ) h+=`<div class="typerow">${typ.content.mode}·${typ.content.domain}·${typ.content.object} → <b>${typ.content.act}</b> / ${typ.content.site} / ${typ.content.stance} <span class="ag">${esc(typ.agent)}</span></div>`;
-      else if(window.EOLLM&&window.EOLLM.anyReady()) h+=`<div class="typerow"><button class="mini" onclick="typeClause('${e.id}')">type · Typer</button></div>`;
     }
   });
   h+='</div></div>';
@@ -8686,6 +8704,7 @@ function logSummary(e){
     if(c.kind==='rule') return 'RULE['+c.ruleType+'] '+JSON.stringify(c.when)+' → '+JSON.stringify(c.then)+(c.scope?' scope '+JSON.stringify(c.scope):'');
     if(c.kind==='typing') return 'typing '+c.target.conEvt+' → '+c.act+'/'+c.site+'/'+c.stance;
     if(c.kind==='rule-revoke') return 'revoke '+c.revokes;
+    if(c.kind==='document') return (c.cursor!=null?'⟨hypothesis @ clause '+c.cursor+'⟩ ':'hypothesis: ')+'“'+(c.hypothesis||'')+'”';
     return (c.kind||'')+': '+(c.hypothesis||JSON.stringify(c).slice(0,80));
   }
   if(e.op==='EVA') return 'EVA '+(c.holds?'✓ holds':'✗ fails')+' '+(c.target||'')+(c.note?' · '+c.note:'');
@@ -8697,21 +8716,24 @@ function renderMeant(p){
   const open=model.openQuestions();
   const docDef=model.activeDoc();
   let h='<div class="meantwrap">';
-  // document hypothesis
-  h+=`<div class="docbox"><div class="mhead">Document DEF</div>`;
-  h+= docDef? `<div class="docdef">“${esc(docDef)}”</div>`:`<div class="isub">none yet</div>`;
-  if(window.EOLLM&&window.EOLLM.anyReady()) h+=`<button class="mini" onclick="hypothesizeDoc()">${docDef?'re-hypothesize':'hypothesize'} document · Model B</button>`;
+  // RUNNING HYPOTHESIS — the active one, plus the per-cursor history so you can watch the interpretation
+  // evolve clause by clause. Each is a cursor-stamped DEF that superseded the one before it.
+  const hypHist=model._meant.filter(d=>['DEF','REC'].includes(d.op)&&d.content.kind==='document');
+  const lastHyp=hypHist[hypHist.length-1];
+  h+=`<div class="docbox"><div class="mhead">Running hypothesis ${lastHyp&&lastHyp.content.cursor!=null?'<span class="vbreak">as of clause '+lastHyp.content.cursor+' · '+hypHist.length+' issued</span>':''}</div>`;
+  h+= docDef? `<div class="docdef">“${esc(docDef)}”</div>`:`<div class="isub">forms automatically, clause by clause, while reading</div>`;
+  if(lastHyp&&lastHyp.content.prompt) h+=`<details class="promptbox"><summary>prompt the model saw</summary><pre>${esc(lastHyp.content.prompt)}</pre></details>`;
+  if(hypHist.length>1){
+    h+=`<details class="hyptl"><summary>how the hypothesis evolved (${hypHist.length} cursors)</summary>`;
+    hypHist.forEach(d=>{ h+=`<div class="hyprow"><span class="hypc">${d.content.cursor!=null?'c'+d.content.cursor:'—'}</span> “${esc(d.content.hypothesis)}” <span class="ag">${esc(d.agent)}</span></div>`; });
+    h+=`</details>`;
+  }
   h+=`</div>`;
-  h+=`<div class="mnote">Coreference runs in two stages (per the neuroscience): a <b>mechanical</b> morphosyntactic search (animacy + known-gender filter, salience-ranked) computes an ambiguity verdict; only <b>ambiguous</b> frames need a Tier-3 <b>judgment</b> (an LLM DEF selecting among competing alternatives). Unique frames are grammar-forced and bind mechanically. <b>The Given-Log is never altered.</b></div>`;
+  h+=`<div class="mnote">Each fork passes through two gates. <b>Gate 1 (call the model?)</b>: bare structure forces some bindings (<i>unique</i>); for the rest the accumulated context is applied first — if the running hypothesis singles out one survivor it is committed as a high-trust <b>context</b> DEF, and only a fork that survives everything we already know is paid to the <b>LLM</b>. <b>Gate 2 (write a rule?)</b>: when the model resolves the same configuration to the salient survivor consistently, that pattern is promoted to a <b>reflex</b> and binds for free thereafter. The cost of reading falls as the interpretation deepens. <b>The Given-Log is never altered.</b></div>`;
   const analyses = model.frameAnalysis();
   const uniq = analyses.filter(a=>a.verdict==='unique');
   const ambi = analyses.filter(a=>a.verdict==='ambiguous');
   const none = analyses.filter(a=>a.verdict==='none');
-  // batch actions
-  let batch='';
-  if(uniq.length) batch+=`<button class="mini" onclick="bindAllUnique()">bind ${uniq.length} unique · mechanical</button>`;
-  if(ambi.length && window.EOLLM&&window.EOLLM.anyReady()) batch+=`<button class="mini" onclick="resolveAmbiguous()">resolve ${ambi.length} ambiguous · LLM</button>`;
-  if(batch) h+=`<div style="margin-bottom:10px">${batch}</div>`;
   h+=`<div class="mhead">Open frames <span class="cnt">${analyses.length}</span> <span class="vbreak">${uniq.length} unique · ${ambi.length} ambiguous · ${none.length} no-candidate</span></div>`;
   if(!analyses.length) h+='<div class="isub">none — every reference frame is bound.</div>';
   analyses.forEach(a=>{
@@ -8719,23 +8741,20 @@ function renderMeant(p){
     h+=`<div class="qcard" id="q_${a.conEvt}_${a.role}">
       <div class="qq">“${esc(a.pronoun)}” <span class="verdict ${vc}">${a.verdict}</span> <span class="constr">${a.constraints.gender||''} ${a.constraints.animacy}</span></div>
       <div class="qclause">clause ${a.cursor} · ${a.role}${a.widened?' · scope widened':''}</div>`;
-    // survivors (salience-ranked) + excluded
+    // survivors (salience-ranked) + excluded — read-only; the pipeline resolves these automatically
     if(a.survivors.length){
       h+=`<div class="surv">survivors (salience-ranked): `;
-      a.survivors.forEach((s,i)=>h+=`<button class="cand ${i===0?'top':''}" onclick="answer('${a.conEvt}','${a.role}','${s.id}','human')">${esc(s.canonical)} <span class="sc">${s.score}</span></button>`);
+      a.survivors.forEach((s,i)=>h+=`<span class="cand ${i===0?'top':''}">${esc(s.canonical)} <span class="sc">${s.score}</span></span>`);
       h+=`</div>`;
     }
     if(a.excluded.length) h+=`<div class="excl">excluded: ${a.excluded.map(e=>esc(e.canonical)+' ('+esc(e.reason)+')').join(', ')}</div>`;
-    // verdict-driven action
+    // verdict outcome (read-only — resolved automatically during reading)
     if(a.verdict==='unique'){
-      h+=`<button class="mini bindb" onclick="bindUnique('${a.conEvt}','${a.role}','${a.survivors[0].id}')">bind → ${esc(a.survivors[0].canonical)} · mechanical (forced)</button>`;
+      h+=`<div class="isub">grammar-forced → bound mechanically to <b>${esc(a.survivors[0].canonical)}</b></div>`;
     } else if(a.verdict==='ambiguous'){
-      if(window.EOLLM&&window.EOLLM.anyReady())
-        h+=`<button class="mini llmb" onclick="resolveLLM('${a.conEvt}','${a.role}')">judge · LLM (select among ${a.survivors.length})</button>`;
-      else h+=`<div class="isub">load a model to judge, or pick a survivor above</div>`;
+      h+=`<div class="isub">ambiguous → judged by the LLM during reading (selecting among ${a.survivors.length})</div>`;
     } else {
-      h+=`<div class="isub">no antecedent in scope — likely deictic, cataphoric, or out of working memory.</div>
-        <button class="cand none" onclick="answer('${a.conEvt}','${a.role}','__none__','human')">mark no referent</button>`;
+      h+=`<div class="isub">no antecedent in scope — likely deictic, cataphoric, or out of working memory.</div>`;
     }
     h+=`</div>`;
   });
@@ -8748,13 +8767,13 @@ function renderMeant(p){
   for(const arr of byT.values()){
     const competing=arr.length>1;
     h+=`<div class="defgroup ${competing?'compete':''}">`;
-    if(competing) h+=`<div class="competehdr">competing answers — pin one active</div>`;
+    if(competing) h+=`<div class="competehdr">competing answers — most recent is active</div>`;
     arr.forEach(d=>{
       const act=activeIds.has(d.id);
       h+=`<div class="defcard ${act?'active':''}">
-        ${competing?`<input type="radio" name="pin_${d.content.target.conEvt}_${d.content.target.role}" ${act?'checked':''} onclick="pin('${d.id}')">`:''}
         <div class="dh">${esc(d.content.hypothesis)} ${act?'<span class="activetag">active</span>':''}</div>
         <div class="dmeta">${d.id} · agent: <b>${esc(d.agent)}</b>${d.content.reason?' · '+esc(d.content.reason):''} · grounding ${d.content.grounding.join(',')}</div>
+        ${d.content.prompt?`<details class="promptbox"><summary>prompt the model saw</summary><pre>${esc(d.content.prompt)}</pre></details>`:''}
       </div>`;
     });
     h+=`</div>`;
@@ -8773,8 +8792,6 @@ function renderMeant(p){
   h+='</div>';
   p.innerHTML=h;
 }
-function answer(conEvt,role,entId,agent){ model.resolveCoref(conEvt,role,entId,agent||'human'); afterMeant(); }
-function pin(defId){ model.pinDef(defId); afterMeant(); }
 function afterMeant(){ STATE=model.summary(); if(RUNNING) return; renderStats(); layoutGraph(); renderTab(currentTab); }
 
 // ---- query ----
@@ -8797,18 +8814,20 @@ function doWalk(){const id=document.getElementById('walkq').value;const hyp=docu
 function describeEnt(e){ return `${e.canonical} (${e.type==='PERSON'?(e.gender==='M'?'a man':e.gender==='F'?'a woman':'a person'):'a thing'})`; }
 
 async function resolveLLM(conEvt,role){
-  const a=model.frameAnalysis().find(x=>x.conEvt===conEvt&&x.role===role); if(!a) return;
-  const q=model.openQuestions().find(x=>x.conEvt===conEvt&&x.role===role); if(!q) return;
+  const a=model.frameAnalysis().find(x=>x.conEvt===conEvt&&x.role===role); if(!a) return null;
+  const q=model.openQuestions().find(x=>x.conEvt===conEvt&&x.role===role); if(!q) return null;
   const card=document.getElementById(`q_${conEvt}_${role}`); if(card) card.classList.add('working');
   try{
+    // working memory carries the RUNNING HYPOTHESIS (activeDoc), the typed entities and the open frames —
+    // the accumulated interpretive context built by every prior DEF in the loop. That context is what
+    // lets a small model resolve a "he" correctly: the hard work of building it is already done.
     const wm=model.renderWorkingMemory(q.cursor);
+    const hyp=model.activeDoc();
     // competing alternatives = the morphosyntactic survivors, salience-ranked (the integration/control stage)
     const cands=a.survivors;
     const list=cands.map(c=>'- '+c.canonical+' ('+(c.type==='PERSON'?(c.gender==='M'?'man':c.gender==='F'?'woman':'person'):'thing')+')').join('\n');
-    const messages=[
-      {role:'system',content:'You resolve an ambiguous reference while reading. The grammar allows several candidates; choose the one the discourse intends. Follow the exact reply format.'},
-      {role:'user',content:
-`You are holding in mind: ${wm||'(nothing yet)'}
+    const userPrompt=
+`${hyp?'Your working hypothesis for this text: "'+hyp+'"\n\n':''}You are holding in mind: ${wm||'(nothing yet)'}
 
 The grammar allows these candidates (most salient first):
 ${list}
@@ -8817,7 +8836,10 @@ New sentence: "${q.clause}"
 
 The word "${q.pronoun}" (as the ${role}) refers to which candidate?
 Reply on ONE line, exactly:  ANSWER: <name or none> | REASON: <brief>
-Use a name copied exactly from the list, or the word none.`}
+Use a name copied exactly from the list, or the word none.`;
+    const messages=[
+      {role:'system',content:'You resolve an ambiguous reference while reading. The grammar allows several candidates; choose the one the discourse intends. Follow the exact reply format.'},
+      {role:'user',content:userPrompt}
     ];
     const {text,model:mid}=await window.EOLLM.chat('typer',messages,{temperature:0.1,max_tokens:80});
     const {refId,reason}=parseCoref(text,cands);
@@ -8826,11 +8848,12 @@ Use a name copied exactly from the list, or the word none.`}
       console.log('[coref] no clean match for',q.pronoun,'→ left open. raw:',text);
       const note=document.createElement('div'); note.className='qnote'; note.textContent='reply matched no candidate — left open: '+text.slice(0,80);
       if(card) card.appendChild(note);
-      return;
+      return null;
     }
-    model.resolveCoref(conEvt,role,refId,'webllm:'+mid,reason);
+    model.resolveCoref(conEvt,role,refId,'webllm:'+mid,reason,userPrompt);
     afterMeant();
-  }catch(e){ if(card){card.classList.remove('working');} notify('resolve failed: '+e.message); }
+    return refId;
+  }catch(e){ if(card){card.classList.remove('working');} notify('resolve failed: '+e.message); return null; }
 }
 function parseCoref(text,cands){
   let ans='', reason='';
@@ -8846,22 +8869,6 @@ function parseCoref(text,cands){
     ||cands.find(c=>{const lt=c.canonical.toLowerCase().split(' ').pop();return low.split(/\s+/).includes(lt)&&lt.length>2;});
   return {refId: best?best.id:null, reason};
 }
-// MECHANICAL binding for grammar-forced (unique) frames — agent 'morphosyntax', still revisable
-function bindUnique(conEvt,role,entId){
-  model.resolveCoref(conEvt,role,entId,'morphosyntax','unique survivor of morphosyntactic search in working memory');
-  afterMeant();
-}
-function bindAllUnique(){
-  model.frameAnalysis().filter(a=>a.verdict==='unique').forEach(a=>{
-    model.resolveCoref(a.conEvt,a.role,a.survivors[0].id,'morphosyntax','unique survivor of morphosyntactic search in working memory');
-  });
-  afterMeant();
-}
-async function resolveAmbiguous(){
-  const ambi=model.frameAnalysis().filter(a=>a.verdict==='ambiguous');
-  for(const a of ambi){ await resolveLLM(a.conEvt,a.role); }
-}
-
 async function typeClause(conEvt){
   const con=STATE.log.find(e=>e.id===conEvt); if(!con) return;
   try{
@@ -8895,11 +8902,6 @@ function parseTyping(text){
   const ch=(text.match(/Changed[:\s]+(.*)$/im)||[])[1]||'';
   return {mode:m,domain:d,object:o,changed:ch.trim()};
 }
-async function typeAll(){
-  const cons=STATE.log.filter(e=>e.op==='CON'&&!model._meant.some(d=>d.content.kind==='typing'&&d.content.target.conEvt===e.id));
-  for(const c of cons){ await typeClause(c.id); }
-}
-
 async function characterize(entId){
   try{
     const ent=STATE.entities.find(e=>e.id===entId);
@@ -8915,47 +8917,35 @@ In one sentence, what is ${ent.canonical}?`}
     ];
     const {text,model:mid}=await window.EOLLM.chat('hyp',messages,{temperature:0.5,max_tokens:80});
     model.setEntityDef(entId, oneSentence(text), 'webllm:'+mid, null, model._log.filter(e=>e.op==='CON'&&(e.content.subject===entId||e.content.object===entId)).map(e=>e.id).slice(0,6));
-    afterMeant(); renderGraph(document.getElementById('panel'));
-  }catch(e){ alert('characterize failed: '+e.message); }
+    afterMeant(); if(!RUNNING) renderGraph(document.getElementById('panel'));
+  }catch(e){ notify('characterize failed: '+e.message); }
 }
-async function evaEntity(entId){
+// RUNNING HYPOTHESIS — the per-cursor DEF. Formed from everything resolved up to and including this
+// cursor, it records the best interpretation the reader holds at that moment and is carried forward as
+// context for the next cursor (it re-enters renderWorkingMemory and the salience ranking). It supersedes
+// the prior hypothesis and is stamped with this cursor, so the log holds many of them and the
+// interpretation can be watched evolving clause by clause. The full prompt is stored on the DEF.
+async function formHypothesis(cursor){
   try{
-    const cur=model.activeEntityDef(entId); if(!cur) return;
-    const ent=STATE.entities.find(e=>e.id===entId);
-    const cls=model.clausesForEntity(entId,12).map(s=>'- '+s).join('\n');
-    const messages=[
-      {role:'system',content:'You test whether a description still holds against the evidence. Answer yes or no.'},
-      {role:'user',content:
-`Current understanding of ${ent.canonical}: "${cur}"
+    const segs=STATE.log.filter(e=>e.op==='SEG'&&e.cursor<=cursor).map(e=>'- '+e.content.text).join('\n');
+    const prior=model.activeDoc();
+    const wm=model.renderWorkingMemory(cursor);
+    const userPrompt=
+`Clauses read so far (through clause ${cursor}):
+${segs}
 
-All clauses about ${ent.canonical}:
-${cls}
+${prior?'Your current working hypothesis: "'+prior+'"\n\n':''}What you are holding in mind: ${wm||'(little resolved yet)'}
 
-Does the current understanding still hold? Reply "yes" or "no:" followed by a revised one-sentence description.`}
-    ];
-    const {text,model:mid}=await window.EOLLM.chat('hyp',messages,{temperature:0.4,max_tokens:90});
-    const def=model.activeDefForTarget('entity',entId);
-    if(/^\s*no\b/i.test(text)){
-      const rev=oneSentence(text.replace(/^\s*no[:\s-]*/i,''));
-      model.evaluate(def.id,false,'webllm:'+mid,'failed');
-      model.setEntityDef(entId,rev,'webllm:'+mid,null,def.content.grounding);
-    } else {
-      model.evaluate(def.id,true,'webllm:'+mid,'confirmed');
-    }
-    afterMeant(); renderGraph(document.getElementById('panel'));
-  }catch(e){ alert('eva failed: '+e.message); }
-}
-async function hypothesizeDoc(){
-  try{
-    const segs=STATE.log.filter(e=>e.op==='SEG').map(e=>'- '+e.content.text).slice(0,40).join('\n');
+In ONE sentence, state the best running hypothesis for what this text is doing and about, given everything read so far. If your prior hypothesis still holds, restate it; if the latest clause changes it, revise it.`;
     const messages=[
-      {role:'system',content:'You state what a text is about in ONE sentence.'},
-      {role:'user',content:`The text, clause by clause:\n${segs}\n\nIn one sentence, what is this text about?`}
+      {role:'system',content:'You maintain a running, one-sentence interpretation of a text as it is read, clause by clause. Always answer in exactly one sentence.'},
+      {role:'user',content:userPrompt}
     ];
-    const {text,model:mid}=await window.EOLLM.chat('hyp',messages,{temperature:0.5,max_tokens:80});
-    model.setDocDef(oneSentence(text),'webllm:'+mid,STATE.log.filter(e=>e.op==='SEG').map(e=>e.id).slice(0,8));
-    afterMeant();
-  }catch(e){ notify('document hypothesis failed: '+e.message); }
+    const {text,model:mid}=await window.EOLLM.chat('hyp',messages,{temperature:0.4,max_tokens:80});
+    const ground=STATE.log.filter(e=>e.op==='SEG'&&e.cursor<=cursor).map(e=>e.id).slice(-8);
+    model.setDocDef(oneSentence(text),'webllm:'+mid,ground,cursor,userPrompt);
+    STATE=model.summary();
+  }catch(e){ notify('hypothesis at cursor '+cursor+' failed: '+e.message); }
 }
 function oneSentence(t){ t=t.trim().replace(/^["'"]|["'"]$/g,''); const m=t.match(/^.*?[.!?](\s|$)/); return (m?m[0]:t).trim(); }
 
@@ -8978,9 +8968,8 @@ function renderLearn(p){
   const haveLLM=window.EOLLM&&window.EOLLM.anyReady();
   h+=`<div class="gatebar">`;
   if(haveLLM){
-    h+=`<button class="mini llmb" onclick="runGate()">run EVA gate · is this failing enough?</button>`;
-    if(GATE) h+=`<button class="mini ${GATE.trigger?'bindb':''}" ${GATE.trigger?'':'disabled'} onclick="runAuthor()">author rules${GATE.focus?' · '+esc(GATE.focus.slice(0,40)):''}</button>`;
-  } else h+=`<div class="isub">load a model (top of panel) to run the gate and author rules — the report above is fully mechanical and needs none.</div>`;
+    h+=`<div class="isub">The EVA gate runs automatically on every Read: it judges whether the mechanism is failing enough to be worth learning, and if so it authors rules and re-reads to apply them mechanically. The verdict from the last read is shown below.</div>`;
+  } else h+=`<div class="isub">load a model (top of panel) so the gate can run and author rules automatically — the report above is fully mechanical and needs none.</div>`;
   h+=`</div>`;
   if(GATE){
     const cls=GATE.trigger?'gtrig':'gpass';
@@ -8988,11 +8977,11 @@ function renderLearn(p){
   }
 
   const seeds=rules.filter(r=>r.agent==='seed'), authored=rules.filter(r=>r.agent!=='seed');
-  h+=`<div class="mhead" style="margin-top:18px">Rules in the log <span class="cnt">${rules.length}</span> <span class="vbreak">${authored.length} authored · ${seeds.length} seed</span> ${seeds.length?'<button class="tiny" onclick="clearSeeds()">drop seeds → bare mechanism</button>':''}</div>`;
+  h+=`<div class="mhead" style="margin-top:18px">Rules in the log <span class="cnt">${rules.length}</span> <span class="vbreak">${authored.length} authored · ${seeds.length} seed</span></div>`;
   rules.forEach(r=>{
     const c=r.content;
     h+=`<div class="rulecard ${r.agent==='seed'?'seed':'authored'}">
-      <div class="rtop"><span class="rtype">${esc(c.ruleType)}</span> <span class="ragent">${esc(r.agent)}</span> <button class="tiny rev" onclick="revokeRule('${r.id}')">revoke</button></div>
+      <div class="rtop"><span class="rtype">${esc(c.ruleType)}</span> <span class="ragent">${esc(r.agent)}</span></div>
       <div class="rbody"><span class="rwhen">${esc(JSON.stringify(c.when))}</span> → <span class="rthen">${esc(JSON.stringify(c.then))}</span>${c.scope?' <span class="rscope">scope '+esc(JSON.stringify(c.scope))+'</span>':''}</div>
       ${c.note?`<div class="rnote">${esc(c.note)}</div>`:''}</div>`;
   });
@@ -9030,11 +9019,6 @@ async function authorRulesFromFocus(focus){
   arr.forEach(r=>{ if(r&&r.ruleType&&r.when&&r.then){ model.setRule(r.ruleType,r.when,r.then,{scope:r.scope||null,agent:'webllm:'+mid,note:r.note||''}); n++; } });
   return n;
 }
-async function runGate(){ try{ GATE=await gateDecision(); renderTab('learn'); }catch(e){ notify('gate failed: '+e.message); } }
-async function runAuthor(){ try{ const n=await authorRulesFromFocus(GATE&&GATE.focus); GATE=null; renderTab('learn'); notify(n+' rule(s) authored. Re-read to apply them mechanically.'); }catch(e){ notify('author failed: '+e.message); } }
-
-function revokeRule(id){ model.revokeRule(id,'human'); renderTab('learn'); }
-function clearSeeds(){ if(confirm('Drop all seed rules? The reader will type nothing as PERSON until you (or the author pass) add rules.')){ model.clearSeeds(); renderTab('learn'); } }
 function notify(msg){ if(RUNNING){ console.warn('[pipeline]',msg); } else { alert(msg); } }
 
 // ---- autonomous pipeline: Read runs everything, no per-step clicks ----
@@ -9083,38 +9067,128 @@ GENDER: <M|F|unknown>`}
   STATE=model.summary();
 }
 
+// THE PER-CURSOR LOOP. Hypotheses are not a terminal summary produced after the whole text is read;
+// they exist AS CURSORS. After the mechanical pass has laid down structure for the whole text, we walk
+// the clauses in reading order and at each one run the FULL interpretive cycle:
+//   advance → TYPE what's new → RESOLVE what's open (with the running hypothesis as context)
+//           → TYPE the clause → ISSUE/UPDATE the running hypothesis → carry it forward.
+// Each step only needs resolution up to "here", and the hypothesis it produces is the cheapest, most
+// valuable context for the next cursor. It is one continuous loop, not a disambiguation wave followed by
+// a hypothesis wave.
+// ---- the two gates of the reading loop, run live at every cursor -----------------------------------
+// GATE 1 (when to CALL the LLM): only on genuine structural exhaustion AFTER applying everything known.
+//   If bare structure forces the binding → mechanical commit. If the accumulated context (the running
+//   hypothesis) singles out one survivor → a high-trust CONTEXT commit, still no LLM. Only a fork that
+//   survives all of that — real ambiguity given everything we believe — is worth paying the model for.
+// GATE 2 (when to WRITE a rule): the same structural configuration recurring with the LLM resolving it
+//   the same way. When the model has, two or more times this reading, resolved a configuration to the
+//   salient survivor and never disagreed, that pattern is promoted to a REFLEX: the whole class of fork
+//   drops to zero cost for the rest of the read. The governor is coherence (consistent, structurally
+//   explicable agreement), not a fixed count. This runs live, alongside hypothesis formation — not as an
+//   offline phase — and each promotion is logged as a DEF so the learning is visible.
+let COREF_MEM = {};   // configuration signature -> { llmTotal, llmTop, reflex }
+function corefSignature(a){
+  const c=a.constraints||{};
+  return [(''+a.pronoun).toLowerCase(), a.role, c.animacy||'', c.gender||'', c.number||''].join('|');
+}
+function recordLLMResolution(sig, rank){
+  const m = COREF_MEM[sig] || (COREF_MEM[sig]={llmTotal:0, llmTop:0, reflex:false});
+  m.llmTotal++; if(rank===0) m.llmTop++;
+  if(!m.reflex && m.llmTotal>=2 && m.llmTop===m.llmTotal){
+    m.reflex=true;
+    model.setSpanDef('coref-reflex:'+sig,
+      'learned reflex — a “'+sig.replace(/\|/g,' · ')+'” reference resolves to the most salient survivor (the model agreed '+m.llmTotal+'×); future instances bind mechanically this reading',
+      'eva:coherence', []);
+  }
+}
+
+async function readCursorLoop(text, docName){
+  COREF_MEM = {};   // reflexes are learned within a reading; a fresh read relearns them
+  const maxK=model.maxCursor();
+  // the cursor where each entity was first introduced (its INS) — so we type each as it enters
+  const insAt={}; STATE.log.filter(e=>e.op==='INS').forEach(e=>{ if(insAt[e.content.anchor]==null) insAt[e.content.anchor]=e.cursor; });
+  for(let k=0;k<=maxK;k++){
+    const clause=(STATE.log.find(e=>e.op==='SEG'&&e.cursor===k)?.content.text)||'';
+    progress('reading clause '+(k+1)+'/'+(maxK+1)+(clause?' — “'+clause.slice(0,42)+(clause.length>42?'…':'')+'”':'')+' · type · resolve · hypothesize');
+    // 1) TYPE WHAT'S NEW — entities introduced at this cursor the mechanical pass could not type, with
+    //    the current running hypothesis (from the prior cursor) as context.
+    const newUntyped=STATE.entities.filter(e=>insAt[e.id]===k && !e.type);
+    if(newUntyped.length){ await typeEntitiesLLM(newUntyped, docName, model.activeDoc()); STATE=model.summary(); }
+    // 2) RESOLVE WHAT'S OPEN — each frame at this cursor passes through the gates, cheapest first.
+    const frames=model.frameAnalysis().filter(a=>a.cursor===k);
+    for(const a of frames){
+      if(a.verdict==='none') continue;                         // no antecedent in scope → honestly left open
+      const top=a.survivors[0];
+      if(a.verdict==='unique'){                                 // bare structure forces it
+        model.resolveCoref(a.conEvt,a.role,top.id,'morphosyntax','unique survivor of morphosyntactic search in working memory');
+        continue;
+      }
+      // 'ambiguous' — structure is exhausted; close it with what we already know before paying the model.
+      const sig=corefSignature(a), mem=COREF_MEM[sig];
+      const central=a.survivors.filter(s=>s.central);
+      if(mem&&mem.reflex){                                      // GATE 2 result — a learned reflex closes it for free
+        model.resolveCoref(a.conEvt,a.role,top.id,'reflex','recurring “'+sig.replace(/\|/g,' · ')+'” configuration the model has consistently resolved to the salient survivor this reading');
+        continue;
+      }
+      if(central.length===1 && central[0].id===top.id){        // GATE 1 — the running hypothesis singles one out
+        model.resolveCoref(a.conEvt,a.role,top.id,'context','resolved by the running hypothesis (narratively near-certain), not bare structure');
+        continue;
+      }
+      // genuine ambiguity persists after applying everything known → pay for the LLM, and record the
+      // judgment as evidence that may promote this configuration to a reflex (GATE 2).
+      const refId=await resolveLLM(a.conEvt,a.role);
+      if(refId&&refId!=='__none__'){ const rank=a.survivors.findIndex(s=>s.id===refId); recordLLMResolution(sig, rank); }
+    }
+    STATE=model.summary();
+    // 3) TYPE THE CLAUSE(S) at this cursor (IS/DOES/MEANS · domain · object)
+    const cons=STATE.log.filter(e=>e.op==='CON'&&e.cursor===k&&!model._meant.some(d=>d.content.kind==='typing'&&d.content.target.conEvt===e.id));
+    for(const c of cons){ await typeClause(c.id); }
+    STATE=model.summary();
+    // 4) ISSUE / UPDATE THE RUNNING HYPOTHESIS at this cursor — carried forward as context for the next.
+    if(clause) await formHypothesis(k);
+  }
+}
+
 async function runPipeline(text){
   RUNNING=true; GATE=null;
   const docName=(document.getElementById('docName')?document.getElementById('docName').value:'').trim();
   const btn=document.getElementById('readBtn'); if(btn){btn.disabled=true; btn.textContent='Running…';}
   try{
-    // ---- BAND 1 (observed) + BAND 2 (mechanical, untyped) ----
-    progress('band 1–2 — ingestion · structure (positional roles, no typing)…');
-    model=engine(); STATE=model.read(text);
+    const MAX_PASSES=2;   // initial read + at most one learn-and-reread (so learning can't loop forever)
+    for(let pass=0; pass<MAX_PASSES; pass++){
+      // ---- BAND 1 (observed) + BAND 2 (mechanical, untyped): the whole text in one mechanical pass ----
+      if(pass===0){ progress('band 1–2 — ingestion · structure (positional roles, no typing)…'); model=engine(); STATE=model.read(text); }
+      else { progress('learning loop — re-reading with the rules it just authored…'); rereadWithRules(text); }
 
-    // ---- BAND 3, EASY FORK FIRST: mechanical type-DEFs from clear indicators (titles / type-rules) ----
-    // This always runs (no model needed). TYPING PRECEDES COREFERENCE: the type-DEFs re-enter the
-    // structural candidate filter before any frame is bound.
-    progress('band 3 (easy) — typing on clear indicators (mechanical)…');
-    let untyped = model.typeEntitiesMechanical(); STATE=model.summary();
+      // ---- BAND 3, EASY FORK: mechanical type-DEFs from clear indicators (titles / type-rules). Always
+      // runs (no model needed); typing precedes coreference so the candidate pool starts clean. ----
+      progress('band 3 (easy) — typing on clear indicators (mechanical)…');
+      model.typeEntitiesMechanical(); STATE=model.summary();
 
-    if(window.EOLLM&&window.EOLLM.anyReady()){
-      // ---- BAND 3, HARD FORK: the genuinely-ambiguous types go to the LLM (auto, no manual click) ----
-      if(untyped.length){
-        progress('hypothesizing the document (context for typing)…'); await hypothesizeDoc();
-        const docHyp=model.activeDoc();
-        await typeEntitiesLLM(untyped, docName, docHyp);  // types ONLY the survivors of the cheap pass
+      if(window.EOLLM&&window.EOLLM.anyReady()){
+        // the per-cursor interpretive loop (hard typing · coref · clause typing · running hypothesis)
+        await readCursorLoop(text, docName);
+        // entity characterization — a finishing pass over the completed reading (entity DEFs)
+        STATE=model.summary();
+        for(let i=0;i<STATE.entities.length;i++){ progress('characterizing entities… '+(i+1)+'/'+STATE.entities.length+' · '+STATE.entities[i].canonical); await characterize(STATE.entities[i].id); }
+
+        // ---- LEARN ON ITS OWN: the gate judges whether the mechanism is failing enough to learn; if so
+        // it authors rules and we re-read to apply them mechanically (the schema sinks into the log). ----
+        if(pass < MAX_PASSES-1){
+          progress('EVA gate — is the mechanism failing enough to be worth learning?');
+          GATE=await gateDecision();
+          if(GATE.trigger){
+            progress('authoring rules from the gate’s focus'+(GATE.focus?' · '+GATE.focus:'')+'…');
+            const n=await authorRulesFromFocus(GATE.focus);
+            if(n>0) continue;   // re-read with the freshly authored rules, then stop
+          }
+        }
+      } else {
+        // No model: easy forks already committed; bind grammar-forced frames mechanically. Hard forks
+        // (untyped entities, ambiguous frames, hypotheses) are left as honest open DEFs.
+        progress('binding grammar-forced frames (mechanical)…'); bindUniqueFrames(); STATE=model.summary();
       }
-      progress('binding grammar-forced frames (type-corrected)…'); bindUniqueFrames(); STATE=model.summary();
-      const ambi=model.frameAnalysis().filter(a=>a.verdict==='ambiguous');   // coref over the clean pool
-      for(let i=0;i<ambi.length;i++){ progress('resolving ambiguous references… '+(i+1)+'/'+ambi.length); await resolveLLM(ambi[i].conEvt,ambi[i].role); }
-      const cons=STATE.log.filter(e=>e.op==='CON'&&!model._meant.some(d=>d.content.kind==='typing'&&d.content.target.conEvt===e.id));
-      for(let i=0;i<cons.length;i++){ progress('typing clauses… '+(i+1)+'/'+cons.length); await typeClause(cons[i].id); }   // clause typing last (off critical path)
-    } else {
-      // No model: easy forks already committed; bind the grammar-forced frames mechanically. Hard
-      // forks (untyped entities, ambiguous frames) are left as honest open DEFs — never a manual-click.
-      if(untyped.length) progress(untyped.length+' entit'+(untyped.length===1?'y':'ies')+' need the model to type — load one and Read again.');
-      progress('binding grammar-forced frames (mechanical)…'); bindUniqueFrames(); STATE=model.summary();
+      break;   // no learning re-read triggered → done
     }
     progress('done — one log, '+(model._events?model._events.length:0)+' events.');
   }catch(e){ progress('pipeline error: '+e.message); console.error(e); }
