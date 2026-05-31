@@ -8031,7 +8031,7 @@ function buildEOReader(nlp, its, extractSVO) {
         return recency*3 + Math.log(1+freq) + subjCount(e.id)*0.6 + central(e);
       };
       survivors.sort((a,b)=>scoreOf(b)-scoreOf(a));
-      const ranked = survivors.map(e=>({ id:e.id, canonical:e.canonical, type:e.type, gender:e.gender, score:+scoreOf(e).toFixed(2) }));
+      const ranked = survivors.map(e=>({ id:e.id, canonical:e.canonical, type:e.type, gender:e.gender, score:+scoreOf(e).toFixed(2), central: central(e)>0 }));
       const verdict = ranked.length===0 ? 'none' : ranked.length===1 ? 'unique' : 'ambiguous';
       return { frame:occ.frame||null, conEvt:occ.conEvt, role:occ.role, pronoun:surface, cursor:cur,
         constraints:fr, window:N, widened, survivors:ranked, excluded, verdict };
@@ -8729,7 +8729,7 @@ function renderMeant(p){
     h+=`</details>`;
   }
   h+=`</div>`;
-  h+=`<div class="mnote">Coreference runs in two stages (per the neuroscience): a <b>mechanical</b> morphosyntactic search (animacy + known-gender filter, salience-ranked) computes an ambiguity verdict; only <b>ambiguous</b> frames need a Tier-3 <b>judgment</b> (an LLM DEF selecting among competing alternatives). Unique frames are grammar-forced and bind mechanically. <b>The Given-Log is never altered.</b></div>`;
+  h+=`<div class="mnote">Each fork passes through two gates. <b>Gate 1 (call the model?)</b>: bare structure forces some bindings (<i>unique</i>); for the rest the accumulated context is applied first — if the running hypothesis singles out one survivor it is committed as a high-trust <b>context</b> DEF, and only a fork that survives everything we already know is paid to the <b>LLM</b>. <b>Gate 2 (write a rule?)</b>: when the model resolves the same configuration to the salient survivor consistently, that pattern is promoted to a <b>reflex</b> and binds for free thereafter. The cost of reading falls as the interpretation deepens. <b>The Given-Log is never altered.</b></div>`;
   const analyses = model.frameAnalysis();
   const uniq = analyses.filter(a=>a.verdict==='unique');
   const ambi = analyses.filter(a=>a.verdict==='ambiguous');
@@ -8814,8 +8814,8 @@ function doWalk(){const id=document.getElementById('walkq').value;const hyp=docu
 function describeEnt(e){ return `${e.canonical} (${e.type==='PERSON'?(e.gender==='M'?'a man':e.gender==='F'?'a woman':'a person'):'a thing'})`; }
 
 async function resolveLLM(conEvt,role){
-  const a=model.frameAnalysis().find(x=>x.conEvt===conEvt&&x.role===role); if(!a) return;
-  const q=model.openQuestions().find(x=>x.conEvt===conEvt&&x.role===role); if(!q) return;
+  const a=model.frameAnalysis().find(x=>x.conEvt===conEvt&&x.role===role); if(!a) return null;
+  const q=model.openQuestions().find(x=>x.conEvt===conEvt&&x.role===role); if(!q) return null;
   const card=document.getElementById(`q_${conEvt}_${role}`); if(card) card.classList.add('working');
   try{
     // working memory carries the RUNNING HYPOTHESIS (activeDoc), the typed entities and the open frames —
@@ -8848,11 +8848,12 @@ Use a name copied exactly from the list, or the word none.`;
       console.log('[coref] no clean match for',q.pronoun,'→ left open. raw:',text);
       const note=document.createElement('div'); note.className='qnote'; note.textContent='reply matched no candidate — left open: '+text.slice(0,80);
       if(card) card.appendChild(note);
-      return;
+      return null;
     }
     model.resolveCoref(conEvt,role,refId,'webllm:'+mid,reason,userPrompt);
     afterMeant();
-  }catch(e){ if(card){card.classList.remove('working');} notify('resolve failed: '+e.message); }
+    return refId;
+  }catch(e){ if(card){card.classList.remove('working');} notify('resolve failed: '+e.message); return null; }
 }
 function parseCoref(text,cands){
   let ans='', reason='';
@@ -9074,7 +9075,35 @@ GENDER: <M|F|unknown>`}
 // Each step only needs resolution up to "here", and the hypothesis it produces is the cheapest, most
 // valuable context for the next cursor. It is one continuous loop, not a disambiguation wave followed by
 // a hypothesis wave.
+// ---- the two gates of the reading loop, run live at every cursor -----------------------------------
+// GATE 1 (when to CALL the LLM): only on genuine structural exhaustion AFTER applying everything known.
+//   If bare structure forces the binding → mechanical commit. If the accumulated context (the running
+//   hypothesis) singles out one survivor → a high-trust CONTEXT commit, still no LLM. Only a fork that
+//   survives all of that — real ambiguity given everything we believe — is worth paying the model for.
+// GATE 2 (when to WRITE a rule): the same structural configuration recurring with the LLM resolving it
+//   the same way. When the model has, two or more times this reading, resolved a configuration to the
+//   salient survivor and never disagreed, that pattern is promoted to a REFLEX: the whole class of fork
+//   drops to zero cost for the rest of the read. The governor is coherence (consistent, structurally
+//   explicable agreement), not a fixed count. This runs live, alongside hypothesis formation — not as an
+//   offline phase — and each promotion is logged as a DEF so the learning is visible.
+let COREF_MEM = {};   // configuration signature -> { llmTotal, llmTop, reflex }
+function corefSignature(a){
+  const c=a.constraints||{};
+  return [(''+a.pronoun).toLowerCase(), a.role, c.animacy||'', c.gender||'', c.number||''].join('|');
+}
+function recordLLMResolution(sig, rank){
+  const m = COREF_MEM[sig] || (COREF_MEM[sig]={llmTotal:0, llmTop:0, reflex:false});
+  m.llmTotal++; if(rank===0) m.llmTop++;
+  if(!m.reflex && m.llmTotal>=2 && m.llmTop===m.llmTotal){
+    m.reflex=true;
+    model.setSpanDef('coref-reflex:'+sig,
+      'learned reflex — a “'+sig.replace(/\|/g,' · ')+'” reference resolves to the most salient survivor (the model agreed '+m.llmTotal+'×); future instances bind mechanically this reading',
+      'eva:coherence', []);
+  }
+}
+
 async function readCursorLoop(text, docName){
+  COREF_MEM = {};   // reflexes are learned within a reading; a fresh read relearns them
   const maxK=model.maxCursor();
   // the cursor where each entity was first introduced (its INS) — so we type each as it enters
   const insAt={}; STATE.log.filter(e=>e.op==='INS').forEach(e=>{ if(insAt[e.content.anchor]==null) insAt[e.content.anchor]=e.cursor; });
@@ -9085,13 +9114,30 @@ async function readCursorLoop(text, docName){
     //    the current running hypothesis (from the prior cursor) as context.
     const newUntyped=STATE.entities.filter(e=>insAt[e.id]===k && !e.type);
     if(newUntyped.length){ await typeEntitiesLLM(newUntyped, docName, model.activeDoc()); STATE=model.summary(); }
-    // 2) RESOLVE WHAT'S OPEN — frames at this cursor. Unique → bound mechanically; ambiguous → the LLM
-    //    judges with the running hypothesis in the prompt; none → left open. (The hypothesis also feeds
-    //    the salience ranking via interpretive centrality, so some frames are no longer ambiguous.)
+    // 2) RESOLVE WHAT'S OPEN — each frame at this cursor passes through the gates, cheapest first.
     const frames=model.frameAnalysis().filter(a=>a.cursor===k);
     for(const a of frames){
-      if(a.verdict==='unique') model.resolveCoref(a.conEvt,a.role,a.survivors[0].id,'morphosyntax','unique survivor of morphosyntactic search in working memory');
-      else if(a.verdict==='ambiguous') await resolveLLM(a.conEvt,a.role);
+      if(a.verdict==='none') continue;                         // no antecedent in scope → honestly left open
+      const top=a.survivors[0];
+      if(a.verdict==='unique'){                                 // bare structure forces it
+        model.resolveCoref(a.conEvt,a.role,top.id,'morphosyntax','unique survivor of morphosyntactic search in working memory');
+        continue;
+      }
+      // 'ambiguous' — structure is exhausted; close it with what we already know before paying the model.
+      const sig=corefSignature(a), mem=COREF_MEM[sig];
+      const central=a.survivors.filter(s=>s.central);
+      if(mem&&mem.reflex){                                      // GATE 2 result — a learned reflex closes it for free
+        model.resolveCoref(a.conEvt,a.role,top.id,'reflex','recurring “'+sig.replace(/\|/g,' · ')+'” configuration the model has consistently resolved to the salient survivor this reading');
+        continue;
+      }
+      if(central.length===1 && central[0].id===top.id){        // GATE 1 — the running hypothesis singles one out
+        model.resolveCoref(a.conEvt,a.role,top.id,'context','resolved by the running hypothesis (narratively near-certain), not bare structure');
+        continue;
+      }
+      // genuine ambiguity persists after applying everything known → pay for the LLM, and record the
+      // judgment as evidence that may promote this configuration to a reflex (GATE 2).
+      const refId=await resolveLLM(a.conEvt,a.role);
+      if(refId&&refId!=='__none__'){ const rank=a.survivors.findIndex(s=>s.id===refId); recordLLMResolution(sig, rank); }
     }
     STATE=model.summary();
     // 3) TYPE THE CLAUSE(S) at this cursor (IS/DOES/MEANS · domain · object)
