@@ -8191,27 +8191,34 @@ import * as webllm from "https://esm.run/@mlc-ai/web-llm";
 
 const slots = { typer: { engine:null, model:null, loading:false }, hyp: { engine:null, model:null, loading:false } };
 
-function curatedModels() {
-  // Filter the prebuilt list to small instruct models suitable for in-browser.
+const SMALL = /(-0.5B-|-1B-|-1.5B-|-2b-|-3B-|-mini-)/i;
+const INSTR = /instruct|-it-|chat/i;
+function sizeKey(label){ const m=label.match(/([\d.]+)\s*B/i); return m?parseFloat(m[1]):99; }
+
+// Every prebuilt WebLLM model, deduped by base name (prefer q4f16). Each is tagged
+// `recommended` when it is a small instruct model that comfortably runs in-browser.
+function allModels() {
   const list = (webllm.prebuiltAppConfig?.model_list) || [];
-  const want = /(-1B-|-1.5B-|-2b-|-3B-|-mini-|-0.5B-)/i;
-  const instr = /instruct|-it-|chat/i;
   const seen = new Set();
   const out = [];
   for (const m of list) {
     const id = m.model_id;
-    if (!want.test(id) || !instr.test(id)) continue;
     // dedupe by base name, prefer q4f16
     const base = id.replace(/-q4f(16|32)_1-MLC.*/,'');
     if (seen.has(base) && !/q4f16/.test(id)) continue;
     seen.add(base);
-    out.push({ id, label: prettyName(id), vram: m.vram_required_MB ? Math.round(m.vram_required_MB/1024*10)/10+'GB' : '' });
+    out.push({
+      id,
+      label: prettyName(id),
+      vram: m.vram_required_MB ? Math.round(m.vram_required_MB/1024*10)/10+'GB' : '',
+      recommended: SMALL.test(id) && INSTR.test(id)
+    });
   }
-  // sort by rough size
-  const sizeKey = s => { const m=s.label.match(/([\d.]+)\s*B/i); return m?parseFloat(m[1]):99; };
-  out.sort((a,b)=>sizeKey(a)-sizeKey(b));
+  out.sort((a,b)=> (b.recommended-a.recommended) || (sizeKey(a.label)-sizeKey(b.label)) || a.label.localeCompare(b.label));
   return out;
 }
+// Backwards-compatible: just the recommended (small instruct) subset.
+function curatedModels() { return allModels().filter(m=>m.recommended); }
 function prettyName(id){
   return id.replace(/-q4f(16|32)_1-MLC.*/,'').replace(/-/g,' ');
 }
@@ -8252,6 +8259,7 @@ async function chat(slot, messages, opts={}) {
 window.EOLLM = {
   hasWebGPU: () => !!navigator.gpu,
   listModels: curatedModels,
+  listAllModels: allModels,
   loadSlot, unloadSlot, ready, modelOf, anyReady, pick, chat
 };
 window.dispatchEvent(new Event('eollm-ready'));
@@ -8470,9 +8478,14 @@ function initLLMPanel(){
     host.innerHTML='<div class="llmwarn">WebGPU not available in this browser. The significance layer (LLM) needs Chrome/Edge or a recent Safari with WebGPU. Tiers 1–2 work without it.</div>';
     return;
   }
-  const models=window.EOLLM.listModels();
-  const opts=models.map(m=>`<option value="${m.id}">${esc(m.label)}${m.vram?' · '+m.vram:''}</option>`).join('');
-  const def=models[models.length-1]?.id||models[0]?.id;
+  const models=window.EOLLM.listAllModels();
+  const opt=m=>`<option value="${m.id}">${esc(m.label)}${m.vram?' · '+m.vram:''}</option>`;
+  const rec=models.filter(m=>m.recommended), other=models.filter(m=>!m.recommended);
+  const opts=
+    (rec.length?`<optgroup label="Recommended (runs in-browser)">${rec.map(opt).join('')}</optgroup>`:'')+
+    (other.length?`<optgroup label="All models (may need more VRAM)">${other.map(opt).join('')}</optgroup>`:'');
+  // default: largest recommended model, else first available
+  const def=rec[rec.length-1]?.id||models[0]?.id;
   host.innerHTML=`
    <div class="llmhead">Significance layer · WebLLM <span class="llmsub">one model drives the whole pipeline, in your browser</span></div>
    <div class="slots">
@@ -8483,7 +8496,7 @@ function initLLMPanel(){
        <div class="prog"><div class="progbar" id="progMain"></div></div>
      </div>
    </div>
-   <div class="llmnote">First load downloads weights to IndexedDB (cached after). Every DEF/EVA/REC is stamped with the model id — the given band is never touched.<br><span class="hint">If a load fails on a file:// page, serve over http: <code>python3 -m http.server</code>, then open <code>http://localhost:8000/eo-reader.html</code>.</span></div>`;
+   <div class="llmnote">Pick any WebLLM model — the list above shows every prebuilt model; larger ones need more GPU memory. First load downloads weights to IndexedDB (cached after). Every DEF/EVA/REC is stamped with the model id — the given band is never touched.<br><span class="hint">If a load fails on a file:// page, serve over http: <code>python3 -m http.server</code>, then open <code>http://localhost:8000/eo-reader.html</code>.</span></div>`;
   if(def) document.getElementById('mMain').value=def;
 }
 window.addEventListener('eollm-ready', async ()=>{ initLLMPanel(); await autoLoadModels(); });
