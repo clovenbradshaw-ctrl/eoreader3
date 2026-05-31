@@ -8345,8 +8345,18 @@ button{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;lett
 /* log */
 .logfilter{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}.lf{padding:5px 12px;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--dim)}.lf.on{color:var(--text);border-color:var(--certain)}.lf.typeall{margin-left:auto;color:var(--person);border-color:var(--person)}
 .loglist{font-family:'IBM Plex Mono',monospace;font-size:12px}
-.logrow{display:grid;grid-template-columns:84px 42px 30px 1fr;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:baseline}
+.logrow{display:grid;grid-template-columns:16px 34px 44px 66px 1fr auto;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:baseline;cursor:pointer}
+.logrow:hover{background:var(--surface)}
+.logrow.open{background:var(--surface)}
+.lcaret{color:var(--dim);font-size:9px}
 .lid{color:var(--dim);font-size:10px}.lop{font-weight:600}.ltier{color:var(--dim);font-size:10px}.lc{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lband{color:var(--dim);font-size:10px}.lag{color:var(--dim);font-size:10px;text-align:right}
+.logsort{margin-left:auto;color:var(--person);border-color:var(--person)}
+.logdetail{background:var(--surface2);border:1px solid var(--border);border-radius:6px;margin:0 8px 8px;padding:10px 12px;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.ldmeta{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--dim);margin-bottom:8px}.ldmeta b{color:var(--text);font-weight:600;margin-right:4px}
+.ldsum{color:var(--text);margin-bottom:8px;white-space:pre-wrap}
+.ldk{color:var(--hyp);font-size:10px;letter-spacing:.5px;text-transform:uppercase;margin:8px 0 4px}
+.ldpre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:8px;margin:0;color:var(--dim);max-height:280px;overflow:auto;line-height:1.5}
 .typerow{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim);padding:3px 8px 8px 134px}.typerow b{color:var(--person)}.typerow .ag{color:var(--dim);opacity:.7;margin-left:8px}
 /* meant */
 .docbox{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--person);border-radius:6px;padding:12px 14px;margin-bottom:14px}
@@ -8668,7 +8678,21 @@ function togglePlay(){
 
 // ---- log (with per-CON typing) ----
 let logFilter='ALL';
+let logSort='recent';          // 'recent' = newest event first (default), 'causal' = oldest first
+let logOpen=new Set();         // event ids whose full detail is expanded
 function setLogFilter(o){logFilter=o;renderLog(document.getElementById('panel'));}
+function setLogSort(s){logSort=s;renderLog(document.getElementById('panel'));}
+function toggleLogDetail(id){ if(logOpen.has(id)) logOpen.delete(id); else logOpen.add(id); renderLog(document.getElementById('panel')); }
+function logDetail(e){
+  const meta=[['id',e.id],['seq',e.seq],['op',e.op],['band',e.band||'—'],['tier',e.tier],['cursor',e.cursor??e.content?.cursor??'—'],['agent',e.agent]];
+  let d='<div class="logdetail">';
+  d+='<div class="ldmeta">'+meta.map(([k,v])=>`<span><b>${k}</b> ${esc(String(v))}</span>`).join('')+'</div>';
+  d+=`<div class="ldsum">${esc(logSummary(e))}</div>`;
+  if(e.content&&e.content.prompt){ d+=`<div class="ldk">prompt the model saw</div><pre class="ldpre">${esc(e.content.prompt)}</pre>`; }
+  d+=`<div class="ldk">content</div><pre class="ldpre">${esc(JSON.stringify(e.content,null,2))}</pre>`;
+  d+='</div>';
+  return d;
+}
 function renderLog(p){
   const opColor={INGEST:'#b794f6',SEG:'#6b7280',INS:'#7dd3a8',SIG:'#7dd3a8',SYN:'#e8926a',CON:'#6ea8e8',DEF:'#e8c46a',EVA:'#e8c46a',REC:'#e8c46a'};
   const bandLabel={given:'given',structure:'structure',meaning:'meaning'};
@@ -8678,11 +8702,17 @@ function renderLog(p){
   ['ALL','given','structure','meaning'].forEach(o=>h+=`<button class="lf ${logFilter===o?'on':''}" onclick="setLogFilter('${o}')">${o}</button>`);
   h+='<span class="lfsep"></span>';
   ['SEG','INS','CON','SYN','SIG','DEF'].forEach(o=>h+=`<button class="lf ${logFilter===o?'on':''}" onclick="setLogFilter('${o}')">${o}</button>`);
+  h+='<span class="lfsep"></span>';
+  h+=`<button class="lf logsort ${logSort==='recent'?'on':''}" onclick="setLogSort('${logSort==='recent'?'causal':'recent'}')">${logSort==='recent'?'newest first ↓':'oldest first ↑'}</button>`;
   h+='</div><div class="loglist">';
   const stream=(STATE.events||STATE.log);
   const show=e=> logFilter==='ALL' || e.band===logFilter || e.op===logFilter;
-  stream.filter(show).forEach(e=>{
-    h+=`<div class="logrow band-${e.band}"><span class="lseq">${String(e.seq).padStart(3,'0')}</span><span class="lop" style="color:${opColor[e.op]||'#9ca3af'}">${e.op}</span><span class="lband">${bandLabel[e.band]||''}</span><span class="lc">${esc(logSummary(e))}</span><span class="lag">${esc(e.agent)}</span></div>`;
+  let rows=stream.filter(show);
+  if(logSort==='recent') rows=rows.slice().reverse();   // default: most recent log event on top
+  rows.forEach(e=>{
+    const opn=logOpen.has(e.id);
+    h+=`<div class="logrow band-${e.band}${opn?' open':''}" onclick="toggleLogDetail('${e.id}')"><span class="lcaret">${opn?'▾':'▸'}</span><span class="lseq">${String(e.seq).padStart(3,'0')}</span><span class="lop" style="color:${opColor[e.op]||'#9ca3af'}">${e.op}</span><span class="lband">${bandLabel[e.band]||''}</span><span class="lc">${esc(logSummary(e))}</span><span class="lag">${esc(e.agent)}</span></div>`;
+    if(opn) h+=logDetail(e);
     if(e.op==='CON' && (logFilter==='ALL'||logFilter==='structure'||logFilter==='CON')){
       const typ=model._meant.find(d=>d.content.kind==='typing'&&d.content.target.conEvt===e.id&&['DEF','REC'].includes(d.op));
       if(typ) h+=`<div class="typerow">${typ.content.mode}·${typ.content.domain}·${typ.content.object} → <b>${typ.content.act}</b> / ${typ.content.site} / ${typ.content.stance} <span class="ag">${esc(typ.agent)}</span></div>`;
