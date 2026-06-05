@@ -1020,6 +1020,7 @@ function migrateSession(s) {
   for (const sg of s.convSigs) {
     if (!sg.op) { sg.op = 'CON'; sg.stance = 'Binding'; }
     if (sg.gen === undefined) sg.gen = 0;
+    if (sg.force === undefined) sg.force = 1;
   }
   for (const a of s.attachments) {
     if (!a.defs) a.defs = [];
@@ -1037,6 +1038,7 @@ function migrateSession(s) {
     for (const sg of a.sigs) {
       if (!sg.op) { sg.op = 'CON'; sg.stance = 'Binding'; }
       if (sg.gen === undefined) sg.gen = 0;
+      if (sg.force === undefined) sg.force = 1;
     }
     for (const sec of (a.sections || [])) {
       if (sec.sigDone === undefined) sec.sigDone = false;
@@ -1793,6 +1795,7 @@ function sweepSectionSigs(att, sec, parsedEvents, actState) {
       seq: baseSeq + out.length,
       op, stance: STANCE_OF_OP[op] || 'Binding',
       gen: att_gen,
+      force: FORCE.doc,
       sectionIdx: sec.idx,
       spanFromIdx: sec.spanFromIdx,
       spanToIdx: sec.spanToIdx,
@@ -1968,6 +1971,13 @@ ${exchange}`;
     const turnIdx = Math.floor(thread.history.length / 2);
     const fakeSec = { idx: turnIdx, spanFromIdx: null, spanToIdx: null };
     const sigs = sweepSectionSigs(fakeAtt, fakeSec, parsedEvents, actState);
+    // User speech is the highest-precision sensor in the system. Raise the force
+    // on direct user voice (SIG events whose speaker is the user). This is the
+    // only place user force is applied in Phases 1 and 2; correction-driven
+    // force-5 DEFs are Phase 3.
+    for (const sg of sigs) {
+      if (sg.op === 'SIG' && /^user$/i.test(sg.speaker || '')) sg.force = FORCE.user;
+    }
     thread.convSigs.push(...sigs);
     thread.convTentatives = fakeAtt.tentatives;  // persist counter across exchanges
     saveState();
@@ -2109,6 +2119,7 @@ function mechanicalReadAttachment(att) {
       // Base event metadata
       const baseMeta = {
         gen: att_gen,
+        force: FORCE.doc,
         sectionIdx: span.sectionIdx ?? 0,
         spanFromIdx: spanIdx,
         spanToIdx: spanIdx,
@@ -2346,6 +2357,16 @@ async function readAttachmentBackground(att, onPhase) {
 }
 
 // ============================================================
+// CONSTANTS OF THE MEDIUM — the only tunables physics introduces. GAMMA is
+// the per-event/per-turn decay (the same 0.7 the activation sweeps use). FORCE
+// is precision weighting at mint time: a user assertion is a higher-precision
+// sensor than a document observation. There are no per-fact tunables; the flip
+// rule below is strict mass comparison, no threshold.
+// ============================================================
+const GAMMA = 0.7;                 // decay per event/turn
+const FORCE = { doc: 1, user: 5 }; // precision weighting at mint time
+
+// ============================================================
 // SITE PROJECTION — the fold. A pure function over the SIG log that projects
 // raw observations into typed site structure (the 9 Site terrains), resolves
 // references using the frozen activation hints, and derives edges from bound
@@ -2404,8 +2425,9 @@ function projectSites(att, cursor = Infinity) {
       if (!tryAdmit(surface, isProp, projTentatives)) continue;
       const key = normSurface(surface);
       if (key.length < 2) continue;
-      const cur = occ.get(key) || { key, name: surface, count: 0, sigSeqs: [], proper: isProp, surfaceForms: new Set() };
+      const cur = occ.get(key) || { key, name: surface, count: 0, mass: 0, sigSeqs: [], proper: isProp, surfaceForms: new Set() };
       cur.count++;
+      cur.mass += (sg.force || 1);
       cur.sigSeqs.push(sg.seq);
       cur.surfaceForms.add(surface);
       if (surface.length > cur.name.length) cur.name = surface;
@@ -2429,6 +2451,7 @@ function projectSites(att, cursor = Infinity) {
           leadTok = tokenSetOf(lead.name);
         }
         lead.count += other.count;
+        lead.mass = (lead.mass || 0) + (other.mass || 0);
         lead.sigSeqs = lead.sigSeqs.concat(other.sigSeqs);
         for (const sf of other.surfaceForms) lead.surfaceForms.add(sf);
         consumed.add(j);
@@ -2452,6 +2475,42 @@ function projectSites(att, cursor = Infinity) {
     }
     return null;
   };
+
+  // ── Attribute ledger + strain. Every (cluster, path) pair keeps ALL observed
+  // values, each with accumulated mass. Nothing is overwritten. The canonical
+  // value is simply the heaviest row; rows beyond [0] are strain — a live
+  // contradiction the projection carries instead of hiding. The flip rule is
+  // strict mass comparison (no threshold), so one stray sentence flips a 2-mass
+  // fact and bounces off a 40-mass one. Inertia is derived, not configured. ──
+  // key: clusterKey + '\u0001' + path  ->  rows[] (heaviest first)
+  const attrs = new Map();
+  const strains = [];
+  for (const sg of sigs) {
+    if (sg.op !== 'DEF') continue;
+    let cl = null;
+    if (isPronoun(sg.target)) {
+      if (sg.targetHint && sg.targetHint.name) cl = findCluster(sg.targetHint.name);
+    } else {
+      cl = findCluster(sg.target);
+    }
+    if (!cl) continue;
+    const k = cl.key + '\u0001' + String(sg.path || '').toLowerCase();
+    const ledger = attrs.get(k) || [];
+    const f = sg.force || 1;
+    const vNorm = String(sg.value).toLowerCase().trim();
+    const hit = ledger.find(r => r.vNorm === vNorm);
+    if (hit) { hit.mass += f; hit.count++; hit.lastSeq = sg.seq; }
+    else ledger.push({ value: sg.value, vNorm, mass: f, count: 1, firstSeq: sg.seq, lastSeq: sg.seq });
+    attrs.set(k, ledger);
+  }
+  for (const [k, ledger] of attrs) {
+    ledger.sort((a, b) => b.mass - a.mass || b.lastSeq - a.lastSeq);
+    if (ledger.length > 1) {
+      const [key, path] = k.split('\u0001');
+      const cl = clusters.find(c => c.key === key);
+      strains.push({ key, name: cl ? cl.name : key, path, rows: ledger });
+    }
+  }
 
   // ── is-a evidence: copular CONs ("X is mayor") AND DEF class paths
   // ("= X | class | mayor") both push terrain knowledge into the cluster. ─
@@ -2531,6 +2590,8 @@ function projectSites(att, cursor = Infinity) {
     return {
       key: cl.key, name: cl.name, type: cl.terrain,
       mentions: cl.count,
+      mass: cl.mass || cl.count,
+      sigSeqs: cl.sigSeqs.slice(),
       surfaceForms: [...cl.surfaceForms],
       firstSectionIdx: secIdxs.length ? Math.min(...secIdxs) : 0,
       lastSectionIdx: secIdxs.length ? Math.max(...secIdxs) : 0,
@@ -2548,7 +2609,7 @@ function projectSites(att, cursor = Infinity) {
   }).sort((a, b) => b.mentions - a.mentions || a.firstSectionIdx - b.firstSectionIdx);
 
   const edges = [...edgesMap.values()].sort((a, b) => b.weight - a.weight);
-  const result = { entities, edges, bindings, unboundCount, sigCount: sigs.length };
+  const result = { entities, edges, bindings, unboundCount, sigCount: sigs.length, attrs, strains };
   _siteMemo.set(memoKey, result);
   if (_siteMemo.size > 30) _siteMemo.delete(_siteMemo.keys().next().value);
   return result;
@@ -2658,84 +2719,84 @@ function pickRelevantEntities(query, atts, max = 8) {
   return scored.slice(0, max);
 }
 
-// Graph-based span retrieval — companion to embedding-cosine retrieval.
-// Matches query tokens against cluster names; for each matched cluster,
-// pulls the spans where it appears; then expands ONE hop via the edge
-// projection to pick up spans of immediately-related clusters. The score
-// blends cluster-name overlap with mention count, so dominant entities
-// rank higher than incidental ones.
-function pickRelevantSpansByGraph(query, atts, charBudget = 600) {
-  if (!query || !atts || !atts.length) return { spans: [], resolved: [] };
-  const qTokens = tokenSetOf(query);
-  if (!qTokens.size) return { spans: [], resolved: [] };
+// Momentum retrieval. mass from the fold, velocity from what's touched now.
+// p = m*v ranks. Velocity conducts one hop along edges at 0.4. A heavy cluster
+// the conversation isn't touching has v=0, p=0, and stays out of the way.
+function pickRelevantSpansByGraph(query, atts, charBudget = 600, recentTurns = []) {
+  if (!query || !atts || !atts.length) return { spans: [], resolved: [], ranked: [] };
   const qLower = String(query).toLowerCase();
+  const qTokens = tokenSetOf(query);
+  const turns = (recentTurns || []).slice(0, 3).map(t => ({
+    lower: String(t).toLowerCase(), tokens: tokenSetOf(t),
+  }));
+
+  // How hard does a text touch a cluster? Exact name-phrase (len>=4) = 1.0;
+  // token overlap = up to 0.5. Pure surface mechanics, no model.
+  const touchOf = (lower, tokens, ent) => {
+    let best = 0;
+    const names = [ent.name, ...(ent.surfaceForms || [])];
+    for (const nm of names) {
+      const nl = String(nm).toLowerCase();
+      if (nl.length >= 4 && lower.includes(nl)) return 1;
+      const eToks = tokenSetOf(nm);
+      if (!eToks.size) continue;
+      let shared = 0;
+      for (const t of eToks) if (tokens.has(t)) shared++;
+      if (shared) best = Math.max(best, 0.5 * (shared / eToks.size));
+    }
+    return best;
+  };
 
   const hits = [];
-  const resolved = [];  // cluster names matched by exact PHRASE — strong evidence
+  const resolved = [];
+  const ranked = [];
 
   for (const att of atts) {
     let proj;
     try { proj = projectSites(att); } catch (e) { continue; }
     if (!proj || !proj.entities.length) continue;
 
-    const matched = new Map();
+    // velocity: query at force 1, prior turns decayed by GAMMA^(k+1)
+    const vMap = new Map();
     for (const ent of proj.entities) {
-      const nLower = ent.name.toLowerCase();
-      const eToks = tokenSetOf(ent.name);
-      let overlap = 0;
-      for (const t of qTokens) if (eToks.has(t)) overlap++;
-      const phraseMatch = qLower.includes(nLower) && nLower.length >= 4 ? 1 : 0;
-      if (overlap === 0 && !phraseMatch) continue;
-      const score = overlap * 3 + phraseMatch * 10 + Math.min(ent.mentions, 20) * 0.2;
-      matched.set(ent.key, { ent, score, hop: 0 });
-      if (phraseMatch) {
-        resolved.push({ attId: att.id, attTitle: att.title, name: ent.name, mentions: ent.mentions });
-      }
+      let v = touchOf(qLower, qTokens, ent);
+      if (v >= 1) resolved.push({ attId: att.id, attTitle: att.title, name: ent.name, mentions: ent.mentions });
+      turns.forEach((t, k) => { v += touchOf(t.lower, t.tokens, ent) * Math.pow(GAMMA, k + 1); });
+      if (v > 0) vMap.set(ent.key, v);
     }
-    if (!matched.size) continue;
 
-    const directKeys = new Set(matched.keys());
+    // conduction: one hop along edges at 0.4
     for (const ed of (proj.edges || [])) {
-      const aIn = directKeys.has(ed.aKey);
-      const bIn = directKeys.has(ed.bKey);
-      if (aIn && !bIn) {
-        const other = proj.entities.find(e => e.key === ed.bKey);
-        if (other) {
-          const cur = matched.get(ed.bKey);
-          const add = (matched.get(ed.aKey).score * 0.4) + ed.weight * 0.3;
-          if (!cur || cur.score < add) matched.set(ed.bKey, { ent: other, score: add, hop: 1 });
-        }
-      } else if (bIn && !aIn) {
-        const other = proj.entities.find(e => e.key === ed.aKey);
-        if (other) {
-          const cur = matched.get(ed.aKey);
-          const add = (matched.get(ed.bKey).score * 0.4) + ed.weight * 0.3;
-          if (!cur || cur.score < add) matched.set(ed.aKey, { ent: other, score: add, hop: 1 });
-        }
-      }
+      const va = vMap.get(ed.aKey) || 0, vb = vMap.get(ed.bKey) || 0;
+      if (va > 0 && va * 0.4 > vb) vMap.set(ed.bKey, va * 0.4);
+      else if (vb > 0 && vb * 0.4 > va) vMap.set(ed.aKey, vb * 0.4);
     }
+    if (!vMap.size) continue;
 
+    // momentum per cluster; spans scored by the momenta touching them
     const spanScores = new Map();
-    for (const { ent, score } of matched.values()) {
-      const seqs = ent.sigSeqs || [];
+    for (const ent of proj.entities) {
+      const v = vMap.get(ent.key) || 0;
+      if (v <= 0) continue;
+      const m = ent.mass || ent.mentions || 1;
+      const p = m * v;
+      ranked.push({ attId: att.id, attTitle: att.title, ent, m, v, p });
       const spanIdxs = new Set();
+      const seqs = ent.sigSeqs || [];
       if (seqs.length) {
         for (const s of seqs) {
           const ev = att.sigs[s];
           if (ev && typeof ev.spanFromIdx === 'number') spanIdxs.add(ev.spanFromIdx);
         }
       } else {
-        const surfacePatterns = ent.surfaceForms || [ent.name];
         for (let i = 0; i < att.spans.length; i++) {
           const txt = att.spans[i].text || '';
-          for (const sf of surfacePatterns) {
+          for (const sf of (ent.surfaceForms || [ent.name])) {
             if (txt.includes(sf)) { spanIdxs.add(i); break; }
           }
         }
       }
-      for (const idx of spanIdxs) {
-        spanScores.set(idx, (spanScores.get(idx) || 0) + score);
-      }
+      for (const idx of spanIdxs) spanScores.set(idx, (spanScores.get(idx) || 0) + p);
     }
 
     for (const [idx, score] of spanScores) {
@@ -2745,6 +2806,7 @@ function pickRelevantSpansByGraph(query, atts, charBudget = 600) {
     }
   }
 
+  ranked.sort((a, b) => b.p - a.p || b.m - a.m);
   hits.sort((a, b) => b.score - a.score);
   const picked = [];
   const seen = new Set();
@@ -2757,7 +2819,7 @@ function pickRelevantSpansByGraph(query, atts, charBudget = 600) {
     picked.push(h);
     used += (h.span.text || '').length;
   }
-  return { spans: picked, resolved };
+  return { spans: picked, resolved, ranked };
 }
 
 // Re-summarize keeps the existing spans/embeddings, redoes the sections + top
@@ -3031,6 +3093,10 @@ async function dispatch(thread, queryOverride) {
   const retrievalScope = (isPronounAnchored && focusAtt && atts.length > 1) ? [focusAtt] : atts;
   let retrieved = { spans: [], sections: [] };
   let graphResolved = [];
+  let graphRanked = [];
+  // Recent user turns feed velocity (decayed GAMMA per turn).
+  const userMsgsAll = thread.history.filter(m => m.role === 'user').map(m => m.content);
+  const recentUserTurns = userMsgsAll.slice(0, -1).slice(-3).reverse(); // newest first, excludes current
   if (retrievalOn && retrievalScope.length) {
     // Split the budget: ~60% to embedding cosine (semantic similarity),
     // ~40% to graph RAG (cluster-name match + 1-hop edge expansion). They
@@ -3041,9 +3107,10 @@ async function dispatch(thread, queryOverride) {
     try {
       const [emb, graphResult] = await Promise.all([
         pickRelevantSpans(currentUserText, retrievalScope, embBudget, profile.sectionBudget),
-        Promise.resolve(pickRelevantSpansByGraph(currentUserText, retrievalScope, graphBudget)),
+        Promise.resolve(pickRelevantSpansByGraph(currentUserText, retrievalScope, graphBudget, recentUserTurns)),
       ]);
       graphResolved = graphResult.resolved || [];
+      graphRanked = graphResult.ranked || [];
       const graph = graphResult.spans || [];
       // Merge by (att, spanIdx). Track source so the audit UI can show which
       // retrieval path surfaced each span; spans found by BOTH get boosted.
@@ -3076,7 +3143,8 @@ async function dispatch(thread, queryOverride) {
   // blocks. Those blocks are gone now (redundant with graph-RAG spans). We
   // still compute a small list to surface in the retrieval card UI, so the
   // user can see what the graph matched — but it does NOT enter the prompt.
-  let entityHits = atts.length ? pickRelevantEntities(retrievalOn ? currentUserText : null, atts, 5) : [];
+  let entityHits = graphRanked.slice(0, 5).map(r => ({ attId: r.attId, attTitle: r.attTitle, ent: r.ent, score: r.p }));
+  if (!entityHits.length && atts.length) entityHits = pickRelevantEntities(retrievalOn ? currentUserText : null, atts, 5);
 
   // 3. Recent verbatim window.
   // Don't cross the streams: when a user asks a NEW LOOKUP against an
@@ -3096,160 +3164,168 @@ async function dispatch(thread, queryOverride) {
     verbatimMsgs = [];
   }
 
+  // Group the momentum ranking per attachment.
+  const rankedByAtt = new Map();
+  for (const r of graphRanked) {
+    if (!rankedByAtt.has(r.attId)) rankedByAtt.set(r.attId, []);
+    rankedByAtt.get(r.attId).push(r);
+  }
+
   const buildSys = () => {
-    // No context — no system prompt. Vanilla chat for chitchat.
     const hasContext = atts.length > 0
       || (thread.pins && thread.pins.length > 0)
       || (thread.composeRefs && thread.composeRefs.length > 0);
     if (!hasContext) return customSys || '';
 
-    const parts = [];
-    // Informational framing only. The earlier version was a refusal manual
-    // ("only state facts from EXCERPTS… say I'd need to read more for
-    // anything outside them") which small models parroted back at the user
-    // instead of answering. Just state the facts about what's attached and
-    // let the model be a chat assistant. The excerpts below are *available*,
-    // not *required*; general knowledge is fine.
+    // Chitchat with context attached: situational awareness only, no triad.
+    if (isChitchat) {
+      const names = atts.map((a, i) => `[doc${i + 1}] ${a.title}`).join('; ');
+      const line = atts.length
+        ? `The user has attached: ${names}. They haven't asked about the documents; just chat normally.`
+        : `The user has pinned context for later reference.`;
+      return line + (customSys ? '\n\n' + customSys : '');
+    }
+
+    const SYS_CAP = profile.sysCap;
+    const tagOf = (att) => `[doc${atts.indexOf(att) + 1}]`;
+
+    // # GROUND: what exists and how heavy it is. xN is mass, auditable to spans.
+    let ground = '';
     if (atts.length) {
-      const lines = atts.map((a, i) => {
+      const g = ['# GROUND'];
+      for (const a of atts) {
         const marker = a === focusAtt && atts.length > 1 ? ' (focus)' : '';
-        const url = a.url ? ` — ${a.url}` : '';
-        return `[doc${i + 1}] ${a.title}${marker}${url}`;
-      }).join('; ');
-      parts.push(`The user has attached: ${lines}. Answer ONLY from the excerpts below. Do not add facts from general knowledge or earlier turns. If the excerpts don't contain the answer, say the document doesn't cover it.`);
-    } else {
-      parts.push(`The user has pinned context below for reference.`);
-    }
-
-    // Resolution hint: if graph-RAG matched specific entities by exact
-    // phrase (e.g. "mama's family" in the query matched cluster "Mama's
-    // Family"), tell the model directly. Small models can miss the
-    // casing/possessive leap on their own.
-    if (graphResolved && graphResolved.length) {
-      const names = graphResolved.slice(0, 3).map(r => r.name).join(', ');
-      parts.push(`The user's query references: ${names}.`);
-    }
-
-    if (customSys) parts.push(customSys);
-
-    // Compose-refs — user explicitly attached these to THIS message via the find modal.
-    // Most specific signal possible: "answer in light of this excerpt".
-    // Listed before PINNED because user just pointed at them seconds ago.
-    if (thread.composeRefs && thread.composeRefs.length) {
-      const lines = ['# REFERENCED (user pointed at this for THIS turn)'];
-      let used = 0;
-      const REF_CAP = profile.refCap;
-      for (const ref of thread.composeRefs) {
-        const att = atts.find(a => a.id === ref.attId);
-        const tag = att ? `[doc${atts.indexOf(att) + 1}]` : '[doc?]';
-        let line;
-        if (ref.kind === 'entity') line = `${tag} ${ref.entityName} [${ref.entityType}]: ${ref.text || ''}`;
-        else if (ref.kind === 'section') line = `${tag} sec${ref.sectionIdx + 1}: ${ref.text || ''}`;
-        else line = `${tag} span #${ref.spanIdx}: ${ref.text || ''}`;
-        if (line.length > 500) line = line.slice(0, 500) + '…';
-        if (used + line.length > REF_CAP) break;
-        lines.push(line); used += line.length;
+        let top = (rankedByAtt.get(a.id) || []).slice(0, 4).map(r => r.ent);
+        if (!top.length) { try { top = projectSites(a).entities.slice(0, 4); } catch { top = []; } }
+        const names = top.map(e => `${e.name} x${e.mentions}`).join(', ');
+        g.push(`${tagOf(a)} "${a.title}"${marker}${names ? ` — ${names}` : ''}`);
       }
-      parts.push(lines.join('\n'));
+      const touched = [...new Set(graphRanked.filter(r => r.v > 0).slice(0, 4).map(r => r.ent.name))];
+      if (touched.length) g.push(`query touches: ${touched.join(', ')}`);
+      ground = g.join('\n');
     }
 
-    // Pinned items — sticky context the user explicitly marked relevant.
-    // These ride in every dispatch until unpinned. Capped per profile.
-    if (thread.pins && thread.pins.length) {
-      const lines = ['# PINNED (user-flagged context — always relevant)'];
-      let used = 0;
-      const PIN_CAP = profile.pinCap;
-      for (const pin of thread.pins) {
-        const att = atts.find(a => a.id === pin.attId);
-        const tag = att ? `[doc${atts.indexOf(att) + 1}]` : '[doc?]';
-        let line;
-        if (pin.kind === 'entity') {
-          line = `${tag} ${pin.entityName} [${pin.entityType}]: ${pin.text || ''}`;
-        } else if (pin.kind === 'section') {
-          line = `${tag} sec${pin.sectionIdx + 1}: ${pin.text || ''}`;
-        } else {
-          line = `${tag} span #${pin.spanIdx}: ${pin.text || ''}`;
+    const instruction = atts.length
+      ? `Answer the user from STRUCTURE only. If STRUCTURE doesn't contain it, say the document doesn't cover it.`
+      : `Answer the user, drawing on STRUCTURE where relevant.`;
+
+    // # STRUCTURE: candidate lines in priority order, packed to budget.
+    const cands = [];
+    const push = (pri, text, cap) => {
+      if (!text) return;
+      let t = String(text).replace(/\s+/g, ' ').trim();
+      if (!t) return;
+      if (cap && t.length > cap) t = t.slice(0, cap) + '…';
+      cands.push({ pri, t });
+    };
+
+    // 0 — compose-refs (user points at this for THIS turn)
+    for (const ref of (thread.composeRefs || [])) {
+      const att = atts.find(a => a.id === ref.attId);
+      push(0, `${att ? tagOf(att) : '[ref]'} (user points at this) ${ref.text || ref.label || ''}`, profile.refCap);
+    }
+    // 1 — pins (sticky user-flagged context)
+    for (const pin of (thread.pins || [])) {
+      const att = atts.find(a => a.id === pin.attId);
+      push(1, `${att ? tagOf(att) : '[pin]'} (pinned) ${pin.text || pin.label || ''}`, Math.min(380, profile.pinCap));
+    }
+    // nothing touched at all -> the doc's own summary is the structure
+    if (!graphRanked.length && focusAtt) {
+      push(2, `${tagOf(focusAtt)} summary: ${focusAtt.summary || focusAtt.skim || ''}`, profile.docSumCap);
+    }
+    for (const a of atts) {
+      const ranked = (rankedByAtt.get(a.id) || []).slice(0, 4);
+      if (!ranked.length) continue;
+      let proj = null;
+      try { proj = projectSites(a); } catch { continue; }
+      // 2 — ledger facts: canonical value per (site, path); strain shown
+      for (const r of ranked) {
+        const prefix = r.ent.key + '\u0001';
+        const rows = [];
+        for (const [k, ledger] of (proj.attrs || new Map())) {
+          if (!k.startsWith(prefix)) continue;
+          const path = k.slice(prefix.length);
+          if (path === 'resolves-to') continue;
+          rows.push({ path, ledger });
         }
-        if (line.length > 380) line = line.slice(0, 380) + '…';
-        if (used + line.length > PIN_CAP) break;
-        lines.push(line); used += line.length;
+        rows.sort((x, y) => y.ledger[0].mass - x.ledger[0].mass);
+        for (const { path, ledger } of rows.slice(0, 2)) {
+          const head = ledger[0];
+          let line = `${tagOf(a)} ${r.ent.name} — ${path}: ${head.value}`;
+          if (head.mass > 1) line += ` x${head.mass}`;
+          if (ledger.length > 1) line += ` (also recorded: ${ledger[1].value} x${ledger[1].mass})`;
+          push(2, line, 150);
+        }
       }
-      parts.push(lines.join('\n'));
+      // 3 — edges touching the ranked clusters
+      const touchedKeys = new Set(ranked.map(r => r.ent.key));
+      let edgeN = 0;
+      for (const ed of (proj.edges || [])) {
+        if (edgeN >= 4) break;
+        if (!touchedKeys.has(ed.aKey) && !touchedKeys.has(ed.bKey)) continue;
+        push(3, `${tagOf(a)} ${ed.aName} ${ed.verb || '·'} ${ed.bName}${ed.weight > 1 ? ` x${ed.weight}` : ''}`, 120);
+        edgeN++;
+      }
+      // 4 — a quote or two from touched speakers
+      const surfSet = new Set();
+      for (const r of ranked) for (const sf of (r.ent.surfaceForms || [r.ent.name])) surfSet.add(normSurface(sf));
+      let quotes = 0;
+      for (const ev of (a.sigs || [])) {
+        if (quotes >= 2) break;
+        if (ev.op !== 'SIG' || !ev.quote) continue;
+        const sp = normSurface(ev.speaker || '');
+        const hinted = ev.speakerHint ? normSurface(ev.speakerHint.name) : '';
+        if (!surfSet.has(sp) && !surfSet.has(hinted)) continue;
+        push(4, `${tagOf(a)} ${ev.speaker}: "${ev.quote}"`, 140);
+        quotes++;
+      }
+    }
+    // 5 — section summaries the retrieval surfaced
+    for (const sh of sectionHits) {
+      const att = atts.find(a => a.id === sh.attId);
+      push(5, `${att ? tagOf(att) : '[doc?]'} summary (sec ${sh.section.idx + 1}): ${sh.section.summary || ''}`, 240);
+    }
+    // 6 — verbatim spans (cosine + graph union)
+    for (const ex of spanHits) {
+      const att = atts.find(a => a.id === ex.attId);
+      push(6, `${att ? tagOf(att) : '[doc?]'} text: "${ex.span.text}"`, 300);
     }
 
-    // # DOCS — just summaries / skim text. Title and URL are already in
-    // the prefix; this block is for content. Focus doc gets the full
-    // summary; others get a short skim.
-    if (atts.length) {
-      const lines = ['# DOCS'];
-      const ordered = focusAtt ? [focusAtt, ...atts.filter(a => a !== focusAtt)] : atts;
-      for (const a of ordered) {
-        const i = atts.indexOf(a);
-        const stage = attachmentStage(a);
-        const totalSec = (a.sections || []).length;
-        const readSec = (a.sections || []).filter(s => s.summary).length;
-        const stateLabel = stage === 'read' ? 'fully read'
-                         : stage === 'lookup' ? 'indexed'
-                         : `read ${readSec}/${totalSec}`;
-        lines.push(`\n[doc${i + 1}] ${stateLabel}:`);
-        const cap = a === focusAtt ? profile.docSumCap : Math.min(profile.docSumCap, 180);
-        const sum = a.summary || a.skim || '';
-        if (sum) lines.push(sum.length > cap ? sum.slice(0, cap) + '…' : sum);
-        else lines.push('(no summary yet — use /read to have me read it through)');
-      }
-      parts.push(lines.join('\n'));
-    }
+    // # EARLIER: folded conversation, tiny, only when folds exist
+    let earlier = '';
     if (thread.summaries.length) {
-      // Render the actual fold summaries, not just an empty header.
-      const lines = ['# EARLIER (summarized)'];
-      for (const s of thread.summaries.slice(-2)) {
-        const txt = s.text || '';
-        lines.push(txt.length > 240 ? txt.slice(0, 240) + '…' : txt);
-      }
-      parts.push(lines.join('\n'));
-    }
-    // # ENTITIES and # RELATIONS blocks used to ride here. They were
-    // redundant: graph-RAG already retrieves the spans that mention the
-    // relevant entities, so the model sees them naturally in # EXCERPTS.
-    // Trust the model + the graph; don't double-feed.
-    if (sectionHits.length) {
-      const lines = ['# RELEVANT SECTIONS'];
-      for (const sh of sectionHits) {
-        const att = atts.find(a => a.id === sh.attId);
-        const tag = att ? `[doc${atts.indexOf(att) + 1}]` : '[doc?]';
-        const sum = sh.section.summary || '';
-        lines.push(`${tag} sec${sh.section.idx + 1}: ${sum.length > 350 ? sum.slice(0, 350) + '…' : sum}`);
-      }
-      parts.push(lines.join('\n'));
-    }
-    if (spanHits.length) {
-      const lines = ['# EXCERPTS (just looked up — quote when relevant)'];
-      const byAtt = new Map();
-      for (const ex of spanHits) { if (!byAtt.has(ex.attId)) byAtt.set(ex.attId, []); byAtt.get(ex.attId).push(ex); }
-      for (const [attId, exs] of byAtt.entries()) {
-        const att = atts.find(a => a.id === attId);
-        const tag = att ? `[doc${atts.indexOf(att) + 1}]` : '[doc?]';
-        for (const ex of exs) {
-          const t = ex.span.text;
-          lines.push(`${tag} #${ex.span.idx}: ${t.length > 450 ? t.slice(0, 450) + '…' : t}`);
-        }
-      }
-      parts.push(lines.join('\n'));
+      const s = thread.summaries[thread.summaries.length - 1];
+      earlier = '# EARLIER\n' + (s.text.length > 200 ? s.text.slice(0, 200) + '…' : s.text);
     }
     if (convTurns.length) {
-      const lines = ['# EARLIER MESSAGES'];
-      convTurns.forEach(t => {
-        const snip = (t.snippet || t.content || '');
-        lines.push(`[#${t.idx} ${t.role}]: ${snip.length > 350 ? snip.slice(0, 350) + '…' : snip}`);
-      });
-      parts.push(lines.join('\n'));
+      const t0 = convTurns[0];
+      const snip = (t0.snippet || t0.content || '').slice(0, 200);
+      earlier += (earlier ? '\n' : '# EARLIER\n') + `[#${t0.idx} ${t0.role}]: ${snip}`;
     }
+
+    // Pack STRUCTURE into what's left under the cap. The prompt does not grow.
+    cands.sort((x, y) => x.pri - y.pri);
+    const fixed = ground.length + instruction.length + earlier.length
+      + (customSys ? customSys.length + 2 : 0) + 40;
+    const structBudget = Math.max(220, SYS_CAP - fixed);
+    const sLines = ['# STRUCTURE'];
+    let used = 0;
+    for (const c of cands) {
+      if (used + c.t.length + 3 > structBudget) continue;   // skip, keep scanning (a shorter later line may fit)
+      sLines.push('- ' + c.t);
+      used += c.t.length + 3;
+    }
+    if (sLines.length === 1) sLines.push('- (nothing surfaced for this question)');
+
+    const parts = [];
+    if (ground) parts.push(ground);
+    parts.push(sLines.join('\n'));
+    if (earlier) parts.push(earlier);
+    if (customSys) parts.push(customSys);
+    parts.push(instruction);
     let sys = parts.join('\n\n');
-    // Final hard cap on system prompt so small models stay snappy. Each
-    // block is already capped individually; this is the safety net at the
-    // per-model ceiling.
-    const SYS_CAP = profile.sysCap;
-    if (sys.length > SYS_CAP) sys = sys.slice(0, SYS_CAP) + '\n…(trimmed)';
+    const hardCap = Math.round(SYS_CAP * 1.25);
+    if (sys.length > hardCap) sys = sys.slice(0, hardCap) + '\n…(trimmed)';
     return sys;
   };
 
@@ -4451,35 +4527,27 @@ function tryMechanicalDefLookup(text, thread) {
   const atts = (thread.attachments || []).filter(a => (a.sigs || []).length);
   if (!atts.length) return null;
   const raw = String(text).trim();
-  if (raw.length > 120) return null;  // long queries are usually composed asks, not lookups
+  if (raw.length > 120) return null;            // long queries are usually composed asks
   const q = raw.toLowerCase().replace(/[?.!]+$/, '').trim();
 
-  // Match question shape + extract target entity
-  // Patterns:
-  //   "when was X born" / "when did X die" / "what year was X born"
-  //   "where was X born" / "where did X live" / "where is X from"
-  //   "what is X" / "what was X" / "who is X" / "who was X"
-  //   "how old is X"
-  let path = null, target = null;
-  let m;
+  let path = null, target = null, m;
   if ((m = q.match(/^(?:when|what\s+year)\s+(?:was|did|is)\s+(.+?)\s+(born|die[d]?|founded|started?|created|made)$/))) {
-    target = m[1]; path = m[2].replace(/d$/, '') === 'die' ? 'died' : (m[2] === 'born' ? 'born' : m[2]);
+    target = m[1]; path = (m[2] === 'born') ? 'born' : (m[2].startsWith('die') ? 'died' : m[2]);
   } else if ((m = q.match(/^where\s+(?:was|is|did)\s+(.+?)\s+(born|from|located|founded|live[d]?)$/))) {
-    target = m[1]; path = m[2] === 'from' || m[2] === 'born' ? 'birthplace' : 'location';
+    target = m[1]; path = (m[2] === 'from' || m[2] === 'born') ? 'birthplace' : 'location';
   } else if ((m = q.match(/^(?:what|who)\s+(?:is|was|are|were)\s+(.+)$/))) {
     target = m[1]; path = 'class';
   } else if ((m = q.match(/^how\s+old\s+is\s+(.+)$/))) {
-    target = m[1]; path = 'born';  // we'll show born + caveat
+    target = m[1]; path = 'born';
   }
   if (!target) return null;
-
-  // Strip articles, possessives
   target = target.replace(/^(the|a|an)\s+/, '').trim();
   if (target.length < 2) return null;
 
-  // Find matching cluster across attachments (case-insensitive substring)
+  // resolve target -> clusters (case-insensitive substring over names + aliases)
   const tLow = target.toLowerCase();
   const hits = [];
+  const seenHit = new Set();
   for (const att of atts) {
     let proj;
     try { proj = projectSites(att); } catch (e) { continue; }
@@ -4487,64 +4555,50 @@ function tryMechanicalDefLookup(text, thread) {
       const nLow = ent.name.toLowerCase();
       const sfMatch = (ent.surfaceForms || []).some(s => s.toLowerCase() === tLow || tLow.includes(s.toLowerCase()));
       if (nLow === tLow || nLow.includes(tLow) || tLow.includes(nLow) || sfMatch) {
-        hits.push({ att, ent });
+        const k = att.id + '|' + ent.key;
+        if (seenHit.has(k)) continue;
+        seenHit.add(k);
+        hits.push({ att, proj, ent });
       }
     }
   }
   if (!hits.length) return null;
 
-  // Find DEF events with matching path. paths in our schema include:
-  //   'class', 'born', 'birthplace', 'died', 'gloss', plus user-defined paths
   const pathSyns = {
     'born': ['born', 'birth', 'birthdate', 'birthday'],
     'died': ['died', 'death'],
     'birthplace': ['birthplace', 'born-in', 'birth-place'],
-    'class': ['class', 'is', 'is-a', 'isa', 'type'],
+    'class': ['class', 'is', 'is-a', 'isa', 'type', 'role', 'gloss'],
     'location': ['location', 'based', 'headquarters', 'hq'],
     'founded': ['founded', 'started', 'created'],
   };
   const wantPaths = new Set(pathSyns[path] || [path]);
-  const facts = [];
-  for (const { att, ent } of hits) {
-    for (const ev of att.sigs) {
-      if (ev.op !== 'DEF') continue;
-      const tgt = (ev.target || '').toLowerCase();
-      const sigPath = String(ev.path || '').toLowerCase();
-      // Target match against this cluster's surface forms
-      const surfMatch = (ent.surfaceForms || [ent.name]).some(s => s.toLowerCase() === tgt);
-      if (!surfMatch) continue;
-      if (wantPaths.has(sigPath) || (path === 'class' && !sigPath)) {
-        facts.push({ att, ent, ev });
-      }
-    }
-  }
-  if (!facts.length) return null;
 
-  // Compose the answer. Lead with the fact, name the source.
-  const byEnt = new Map();
-  for (const f of facts) {
-    const k = f.ent.key + '|' + f.att.id;
-    if (!byEnt.has(k)) byEnt.set(k, { att: f.att, ent: f.ent, evs: [] });
-    byEnt.get(k).evs.push(f.ev);
-  }
   const lines = [];
-  for (const { att, ent, evs } of byEnt.values()) {
-    const docTag = atts.length > 1 ? ` *(from ${att.title})*` : '';
-    // De-dupe by value
-    const seen = new Set();
-    const values = [];
-    for (const ev of evs) {
-      const v = String(ev.value || '').trim();
-      if (!v || seen.has(v.toLowerCase())) continue;
-      seen.add(v.toLowerCase());
-      values.push(v);
+  for (const { att, proj, ent } of hits) {
+    const prefix = ent.key + '\u0001';
+    const matched = [];
+    for (const [k, ledger] of (proj.attrs || new Map())) {
+      if (!k.startsWith(prefix)) continue;
+      const p = k.slice(prefix.length);
+      if (p === 'resolves-to') continue;
+      if (wantPaths.has(p)) matched.push({ path: p, ledger });
     }
-    if (!values.length) continue;
-    const pathLabel = path === 'class' ? 'is' : path;
-    lines.push(`**${ent.name}** — ${pathLabel}: ${values.join('; ')}${docTag}`);
+    if (!matched.length) continue;
+    matched.sort((a, b) => b.ledger[0].mass - a.ledger[0].mass);
+    const { path: mp, ledger } = matched[0];
+    const head = ledger[0];
+    const docTag = atts.length > 1 ? ` *(from ${att.title})*` : '';
+    const pathLabel = path === 'class' ? 'is' : mp;
+    let line = `**${ent.name}** — ${pathLabel}: ${head.value}`;
+    if (head.mass > 1) line += ` x${head.mass}`;
+    if (ledger.length > 1) {
+      const alts = ledger.slice(1, 3).map(r => `${r.value} x${r.mass}`).join(', ');
+      line += ` *(also recorded: ${alts})*`;
+    }
+    lines.push(line + docTag);
   }
-  if (!lines.length) return null;
-  return lines.join('\n\n');
+  return lines.length ? lines.join('\n\n') : null;
 }
 
 // Detect whether the user's query is a FOLLOW-UP that depends on prior
@@ -5169,6 +5223,41 @@ const SLASH_COMMANDS = [
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
   } },
+  { name: '/physics', desc: 'Mass / strain / momentum audit (optionally: /physics <query>)', run: (args) => {
+      if (!activeSessionId) return;
+      const t = getSession(activeSessionId);
+      const atts = (t.attachments || []).filter(a => (a.sigs || []).length);
+      const lines = [];
+      if (!atts.length) lines.push('No event logs yet — attach a document (the mechanical read runs at index time).');
+      for (const att of atts) {
+        let proj;
+        try { proj = projectSites(att); } catch (e) { continue; }
+        lines.push(`**${att.title}** — ${proj.sigCount} events · ${proj.entities.length} sites · ${proj.strains.length} strained attribute${proj.strains.length === 1 ? '' : 's'}`);
+        lines.push('*mass:*');
+        for (const e of proj.entities.slice(0, 6)) lines.push(`- ${e.name} — m ${e.mass} (x${e.mentions})`);
+        if (proj.strains.length) {
+          lines.push('*strain (contested attributes — heaviest is canonical):*');
+          for (const st of proj.strains.slice(0, 6)) {
+            lines.push(`- ${st.name} · ${st.path}: ` + st.rows.slice(0, 3).map(r => `${r.value} x${r.mass}`).join('  vs  '));
+          }
+        }
+        if (args) {
+          const r = pickRelevantSpansByGraph(args, [att], 400, []);
+          if (r.ranked && r.ranked.length) {
+            lines.push(`*momentum vs "${args}" (p = m·v):*`);
+            for (const mr of r.ranked.slice(0, 6)) lines.push(`- ${mr.ent.name} — m ${mr.m} · v ${mr.v.toFixed(2)} · p ${mr.p.toFixed(1)}`);
+          } else {
+            lines.push(`*momentum vs "${args}": nothing touched, every site at rest*`);
+          }
+        }
+        lines.push('');
+      }
+      messagesEl.querySelector('.empty')?.remove();
+      const el = document.createElement('div'); el.className = 'msg assistant';
+      el.innerHTML = marked.parse('### Physics audit (mechanical, no model)\n' + lines.join('\n'));
+      messagesEl.appendChild(el);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+  } },
   { name: '/read', desc: 'Read the latest attached doc through (section summaries + integral)', run: () => {
       if (!activeSessionId) return;
       const t = getSession(activeSessionId);
@@ -5605,6 +5694,126 @@ function runEventLayerTests() {
     for (const q of newLookups) {
       if (looksLikeFollowUp(q)) return `expected new-lookup, got follow-up: "${q}"`;
     }
+    return null;
+  });
+
+  // 15. Force is stamped on minted events (FORCE.doc === 1).
+  t('minted events carry force 1', () => {
+    const fakeAtt = { sigs: [], tentatives: {}, gen: 0 };
+    const fakeSec = { idx: 0, spanFromIdx: 0, spanToIdx: 0 };
+    const minted = sweepSectionSigs(fakeAtt, fakeSec, [
+      { op: 'CON', s: 'Alpha Corp', v: 'bought', o: 'Beta Labs' },
+    ], new Map());
+    if (minted[0].force !== 1) return `force=${minted[0].force}`;
+    const att = {
+      id: 'ftest', title: 'T', gen: 0, tentatives: {}, sigs: [],
+      spans: [{ idx: 0, sectionIdx: 0, text: 'Alpha Corp bought Beta Labs.' }],
+      sections: [{ idx: 0, spanFromIdx: 0, spanToIdx: 0 }],
+    };
+    const mech = mechanicalReadAttachment(att);
+    for (const ev of mech) if (ev.force !== 1) return `mechanical force=${ev.force}`;
+    return null;
+  });
+
+  // 16. Ledger accumulates mass; disagreement is strain, not overwrite.
+  t('attribute ledger accumulates mass and carries strain', () => {
+    const sigs = [
+      { id: 's0', seq: 0, op: 'DEF', target: 'Carol Burnett', path: 'born', value: '1933', force: 1, sectionIdx: 0 },
+      { id: 's1', seq: 1, op: 'DEF', target: 'Carol Burnett', path: 'born', value: '1933', force: 1, sectionIdx: 0 },
+      { id: 's2', seq: 2, op: 'DEF', target: 'Carol Burnett', path: 'born', value: '1936', force: 1, sectionIdx: 0 },
+    ];
+    const proj = projectSites({ id: 'ledg1', sigs });
+    const ent = proj.entities.find(e => /burnett/i.test(e.name));
+    if (!ent) return 'no Burnett cluster';
+    const ledger = proj.attrs.get(ent.key + '\u0001born');
+    if (!ledger) return 'no born ledger';
+    if (ledger[0].value !== '1933' || ledger[0].mass !== 2) return `canonical ${ledger[0].value} x${ledger[0].mass}`;
+    if (ledger.length !== 2 || ledger[1].mass !== 1) return 'strain row missing';
+    if (!proj.strains.length) return 'strains list empty';
+    return null;
+  });
+
+  // 17. Canonical flips only when out-massed; the old value stays on the ledger.
+  t('canonical flips only when out-massed', () => {
+    const mk = (seq, value) => ({ id: 's' + seq, seq, op: 'DEF', target: 'Acme', path: 'hq', value, force: 1, sectionIdx: 0 });
+    const sigs = [mk(0, 'Austin'), mk(1, 'Austin'), mk(2, 'Dallas'), mk(3, 'Dallas'), mk(4, 'Dallas')];
+    const proj = projectSites({ id: 'ledg2', sigs });
+    const ent = proj.entities.find(e => /acme/i.test(e.name));
+    if (!ent) return 'no Acme cluster';
+    const ledger = proj.attrs.get(ent.key + '\u0001hq');
+    if (!ledger) return 'no hq ledger';
+    if (ledger[0].value !== 'Dallas') return `canonical=${ledger[0].value} (should flip to Dallas x3)`;
+    if (!ledger.find(r => r.value === 'Austin')) return 'Austin vanished; history must stay';
+    return null;
+  });
+
+  // 18. One user assertion (force 5) out-masses four doc observations.
+  t('one user assertion out-masses four doc observations', () => {
+    const sigs = [];
+    for (let i = 0; i < 4; i++) sigs.push({ id: 's' + i, seq: i, op: 'DEF', target: 'Rue McClanahan', path: 'role', value: 'Vivian', force: 1, sectionIdx: 0 });
+    sigs.push({ id: 's4', seq: 4, op: 'DEF', target: 'Rue McClanahan', path: 'role', value: 'Blanche', force: 5, sectionIdx: 0 });
+    const proj = projectSites({ id: 'ledg3', sigs });
+    const ent = proj.entities.find(e => /mcclanahan/i.test(e.name));
+    if (!ent) return 'no cluster';
+    const ledger = proj.attrs.get(ent.key + '\u0001role');
+    if (!ledger) return 'no role ledger';
+    if (ledger[0].value !== 'Blanche' || ledger[0].mass !== 5) return `canonical ${ledger[0].value} x${ledger[0].mass}`;
+    return null;
+  });
+
+  // 19. Mechanical lookup reports strain instead of hiding it.
+  t('tryMechanicalDefLookup surfaces strain', () => {
+    const sigs = [
+      { id: 's0', seq: 0, op: 'DEF', target: 'Carol Burnett', path: 'born', value: 'April 26, 1933', force: 1, sectionIdx: 0 },
+      { id: 's1', seq: 1, op: 'DEF', target: 'Carol Burnett', path: 'born', value: 'April 26, 1933', force: 1, sectionIdx: 0 },
+      { id: 's2', seq: 2, op: 'DEF', target: 'Carol Burnett', path: 'born', value: '1936', force: 1, sectionIdx: 0 },
+    ];
+    const att = { id: 'ledg4', title: 'Bio', sigs, spans: [], sections: [] };
+    const thread = { id: 't', attachments: [att] };
+    const ans = tryMechanicalDefLookup('when was Carol Burnett born?', thread);
+    if (!ans) return 'returned null';
+    if (!/1933/.test(ans)) return 'canonical missing';
+    if (!/1936/.test(ans)) return `strain not reported: ${ans.slice(0, 120)}`;
+    return null;
+  });
+
+  // 20. Momentum ranks a touched-light cluster above an untouched-heavy one.
+  t('momentum ranks touched-light above untouched-heavy', () => {
+    const sigs = [];
+    let seq = 0;
+    for (let i = 0; i < 8; i++) sigs.push({ id: 's' + seq, seq: seq++, op: 'CON', s: 'Zeus Holdings', v: 'acquired', o: 'Atlas Group', force: 1, sectionIdx: 0, spanFromIdx: 0, spanToIdx: 0 });
+    sigs.push({ id: 's' + seq, seq: seq++, op: 'DEF', target: 'Hera Partners', path: 'class', value: 'a small fund', force: 1, sectionIdx: 0, spanFromIdx: 1, spanToIdx: 1 });
+    const att = {
+      id: 'mom1', title: 'T', sigs,
+      spans: [
+        { idx: 0, sectionIdx: 0, text: 'Zeus Holdings acquired Atlas Group.', startChar: 0, endChar: 35 },
+        { idx: 1, sectionIdx: 0, text: 'Hera Partners is a small fund.', startChar: 36, endChar: 66 },
+      ],
+      sections: [{ idx: 0, spanFromIdx: 0, spanToIdx: 1 }],
+    };
+    const r = pickRelevantSpansByGraph('what is Hera Partners?', [att], 1000, []);
+    if (!r.ranked || !r.ranked.length) return 'no ranked output';
+    if (!/hera/i.test(r.ranked[0].ent.name)) return `top by momentum: ${r.ranked[0].ent.name}`;
+    const zeus = r.ranked.find(x => /zeus/i.test(x.ent.name));
+    if (zeus && zeus.p >= r.ranked[0].p) return 'untouched Zeus outranked touched Hera';
+    if (!r.spans.length || r.spans[0].span.idx !== 1) return 'span selection did not follow momentum';
+    return null;
+  });
+
+  // 21. Velocity conducts one hop along edges (touching one end warms the other).
+  t('velocity conducts one hop along edges', () => {
+    const sigs = [];
+    let seq = 0;
+    for (let i = 0; i < 3; i++) sigs.push({ id: 's' + seq, seq: seq++, op: 'CON', s: 'Zeus Holdings', v: 'acquired', o: 'Atlas Group', force: 1, sectionIdx: 0, spanFromIdx: 0, spanToIdx: 0 });
+    const att = {
+      id: 'mom2', title: 'T', sigs,
+      spans: [{ idx: 0, sectionIdx: 0, text: 'Zeus Holdings acquired Atlas Group.', startChar: 0, endChar: 35 }],
+      sections: [{ idx: 0, spanFromIdx: 0, spanToIdx: 0 }],
+    };
+    const r = pickRelevantSpansByGraph('tell me about Zeus Holdings', [att], 1000, []);
+    const atlas = (r.ranked || []).find(x => /atlas/i.test(x.ent.name));
+    if (!atlas) return 'Atlas got no conducted velocity';
+    if (!(atlas.v > 0 && atlas.v < 1)) return `Atlas v=${atlas && atlas.v} (expected 0 < v < 1)`;
     return null;
   });
 
