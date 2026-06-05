@@ -3204,7 +3204,11 @@ async function dispatch(thread, queryOverride) {
     }
 
     const SYS_CAP = profile.sysCap;
-    const tagOf = (att) => `[doc${atts.indexOf(att) + 1}]`;
+    // A [docN] tag only earns its tokens when there's more than one source to
+    // disambiguate. With a single doc the tag rides on every GROUND/STRUCTURE
+    // line as pure overhead, so drop it — attribution is unambiguous. STRUCTURE
+    // lines pass through push(), which normalizes the resulting whitespace.
+    const tagOf = (att) => atts.length > 1 ? `[doc${atts.indexOf(att) + 1}]` : '';
 
     // # GROUND: what exists and how heavy it is. xN is mass, auditable to spans.
     let ground = '';
@@ -3215,7 +3219,8 @@ async function dispatch(thread, queryOverride) {
         let top = (rankedByAtt.get(a.id) || []).slice(0, 4).map(r => r.ent);
         if (!top.length) { try { top = projectSites(a).entities.slice(0, 4); } catch { top = []; } }
         const names = top.map(e => `${e.name} x${e.mentions}`).join(', ');
-        g.push(`${tagOf(a)} "${a.title}"${marker}${names ? ` — ${names}` : ''}`);
+        const tg = tagOf(a);
+        g.push(`${tg ? tg + ' ' : ''}"${a.title}"${marker}${names ? ` — ${names}` : ''}`);
       }
       const touched = [...new Set(graphRanked.filter(r => r.v > 0).slice(0, 4).map(r => r.ent.name))];
       if (touched.length) g.push(`query touches: ${touched.join(', ')}`);
@@ -3223,7 +3228,7 @@ async function dispatch(thread, queryOverride) {
     }
 
     const instruction = atts.length
-      ? `Answer the user from STRUCTURE only. If STRUCTURE doesn't contain it, say the document doesn't cover it.`
+      ? `Answer from STRUCTURE only. If it's not there, say the document doesn't cover it.`
       : `Answer the user, drawing on STRUCTURE where relevant.`;
 
     // # STRUCTURE: candidate lines in priority order, packed to budget.
@@ -4336,9 +4341,9 @@ function closePreview() { $('preview-modal').classList.remove('show'); $('previe
 // Build one expert's prompt — scoped retrieval against ONE attachment only.
 async function buildExpertPlan(att, query, tag) {
   const parts = [];
-  parts.push(`You are the subject-matter expert on exactly ONE source: "${att.title}"${att.siteName ? ` (${att.siteName})` : ''}. Answer the user's question using ONLY this source. Quote exact phrases where the wording matters. If this source does not address the question, reply exactly: "This source doesn't address that." Do not use outside knowledge. Do not speculate.`);
+  parts.push(`Expert on one source: "${att.title}"${att.siteName ? ` (${att.siteName})` : ''}. Answer ONLY from the material below — quote exact wording where it matters, no outside knowledge, no speculation. If it's not covered here, reply exactly: "This source doesn't address that."`);
 
-  if (att.summary) parts.push(`# SOURCE OVERVIEW\n${att.summary.slice(0, 550)}`);
+  if (att.summary) parts.push(`# OVERVIEW\n${att.summary.slice(0, 550)}`);
 
   // Scoped mechanical retrieval — this expert's source only
   let hits = [];
@@ -4347,19 +4352,19 @@ async function buildExpertPlan(att, query, tag) {
   const secHits = hits.filter(h => h.kind === 'section').sort((a, b) => b.score - a.score).slice(0, 2);
 
   if (secHits.length) {
-    const lines = ['# RELEVANT SECTIONS'];
+    const lines = ['# SECTIONS'];
     for (const h of secHits) lines.push(`[sec ${h.section.idx + 1}] ${h.section.summary.slice(0, 350)}`);
     parts.push(lines.join('\n'));
   }
   if (spanHits.length) {
-    const lines = ['# EXCERPTS (verbatim from the source)'];
-    for (const h of spanHits) lines.push(`[span #${h.span.idx} · chars ${h.span.startChar}–${h.span.endChar}]\n${h.span.text.slice(0, 600)}`);
+    const lines = ['# EXCERPTS (verbatim)'];
+    for (const h of spanHits) lines.push(`[span #${h.span.idx}]\n${h.span.text.slice(0, 600)}`);
     parts.push(lines.join('\n'));
   }
   // Site projection — this doc's own fold only
   const ents = projectEntities(att).slice(0, 6);
   if (ents.length) {
-    const lines = ['# KEY SITES (mechanical projection of this source)'];
+    const lines = ['# SITES'];
     for (const e of ents) lines.push(`- ${e.name} [${e.type}] ×${e.mentions}`);
     parts.push(lines.join('\n'));
   }
@@ -4378,7 +4383,7 @@ async function buildExpertPlan(att, query, tag) {
 // never touches the sources directly; provenance stays one level deep.
 function buildMergePlan(query, expertResults) {
   const parts = [];
-  parts.push(`You are the synthesizer. Below are answers from per-source experts. Each expert saw ONLY its own source and nothing else. Combine them into one answer to the user's question. Attribute every claim to its source tag (e.g. [doc1]). Where experts disagree, say so explicitly — do not smooth over conflicts. Do not add any fact that no expert stated. If no expert had an answer, say so plainly.`);
+  parts.push(`Synthesize the per-source expert answers below into one answer. Each expert saw only its own source. Attribute every claim to its source tag (e.g. [doc1]). Name disagreements explicitly — don't smooth over conflicts. Add no fact no expert stated; if none had an answer, say so plainly.`);
   const lines = ['# EXPERT ANSWERS'];
   for (const r of expertResults) {
     lines.push(`${r.tag} "${r.attTitle}":\n${(r.answer || '(no answer)').slice(0, 800)}`);
