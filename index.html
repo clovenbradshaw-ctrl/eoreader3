@@ -3269,6 +3269,7 @@ async function dispatch(thread, queryOverride) {
     }
   }
   let spanHits = retrieved.spans;
+  spanHits.sort((a, b) => (b.hybrid || b.score || 0) - (a.hybrid || a.score || 0));
   let sectionHits = retrieved.sections;
 
   // 2. Retrieval against folded conversation turns (lexical — no embeddings on chat)
@@ -3313,6 +3314,48 @@ async function dispatch(thread, queryOverride) {
     rankedByAtt.get(r.attId).push(r);
   }
 
+  // ---- card routing: detect verbatim-lookup queries, window spans on the match ----
+  // A query is LEXICAL when the user quoted a phrase, or used a content token
+  // that is present-but-rare in the attached docs. Those questions are only
+  // answerable from verbatim text, so spans must outrank ledger facts.
+  const qParsed = parseQuery(currentUserText || '');
+  const QSTOP = new Set(['the','was','were','who','what','when','where','which','that','this','with','from','about','called','said','does','did','have','has','had','his','her','their','them','they','being','been','into','over','under','more','most','some','any']);
+  const docOccurrences = (tok) => {
+    let occ = 0;
+    for (const a of atts) for (const sp of (a.spans || [])) {
+      occ += sp.text.toLowerCase().split(tok).length - 1;
+      if (occ > 6) return occ;
+    }
+    return occ;
+  };
+  const isLexicalQuery = atts.length > 0 && (
+    qParsed.phrases.length > 0 ||
+    (qParsed.tokens || []).some(t => {
+      if (t.length < 4 || QSTOP.has(t)) return false;
+      const occ = docOccurrences(t);
+      return occ > 0 && occ <= 6;
+    })
+  );
+  // Window a long span AROUND the query match instead of slicing from char 0.
+  // Head-slicing loses any answer that sits past the cap.
+  const windowSpan = (text, cap) => {
+    if (!text || text.length <= cap) return text;
+    const lower = text.toLowerCase();
+    let pos = -1;
+    for (const ph of qParsed.phrases) { const p = lower.indexOf(ph); if (p >= 0) { pos = p; break; } }
+    if (pos < 0) {
+      const toks = [...(qParsed.tokens || [])].filter(t => t.length >= 4 && !QSTOP.has(t)).sort((a, b) => b.length - a.length);
+      for (const t of toks) { const p = lower.indexOf(t); if (p >= 0) { pos = p; break; } }
+    }
+    if (pos < 0) return text.slice(0, cap) + '…';
+    let start = Math.max(0, pos - Math.floor(cap / 2));
+    let end = Math.min(text.length, start + cap);
+    start = Math.max(0, end - cap);
+    if (start > 0) { const sp = text.indexOf(' ', start); if (sp >= 0 && sp < start + 24) start = sp + 1; }
+    if (end < text.length) { const sp = text.lastIndexOf(' ', end); if (sp > end - 24) end = sp; }
+    return (start > 0 ? '…' : '') + text.slice(start, end).trim() + (end < text.length ? '…' : '');
+  };
+
   const buildSys = () => {
     const hasContext = atts.length > 0
       || (thread.pins && thread.pins.length > 0)
@@ -3343,27 +3386,28 @@ async function dispatch(thread, queryOverride) {
         const marker = a === focusAtt && atts.length > 1 ? ' (focus)' : '';
         let top = (rankedByAtt.get(a.id) || []).slice(0, 4).map(r => r.ent);
         if (!top.length) { try { top = projectSites(a).entities.slice(0, 4); } catch { top = []; } }
-        const names = top.map(e => `${e.name} x${e.mentions}`).join(', ');
+        const trim36 = (s) => { s = String(s).replace(/\s+/g, ' ').trim(); return s.length > 36 ? s.slice(0, 36) + '…' : s; };
+        const names = top.map(e => `${trim36(e.name)} x${e.mentions}`).join(', ');
         const tg = tagOf(a);
         g.push(`${tg ? tg + ' ' : ''}"${a.title}"${marker}${names ? ` — ${names}` : ''}`);
       }
-      const touched = [...new Set(graphRanked.filter(r => r.v > 0).slice(0, 4).map(r => r.ent.name))];
+      const touched = [...new Set(graphRanked.filter(r => r.v > 0).slice(0, 4).map(r => { const s = String(r.ent.name).replace(/\s+/g, ' ').trim(); return s.length > 36 ? s.slice(0, 36) + '…' : s; }))];
       if (touched.length) g.push(`query touches: ${touched.join(', ')}`);
       ground = g.join('\n');
     }
 
     const instruction = atts.length
-      ? `Answer from STRUCTURE only. If it's not there, say the document doesn't cover it.`
+      ? `Answer from STRUCTURE only. Lines marked text: are verbatim quotes from the document; trust them over memory. If the answer is not in STRUCTURE, say the document doesn't cover it.`
       : `Answer the user, drawing on STRUCTURE where relevant.`;
 
     // # STRUCTURE: candidate lines in priority order, packed to budget.
     const cands = [];
-    const push = (pri, text, cap) => {
+    const push = (pri, text, cap, meta) => {
       if (!text) return;
       let t = String(text).replace(/\s+/g, ' ').trim();
       if (!t) return;
       if (cap && t.length > cap) t = t.slice(0, cap) + '…';
-      cands.push({ pri, t });
+      cands.push({ pri, t, meta });
     };
 
     // 0 — compose-refs (user points at this for THIS turn)
@@ -3401,7 +3445,7 @@ async function dispatch(thread, queryOverride) {
           let line = `${tagOf(a)} ${r.ent.name} — ${path}: ${head.value}`;
           if (head.mass > 1) line += ` x${head.mass}`;
           if (ledger.length > 1) line += ` (also recorded: ${ledger[1].value} x${ledger[1].mass})`;
-          push(2, line, 150);
+          push(isLexicalQuery ? 4 : 2, line, 150);
         }
       }
       // 3 — edges touching the ranked clusters
@@ -3432,10 +3476,14 @@ async function dispatch(thread, queryOverride) {
       const att = atts.find(a => a.id === sh.attId);
       push(5, `${att ? tagOf(att) : '[doc?]'} summary (sec ${sh.section.idx + 1}): ${sh.section.summary || ''}`, 240);
     }
-    // 6 — verbatim spans (cosine + graph union)
+    // 6 — verbatim spans (cosine + graph union). On lexical queries these
+    // ARE the answer: promote above ledger facts and window on the match.
+    const spanPri = isLexicalQuery ? 1.5 : 6;
+    const spanCap = isLexicalQuery ? 420 : 300;
     for (const ex of spanHits) {
+      ex.sent = false;
       const att = atts.find(a => a.id === ex.attId);
-      push(6, `${att ? tagOf(att) : '[doc?]'} text: "${ex.span.text}"`, 300);
+      push(spanPri, `${att ? tagOf(att) : '[doc?]'} text: "${windowSpan(ex.span.text, spanCap)}"`, spanCap + 60, { spanRef: ex });
     }
 
     // # EARLIER: folded conversation, tiny, only when folds exist
@@ -3454,13 +3502,14 @@ async function dispatch(thread, queryOverride) {
     cands.sort((x, y) => x.pri - y.pri);
     const fixed = ground.length + instruction.length + earlier.length
       + (customSys ? customSys.length + 2 : 0) + 40;
-    const structBudget = Math.max(220, SYS_CAP - fixed);
+    const structBudget = Math.max(isLexicalQuery ? 520 : 220, SYS_CAP - fixed);
     const sLines = ['# STRUCTURE'];
     let used = 0;
     for (const c of cands) {
       if (used + c.t.length + 3 > structBudget) continue;   // skip, keep scanning (a shorter later line may fit)
       sLines.push('- ' + c.t);
       used += c.t.length + 3;
+      if (c.meta && c.meta.spanRef) c.meta.spanRef.sent = true;   // audit: this span shipped
     }
     if (sLines.length === 1) sLines.push('- (nothing surfaced for this question)');
 
@@ -3693,7 +3742,9 @@ function renderRetrievalCard(spanHits, sectionHits, convTurns, attachments, enti
         const ec = (ex.span && ex.span.endChar != null) ? ex.span.endChar : ex.endChar;
         const chars = (sc != null && ec != null) ? ` · chars ${sc.toLocaleString()}–${ec.toLocaleString()}` : '';
         const via = ex.src ? ` · via ${ex.src}` : '';
-        tag.textContent = `${findTag(ex.attId)} span #${spanIdx(ex)}${chars}${via} · lex ${lex} · sem ${sem} · hybrid ${hyb}`;
+        const dropped = ex.sent === false;
+        tag.textContent = `${findTag(ex.attId)} span #${spanIdx(ex)}${chars}${via} · lex ${lex} · sem ${sem} · hybrid ${hyb}${dropped ? ' · ⚠ retrieved, NOT sent (budget)' : ''}`;
+        if (dropped) { row.style.opacity = '0.45'; tag.style.color = 'var(--warn, #c47700)'; }
         const body = document.createElement('div'); body.className = 'dd-body';
         body.textContent = spanText(ex);
         row.appendChild(tag); row.appendChild(body);
@@ -4913,7 +4964,7 @@ async function send() {
   setStatus('Dispatching…', true);
   const plan = await dispatch(thread);
   setStatus('', false);
-  if (plan.spanHits.length) userMsg.spanHits = plan.spanHits.map(h => ({ attId: h.attId, attTitle: h.attTitle, spanIdx: h.span.idx, snippet: h.span.text, startChar: h.span.startChar, endChar: h.span.endChar, lex: h.lex, sem: h.sem, hybrid: h.hybrid }));
+  if (plan.spanHits.length) userMsg.spanHits = plan.spanHits.map(h => ({ attId: h.attId, attTitle: h.attTitle, spanIdx: h.span.idx, snippet: h.span.text, startChar: h.span.startChar, endChar: h.span.endChar, lex: h.lex, sem: h.sem, hybrid: h.hybrid, sent: h.sent !== false }));
   if (plan.systemPrompt) userMsg.sentSystem = plan.systemPrompt.slice(0, 12000);
   if (plan.sectionHits.length) userMsg.sectionHits = plan.sectionHits.map(h => ({ attId: h.attId, attTitle: h.attTitle, sectionIdx: h.section.idx, spanFromIdx: h.section.spanFromIdx, spanToIdx: h.section.spanToIdx, summary: h.section.summary }));
   if (plan.convTurns.length) userMsg.convTurns = plan.convTurns;
