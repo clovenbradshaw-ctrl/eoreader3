@@ -3159,9 +3159,16 @@ async function dispatch(thread, queryOverride) {
   let verbatimMsgs = thread.history.slice(verbatimStart);
   const isFreshLookup = atts.length > 0 && !looksLikeFollowUp(currentUserText);
   if (isFreshLookup) {
-    // Strip everything except the immediately appended current user turn,
-    // which lives in `messages` below. The model sees only system + this turn.
-    verbatimMsgs = [];
+    // Strip prior conversation so the model sees only system + the current
+    // user turn — a fresh read with no earlier turn to bleed into the answer.
+    // We MUST keep the current user turn: assemble() builds the message list
+    // as [system] + verbatimMsgs, and a chat completion's last message has to
+    // be from `user` (or `tool`). Emptying this entirely left the request
+    // ending on the system prompt, which the API rejects.
+    const lastTurn = thread.history[thread.history.length - 1];
+    verbatimMsgs = (lastTurn && lastTurn.role === 'user')
+      ? [lastTurn]
+      : (currentUserText ? [{ role: 'user', content: currentUserText }] : []);
   }
 
   // Group the momentum ranking per attachment.
