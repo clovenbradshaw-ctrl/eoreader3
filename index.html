@@ -1324,6 +1324,100 @@ function scoreChunkAgainstQuery(chunk, queryOrTokens) {
   return score;
 }
 
+// ── EXISTENCE CASCADE ─────────────────────────────────────────────────────
+// "Is this word here, and where?" is a Ground-layer question (see prompting
+// notes). It must NOT be left to embedding cosine alone: a rare term the user
+// typed verbatim can sit in a span whose overall semantic similarity is low,
+// and the top-K blend silently drops it. The fix is a cascade that tries, in
+// order: (1) raw regex / verbatim substring, (2) fuzzy (bounded edit-distance)
+// for typos & morphology, (3) embedding similarity for paraphrase. A span that
+// matches at an earlier stage outranks anything found only at a later one.
+
+// Salient terms to locate. Quoted phrases and capitalized runs in the ORIGINAL
+// query stay whole (so "Rue McClanahan" matches as a unit); content words come
+// from the query with only pure stopwords dropped. We keep length>=2 so "AI",
+// "UN" and years like "1984" survive. `fuzzy` flags terms long enough that an
+// edit-distance match is meaningful (and that aren't multi-word).
+function lookupTerms(query, parsed) {
+  const out = []; const seen = new Set();
+  const add = (raw, w) => {
+    const low = String(raw).toLowerCase().trim();
+    if (low.length < 2 || seen.has(low)) return;
+    seen.add(low);
+    out.push({ raw, low, w, fuzzy: low.length >= 4 && !/\s/.test(low) });
+  };
+  for (const ph of (parsed.phrases || [])) add(ph, 5);
+  const proper = String(query || '').match(/[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)*/g) || [];
+  for (const p of proper) if (/\s/.test(p) || !STOP.has(p.toLowerCase())) add(p, 3);
+  const words = String(query || '').match(/[A-Za-z0-9][A-Za-z0-9'’-]*/g) || [];
+  for (const w of words) {
+    const lw = w.toLowerCase();
+    if (lw.length < 2 || STOP.has(lw)) continue;
+    // Short function words sit below STOP's length>=3 horizon; matching them
+    // verbatim would light up nearly every span. Drop them as standalone terms
+    // (they still ride inside quoted phrases / proper-noun runs above).
+    if (lw.length <= 3 && SHORT_FN.has(lw)) continue;
+    add(w, lw.length >= 5 ? 2 : 1.2);
+  }
+  return out;
+}
+const SHORT_FN = new Set(['is','it','in','on','at','of','to','as','by','or','an','be','we','he','me','my','no','so','up','if','do','go','am','us','re','a','i','of','off','per','via','vs','etc','nor','yet','but','not','its','him','she','was','are']);
+
+// Stage 1 — raw regex. Word-boundary occurrence of each term (counted), with a
+// loose-substring fallback (term living inside a larger word) at reduced weight.
+// `lower` is the already-lowercased span text. Returns score + which terms hit.
+function exactTermScore(lower, terms) {
+  let score = 0; const matched = [];
+  for (const t of terms) {
+    const esc = t.low.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    let n = 0;
+    // Delimiter-bounded match rather than \b: terms may carry apostrophes /
+    // hyphens / spaces where \b behaves unintuitively.
+    try { n = (lower.match(new RegExp('(?:^|[^a-z0-9])' + esc + '(?:[^a-z0-9]|$)', 'g')) || []).length; } catch {}
+    if (n) { score += n * t.w; matched.push(t.low); continue; }
+    if (lower.includes(t.low)) { score += 0.4 * t.w; matched.push(t.low); }
+  }
+  return { score, matched };
+}
+
+// Bounded Levenshtein: true iff edit distance(a,b) <= maxD. Early-exits per row.
+function levWithin(a, b, maxD) {
+  const la = a.length, lb = b.length;
+  if (Math.abs(la - lb) > maxD) return false;
+  let prev = new Array(lb + 1);
+  for (let j = 0; j <= lb; j++) prev[j] = j;
+  for (let i = 1; i <= la; i++) {
+    const cur = new Array(lb + 1); cur[0] = i;
+    let rowMin = cur[0];
+    const ai = a.charCodeAt(i - 1);
+    for (let j = 1; j <= lb; j++) {
+      const cost = ai === b.charCodeAt(j - 1) ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > maxD) return false;
+    prev = cur;
+  }
+  return prev[lb] <= maxD;
+}
+
+// Stage 2 — fuzzy. For terms with no verbatim hit anywhere, look for an
+// edit-distance-close word in this span (catches "Mcclanahan"/"McClanahan",
+// "color"/"colour", single-char typos). Only invoked on the rare path where a
+// salient term wasn't found verbatim, so the cost is bounded.
+function fuzzyTermScore(lower, targets) {
+  const words = lower.match(/[a-z0-9][a-z0-9'’-]*/g) || [];
+  let score = 0;
+  for (const t of targets) {
+    const maxD = t.low.length <= 5 ? 1 : 2;
+    for (const w of words) {
+      if (Math.abs(w.length - t.low.length) > maxD) continue;
+      if (levWithin(w, t.low, maxD)) { score += t.w * 0.6; break; }
+    }
+  }
+  return score;
+}
+
 async function pickRelevantSpans(query, attachments, spanBudget = 2000, sectionBudget = 1500) {
   const parsed = parseQuery(query);
   if (!attachments.length) return { spans: [], sections: [] };
@@ -1337,34 +1431,65 @@ async function pickRelevantSpans(query, attachments, spanBudget = 2000, sectionB
   const lexWeight = hasPhrase ? 0.80 : 0.45;
   const semWeight = 1 - lexWeight;
 
+  // Cascade terms: what the user typed that we should try to locate.
+  const terms = lookupTerms(query, parsed);
+
   const candidates = [];
   for (const att of attachments) {
     for (const span of (att.spans || [])) {
+      const lower = span.text.toLowerCase();
+      const exact = exactTermScore(lower, terms);      // stage 1 (raw regex)
       const lex = scoreChunkAgainstQuery(span.text, parsed);
       let sem = 0;
       if (qVec && span.embedding) {
-        try { sem = cosine(qVec, b64ToF32(span.embedding)); } catch {}
+        try { sem = cosine(qVec, b64ToF32(span.embedding)); } catch {} // stage 3 (embedding)
       }
       // Normalize lex against expected max for this query
       // Rough ceiling: phrase hits are worth 12, so cap lex at ~24 for normalization
       const lexNorm = Math.min(1, lex / 8);
       const hybrid = qVec ? (lexWeight * lexNorm + semWeight * Math.max(0, sem)) : lexNorm;
-      if (hybrid > 0.04) {
-        candidates.push({ attId: att.id, attTitle: att.title, span, lex, sem, hybrid });
-      }
+      candidates.push({ attId: att.id, attTitle: att.title, span, lex, sem, hybrid, exact: exact.score, matched: exact.matched, fuzzy: 0, _lower: lower });
     }
   }
-  candidates.sort((a, b) => b.hybrid - a.hybrid);
 
-  // Pick spans
+  // Stage 2 — fuzzy, only for salient terms NOT found verbatim anywhere. This
+  // is the rare/important path (the term the user asked about is missing or
+  // mis-spelled), so the edit-distance scan stays cheap in the common case.
+  const matchedTerms = new Set();
+  for (const c of candidates) for (const m of c.matched) matchedTerms.add(m);
+  const fuzzyTargets = terms.filter(t => t.fuzzy && !matchedTerms.has(t.low));
+  if (fuzzyTargets.length) {
+    for (const c of candidates) {
+      if (c.exact) continue;                            // already located verbatim here
+      c.fuzzy = fuzzyTermScore(c._lower, fuzzyTargets);
+    }
+  }
+
+  // Cascade ranking. A span that matches at an earlier stage outranks anything
+  // found only at a later one — existence beats paraphrase. Within a stage we
+  // fall back to the within-stage score, then the hybrid (lexical+semantic).
+  const rankKey = c =>
+    (c.exact ? 3 : c.fuzzy ? 2 : 1) * 1e6
+    + (c.exact || c.fuzzy || 0) * 1e3
+    + c.hybrid;
+  // Stage 3 still gates on a minimum hybrid so pure-noise spans don't enter;
+  // exact/fuzzy hits always qualify regardless of cosine.
+  const kept = candidates.filter(c => c.exact || c.fuzzy || c.hybrid > 0.04);
+  kept.sort((a, b) => rankKey(b) - rankKey(a));
+
+  // Pick spans. Verbatim/fuzzy hits are force-included (never budget-dropped
+  // first) so a queried word that exists in the source always reaches the model.
   const picked = []; const sectionsHit = new Set();
   let used = 0;
-  for (const c of candidates) {
-    if (used + c.span.text.length > spanBudget && picked.length > 0) continue;
-    picked.push(c);
+  for (const c of kept) {
+    const forced = c.exact || c.fuzzy;
+    if (!forced && used + c.span.text.length > spanBudget && picked.length > 0) continue;
+    if (forced && used > spanBudget * 1.6 && picked.length > 0) continue; // loose ceiling
+    const src = c.exact ? 'exact' : c.fuzzy ? 'fuzzy' : 'cosine';
+    picked.push({ attId: c.attId, attTitle: c.attTitle, span: c.span, lex: c.lex, sem: c.sem, hybrid: c.hybrid, exact: c.exact, fuzzy: c.fuzzy, src });
     used += c.span.text.length;
     if (c.span.sectionId) sectionsHit.add(c.attId + '::' + c.span.sectionId);
-    if (picked.length >= 6) break;
+    if (picked.length >= 8) break;
   }
 
   // Pick section summaries for the sections containing top spans
@@ -3567,7 +3692,8 @@ function renderRetrievalCard(spanHits, sectionHits, convTurns, attachments, enti
         const sc = (ex.span && ex.span.startChar != null) ? ex.span.startChar : ex.startChar;
         const ec = (ex.span && ex.span.endChar != null) ? ex.span.endChar : ex.endChar;
         const chars = (sc != null && ec != null) ? ` · chars ${sc.toLocaleString()}–${ec.toLocaleString()}` : '';
-        tag.textContent = `${findTag(ex.attId)} span #${spanIdx(ex)}${chars} · lex ${lex} · sem ${sem} · hybrid ${hyb}`;
+        const via = ex.src ? ` · via ${ex.src}` : '';
+        tag.textContent = `${findTag(ex.attId)} span #${spanIdx(ex)}${chars}${via} · lex ${lex} · sem ${sem} · hybrid ${hyb}`;
         const body = document.createElement('div'); body.className = 'dd-body';
         body.textContent = spanText(ex);
         row.appendChild(tag); row.appendChild(body);
@@ -4946,11 +5072,13 @@ async function searchAll(query, atts, filters) {
     try { qVec = await embedText(query); } catch {}
   }
 
+  const terms = lookupTerms(query, parsed);
   for (const att of atts) {
     if (filters.spans) {
       const lexWeight = hasPhrase ? 0.85 : 0.45;
       const semWeight = 1 - lexWeight;
       for (const span of (att.spans || [])) {
+        const exact = exactTermScore(span.text.toLowerCase(), terms);
         const lex = scoreChunkAgainstQuery(span.text, parsed);
         let sem = 0;
         if (qVec && span.embedding) {
@@ -4958,8 +5086,10 @@ async function searchAll(query, atts, filters) {
         }
         const lexNorm = Math.min(1, lex / 8);
         const hybrid = qVec ? (lexWeight * lexNorm + semWeight * Math.max(0, sem)) : lexNorm;
-        if (hybrid > 0.04) {
-          out.push({ kind: 'span', attId: att.id, attTitle: att.title, span, lex, sem, hybrid, score: hybrid });
+        if (exact.score || hybrid > 0.04) {
+          // Verbatim hits sort above anything found only by similarity.
+          const score = hybrid + (exact.score ? 1 + Math.min(1, exact.score / 8) : 0);
+          out.push({ kind: 'span', attId: att.id, attTitle: att.title, span, lex, sem, hybrid, exact: exact.score, src: exact.score ? 'exact' : 'cosine', score });
         }
       }
     }
