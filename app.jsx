@@ -546,8 +546,8 @@ function App() {
 
       {isMobile && !collapsed && <div className="sb-backdrop" onClick={() => setCollapsed(true)} />}
 
-      <div className="workspace">
-        <div className="topbar">
+      <main className="workspace" aria-label="Chat workspace">
+        <header className="topbar">
           {collapsed && <button className="tb-btn" onClick={() => setCollapsed(false)} title="Show sidebar"><Icon name="sidebar" size={18} /></button>}
           <div className="tb-title">{chatTitle}{hasTabs && <span className="sub">· {docs.length} document{docs.length > 1 ? 's' : ''}</span>}</div>
           <div className="tb-spacer" />
@@ -559,7 +559,7 @@ function App() {
             </div>
           )}
           <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> {enabledRules} rules on</button>
-        </div>
+        </header>
 
         <div className="body" ref={bodyRef}>
           {showHero ? (
@@ -583,7 +583,7 @@ function App() {
             </React.Fragment>
           )}
         </div>
-      </div>
+      </main>
 
       {rulesOpen && <RulesDrawer rules={rules} onToggle={toggleRule} onInstall={installRule} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
       {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}

@@ -13,7 +13,7 @@
   --border-strong: #d9dce2;
   --text:          #1b1d21;
   --text-2:        #5b626c;
-  --text-3:        #8a909a;
+  --text-3:        #6c727c;   /* muted captions — darkened to clear WCAG AA (≥4.5:1 on white) */
   --accent:        #2a6fdb;
   --accent-hover:  #2360c2;
   --accent-tint:   #eaf1fc;
@@ -200,11 +200,14 @@ button { font-family: inherit; cursor: pointer; }
 
 /* citation chip */
 .cite {
-  font-family: var(--mono); font-size: .72em; color: var(--evidence); background: var(--evidence-tint);
+  font: inherit; font-family: var(--mono); font-size: .72em; line-height: inherit;
+  color: var(--evidence); background: var(--evidence-tint);
   border-radius: 5px; padding: 1px 5px; margin: 0 1px; cursor: pointer; vertical-align: 1px;
   border: 1px solid transparent; white-space: nowrap; transition: background .12s, border-color .12s;
+  display: inline; -webkit-appearance: none; appearance: none;
 }
 .cite:hover { background: var(--evidence-tint-2); border-color: var(--evidence); }
+.cite:focus-visible { outline: 2px solid var(--evidence); outline-offset: 1px; }
 .cite.void { color: var(--void-fg); background: var(--void-bg); }
 .cite.void:hover { border-color: var(--void-bd); }
 

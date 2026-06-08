@@ -8,7 +8,8 @@ function renderAnswer(text, onCite) {
       if (m.index > last) parts.push(renderBold(block.slice(last, m.index), bi + '-' + last));
       if (m[1] === 'cite') {
         const [docId, idx, label] = m[2].split(':');
-        parts.push(<span key={m.index} className="cite" onClick={() => onCite(docId, parseInt(idx, 10))}>{label}</span>);
+        parts.push(<button key={m.index} type="button" className="cite" title={'Jump to ' + label + ' in the document'}
+          onClick={() => onCite(docId, parseInt(idx, 10))}>{label}</button>);
       } else {
         parts.push(<span key={m.index} className="cite void" title="This term appears nowhere in the sources">{m[2]}</span>);
       }
@@ -111,7 +112,7 @@ function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, place
           ))}
         </div>
         <div className="comp-spacer" />
-        <button className="send-btn" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>
+        <button className="send-btn" aria-label="Send message" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>
       </div>
     </div>
   );

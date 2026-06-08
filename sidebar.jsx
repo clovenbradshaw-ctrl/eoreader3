@@ -4,7 +4,7 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc,
                    enabledRules, modelStatus }) {
   const iconFor = (d) => d.kind === 'table' ? 'table' : 'doc';
   return (
-    <aside className={'sidebar' + (collapsed ? ' collapsed' : '')}>
+    <aside className={'sidebar' + (collapsed ? ' collapsed' : '')} aria-label="Workspace navigation">
       <div className="sb-top">
         <div className="brand"><span className="glyph">Cl</span> Cleon</div>
         <button className="sb-icon-btn" title="Collapse sidebar" onClick={onToggle}><Icon name="sidebar" size={18} /></button>

@@ -38,3 +38,36 @@ function Icon({ name, size = 18, style, className, strokeWidth = 1.7 }) {
   });
 }
 window.Icon = Icon;
+
+/* Shared dialog behaviour (§4 a11y): focus the panel on open, trap Tab inside
+   it, close on Escape, and restore focus to the trigger on close. Returns a ref
+   to put on the dialog panel (which should be tabIndex={-1}). */
+function useDialog(onClose) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const prev = document.activeElement;
+    const panel = ref.current;
+    const focusables = () => panel
+      ? [...panel.querySelectorAll('a[href],button:not([disabled]),textarea,input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')]
+          .filter(el => el.offsetParent !== null || el === document.activeElement)
+      : [];
+    const first = focusables()[0];
+    try { (first || panel) && (first || panel).focus(); } catch (e) {}
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose && onClose(); return; }
+      if (e.key === 'Tab' && panel) {
+        const f = focusables(); if (!f.length) { e.preventDefault(); return; }
+        const a = f[0], b = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === a) { e.preventDefault(); b.focus(); }
+        else if (!e.shiftKey && document.activeElement === b) { e.preventDefault(); a.focus(); }
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      try { prev && prev.focus && prev.focus(); } catch (e) {}
+    };
+  }, []);
+  return ref;
+}
+window.useDialog = useDialog;

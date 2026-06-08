@@ -139,14 +139,16 @@ function RulesDrawer({ rules, onToggle, onInstall, onImport, onClose, onToast })
   const enabledCount = rules.filter(r => r.installed && r.enabled).length;
   const availCount = rules.filter(r => !r.installed).length;
   const exportObj = buildExport(rules);
+  const dialogRef = window.useDialog(onClose);
 
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="drawer" onClick={e => e.stopPropagation()}>
+      <div className="drawer" role="dialog" aria-modal="true" aria-label="Reading rules"
+           tabIndex={-1} ref={dialogRef} onClick={e => e.stopPropagation()}>
         <div className="drawer-head">
           <div className="row1">
             <h2>Rules</h2>
-            <button className="x" onClick={onClose}><Icon name="x" size={18} /></button>
+            <button className="x" onClick={onClose} aria-label="Close rules"><Icon name="x" size={18} /></button>
           </div>
           <p>Every rule Cleon applies — how it finds names, attributes speech, retrieves, and checks its own answers. The model only phrases what these rules decide. Install, remove, or switch any off; the locked ones are constants of the medium. All of it is auditable and exportable as JSON.</p>
         </div>
@@ -189,7 +191,7 @@ function RulesDrawer({ rules, onToggle, onInstall, onImport, onClose, onToast })
 
 /* ============================================================ Model popover */
 function ModelPopover({ models, current, onPick, onClose, anchor, status, progress }) {
-  const ref = React.useRef(null);
+  const ref = window.useDialog(onClose);
   React.useEffect(() => {
     // Close only on a genuine outside press. A containment check on mousedown
     // (instead of a bare window 'click' → onClose) means a press on a model
@@ -207,13 +209,16 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
   const style = anchor ? { left: anchor.left, bottom: anchor.bottom } : { left: 16, bottom: 60 };
   const pct = Math.round((progress || 0) * 100);
   return (
-    <div className="popover" ref={ref} style={style}>
+    <div className="popover" role="dialog" aria-modal="true" aria-label="Choose local model"
+         tabIndex={-1} ref={ref} style={style}>
       <div className="ph">Local model · runs on your GPU</div>
       {models.map(m => {
         const isCur = m.id === current.id;
         const state = isCur ? status : 'idle';
         return (
-          <div key={m.id} className={'pop-item' + (isCur ? ' sel' : '')} onClick={() => onPick(m)}>
+          <div key={m.id} role="button" tabIndex={0} aria-pressed={isCur}
+            className={'pop-item' + (isCur ? ' sel' : '')} onClick={() => onPick(m)}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(m); } }}>
             <div className="pi-main">
               <div className="pi-n">{m.name}</div>
               <div className="pi-d">{m.detail}</div>
