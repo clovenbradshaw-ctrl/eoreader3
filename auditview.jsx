@@ -228,6 +228,9 @@ function GraphView({ doc }) {
           {events.slice(0, 400).map((ev, i) => (
             <div key={i} className="graph-ev">
               <span className="graph-ev-op">{ev.op}</span>
+              {window.EOEngine && window.EOEngine.isTransmutingDef && window.EOEngine.isTransmutingDef(ev) &&
+                <span className="graph-tag place" style={{ fontSize: '8px', padding: '0 5px' }}
+                      title="transmuting DEF — the significance-layer ‘weak’ law: it changes an established type, not just attach a property">flavor</span>}
               <span className="graph-ev-s">s{ev.sentence_idx != null ? ev.sentence_idx : '·'}</span>
               <span className="graph-ev-t">{evText(ev)}</span>
             </div>
@@ -235,6 +238,66 @@ function GraphView({ doc }) {
           {events.length > 400 && <div className="graph-dim">…{events.length - 400} more (the full set is in the export)</div>}
         </div>
       </details>
+    </div>
+  );
+}
+
+// The layer ladder: the essay's own falsifiable test, made live. For one prose
+// doc it counts the distinguishable binding-laws operative at each EO layer
+// (existence → structure → significance) by precondition, and checks the
+// predicted 1-2-1 differentiation rate + monotone cumulative count. An
+// instrument, not an advertisement: it reports a MISMATCH plainly and never
+// shows a hard-wired ✓. Reads window.EOEngine.layerLadder; renders nothing of
+// its own physics. Reuses the .graph-* styles.
+function LayerLadder({ doc }) {
+  const ladder = React.useMemo(
+    () => (doc && window.EOEngine && window.EOEngine.layerLadder ? window.EOEngine.layerLadder(doc) : null),
+    [doc]);
+  if (!doc) return <div className="empty-doc" style={{ padding: 40 }}>No document loaded to graph yet — add a source and its layer ladder shows up here.</div>;
+  if (!ladder) return <div className="empty-doc" style={{ padding: 40 }}>This source has no layer ladder (tables and very short texts don’t carry one).</div>;
+  const layers = [
+    ['existence',    'Existence',    'one law freezes out — confinement, the admission threshold.'],
+    ['structure',    'Structure',    'two freeze out, ordered — sign (charge) first, proportion (gravity / δ) built on it.'],
+    ['significance', 'Significance', 'one law freezes out — weak, the only law that changes an established type.'],
+  ];
+  const flag = (ok) => <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: ok ? 'var(--good-fg)' : 'var(--bad-fg)' }}>{ok ? '✓' : '✗'}</span>;
+  const total = ladder.cumulative[ladder.cumulative.length - 1];
+  return (
+    <div className="graph-view">
+      <div className="graph-meta">
+        <span><b>{total}</b> distinguishable binding-law{total === 1 ? '' : 's'}</span>
+        <span>differentiation <b>{ladder.perLayerNew.join(', ')}</b></span>
+        <span>predicted <b>{ladder.predicted.join(', ')}</b></span>
+      </div>
+
+      {layers.map(([key, label, blurb]) => (
+        <div key={key} className="graph-sec">
+          <h4>{label} <span className="graph-dim">— {blurb}</span></h4>
+          <div className="graph-ents">
+            {ladder.laws[key].map((law, i) => (
+              <div key={i} className="graph-ent">
+                <span className={'graph-tag ' + (law.present ? 'place' : '')} style={law.present ? null : { opacity: 0.55 }}>{law.present ? 'present' : 'absent'}</span>
+                <span className="graph-ent-name">{law.name}</span>
+                <span className="graph-dim" style={{ marginLeft: 'auto', fontSize: 11, textAlign: 'right' }}>{law.note}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <div className="graph-sec">
+        <h4>The essay's test <span className="graph-dim">— is differentiation 1-2-1, and the cumulative count monotone?</span></h4>
+        <div className="graph-ents" style={{ fontFamily: 'var(--mono)', fontSize: 12.5 }}>
+          <div className="graph-ent">
+            <span>new laws per layer: <b>{ladder.perLayerNew.join(', ')}</b> (predicted {ladder.predicted.join(', ')})</span>
+            <span style={{ marginLeft: 'auto' }}>{flag(ladder.rateMatches)}</span>
+          </div>
+          <div className="graph-ent">
+            <span>cumulative: <b>{ladder.cumulative.join(', ')}</b></span>
+            <span style={{ marginLeft: 'auto' }}>{flag(ladder.monotone)}</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -311,6 +374,7 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
         <div className="drawer-tabs">
           <button className={'drawer-tab' + (tab === 'trace' ? ' on' : '')} onClick={() => setTab('trace')}>Trace{turns.length ? ' · ' + turns.length : ''}</button>
           <button className={'drawer-tab' + (tab === 'graph' ? ' on' : '')} onClick={() => setTab('graph')}>Graph{proseDocs.length ? ' · ' + proseDocs.length : ''}</button>
+          <button className={'drawer-tab' + (tab === 'ladder' ? ' on' : '')} onClick={() => setTab('ladder')} title="The EO layer ladder — the essay's 1-2-1 force-count test, run live on this document">Ladder</button>
           <div style={{ flex: 1 }} />
           {tab === 'trace' && (
             <button className={'aud-rec' + (enabled ? ' on' : '')} role="switch" aria-checked={enabled}
@@ -319,7 +383,7 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
               <span className="aud-rec-lbl">{enabled ? 'Recording' : 'Paused'}</span>
             </button>
           )}
-          {tab === 'graph' && proseDocs.length > 1 && (
+          {(tab === 'graph' || tab === 'ladder') && proseDocs.length > 1 && (
             <select className="graph-pick" value={graphDoc ? graphDoc.id : ''} onChange={e => setGraphDocId(e.target.value)}>
               {proseDocs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
@@ -333,7 +397,9 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
                 : <div className="empty-doc" style={{ padding: 40 }}>{enabled
                     ? 'No turns recorded yet — ask Cleon something and the full pipeline shows up here.'
                     : 'Recording is paused. Turn it on to capture chat turns.'}</div>)
-            : <GraphView doc={graphDoc} />}
+            : tab === 'ladder'
+              ? <LayerLadder doc={graphDoc} />
+              : <GraphView doc={graphDoc} />}
         </div>
 
         <div className="glass-foot">
@@ -353,4 +419,4 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
   );
 }
 
-Object.assign(window, { AuditDrawer, AuditTurn, AuditStep, GraphView, stripForView });
+Object.assign(window, { AuditDrawer, AuditTurn, AuditStep, GraphView, LayerLadder, stripForView });
