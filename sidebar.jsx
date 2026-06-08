@@ -48,7 +48,7 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc,
           <span className="rt">Rules</span>
           <span className="model-chip">{enabledRules} on</span>
         </div>
-        <div className="sb-foot-row" onClick={onModelClick}>
+        <div className="sb-foot-row" data-model-trigger onClick={onModelClick}>
           <span className={'pulse' + (modelStatus === 'loading' ? ' load' : modelStatus === 'ready' ? '' : ' idle')} />
           <span className="rt">{model.name}</span>
           <span className="model-chip">{modelStatus === 'ready' ? 'loaded' : modelStatus === 'loading' ? 'loading' : 'local'}</span>

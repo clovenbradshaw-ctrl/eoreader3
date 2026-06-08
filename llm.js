@@ -22,11 +22,26 @@
   async function load(mlcKey, onProgress) {
     if (!hasWebGPU()) throw new Error('WebGPU is not available in this browser. Chrome/Edge 113+ or a WebGPU-enabled browser is required for the local model.');
     if (loadedModel === mlcKey && enginePromise) return enginePromise;
+    // Switching models: release the resident engine FIRST. A larger model
+    // loaded on top of a smaller one is the usual reason a switch appears to
+    // "do nothing" — the GPU is still holding the old weights, so the new load
+    // OOMs or stalls. Unload, then build the new one on a clear device.
+    if (enginePromise) {
+      const prev = enginePromise;
+      enginePromise = null; loadedModel = null;
+      try { const eng = await prev; if (eng && eng.unload) await eng.unload(); } catch (e) {}
+    }
     loadedModel = mlcKey;
     const webllm = await importWebLLM();
-    enginePromise = webllm.CreateMLCEngine(mlcKey, {
-      initProgressCallback: (r) => { if (onProgress) onProgress(r.progress ?? 0, r.text || ''); },
-    });
+    try {
+      enginePromise = webllm.CreateMLCEngine(mlcKey, {
+        initProgressCallback: (r) => { if (onProgress) onProgress(r.progress ?? 0, r.text || ''); },
+      });
+      await enginePromise;          // surface a build failure here, not on first turn
+    } catch (e) {
+      enginePromise = null; loadedModel = null;   // keep isLoaded() honest; allow retry
+      throw e;
+    }
     return enginePromise;
   }
 
@@ -45,7 +60,7 @@
       return task === 'summary'
         ? 'You are Cleon. Summarize the supplied passages faithfully in 2 to 4 sentences, using only what they state. Do not add anything not present in them. Do not write citation markers; those are added mechanically afterward.'
         : 'You are Cleon. Answer using ONLY the supplied passages. Reply in one or two sentences, staying close to the passages\' own facts and wording. Never add anything the passages do not state. If they do not answer the question, reply exactly: The passages don\'t say. Do not write citation markers like [s1]; those are added mechanically afterward.';
-    return 'You are Cleon, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
+    return 'You are Cleon, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. Do not invent facts about real people, places, or events: if you are not sure something is true, say you are not sure rather than making something up — a confident wrong answer is worse than an honest "I\'m not certain." A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. If the user is clearly asking about an open document but you were not handed a relevant passage, say so and offer to look it up, rather than guessing at what it contains. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
   }
 
   // Chat-history policy.
@@ -142,14 +157,14 @@
 
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
   // pass retrieved passages. onToken(deltaText).
-  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken }) {
+  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget }) {
     const eng = await load(mlcKey);
     const sys = systemFor(mode, task, grounded);
-    const messages = assembleMessages({ sys, history, contextText, question, grounded });
+    const messages = assembleMessages({ sys, history, contextText, question, grounded, budget });
     const res = await eng.chat.completions.create({
       messages,
-      temperature: mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.5),
-      max_tokens: mode === 'creative' ? 320 : (grounded ? (task === 'summary' ? 260 : 180) : 400),
+      temperature: mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4),
+      max_tokens: mode === 'creative' ? 320 : (grounded ? (task === 'summary' ? 260 : 180) : 360),
       stream: true,
     });
     let full = '';

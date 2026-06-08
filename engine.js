@@ -1197,7 +1197,32 @@ function extractCodeGraph(text, t0) {
     ms: Math.round(t1 - t0),
   };
 }
-function extractEoGraph(text) {
+// Cooperative yield: hand the main thread back to the browser between chunks
+// of a long ingest. Two things happen in that gap that keep a big document
+// from crashing the tab: the page stays responsive (it can paint and accept
+// input instead of going "page unresponsive"), and the garbage collector
+// gets a chance to run, reclaiming the transient parse garbage we shed each
+// chunk instead of letting the heap climb in one unbroken spike. Prefer the
+// scheduler API where it exists; otherwise fall back to a macrotask.
+function _yieldToBrowser() {
+  if (typeof scheduler !== 'undefined' && scheduler.yield) { try { return scheduler.yield(); } catch (e) {} }
+  return new Promise(r => setTimeout(r, 0));
+}
+
+// Staged, chunked prose extraction, walked in the medium's own order:
+// EXISTENCE → STRUCTURE → SIGNIFICANCE. Nothing in a later phase may run
+// before the one beneath it has settled — the same law the rule layers obey.
+//   • existence    — the text is loaded, then segmented into sentences:
+//                    the units come to *be* before anything is said of them.
+//   • structure    — the reading pass: surfaces admitted, referents bound,
+//                    attribution and relations laid down in the event log.
+//   • significance — projection: mass, momentum and prominence measured over
+//                    the settled structure (what, among what exists, matters).
+// `onProgress({ phase, stage, done, total })` is called between chunks so the
+// UI can name the phase and show how far along it is. The work is identical to
+// one synchronous pass — it is only SLICED so the browser breathes between
+// slices. Slower by design; "take longer" beats "crash the tab."
+async function extractEoGraph(text, onProgress) {
   const t0 = performance.now();
   // The page declares its own language; the reader adapts its surface
   // detectors and leaves the grammar alone.
@@ -1219,7 +1244,14 @@ function extractEoGraph(text) {
   // boundary; no sentence crosses it.
   const sentenceDocs = [];
   const sentParaSolo = [];
-  for (const para of text.split(/\n{2,}/)) {
+  // ── Stage: chunk the text into sentences ──
+  // Paragraph-first, then sentence within each paragraph (unchanged). We just
+  // walk the paragraphs on a clock and yield about every frame, so segmenting
+  // a book-length paste can't lock up the tab.
+  const _paras = text.split(/\n{2,}/);
+  let _segClock = performance.now();
+  for (let _pi = 0; _pi < _paras.length; _pi++) {
+    const para = _paras[_pi];
     const p = para.trim();
     if (!p) continue;
     const paraDocs = [];
@@ -1235,6 +1267,10 @@ function extractEoGraph(text) {
       nlp(p).sentences().forEach(s => paraDocs.push(s));
     }
     for (const s of paraDocs) { sentenceDocs.push(s); sentParaSolo.push(paraDocs.length === 1); }
+    if (onProgress && performance.now() - _segClock > 24) {
+      onProgress({ phase: 'existence', stage: 'segmenting', done: _pi + 1, total: _paras.length });
+      await _yieldToBrowser(); _segClock = performance.now();
+    }
   }
   const sentCount = sentenceDocs.length;
 
@@ -1708,9 +1744,19 @@ function extractEoGraph(text) {
     return result;
   };
 
-  sentenceDocs.forEach((sentDoc, i) => {
+  // ── Structure: read each sentence, laying surfaces, bindings and relations
+  // into the event log. The body is unchanged; it's just held in a function so
+  // the driver below can walk it in time-sliced chunks. We record each
+  // sentence's text up front (sentenceTexts[i]) so the heavy compromise doc can
+  // be released the instant we're done with it. The per-event `sentence` field
+  // is gone — nothing downstream ever read it; everyone resolves text through
+  // sentence_idx → sentence_texts, so carrying a full copy on every event was
+  // pure retained weight (the main lever on a long document's memory).
+  const sentenceTexts = new Array(sentenceDocs.length);
+  const processSentence = (sentDoc, i) => {
     const sentText = sentDoc.text();
-    const sentMeta = { sentence_idx: i, sentence: sentText };
+    sentenceTexts[i] = sentText.trim();
+    const sentMeta = { sentence_idx: i };
     currentSentIdx = i;
     currentSentText = sentText;
 
@@ -2432,9 +2478,27 @@ function extractEoGraph(text) {
       // shouldn't pretend to know who the next one belongs to either.
       if (speaker && attributionConfident) lastSpeaker = speaker;
     });
-  });
+  };
+  // Drive the structure pass on a clock: read sentences until ~a frame has
+  // elapsed, then hand control back. Each sentence's compromise doc is nulled
+  // the instant it's processed, so the heap holds the entities-so-far plus a
+  // shrinking tail of unread sentences — never the whole book at once.
+  {
+    let _readClock = performance.now();
+    for (let i = 0; i < sentenceDocs.length; i++) {
+      processSentence(sentenceDocs[i], i);
+      sentenceDocs[i] = null;
+      const last = i + 1 === sentenceDocs.length;
+      if (onProgress && (last || performance.now() - _readClock > 24)) {
+        onProgress({ phase: 'structure', stage: 'reading', done: i + 1, total: sentenceDocs.length });
+        await _yieldToBrowser(); _readClock = performance.now();
+      }
+    }
+  }
 
-  // ── Project the current graph from the full event log ───────────
+  // ── Significance: project mass, momentum and prominence over the settled
+  // structure — only now, with existence and structure complete beneath it. ──
+  if (onProgress) { onProgress({ phase: 'significance', stage: 'projecting' }); await _yieldToBrowser(); }
   // No batch reconciliation: gravity resolution happened inline per sentence.
   // The embedding reconciler and the LLM tiebreak run automatically after
   // this warm pass — cold pass first, then EVA deposits on whatever stalled.
@@ -2505,7 +2569,7 @@ function extractEoGraph(text) {
     edges,
     verb_slot_tally: typeof verbSlotTally !== 'undefined' ? verbSlotTally : {},
     sections,
-    sentence_texts: sentenceDocs.map(d => d.text().trim()),
+    sentence_texts: sentenceTexts,
     open_signals: openSignals,
     signal_collapses: signalCollapses,
     rules: rulesJson,
@@ -3338,8 +3402,8 @@ function projectGraph(events, frame = {}) {
     return blocks;
   }
 
-  function parseProse(name, text, id) {
-    const result = extractEoGraph(text);
+  async function parseProse(name, text, id, onProgress) {
+    const result = await extractEoGraph(text, onProgress);
     const sentenceTexts = (result.sentence_texts || []).map(s => String(s));
     const sentences = sentenceTexts.map((t, i) => ({ i, t }));
     const blocks = rebuildBlocks(text, sentenceTexts, result.sections);
@@ -3357,8 +3421,10 @@ function projectGraph(events, frame = {}) {
     };
   }
 
-  function parseDocument(name, text, id) {
-    const doc = detectKind(text) === 'table' ? parseTable(name, text, id) : parseProse(name, text, id);
+  async function parseDocument(name, text, id, onProgress) {
+    const doc = detectKind(text) === 'table'
+      ? parseTable(name, text, id)
+      : await parseProse(name, text, id, onProgress);
     // retain the source so the UI can re-parse when an extraction-phase rule
     // changes (those decisions are baked into the event log at parse time).
     doc._text = text; doc._name = name;
