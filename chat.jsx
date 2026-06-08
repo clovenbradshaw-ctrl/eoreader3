@@ -31,6 +31,21 @@ function renderBold(s, key) {
 
 function AuditBadge({ audit }) {
   if (!audit) return null;
+  // An explicitly ungrounded answer (plain chat while a document is open): show
+  // that it was NOT drawn from the page, so a model answer is never mistaken for
+  // a grounded, cited one. These carry no coverage/stability figures. (1b)
+  if (audit.grounded === false && audit.covers == null) {
+    return (
+      <div>
+        <div className="audit">
+          <span className="audit-chip plain">
+            <span className="seg"><span className="no">–</span>not from the document</span>
+          </span>
+        </div>
+        {audit.note && <div className="audit-note">{audit.note}</div>}
+      </div>
+    );
+  }
   const Seg = ({ ok, children }) => <span className="seg"><span className={ok ? 'ok' : 'no'}>{ok ? '✓' : '–'}</span>{children}</span>;
   const full = audit.covers && audit.covers.split('/')[0] === audit.covers.split('/')[1];
   return (

@@ -65,8 +65,12 @@ function TableDoc({ doc, initialSpec }) {
   const fold = window.foldPivot(doc, spec);
   const [openGroups, setOpenGroups] = React.useState({});
   const numCols = doc.numeric || [];
+  const moneyCols = doc.money || [];
   const key0 = doc.columns[0];
-  const fmt = (col, v) => numCols.includes(col) ? window.fmtMoney(window.num(v)) : v;
+  // Money → dollars; other numeric columns → plain thousands-separated numbers
+  // so a count column isn't shown as currency; everything else verbatim. (1c)
+  const fmt = (col, v) => moneyCols.includes(col) ? window.fmtMoney(window.num(v))
+    : numCols.includes(col) ? window.fmtNum(window.num(v)) : v;
   const set = (patch) => setSpec(s => ({ ...s, ...patch }));
   const active = spec.groupBy || spec.aggregate || spec.sortBy || (spec.filters && spec.filters.length);
 
@@ -114,7 +118,7 @@ function TableDoc({ doc, initialSpec }) {
                   <React.Fragment key={g.key}>
                     <tr className="grp" onClick={() => setOpenGroups(o => ({ ...o, [gi]: !o[gi] }))}>
                       <td>{g.key}</td><td className="num">{g.count}</td>
-                      <td className="num">{g.agg.value == null ? '—' : (fold.isMoneyCol(fold.aggregate?.col) ? window.fmtMoney(g.agg.value) : g.agg.value)}</td>
+                      <td className="num">{g.agg.value == null ? '—' : (fold.isMoneyCol(fold.aggregate?.col) ? window.fmtMoney(g.agg.value) : window.fmtNum(g.agg.value))}</td>
                     </tr>
                     {openGroups[gi] && g.rows.map((r, ri) => (
                       <tr key={ri} className="member"><td>{r[key0]}</td>

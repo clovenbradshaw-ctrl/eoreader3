@@ -50,13 +50,14 @@ function snapshotProse(doc, tag) {
   return { [tag]: out };
 }
 
-function snapshot() {
-  const voss = E.parseDocument('Voss.txt', VOSS, 'voss');
-  const big = E.parseDocument('big.txt', makeBigDoc(60), 'big');
+async function snapshot() {
+  const voss = await E.parseDocument('Voss.txt', VOSS, 'voss');
+  const big = await E.parseDocument('big.txt', makeBigDoc(60), 'big');
   return { ...snapshotProse(voss, 'voss'), ...snapshotProse(big, 'big') };
 }
 
-const current = snapshot();
+async function main() {
+const current = await snapshot();
 
 if (process.argv.includes('--update')) {
   fs.writeFileSync(GOLDEN, JSON.stringify(current, null, 1));
@@ -79,3 +80,6 @@ for (const tag of Object.keys(current)) {
 const n = Object.keys(current.voss).length + Object.keys(current.big).length;
 console.log(`\n${diffs === 0 ? '✓ PARITY' : '✗ DRIFT'} — ${n} snapshots, ${diffs} differ from golden`);
 process.exit(diffs ? 1 : 0);
+}
+
+main().catch(e => { console.error(e); process.exit(1); });

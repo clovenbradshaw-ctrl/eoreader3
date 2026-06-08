@@ -19,8 +19,18 @@ function ok(cond, msg) {
 function eq(a, b, msg) { ok(a === b, `${msg} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`); }
 function group(name, fn) { console.log('• ' + name); fn(); }
 
-const voss = E.parseDocument('Voss.txt', VOSS, 'voss');
-const deals = E.parseDocument('deals.csv', CSV, 'deals');
+// A table with a money column (revenue) AND a plain count column (units),
+// plus low-cardinality category columns, for the currency/pivot tests.
+const SALES = `product,region,units,revenue
+Widget,West,120,2400
+Gadget,East,80,5600
+Widget,East,200,4000
+Gadget,West,50,3500`;
+
+async function main() {
+const voss = await E.parseDocument('Voss.txt', VOSS, 'voss');
+const deals = await E.parseDocument('deals.csv', CSV, 'deals');
+const sales = await E.parseDocument('sales.csv', SALES, 'sales');
 
 group('parse — prose', () => {
   eq(voss.kind, 'prose', 'prose doc detected as prose');
@@ -61,6 +71,17 @@ group('route — referencesDoc', () => {
   ok(E.referencesDoc(deals, 'which region closed the most'), 'a column-named question routes to the table');
 });
 
+group('route — possessives (1a)', () => {
+  ok(E.referencesDoc(voss, "what colour is Edith's kettle?"),
+    "a possessive entity (Edith's) still routes the question to the document");
+  ok(E.referencesDoc(voss, "what is in Sefton's boat?"),
+    "a possessive on a second figure also routes to the document");
+  ok(E.retrieve(voss, "Edith's kettle").some(h => /kettle/i.test(h.t)),
+    "a possessive query retrieves the sentence its root token appears in");
+  eq(JSON.stringify(E.tok("Edith's car")), JSON.stringify(['edith', 'car']),
+    "tok strips the possessive 's to the root token");
+});
+
 group('intent — classification', () => {
   eq(E.classifyIntent('who are the characters'), 'who', 'who-intent');
   eq(E.classifyIntent('give me a summary'), 'summary', 'summary-intent');
@@ -95,6 +116,25 @@ group('table — deterministic fold', () => {
   ok(a.audit.grounded, 'fold is grounded (computed mechanically)');
 });
 
+group('table — money vs plain numeric (1c)', () => {
+  ok(sales.money.includes('revenue'), 'a revenue column is detected as money');
+  ok(!sales.money.includes('units'), 'a plain count column (units) is NOT money');
+  ok(sales.numeric.includes('units') && sales.numeric.includes('revenue'), 'both are still numeric');
+});
+
+group('table — scalar total surfaces the figure (1d)', () => {
+  const a = E.answer(sales, 'total revenue for Gadget');
+  ok(/\$9,100/.test(a.text), 'a bare-value question filters to Gadget and states the money total');
+  eq(a.audit.covers, '1/1', 'a produced figure covers fully');
+
+  const u = E.answer(sales, 'total units for Widget');
+  ok(/\b320\b/.test(u.text), 'a units total reports the figure (320)');
+  ok(!/\$/.test(u.text), 'a non-money total is NOT formatted as currency');
+
+  const bare = E.answer(sales, 'show me the table');
+  eq(bare.audit.covers, '0/1', 'a query with no measure does NOT over-claim coverage');
+});
+
 group('bindCitations — mechanical binding', () => {
   const bc = E.bindCitations(voss, 'Edith set the kettle down and listened.', 'what did Edith do', 'factual');
   ok(/\{\{cite:voss:\d+:s\d+\}\}/.test(bc.text), 'a paraphrase of a real sentence gets a citation bound');
@@ -105,3 +145,6 @@ group('bindCitations — mechanical binding', () => {
 
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
+}
+
+main().catch(e => { console.error(e); process.exit(1); });

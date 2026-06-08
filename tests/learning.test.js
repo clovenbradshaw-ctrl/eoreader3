@@ -21,11 +21,13 @@ const { loadEngine } = require('./harness');
 let pass = 0, fail = 0; const fails = [];
 const ok = (c, m) => c ? pass++ : (fail++, fails.push(m), console.error('  ✗ ' + m));
 const eq = (a, b, m) => ok(a === b, `${m} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
-const group = (n, fn) => { console.log('• ' + n); fn(); };
+const group = async (n, fn) => { console.log('• ' + n); await fn(); };
 
-const sigsOf = (E, text) => (E._extractEoGraph(text).events || []).filter(e => e.op === 'SIG');
-const attrFor = (E, text, mark) => {
-  const s = sigsOf(E, text).find(e => (e.quote || '').includes(mark));
+// extractEoGraph is async (it yields to the event loop during long parses),
+// so unwrap the promise before inspecting its events.
+const sigsOf = async (E, text) => ((await E._extractEoGraph(text)).events || []).filter(e => e.op === 'SIG');
+const attrFor = async (E, text, mark) => {
+  const s = (await sigsOf(E, text)).find(e => (e.quote || '').includes(mark));
   return s ? s.attributed : null;
 };
 // n inverted-attribution sentences ("...," <verb> Name.) — the construction
@@ -34,50 +36,51 @@ const NAMES = ['Mira', 'Toman', 'Sela', 'Edith', 'Marlow'];
 const novelDoc = (verb, n) =>
   Array.from({ length: n }, (_, i) => `"Line ${i} here," ${verb} ${NAMES[i % NAMES.length]}.`).join(' ');
 
-group('starts empty — no hardcoded speech verbs', () => {
+async function main() {
+await group('starts empty — no hardcoded speech verbs', async () => {
   const E = loadEngine().EOEngine;
   eq(JSON.stringify(E._learnedVerbs()), '[]', 'a fresh engine has induced no speech verbs');
   // and so a never-seen verb cannot be cleanly attributed cold
-  ok(attrFor(E, `"The bridge is out," zlorped Mira.`, 'bridge') !== 'named',
+  ok(await attrFor(E, `"The bridge is out," zlorped Mira.`, 'bridge') !== 'named',
     'cold, a never-seen verb yields no clean (named) attribution');
 });
 
-group('induction — two-sighting admission within a document', () => {
+await group('induction — two-sighting admission within a document', async () => {
   const E1 = loadEngine().EOEngine;
-  sigsOf(E1, `"Once only," brindled Mira.`);                       // x1
+  await sigsOf(E1, `"Once only," brindled Mira.`);                 // x1
   ok(!E1._learnedVerbs().some(v => v.verb === 'brindled'), 'a verb seen ONCE is not admitted');
 
   const E2 = loadEngine().EOEngine;
-  sigsOf(E2, `"Once," brindled Mira. "Twice," brindled Toman.`);   // x2
+  await sigsOf(E2, `"Once," brindled Mira. "Twice," brindled Toman.`); // x2
   const lv = E2._learnedVerbs().find(v => v.verb === 'brindled');
   ok(lv, 'a verb seen TWICE in a document is admitted');
   eq(lv && lv.mass, 2, 'an admitted verb carries mass equal to its sightings');
 });
 
-group('gets smarter over use — cross-document transfer', () => {
+await group('gets smarter over use — cross-document transfer', async () => {
   const TEST = `"The bridge is out," quemished Mira.`;     // single sighting of a novel verb
 
   const cold = loadEngine().EOEngine;
-  const coldAttr = attrFor(cold, TEST, 'bridge');
+  const coldAttr = await attrFor(cold, TEST, 'bridge');
 
   const primed = loadEngine().EOEngine;
-  sigsOf(primed, novelDoc('quemished', 3));                // a PRIOR document teaches the verb
-  const primedAttr = attrFor(primed, TEST, 'bridge');
+  await sigsOf(primed, novelDoc('quemished', 3));          // a PRIOR document teaches the verb
+  const primedAttr = await attrFor(primed, TEST, 'bridge');
 
   ok(coldAttr !== 'named', `cold engine cannot cleanly attribute the verb (was ${JSON.stringify(coldAttr)})`);
   eq(primedAttr, 'named', 'after learning the verb from a prior document, the SAME sentence attributes cleanly');
   ok(coldAttr !== primedAttr, 'reading the prior document measurably changed how the test sentence is read');
 });
 
-group('confidence accrues — mass grows with confirming use', () => {
+await group('confidence accrues — mass grows with confirming use', async () => {
   const E = loadEngine().EOEngine;
   const massOf = (v) => { const x = E._learnedVerbs().find(e => e.verb === v); return x ? x.mass : 0; };
 
-  E.parseDocument('a', novelDoc('flunsed', 2), 'a');
+  await E.parseDocument('a', novelDoc('flunsed', 2), 'a');
   const m1 = massOf('flunsed');
-  E.parseDocument('b', `"Just once," flunsed Mira.`, 'b');         // single sighting — guarded out
+  await E.parseDocument('b', `"Just once," flunsed Mira.`, 'b');   // single sighting — guarded out
   const m2 = massOf('flunsed');
-  E.parseDocument('c', novelDoc('flunsed', 3), 'c');               // three confirming sightings
+  await E.parseDocument('c', novelDoc('flunsed', 3), 'c');         // three confirming sightings
   const m3 = massOf('flunsed');
 
   eq(m1, 2, 'first document admits the verb at mass 2');
@@ -86,9 +89,9 @@ group('confidence accrues — mass grows with confirming use', () => {
   ok(m3 > m1, 'the engine grows strictly more confident in the verb with use');
 });
 
-group('learns rules, never content', () => {
+await group('learns rules, never content', async () => {
   const E = loadEngine().EOEngine;
-  E.parseDocument('x', novelDoc('snerked', 2), 'x');
+  await E.parseDocument('x', novelDoc('snerked', 2), 'x');
   const verbs = E._learnedVerbs().map(v => v.verb);
   ok(verbs.includes('snerked'), 'the learning record holds the induced verb');
   ok(!verbs.includes('Mira') && !verbs.some(v => /[A-Z]/.test(v)),
@@ -97,3 +100,6 @@ group('learns rules, never content', () => {
 
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
+}
+
+main().catch(e => { console.error(e); process.exit(1); });

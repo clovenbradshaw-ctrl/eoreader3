@@ -290,7 +290,13 @@ function App() {
 
   // Plain conversation with the model — multi-turn, no document forced in,
   // no citations. This is the default; it should feel like a simple chat app.
-  const runChat = async (q, history, modeTag, ctx) => {
+  // When a document IS open, the answer carries an explicit "not grounded"
+  // audit so it can never be mistaken for a cited, document-drawn answer —
+  // the app's whole promise is that grounded and ungrounded look different. (1b)
+  const runChat = async (q, history, modeTag, ctx, docOpen) => {
+    const ungroundedAudit = docOpen
+      ? { status: 'plain', grounded: false, note: 'Answered from the model’s general knowledge — not drawn from the open document.' }
+      : null;
     const attempt = (hist, budget) => window.EOLLM.phrase({
       mlcKey: model.mlc, question: q, history: hist, contextText: ctx || '',
       mode: modeTag === 'creative' ? 'creative' : 'chat',
@@ -308,7 +314,7 @@ function App() {
         replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
         full = await attempt(history.slice(-2), 2200);
       }
-      replaceLast({ role: 'assistant', text: full, audit: null, mode: modeTag });
+      replaceLast({ role: 'assistant', text: full, audit: ungroundedAudit, mode: modeTag });
     } catch (e) {
       replaceLast({ role: 'assistant', text: 'I couldn’t finish that one locally — the model likely ran out of memory or context. Try a shorter message, pick a smaller model from the switcher, or ask about an open document and I’ll answer it mechanically.', audit: null });
     }
@@ -376,7 +382,7 @@ function App() {
     // if one is open, otherwise writes freely. Never cited.
     if (mode === 'creative') {
       if (!ready) { replaceLast({ role: 'assistant', text: 'Creative mode needs the local model, which isn’t available here. Grounded answers from a document still work.', audit: null }); setBusy(false); return; }
-      runChat(q, history, 'creative', doc ? window.EOEngine.context(doc, q, 6) : ''); return;
+      runChat(q, history, 'creative', doc ? window.EOEngine.context(doc, q, 6) : '', !!doc); return;
     }
 
     // The one routing decision: is the user referencing the open document?
@@ -390,7 +396,7 @@ function App() {
     }
 
     // plain chat
-    if (ready) { runChat(q, history); return; }
+    if (ready) { runChat(q, history, undefined, '', !!doc); return; }
     replaceLast({ role: 'assistant', text: canLLM
       ? 'The local model isn’t ready yet — give it a moment. Meanwhile, upload a document and I can answer questions about it directly, with citations.'
       : 'This browser can’t run the local model (no WebGPU), so I can’t free-chat here. Upload a document or paste text and I’ll still answer questions about it, with citations.', audit: null });

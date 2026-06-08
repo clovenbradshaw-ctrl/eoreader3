@@ -222,6 +222,7 @@ button { font-family: inherit; cursor: pointer; }
 .audit-chip.clean { background: var(--good-bg); border-color: var(--good-bd); }
 .audit-chip.notes { background: var(--warn-bg); border-color: var(--warn-bd); }
 .audit-chip.warn  { background: var(--bad-bg);  border-color: var(--bad-bd); }
+.audit-chip.plain { background: var(--bg); border-color: var(--border); border-style: dashed; color: var(--text-3); }
 .audit-note { font-size: 12px; color: var(--text-3); margin-top: 7px; font-style: italic; }
 
 .msg-actions { display: flex; gap: 4px; margin-top: 8px; opacity: 0; transition: opacity .15s; }
