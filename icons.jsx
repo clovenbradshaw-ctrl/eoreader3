@@ -29,6 +29,7 @@ const ICON_PATHS = {
   read:      '<path d="M2 5h8a3 3 0 0 1 3 3v11a2.5 2.5 0 0 0-2.5-2.5H2z"/><path d="M22 5h-8a3 3 0 0 0-3 3v11a2.5 2.5 0 0 1 2.5-2.5H22z"/>',
   arrowleft: '<path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>',
   edit:      '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  activity:  '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
 };
 function Icon({ name, size = 18, style, className, strokeWidth = 1.7 }) {
   const p = ICON_PATHS[name];

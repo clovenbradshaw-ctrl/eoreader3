@@ -54,8 +54,12 @@ The intelligence is **mechanical**; the language model only phrases things.
   never writes its own citations and never overrides the page.
 - **`pivot.jsx`** — deterministic pivot/fold over tables (totals, counts,
   grouping) driven by a small natural-language → spec parser.
+- **`audit.js`** — the audit recorder (`window.EOAudit`). Records each chat
+  turn's pipeline step by step and exports it as JSONL. In-memory; deterministic;
+  no model involved.
 - **UI** (`app.jsx`, `chat.jsx`, `docview.jsx`, `sidebar.jsx`, `rulesets.jsx`,
-  `icons.jsx`) — React via in-browser Babel; `styles.css` for the look.
+  `auditview.jsx`, `icons.jsx`) — React via in-browser Babel; `styles.css` for
+  the look.
 - **`data.jsx`** — example documents, model list, and the reading rulesets.
 - **`store.js`** — local persistence (IndexedDB for docs/chat, localStorage for
   prefs/rules and the learned rules-ledger delta).
@@ -67,6 +71,33 @@ to the model intact. It only pulls in document context when you're actually
 referencing the loaded document (asking what it says, who's in it, summarizing
 it, naming something from it). That keeps ordinary conversation simple while
 document questions stay grounded and cited.
+
+### Auditing the chat
+
+Because the intelligence is mechanical, every chat turn is a sequence of
+explicit decisions — and the **Audit** drawer (the topbar button) is a glass box
+over them. For each turn it records, step by step:
+
+- **route** — did the turn reference a source in scope, and why; which path it
+  took (grounded-LLM, mechanical, plain chat, creative);
+- **intent / ground / referents** — `who` vs `summary` vs `factual`, whether the
+  page can answer, and the matter / anti-matter (void) referents the question
+  names;
+- **retrieve** — the passages actually retrieved, each with its relevance score;
+- **llm** — the *exact* prompt the model saw (system + assembled history +
+  passages), its parameters, and the raw text it streamed back, verbatim;
+- **veto** — the mechanical check: any invented terms, whether the phrasing
+  re-bound to the page, and whether the model's draft or the mechanical answer
+  won;
+- **answer** — the final text, citations, and the grounded / coverage / stable
+  audit it ended on.
+
+Recording is on by default and in-memory (a capped ring buffer); the durable
+artifact is the **Export JSONL** button — one self-contained turn per line
+(schema `cleon-audit/1`), ready for `jq`/grep or a notebook. Copy and Clear sit
+beside it, and recording can be paused. This is the tool for the question "why
+did it answer that?" — when a `summarize` returns raw opening lines, or a
+retrieval grabs page chrome, the trace shows exactly where.
 
 ## Reading rules
 

@@ -163,18 +163,40 @@
     const eng = await load(mlcKey);
     const sys = systemFor(mode, task, grounded);
     const messages = assembleMessages({ sys, history, contextText, question, grounded, budget });
-    const res = await eng.chat.completions.create({
-      messages,
-      temperature: mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4),
-      max_tokens: mode === 'creative' ? 320 : (grounded ? (task === 'summary' ? 260 : 180) : 360),
-      stream: true,
-    });
+    const temperature = mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4);
+    const max_tokens = mode === 'creative' ? 320 : (grounded ? (task === 'summary' ? 260 : 180) : 360);
+    // Audit hook (no-op unless window.EOAudit is present): record the EXACT prompt
+    // the model saw, its parameters, its raw output, and the wall time — so
+    // auditing mode can show what was sent and what came back, verbatim.
+    const A = (typeof window !== 'undefined') ? window.EOAudit : null;
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    const recLLM = (output, extra) => {
+      if (!A || !A.step) return;
+      try {
+        A.step('llm', Object.assign({
+          mode, task: task || null, grounded: !!grounded, mlcKey,
+          params: { temperature, max_tokens, budget: budget || null },
+          system: sys,
+          messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })),
+          output,
+          ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0),
+        }, extra || {}));
+      } catch (e) {}
+    };
     let full = '';
-    for await (const chunk of res) {
-      const d = chunk.choices?.[0]?.delta?.content || '';
-      if (d) { full += d; if (onToken) onToken(d); }
+    try {
+      const res = await eng.chat.completions.create({ messages, temperature, max_tokens, stream: true });
+      for await (const chunk of res) {
+        const d = chunk.choices?.[0]?.delta?.content || '';
+        if (d) { full += d; if (onToken) onToken(d); }
+      }
+    } catch (e) {
+      recLLM(full, { error: String((e && e.message) || e) });   // record the failed attempt, then let the caller handle it
+      throw e;
     }
-    return full.trim();
+    const out = full.trim();
+    recLLM(out);
+    return out;
   }
 
   window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, summarizeTurns, recallSpan, RECENT_TURNS };
