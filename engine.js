@@ -297,6 +297,11 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Pronouns. Bind by type/momentum (working memory), not by shared substantive tokens.',
   },
+  anaphor_pronouns: {
+    value: ['he','she','it','they','him','her','them','his','hers','its','their','theirs'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Third-person personal pronouns — the anaphors that carry a topic across turns. Routing reads this class for conversation continuity: a follow-up like "tell me more about it" continues the previous grounded turn. Excludes first/second person (I, you, we) and the demonstratives this/that (which dominate gratitude — "that helps"), so continuity never drags chit-chat onto the page.',
+  },
   person_pronouns: {
     value: ['he','she','him','her','his','hers','who','whom'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -487,7 +492,8 @@ function getAttribVerbs() {
 }
 let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     MALE_PRONOUNS, FEMALE_TITLES, MALE_TITLES, CLITIC_SUFFIXES, ADVERB_HEADS,
-    NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS;
+    NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS,
+    ANAPHOR_PRONOUNS;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -495,6 +501,7 @@ function rebuildLangSets() {
     ...mod_values('function_words'),
   ]);
   PRONOUNS = new Set(mod_values('pronouns'));
+  ANAPHOR_PRONOUNS = new Set(mod_values('anaphor_pronouns'));
   PERSON_PRONOUNS = new Set(mod_values('person_pronouns'));
   NONPERSON_PRONOUNS = new Set(mod_values('nonperson_pronouns'));
   FEMALE_PRONOUNS = new Set(mod_values('female_pronouns'));
@@ -3710,25 +3717,41 @@ function projectGraph(events, frame = {}) {
     }
     return false;
   }
-  function referencesDoc(doc, q) {
+  // Conversation continuity (mechanical, ruliad-driven). A turn that resolves to
+  // no subject of its own still belongs to the page when it CONTINUES the prior
+  // grounded turn: it carries an anaphor — a pronoun drawn from the ruliad's
+  // anaphor_pronouns class, not a hand-written list — and names no new, off-page
+  // entity that would pull the topic elsewhere. "tell me more about it", "and
+  // what about her?". Inert unless the caller supplies ctx.prevGrounded, so batch
+  // callers (parity, bench) see exactly the prior routing.
+  function continuesPrior(doc, q, ctx) {
+    if (!ctx || !ctx.prevGrounded) return false;
+    if (referents(doc, q).antimatter.length) return false;      // introduced a new, absent subject
+    const toks = String(q).toLowerCase().replace(/[’']/g, "'").match(/[\p{L}]+/gu) || [];
+    return toks.some(t => ANAPHOR_PRONOUNS.has(t));
+  }
+  function referencesDoc(doc, q, ctx) {
     if (!doc) return false;
     const intent = classifyIntent(q);
     if (intent === 'who' || intent === 'summary') return true;   // asking about the doc
     if (doc.kind === 'table') {
       try { if (!window.parsePivot(q, doc).empty) return true; } catch (e) {}
       const ql = ' ' + String(q).toLowerCase() + ' ';
-      return (doc.columns || []).some(c => ql.includes(' ' + String(c).toLowerCase() + ' '));
+      if ((doc.columns || []).some(c => ql.includes(' ' + String(c).toLowerCase() + ' '))) return true;
+      return continuesPrior(doc, q, ctx);
     }
     if (namesEntity(doc, q)) return true;                        // mentions someone/somewhere in it
     const hits = retrieve(doc, q, 3);                            // or shares real content with the page
-    if (!hits.length) return false;
-    const top = hits[0];
-    if (top.score >= 0.5 || top.overlap >= 2) return true;
-    // a real question ("what does the letter say?") that lands on even one word
-    // from the page is almost certainly about the page, not chit-chat.
-    const isQuestion = /\?\s*$/.test(q) ||
-      /^\s*(what|which|whose|where|when|why|how|who|does|did|do|is|are|was|were|can|could|would|should|tell me|describe|explain|list|show|name)\b/i.test(q);
-    return isQuestion && top.overlap >= 1;
+    if (hits.length) {
+      const top = hits[0];
+      if (top.score >= 0.5 || top.overlap >= 2) return true;
+      // a real question ("what does the letter say?") that lands on even one word
+      // from the page is almost certainly about the page, not chit-chat.
+      const isQuestion = /\?\s*$/.test(q) ||
+        /^\s*(what|which|whose|where|when|why|how|who|does|did|do|is|are|was|were|can|could|would|should|tell me|describe|explain|list|show|name)\b/i.test(q);
+      if (isQuestion && top.overlap >= 1) return true;
+    }
+    return continuesPrior(doc, q, ctx);                          // a follow-up to a grounded turn
   }
   function answerWho(doc) {
     const { entities } = projectEntities(doc);

@@ -75,6 +75,20 @@ group('route — referencesDoc', () => {
   ok(E.referencesDoc(deals, 'which region closed the most'), 'a column-named question routes to the table');
 });
 
+// Anaphora is resolved through the ruliad (READING_RULES.anaphor_pronouns) and a
+// conversation-continuity signal, not a hand-written follow-up regex.
+group('route — conversation continuity (ruliad anaphor)', () => {
+  // Inert without context → byte-identical to before, so parity stays pinned.
+  ok(!E.referencesDoc(voss, 'tell me more about it'), 'a bare anaphor does NOT route on its own');
+  // A prior grounded turn lets an anaphoric follow-up continue on the page.
+  ok(E.referencesDoc(voss, 'tell me more about it', { prevGrounded: true }), 'an anaphoric follow-up continues the grounded turn');
+  ok(E.referencesDoc(voss, 'and what about her?', { prevGrounded: true }), 'a third-person pronoun follow-up routes to the doc');
+  // Continuity never drags a fresh topic or chit-chat onto the page.
+  ok(!E.referencesDoc(voss, 'tell me a joke about penguins', { prevGrounded: true }), 'a new topic does not continue just because the last turn was grounded');
+  ok(!E.referencesDoc(voss, 'thanks, that really helps', { prevGrounded: true }), 'gratitude ("that helps") does not continue — demonstratives are excluded');
+  ok(!E.referencesDoc(voss, 'is he related to Zorthax?', { prevGrounded: true }), 'an anaphor plus a new, absent name is a new topic, not a continuation');
+});
+
 group('route — possessives (1a)', () => {
   ok(E.referencesDoc(voss, "what colour is Edith's kettle?"),
     "a possessive entity (Edith's) still routes the question to the document");

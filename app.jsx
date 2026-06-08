@@ -78,6 +78,9 @@ function App() {
   const docsById = useMemo(() => Object.fromEntries(docs.map(d => [d.id, d])), [docs]);
   const docsRef = useRef(docs); docsRef.current = docs;
   const flashTimer = useRef(null);
+  // Did the previous turn route to the document? Feeds conversation continuity so
+  // an anaphoric follow-up ("tell me more about it") stays on the page.
+  const lastGroundedRef = useRef(false);
   // Local persistence: `hydrated` gates the save effects so the initial empty
   // state can't overwrite stored data before it's read back; `suppressReparse`
   // lets hydration set the restored rule toggles without re-parsing the docs we
@@ -487,13 +490,16 @@ function App() {
     // if one is open, otherwise writes freely. Never cited.
     if (mode === 'creative') {
       if (!ready) { replaceLast({ role: 'assistant', text: 'Creative mode needs the local model, which isn’t available here. Grounded answers from a document still work.', audit: null }); setBusy(false); return; }
+      lastGroundedRef.current = false;
       runChat(q, history, 'creative', doc ? window.EOEngine.context(doc, q, 6) : '', !!doc); return;
     }
 
     // The one routing decision: is the user referencing the open document?
-    // Grounded mode forces it; Auto lets the engine decide. Otherwise it's
-    // just a conversation with the model.
-    const referencing = !!doc && (mode === 'grounded' || window.EOEngine.referencesDoc(doc, q));
+    // Grounded mode forces it; Auto lets the engine decide, with continuity from
+    // the previous turn so an anaphoric follow-up stays on the page. Otherwise
+    // it's just a conversation with the model.
+    const referencing = !!doc && (mode === 'grounded' || window.EOEngine.referencesDoc(doc, q, { prevGrounded: lastGroundedRef.current }));
+    lastGroundedRef.current = referencing;
 
     if (referencing) {
       if (ready && doc.kind === 'prose') { runGrounded(doc, q, history); return; }
@@ -508,8 +514,8 @@ function App() {
     setBusy(false);
   };
 
-  const newChat = () => { setMessages([]); setActiveChat('new'); if (mobileRef.current) setCollapsed(true); };
-  const selectChat = (id) => { setActiveChat(id); if (mobileRef.current) setCollapsed(true); };
+  const newChat = () => { setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; if (mobileRef.current) setCollapsed(true); };
+  const selectChat = (id) => { setActiveChat(id); lastGroundedRef.current = false; if (mobileRef.current) setCollapsed(true); };
 
   // ---- rules ----
   const toggleRule = (id) => setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
