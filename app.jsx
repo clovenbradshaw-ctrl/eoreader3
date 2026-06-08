@@ -161,9 +161,10 @@ function App() {
     // parse is newest, so a rule re-read that started meanwhile owns the UI.
     setDocs(ds => [...ds, doc]);
     setOpenTabs(t => [...t, id]); setActiveTab(id);
-    // on a phone stay in chat after upload so the composer is right there;
-    // on desktop open the side-by-side split.
-    setLayout(mobileRef.current ? 'chat' : 'split');
+    // Stay chat-first after an upload on every device: the doc is added as a
+    // tab but doesn't seize the stage. The user opens it (split on desktop,
+    // fullscreen on a phone) from the view toggle when they actually want it.
+    setLayout('chat');
     if (doc.kind === 'prose') setExplore(true);
     setTableSpec(null);
     showToast('Added “' + name + '” · ' + doc.meta);
