@@ -43,6 +43,7 @@ const result = await esbuild.build({
 // llm.js stays a separate plain script (dynamic CDN import of WebLLM); styles
 // are copied verbatim.
 copyFileSync(join(ROOT, 'llm.js'), join(DIST, 'llm.js'));
+copyFileSync(join(ROOT, 'embed.js'), join(DIST, 'embed.js'));
 copyFileSync(join(ROOT, 'styles.css'), join(DIST, 'styles.css'));
 
 const HTML = `<!doctype html>
@@ -60,6 +61,7 @@ const HTML = `<!doctype html>
 <div id="root"></div>
 <!-- optional local model (dynamic-imports WebLLM from a CDN on demand) -->
 <script src="llm.js"></script>
+<script src="embed.js"></script>
 <!-- everything else: React (production) + compromise + engine + UI, prebuilt -->
 <script src="app.bundle.js"></script>
 </body>

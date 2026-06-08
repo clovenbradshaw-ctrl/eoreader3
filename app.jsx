@@ -23,6 +23,31 @@ const auditHits = (scope, q, k = 6) => {
       .map(h => ({ docId: h.docId, idx: h.i, score: Math.round((h.score || 0) * 1e4) / 1e4, overlap: h.overlap, text: h.t }));
   } catch (e) { return []; }
 };
+// 5-gram shingle overlap between two strings (0..1). Used to catch the one
+// failure the mechanical veto can't see: a "summary" that is just one source
+// span echoed back verbatim binds and audits clean, but is not an answer.
+const shingleOverlap = (a, b) => {
+  const grams = (s) => {
+    const w = String(s).toLowerCase().replace(/\{\{[^}]*\}\}/g, '').match(/[a-z0-9']+/g) || [];
+    const g = new Set();
+    for (let i = 0; i + 5 <= w.length; i++) g.add(w.slice(i, i + 5).join(' '));
+    if (!g.size && w.length) g.add(w.join(' '));   // short text: whole-string gram
+    return g;
+  };
+  const ga = grams(a), gb = grams(b);
+  if (!ga.size || !gb.size) return 0;
+  let shared = 0; for (const x of ga) if (gb.has(x)) shared++;
+  return shared / Math.min(ga.size, gb.size);
+};
+// Is `text` essentially a copy of one of the retrieved spans? (the degenerate
+// echo). Threshold mirrors the old sentinel_draft_overlap (0.82).
+const echoesASpan = (scope, q, text, k = 6) => {
+  try {
+    const hits = window.EOEngine.retrieveScope(scope, q, k) || [];
+    return hits.some(h => shingleOverlap(text, h.t) >= 0.82);
+  } catch (e) { return false; }
+};
+
 let _uid = 0; const uid = (p) => p + '-' + (++_uid);
 // After restoring persisted docs/chats, advance the uid counter past every
 // restored id so a new upload this session can't collide with a stored one.
@@ -429,6 +454,10 @@ function App() {
   // downloading right away on phones too rather than waiting for the first turn.
   useEffect(() => {
     if (window.EOLLM && window.EOLLM.hasWebGPU()) loadModel(model);
+    // Warm the structure-layer embedding reader in the background so the first
+    // escalation isn't also paying the (one-time, cached) model download. Inert
+    // if embed.js is absent or the model fails to load — routing stays lexical.
+    try { if (window.EOEmbed && window.EOEmbed.warm) window.EOEmbed.warm(); } catch (e) {}
   }, []);
 
   // ---- responsive: collapse the sidebar to an off-canvas drawer on phones and
@@ -536,20 +565,26 @@ function App() {
   // Document-referencing turn: feed the model the relevant passages and bind
   // citations mechanically. The seeker still decides what's there to say —
   // "who" is exact-mechanical; no ground → honest hold; the model only phrases.
-  const runGroundedScope = async (scope, q, history) => {
+  const runGroundedScope = async (scope, q, history, semanticHits) => {
     const intent = window.EOEngine.classifyIntent(q);
     AUD('step', 'intent', { intent });
     if (intent === 'who') { AUD('step', 'route', { detour: 'who → mechanical' }); runMechanicalScope(scope, q); return; }
+    // Semantic recall already located the material → trust it for ground; else the
+    // usual lexical hasGround check decides whether the page can answer.
+    const hasSemantic = !!(semanticHits && semanticHits.length);
     const perDocGround = scope.map(d => ({ id: d.id, name: d.name, has: window.EOEngine.hasGround(d, q) }));
-    const grounded = perDocGround.some(d => d.has);
-    AUD('step', 'ground', { hasGround: grounded, perDoc: perDocGround });
+    const grounded = hasSemantic || perDocGround.some(d => d.has);
+    AUD('step', 'ground', { hasGround: grounded, perDoc: perDocGround, viaSemantic: hasSemantic });
     if (!grounded) { AUD('step', 'route', { detour: 'no-ground → mechanical' }); runMechanicalScope(scope, q); return; }
-    const ctx = window.EOEngine.contextScope(scope, q, 6);
+    // Context: semantically-recovered spans if we have them, else the lexical scope context.
+    const ctx = hasSemantic
+      ? window.EOEngine.contextFromHits(scope, semanticHits)
+      : window.EOEngine.contextScope(scope, q, 6);
     const task = intent === 'summary' ? 'summary' : 'answer';
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
-      const full = await window.EOLLM.phrase({
+      let full = await window.EOLLM.phrase({
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
         grounded: true, onToken: streamInto({ mode: 'grounded' }),
       });
@@ -562,6 +597,33 @@ function App() {
         AUD('step', 'veto', { decision: 'mechanical', reason: 'model declined / empty' });
         settle(window.EOEngine.answerScope(scope, q), 'mechanical (model declined)');
       } else {
+        // DEGENERACY VETO (audit-reject retry, ported from eo-extractor.html):
+        // a near-verbatim copy of one retrieved span binds and audits clean but
+        // is not an answer — the failure the grounding checks can't see. Reject
+        // once, re-prompt the model under a stricter rule, and only then fall to
+        // the mechanical answer. Mainly bites summaries on a small model.
+        if (echoesASpan(scope, q, full)) {
+          AUD('step', 'veto', { decision: 'reject', reason: 'echoes a single span — retrying under a stricter rule' });
+          const stricter = ctx + '\n\nDo NOT copy or lightly reword any single passage. Compose a fresh ' +
+            (task === 'summary' ? 'summary that synthesizes across the passages in your own words.' : 'answer in your own words.');
+          let retry = '';
+          try {
+            replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
+            retry = await window.EOLLM.phrase({
+              mlcKey: model.mlc, question: q, contextText: stricter, history, mode: 'grounded', task,
+              grounded: true, onToken: streamInto({ mode: 'grounded' }),
+            });
+          } catch (e) { retry = ''; }
+          // If the retry still echoes (or came back empty), the model can't do
+          // this turn — use the mechanical portrait answer, which never echoes.
+          if (!retry || retry.trim().length < 3 || echoesASpan(scope, q, retry)) {
+            AUD('step', 'veto', { decision: 'mechanical', reason: 'retry still echoed — using the mechanical answer' });
+            settle(window.EOEngine.answerScope(scope, q), 'mechanical (echo veto)');
+            setBusy(false);
+            return;
+          }
+          full = retry;   // retry produced a real answer; fall through to bind it
+        }
         // MECHANICAL VETO across the whole scope: a name present in NONE of the
         // sources is invented; if the phrasing won't bind to any source, discard
         // it for the mechanical answer. The model never wins over the page(s).
@@ -631,28 +693,46 @@ function App() {
       runChat(q, history, 'creative', ctx, scope.length > 0); return;
     }
 
-    // The one routing decision: is the user referencing a source in scope?
-    // Grounded mode forces it; Auto lets the engine decide across the whole
-    // source set, with continuity from the previous turn so an anaphoric
-    // follow-up stays on the page. Otherwise it's a conversation with the model.
-    let referencing = false, refReason = 'no-scope';
-    if (scope.length > 0) {
-      if (mode === 'grounded') { referencing = true; refReason = 'grounded-mode'; }
-      else { referencing = window.EOEngine.referencesScope(scope, q, { prevGrounded: lastGroundedRef.current }); refReason = referencing ? 'references-scope' : 'not-referenced'; }
+    // COST-ORDERED ROUTING (existence → structure → significance). The router is
+    // mechanical and cheap; it returns a band. Only the 'escalate' band pays for
+    // embedding recall, and only the cheap layers ever DECIDE — the model phrases.
+    let route;
+    if (mode === 'grounded' && scope.length) {
+      route = { decision: 'mechanical', confidence: 'forced', reason: 'grounded-mode',
+                primary: window.EOEngine.routePrimary(scope, q) || scope[0] };
+    } else if (scope.length) {
+      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current });
+    } else {
+      route = { decision: 'chat', confidence: 'none', reason: 'no-scope' };
     }
+
+    // ESCALATE: doc-directed but lexical signal was weak/absent. Pay for embedding
+    // recall (degrades to lexical when no embedder). A real hit recovers the locus
+    // and the turn becomes grounded; otherwise it's ordinary chat.
+    let semanticHits = null;
+    if (route.decision === 'escalate') {
+      const { hits, reader } = await window.EOEngine.retrieveHybrid(scope, q, 6);
+      const recovered = hits.length && (reader.indexOf('embedding') >= 0 ? hits.some(h => h.semantic) : true);
+      AUD('step', 'escalate', { reason: route.reason, reader, found: hits.length, recovered: !!recovered });
+      if (recovered) { route.decision = 'mechanical'; route.confidence = 'recovered'; semanticHits = hits.filter(h => h.semantic).length ? hits : null; route.primary = route.primary || window.EOEngine.routePrimary(scope, q) || scope[0]; }
+      else { route.decision = 'chat'; }
+    }
+
+    const referencing = route.decision === 'mechanical';
     lastGroundedRef.current = referencing;
 
     if (referencing) {
-      const primary = window.EOEngine.routePrimary(scope, q) || scope[0];
+      const primary = route.primary || window.EOEngine.routePrimary(scope, q) || scope[0];
       const useLLM = ready && primary && primary.kind === 'prose';
-      AUD('step', 'route', { referencing: true, reason: refReason, path: useLLM ? 'grounded-llm' : 'mechanical',
+      AUD('step', 'route', { referencing: true, reason: route.reason, confidence: route.confidence,
+        path: useLLM ? 'grounded-llm' : 'mechanical',
         primary: primary ? { id: primary.id, name: primary.name, kind: primary.kind } : null });
-      if (useLLM) { runGroundedScope(scope, q, history); return; }
+      if (useLLM) { runGroundedScope(scope, q, history, semanticHits); return; }
       runMechanicalScope(scope, q); return;   // tables, or no model → mechanical pivot / grounded answer
     }
 
     // plain chat
-    AUD('step', 'route', { referencing: false, reason: refReason, path: ready ? 'plain-chat' : 'plain-unavailable' });
+    AUD('step', 'route', { referencing: false, reason: route.reason, path: ready ? 'plain-chat' : 'plain-unavailable' });
     if (ready) { runChat(q, history, undefined, '', !!doc); return; }
     const msg = canLLM
       ? 'The local model isn’t ready yet — give it a moment. Meanwhile, upload a document and I can answer questions about it directly, with citations.'

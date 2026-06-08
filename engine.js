@@ -3692,7 +3692,17 @@ function projectGraph(events, frame = {}) {
     for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) picks.add(b.sentences[0].i);
     [0, 1, 2].forEach(i => doc.sentences[i] && picks.add(doc.sentences[i].i));
     const n = doc.sentences.length; [n - 1, n - 2].forEach(i => i >= 0 && doc.sentences[i] && picks.add(doc.sentences[i].i));
-    return [...picks].sort((a, b) => a - b).slice(0, 16).map(i => `[s${i}] ${doc.sentenceTexts[i]}`).join('\n');
+    // Lead with the structural portrait in reader's voice, so the model
+    // composes from what the reading noticed rather than echoing a span. The
+    // raw spans follow as evidence, but the portrait sets the task.
+    const p = graphPortrait(doc);
+    const head = p && p.heavy.length
+      ? 'What the reading came to rest on: ' + p.heavy.map(e => e.name).join(', ')
+        + (p.assertions.length ? '. It took ' + p.assertions.map(a => `${a.name} to be ${a.is}`).join(', ') : '')
+        + (p.spine.length > 1 ? '. It moved through: ' + p.spine.join(' → ') : '') + '.\n\n'
+      : '';
+    const spans = [...picks].sort((a, b) => a - b).slice(0, 16).map(i => `[s${i}] ${doc.sentenceTexts[i]}`).join('\n');
+    return head + spans;
   }
   function entityContext(doc) {
     const { entities } = projectEntities(doc);
@@ -3768,14 +3778,74 @@ function projectGraph(events, frame = {}) {
     const text = 'The figures who appear most often: ' + list.map(e => `${e.name} (${e.raw}) {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`).join(', ') + '.';
     return { text, cites: list.map(e => ({ docId: doc.id, idx: e.sents[0] })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Counted directly from the document’s mentions — no model involved.' } };
   }
-  function answerSummary(doc) {
-    const leads = [];
-    for (const b of doc.blocks) { if (b.type === 'p' && b.sentences.length) { leads.push(b.sentences[0]); if (leads.length >= 3) break; } }
-    if (!leads.length) return { text: 'This document doesn’t have enough prose to summarize.', audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'Too little text.' } };
+  // ── The graph's portrait ──────────────────────────────────────────
+  // A summary already exists in the graph, unstated: which sites carry the
+  // weight, which edges run between them, what the text asserted about them,
+  // and the section spine. This takes that photo at the end position and says
+  // it in words — mechanically, no model. Ported from eo-extractor.html's
+  // graphPortrait(); reads Cleon's projected entities + edges + sections.
+  function graphPortrait(doc) {
+    if (!doc || doc.kind !== 'prose') return null;
     const { entities } = projectEntities(doc);
-    const ppl = entities.slice(0, 5).map(e => e.name);
-    const text = leads.map(s => `${s.t} {{cite:${doc.id}:${s.i}:s${s.i}}}`).join(' ') + (ppl.length ? `\n\nKey figures: ${ppl.join(', ')}.` : '');
-    return { text, cites: leads.map(s => ({ docId: doc.id, idx: s.i })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'A grounded précis from the opening lines and the most-mentioned figures. Load the model for a fuller summary.' } };
+    if (!entities.length) return null;
+    const heavy = entities.slice(0, 6);
+    const heavyKeys = new Set(heavy.map(e => e.key));
+    // edges between the heavy sites, by projectGraph (text-layer SYN)
+    let edges = [];
+    try { edges = (projectGraph(doc._events).edges || []); } catch (e) {}
+    const heavyEdges = edges
+      .filter(ed => heavyKeys.has(ed.a) && heavyKeys.has(ed.b) && ed.verb)
+      .slice(0, 6);
+    // DEF assertions the text makes about the heaviest subjects: copular
+    // "X is/was Y" and appositive "a TRADE named X" land as DEF path:'class'.
+    const defByTarget = new Map();
+    for (const ev of (doc._events || [])) {
+      if (ev.op !== 'DEF' || ev.path !== 'class' || !ev.value) continue;
+      const k = normSurface(ev.target);
+      if (!defByTarget.has(k)) defByTarget.set(k, ev.value);
+    }
+    const assertions = heavy
+      .map(e => ({ name: e.name, is: defByTarget.get(e.key) }))
+      .filter(a => a.is);
+    const spine = (doc._sections || []).map(s => s.label).filter(Boolean).slice(0, 8);
+    return { heavy, heavyEdges, assertions, spine };
+  }
+
+  function answerSummary(doc) {
+    const p = graphPortrait(doc);
+    if (!p || !p.heavy.length) {
+      // Fall back to the old lead-sentence précis only when the graph is too
+      // thin to portray (very short or entity-less text).
+      const leads = [];
+      for (const b of doc.blocks) { if (b.type === 'p' && b.sentences.length) { leads.push(b.sentences[0]); if (leads.length >= 3) break; } }
+      if (!leads.length) return { text: 'This document doesn’t have enough prose to summarize.', audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'Too little text.' } };
+      const text = leads.map(s => `${s.t} {{cite:${doc.id}:${s.i}:s${s.i}}}`).join(' ');
+      return { text, cites: leads.map(s => ({ docId: doc.id, idx: s.i })), audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'Too little structure to portray — a précis from the opening lines.' } };
+    }
+    // Read the portrait in words. Heaviest figures (with anchor citations),
+    // what the text asserts about them, the relations between them, the spine.
+    const cites = [];
+    const figs = p.heavy.map(e => {
+      cites.push({ docId: doc.id, idx: e.sents[0] });
+      return `${e.name} {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`;
+    });
+    const parts = [];
+    parts.push(`This ${doc._lang && doc._lang !== 'en' ? doc._lang + ' ' : ''}document turns most on ${figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]}.`);
+    if (p.assertions.length) {
+      parts.push('It says ' + p.assertions.map(a => `${a.name} is ${a.is}`).join('; ') + '.');
+    }
+    if (p.heavyEdges.length) {
+      parts.push('The relations it draws: ' + p.heavyEdges.map(ed => `${ed.aName} ${ed.verb} ${ed.bName}`).join('; ') + '.');
+    }
+    if (p.spine.length > 1) {
+      parts.push('Its sections: ' + p.spine.join(' · ') + '.');
+    }
+    return {
+      text: parts.join(' '),
+      cites,
+      audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
+        note: 'Read mechanically from the shape of the whole document — the heaviest figures, what the text asserts about them, and the relations between them. No model involved.' },
+    };
   }
   // Coverage ratio (covered query content-terms / total) at or above which an
   // answer is allowed to claim "grounded". Below it the answer is HELD, not
@@ -4078,6 +4148,122 @@ function projectGraph(events, frame = {}) {
       .map(([verb, m]) => ({ verb, mass: m }));
   }
 
+  /* ============================================================ COST-ORDERED ROUTING
+     existence → structure → significance, cheapest sufficient reader first.
+     Returns a DECISION BAND, not a yes/no the model makes:
+       decision:'mechanical' — confident it's about the source(s); answer now
+                               (mechanical fold/portrait/void, or LLM phrasing).
+       decision:'escalate'   — looks doc-directed but lexical signal is weak or
+                               absent; the caller may pay for embedding recall
+                               (retrieveHybrid) before deciding mechanical vs chat.
+       decision:'chat'       — no signal; ordinary conversation with the model.
+     confidence: 'high' | 'low' | 'none'. reason: which reader fired.
+     This is δ by another name: the cheap reader dominates when its pull is clear;
+     the expensive reader only gets a turn on a stall. Pure-mechanical and sync,
+     so it never blocks and is parity-safe (the legacy referencesDoc/Scope stay). */
+  function routeTurn(docs, q, ctx) {
+    const ds = scopeDocs(docs);
+    if (!ds.length) return { decision: 'chat', confidence: 'none', reason: 'no-scope' };
+    const intent = classifyIntent(q);
+    // SIGNIFICANCE — who/summary always belong to the source: the graph portrait
+    // is the free mechanical answer, the model (if any) only phrases it.
+    if (intent === 'who' || intent === 'summary')
+      return { decision: 'mechanical', confidence: 'high', reason: intent, primary: routePrimary(ds, q, ctx), intent };
+    // STRUCTURE (table) — a parseable pivot or a named column is an exact lock.
+    for (const d of ds) {
+      if (d.kind !== 'table') continue;
+      try { if (!window.parsePivot(q, d).empty) return { decision: 'mechanical', confidence: 'high', reason: 'pivot', primary: d, intent }; } catch (e) {}
+      const ql = ' ' + String(q).toLowerCase() + ' ';
+      if ((d.columns || []).some(c => ql.includes(' ' + String(c).toLowerCase() + ' ')))
+        return { decision: 'mechanical', confidence: 'high', reason: 'table-column', primary: d, intent };
+    }
+    // STRUCTURE (entity) — the question names someone/somewhere in a source.
+    if (ds.some(d => namesEntity(d, q)))
+      return { decision: 'mechanical', confidence: 'high', reason: 'names-entity', primary: routePrimary(ds, q, ctx), intent };
+    // STRUCTURE (lexical) — token overlap with the page. Strong overlap is a
+    // confident hit (answer now). Weak-but-present is the escalate band.
+    const hits = retrieveScope(ds, q, 6);
+    if (hits.length) {
+      const top = hits[0];
+      const isQuestion = /\?\s*$/.test(q) ||
+        /^\s*(what|which|whose|where|when|why|how|who|does|did|do|is|are|was|were|can|could|would|should|tell me|describe|explain|list|show|name)\b/i.test(q);
+      if (top.score >= 0.5 || top.overlap >= 2 || (isQuestion && top.overlap >= 1))
+        return { decision: 'mechanical', confidence: 'high', reason: 'strong-lexical', primary: routePrimary(ds, q, ctx), hits, intent };
+      return { decision: 'escalate', confidence: 'low', reason: 'weak-lexical', primary: routePrimary(ds, q, ctx), hits, intent };
+    }
+    // EXISTENCE — a named referent absent from every source is still doc-directed:
+    // answer mechanically so it resolves to the void rather than wandering to chat.
+    if (referentsScope(ds, q).antimatter.length)
+      return { decision: 'mechanical', confidence: 'high', reason: 'antimatter-void', primary: routePrimary(ds, q, ctx), intent };
+    // continuity — an anaphoric follow-up to a prior grounded turn stays on the page.
+    if (ds.some(d => continuesPrior(d, q, ctx)))
+      return { decision: 'mechanical', confidence: 'high', reason: 'continuity', primary: routePrimary(ds, q, ctx), intent };
+    // A doc-directed-looking question with NO lexical signal is the prime case for
+    // embedding recall: the locus may be a paraphrase the tokens missed. Escalate.
+    const looksQuestiony = /\?\s*$/.test(q) || /^\s*(what|which|whose|where|when|why|how|who)\b/i.test(q);
+    if (looksQuestiony) return { decision: 'escalate', confidence: 'low', reason: 'question-no-lexical', intent };
+    return { decision: 'chat', confidence: 'none', reason: 'no-signal', intent };
+  }
+
+  /* ---- structure-layer recall: lexical-first, embedding on a confident miss ----
+     The hybrid retriever. Confident lexical overlap short-circuits with NO
+     embedder cost. Only a weak/empty lexical result, AND an available embedder,
+     pays for cosine recall — merged behind the lexical hits (lexical is the more
+     reliable reader; embedding only ADDS what tokens missed). Async, used by the
+     app's escalate path; the sync retrieve()/retrieveScope() are untouched, so
+     all golden parity holds. Degrades to pure lexical whenever EOEmbed is absent
+     or throws. Sentence vectors are cached per-document (WeakMap); a re-parse
+     mints a fresh doc and a fresh cache. */
+  const SEM_FLOOR = 0.45;   // cosine below this is not real recall (tunable rule candidate)
+  const _docVecCache = new WeakMap();
+  async function docSentVectors(doc) {
+    if (_docVecCache.has(doc)) return _docVecCache.get(doc);
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return null;
+    let v = null;
+    try { v = await window.EOEmbed.embedSentences(doc.sentenceTexts || []); } catch (e) { v = null; }
+    if (v) _docVecCache.set(doc, v);
+    return v;
+  }
+  function _cosineNorm(a, b) { let d = 0; const n = Math.min(a.length, b.length); for (let i = 0; i < n; i++) d += a[i] * b[i]; return d; }
+  async function retrieveHybrid(docs, q, k = 6) {
+    const ds = scopeDocs(docs);
+    const lex = retrieveScope(ds, q, k).map(h => ({ ...h }));
+    // confident lexical → done, no embedder cost (cost-ordered short-circuit)
+    if (lex.length && (lex[0].score >= 0.5 || lex[0].overlap >= 2)) return { hits: lex, reader: 'lexical' };
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return { hits: lex, reader: 'lexical' };
+    try {
+      const qv = await window.EOEmbed.embedQuery(q);
+      if (!qv) return { hits: lex, reader: 'lexical' };
+      const sem = [];
+      for (const d of ds) {
+        if (d.kind === 'table') continue;
+        const vecs = await docSentVectors(d);
+        if (!vecs) continue;
+        for (let i = 0; i < vecs.length; i++) {
+          const s = _cosineNorm(qv, vecs[i]);
+          if (s >= SEM_FLOOR) sem.push({ i, t: (d.sentenceTexts || [])[i], score: s, overlap: 0, docId: d.id, semantic: true });
+        }
+      }
+      sem.sort((a, b) => b.score - a.score);
+      const seen = new Set(lex.map(h => h.docId + ':' + h.i));
+      const merged = lex.slice();
+      for (const h of sem) { const key = h.docId + ':' + h.i; if (!seen.has(key)) { seen.add(key); merged.push(h); } if (merged.length >= k) break; }
+      return { hits: merged.slice(0, k), reader: sem.length ? 'lexical+embedding' : 'lexical' };
+    } catch (e) { return { hits: lex, reader: 'lexical' }; }
+  }
+  // Build an LLM context string from an explicit hit list (used by the escalate
+  // path so semantically-recovered spans actually reach the model). Mirrors the
+  // [docId:idx] tagging contextScope uses across multiple sources.
+  function contextFromHits(docs, hits) {
+    const ds = scopeDocs(docs);
+    if (!hits || !hits.length) return '';
+    if (ds.length === 1) return hits.map(h => `[s${h.i}] ${h.t}`).join('\n');
+    const nameOf = id => (ds.find(d => d.id === id) || {}).name || id;
+    const byDoc = new Map();
+    for (const h of hits) { if (!byDoc.has(h.docId)) byDoc.set(h.docId, []); byDoc.get(h.docId).push(h); }
+    return [...byDoc.entries()].map(([id, hs]) => `## ${nameOf(id)}\n` + hs.map(h => `[${id}:${h.i}] ${h.t}`).join('\n')).join('\n\n');
+  }
+
   /* ============================================================ EXPORT */
   window.EOEngine = {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
@@ -4086,6 +4272,8 @@ function projectGraph(events, frame = {}) {
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
     contextScope, bindCitationsScope,
+    // cost-ordered routing (existence → structure → significance) + embedding recall
+    routeTurn, retrieveHybrid, contextFromHits,
     // expose the raw graph engine for future operator-void / shape work
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
     // read-only: the induced speech-verb class + accrued mass (learning record)
