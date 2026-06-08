@@ -3678,6 +3678,13 @@ function projectGraph(events, frame = {}) {
     if (/\b(who(\s+all)?\s+(appears?|is in|are in|shows? up|features?)|who are the|characters?|the cast|people (in|who)|list (the )?(people|characters|names|figures)|main characters?|dramatis|everyone (in|who))\b/.test(t)) return 'who';
     if (/\b(summar|overview|tl;?dr|gist|recap|in short|main (idea|point|points|theme)|what'?s (it|this)( about)?|what is (this|it|the document|the text|the story|the file)|describe (this|the|it)|the document about|what kind of (document|text)|what am i (looking at|reading))/.test(t)) return 'summary';
     if (/\b(what happens|what'?s going on|the plot|the story|main events|what is happening|walk me through|what'?s in (this|it))/.test(t)) return 'summary';
+    // Generative whole-document asks — "write a report about this", "write an
+    // essay", "give me a rundown", "write it up". These name no specific passage,
+    // so the factual path retrieves a single lexically-overlapping line and the
+    // model just parrots it. Route them to the same salient-sample summary path
+    // the interrogative overviews above use.
+    if (/\b(write|draft|compose|put together|give me|make me|prepare|generate|create)\b[^?!.]*\b(report|essay|summary|overview|synopsis|recap|rundown|write[\s-]?up|breakdown)\b/.test(t)) return 'summary';
+    if (/\b(write|report|essay|tell me|talk to me)\b[^?!.]*\babout\s+(this|the\s+(document|text|story|file|piece|passage|reading|script|screenplay|book))\b/.test(t)) return 'summary';
     return 'factual';
   }
   function salientContext(doc) {
