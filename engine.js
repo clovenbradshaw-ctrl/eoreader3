@@ -282,6 +282,11 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Titles of rank or address. Sharing a title alone is not identity — Prince Andrew ≠ Prince Bagratión.',
   },
+  sentence_abbreviations: {
+    value: ['mr','mrs','ms','mx','dr','prof','rev','fr','hon','capt','col','gen','sgt','cpl','lt','sr','jr','st','mt','messrs','mlle','mme'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Abbreviations whose trailing period does NOT end a sentence (a title before a name: "Dr." , "Mr."). The segmenter rejoins a sentence cut after one of these so a citation never lands mid-name. Lives here in the ruliad — extend, export, or disable it like any reading rule — rather than being hardcoded in the segmenter. Short forms only (never sentence-final); the full words live in title_tokens.',
+  },
   function_words: {
     value: ['own','much','many','few','less','every','another','other','both','either','neither','several','various'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -482,7 +487,7 @@ function getAttribVerbs() {
 }
 let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     MALE_PRONOUNS, FEMALE_TITLES, MALE_TITLES, CLITIC_SUFFIXES, ADVERB_HEADS,
-    NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST;
+    NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -502,6 +507,7 @@ function rebuildLangSets() {
   PREP_LEAD_DISQUALIFY = new Set(mod_values('prep_lead_disqualify'));
   ARTICLES = new Set(mod_values('articles'));
   ATTRIB_VERB_LIST = getAttribVerbs().join('|');
+  ABBREVIATIONS = new Set(mod_values('sentence_abbreviations'));
 }
 // Apply a language pack: write its detectors into the rules with
 // provenance, register the module, rebuild the lexical sets. English
@@ -1002,6 +1008,12 @@ function cleanEntitySurface(surf) {
       return null;
     }
   }
+  // All-caps multi-word surfaces are headers / section labels ("SECOND WIFE",
+  // "PART ONE"), not names; spaced one/two-letter tokens ("I N") are OCR noise.
+  // A single all-caps token may be a real acronym, so only the multi-word case.
+  const _letters = s.replace(/[^\p{L}]/gu, '');
+  if (words.length > 1 && _letters.length > 1 && _letters === _letters.toUpperCase() && _letters !== _letters.toLowerCase()) return null;
+  if (words.length > 1 && words.every(w => w.replace(/[^\p{L}]/gu, '').length <= 2)) return null;
   // Reject if reduced to nothing or a stopword
   if (!s) return null;
   if (STOP.has(s.toLowerCase())) return null;
@@ -1295,7 +1307,22 @@ async function extractEoGraph(text, onProgress) {
         if (q) paraDocs.push(nlp(q));
       }
     } else {
-      nlp(p).sentences().forEach(s => paraDocs.push(s));
+      // English split, then rejoin a sentence the segmenter cut after an
+      // abbreviation: a known title (lexicon in the ruliad, not hardcoded here)
+      // or any "Abbr." immediately before a number ("No. 12", "Fig. 3"). Keeps a
+      // citation from ever landing mid-name. No-op when nothing merges, so a
+      // title-free document segments exactly as before.
+      const subs = []; nlp(p).sentences().forEach(s => subs.push(s));
+      for (let k = 0; k < subs.length; k++) {
+        let txt = subs[k].text(), merged = false;
+        while (k + 1 < subs.length) {
+          const tail = txt.match(/(?:^|[\s(“"‘])(\p{L}+)\.\s*$/u);
+          const nextIsNum = /^\s*\d/.test(subs[k + 1].text());
+          if (tail && (ABBREVIATIONS.has(tail[1].toLowerCase()) || nextIsNum)) { txt += ' ' + subs[++k].text(); merged = true; }
+          else break;
+        }
+        paraDocs.push(merged ? nlp(txt) : subs[k]);
+      }
     }
     for (const s of paraDocs) { sentenceDocs.push(s); sentParaSolo.push(paraDocs.length === 1); }
     if (onProgress && performance.now() - _segClock > 24) {

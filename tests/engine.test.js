@@ -33,6 +33,8 @@ async function main() {
 const voss = await E.parseDocument('Voss.txt', VOSS, 'voss');
 const deals = await E.parseDocument('deals.csv', CSV, 'deals');
 const sales = await E.parseDocument('sales.csv', SALES, 'sales');
+const abbrDoc = await E.parseDocument('abbr.txt', 'Report\n\nWe checked No. 12 and Fig. 3 below. Dr. Pell signed off.', 'abbr');
+const noiseDoc = await E.parseDocument('noise.txt', 'SECOND WIFE\n\nMauricio Pellegrini married again. SECOND WIFE was the chapter title. Mauricio kept the old maps. I N scanned this page. I N appears once more.', 'noise');
 
 group('parse — prose', () => {
   eq(voss.kind, 'prose', 'prose doc detected as prose');
@@ -137,6 +139,20 @@ group('anti-matter referents', () => {
   const one = E.answer(voss, 'What did Zorthax say?');
   eq(one.audit.status, 'warn', 'a lone anti-matter referent holds (warn)');
   ok(!/appears nowhere/.test(E.answer(voss, 'what did Edith carry').text), 'an all-matter query does not trip the void');
+});
+
+// Lexical knowledge lives in the ruliad (READING_RULES.sentence_abbreviations),
+// not hardcoded in the segmenter.
+group('segmenter — abbreviations rejoin (ruliad-driven)', () => {
+  ok(!abbrDoc.sentenceTexts.some(t => /^\s*12\b/.test(t)), 'a number after "No." is not split into its own sentence');
+  ok(abbrDoc.sentenceTexts.some(t => /No\. 12 and Fig\. 3 below/.test(t)), 'the reference abbreviations stay in one sentence');
+});
+
+group('entity extraction — header/fragment noise filtered', () => {
+  const names = E.projectEntities(noiseDoc).entities.map(e => e.name);
+  ok(names.some(n => /Mauricio/.test(n)), 'a real repeated name still surfaces');
+  ok(!names.some(n => /^second wife$/i.test(n)), 'an all-caps multi-word header does not surface as a person');
+  ok(!names.includes('I N'), 'a spaced single-letter OCR fragment does not surface');
 });
 
 group('void / invented terms', () => {
