@@ -541,6 +541,29 @@ function applyLanguageModule(lang) {
 }
 function moduleEnabledForLang(modId) { return modId === 'core' || (LANGUAGE_MODULES[modId] && LANGUAGE_MODULES[modId].enabled); }
 
+// Set the per-language reading mode. modeMap: { en:'original'|'learning', … }.
+// 'original' freezes a language to its shipped baseline (induction is skipped
+// and the fold drops that bucket's learned delta); 'learning' (default) is the
+// adaptive shipped behavior. Re-folds the live view and bumps RULES_REV; the
+// host then re-parses open docs (induction is a parse-time decision). The
+// learned delta is hidden, never erased — switch back and it returns. Returns
+// the new rev. Called with no/empty original modes, this is a no-op for parity.
+function setLanguageModes(modeMap) {
+  ORIGINAL_LANGS.clear();
+  if (modeMap && typeof modeMap === 'object') {
+    for (const [lang, mode] of Object.entries(modeMap)) if (mode === 'original') ORIGINAL_LANGS.add(lang);
+  }
+  _projMemo = null;                                        // a mode change invalidates the fold memo
+  deriveSets(projectRules(RULES_LEDGER, currentFrame()));   // re-derive the live view + RULES_REV
+  return RULES_REV;
+}
+// Read-only: the current mode for each known language (default 'learning').
+function languageModes() {
+  const out = {};
+  for (const lang of [...Object.keys(PACK_FOR_LANG), 'csv']) out[lang] = ORIGINAL_LANGS.has(lang) ? 'original' : 'learning';
+  return out;
+}
+
 // ── RULES LEDGER ─────────────────────────────────────────────────────
 // Rule state stops being a mutable dictionary and becomes a pure fold
 // over a rules ledger. Packs are replayable regions of that ledger you
@@ -560,6 +583,17 @@ let RULES_REV = 0;
 const ENABLED_PACKS = new Set(['core', 'en-narrative-v1']);
 const PACK_FOR_LANG = { en: 'en-narrative-v1', es: 'es-narrative-v1', zh: 'zh-narrative-v1', code: 'code-v1' };
 const PACK_LANG = Object.fromEntries(Object.entries(PACK_FOR_LANG).map(([l, p]) => [p, l]));
+// ── Per-language reading mode ────────────────────────────────────────
+// A language can read in one of two modes. SELF-LEARNING (default, the
+// shipped behavior) induces speech-verb conventions from each document's
+// typography and accrues mass on the ledger. ORIGINAL pins the language to
+// its shipped baseline: induction is skipped (no new conventions are learned)
+// and the fold ignores that bucket's non-shipped delta, so the reading uses
+// only seed tokens — frozen and deterministic. This set holds the language
+// codes currently in Original mode; empty means everything is Self-learning,
+// which is byte-for-byte the historical reading (the golden-parity contract).
+const ORIGINAL_LANGS = new Set();
+function _originalSig() { return ORIGINAL_LANGS.size ? ('§om:' + [...ORIGINAL_LANGS].sort().join(',')) : ''; }
 // The phase tag is load-bearing: replay-phase rules re-derive over
 // existing logs for free; extract-phase rules shape what gets emitted,
 // so changing them on an already-read document requires re-extraction.
@@ -651,7 +685,8 @@ let _projMemo = null;
 function projectRules(ledger, frame = {}) {
   const packs = frame.packs || ENABLED_PACKS;
   const upTo = frame.upTo == null ? Infinity : frame.upTo;
-  const memoKey = ledger.length + '§' + _packsKey(packs) + '§' + upTo;
+  const _omSig = _originalSig();   // '' when no language is in Original mode → identical key/rev
+  const memoKey = ledger.length + '§' + _packsKey(packs) + '§' + upTo + _omSig;
   if (_projMemo && _projMemo.key === memoKey) return _projMemo.val;
   const rules = {};   // id → { kind, layer, phase, desc, locked, src0, perBucket, tokens?, value?, mass, _cands }
   const readers = {};
@@ -693,6 +728,14 @@ function projectRules(ledger, frame = {}) {
       if (ev.action === 'add-token') { const k = String(ev.value); if (!pb0.tokens.has(k)) pb0.order.push(k); pb0.tokens.set(k, (pb0.tokens.get(k) || 0) + (ev.mass != null ? ev.mass : 1)); }
       else if (ev.action === 'remove-token') { const k = String(ev.value); pb0.tokens.set(k, (pb0.tokens.get(k) || 0) - (ev.mass != null ? ev.mass : 1)); }
       else if (ev.action === 'set-value') pb0.latest = { value: ev.value, mass: ev.mass || 1, seq: ev.seq, src: ev.src };
+      continue;
+    }
+    // ORIGINAL mode: a language pinned to its shipped baseline ignores its
+    // induced (non-shipped) tokens — only seed conventions contribute. The
+    // bucket's shape is still ensured so an empty provision reads as empty,
+    // not absent. No-op while ORIGINAL_LANGS is empty (the parity path).
+    if (ORIGINAL_LANGS.size && !ev.shipped && ORIGINAL_LANGS.has(PACK_LANG[ev.bucket])) {
+      ensure(id, ev.action === 'add-token' || ev.action === 'remove-token' ? 'list' : 'scalar');
       continue;
     }
     maxSeq = Math.max(maxSeq, ev.seq);
@@ -753,7 +796,7 @@ function projectRules(ledger, frame = {}) {
     }
     delete r._cands; delete r._declared;
   }
-  const rev = ((maxSeq + 1) ^ _strHash(_packsKey(packs))) >>> 0;
+  const rev = ((maxSeq + 1) ^ _strHash(_packsKey(packs) + _omSig)) >>> 0;
   const val = { rules, readers, rev, packs: new Set(packs), upTo };
   _projMemo = { key: memoKey, val };
   return val;
@@ -1445,6 +1488,7 @@ async function extractEoGraph(text, onProgress) {
     const have = new Set(getAttribVerbs());
     for (const [verb, count] of [...tally.entries()].sort((a, b) => b[1] - a[1])) {
       if (count < 2) continue;
+      if (ORIGINAL_LANGS.has(LANG)) continue;   // Original mode: induce nothing, read shipped-only
       if (have.has(verb)) {
         // confirmation — mass accrues on the ledger, no doc event
         ledgerCommit({ target: 'rule:attribution_verbs', action: 'add-token', bucket: vBucket, value: verb, mass: count, basis: { slot_sightings: count }, src: 'verb-induction' });
@@ -1557,6 +1601,7 @@ async function extractEoGraph(text, onProgress) {
     const zhBucket = PACK_FOR_LANG[LANG] || 'zh-narrative-v1';
     for (const [v, c] of [...zhVerbTally.entries()].sort((a, b) => b[1] - a[1])) {
       if (c < 2) continue;
+      if (ORIGINAL_LANGS.has(LANG)) continue;   // Original mode: induce nothing, read shipped-only
       if (haveZh.has(v)) {
         ledgerCommit({ target: 'rule:attribution_verbs', action: 'add-token', bucket: zhBucket, value: v, mass: c, basis: { slot_sightings: c }, src: 'verb-induction' });
         continue;
@@ -4294,6 +4339,21 @@ function projectGraph(events, frame = {}) {
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([verb, m]) => ({ verb, mass: m }));
   }
+  // Read-only: count of induced (net-positive) speech verbs per language, from
+  // the live fold. A language in Original mode reads 0 (its delta is filtered).
+  function learnedVerbsByLang() {
+    const r = projectRules(RULES_LEDGER, currentFrame()).rules.attribution_verbs;
+    const out = {};
+    if (r && r.perBucket) {
+      for (const [bucket, pb] of Object.entries(r.perBucket)) {
+        const lang = PACK_LANG[bucket];
+        if (!lang) continue;                       // skip the 'core' declare bucket
+        let n = 0; for (const v of pb.tokens.values()) if (v > 0) n++;
+        out[lang] = (out[lang] || 0) + n;
+      }
+    }
+    return out;
+  }
 
   /* ============================================================ COST-ORDERED ROUTING
      existence → structure → significance, cheapest sufficient reader first.
@@ -4428,8 +4488,10 @@ function projectGraph(events, frame = {}) {
     layerLadder, isTransmutingDef,
     // expose the raw graph engine for future operator-void / shape work
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
+    // per-language reading mode: Original (shipped-only, frozen) vs Self-learning
+    setLanguageModes, languageModes,
     // read-only: the induced speech-verb class + accrued mass (learning record)
-    _learnedVerbs: learnedVerbs,
+    _learnedVerbs: learnedVerbs, learnedVerbsByLang,
     // persistence: serialize/restore the learned ledger delta (host stores it)
     _serializeLedger, _restoreLedger,
   };
