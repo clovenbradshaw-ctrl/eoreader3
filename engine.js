@@ -3748,7 +3748,14 @@ function projectGraph(events, frame = {}) {
     };
   }
   function answerTable(doc, query) {
-    const { spec } = window.parsePivot(query, doc);
+    const { spec, unbound = [], notes = [] } = window.parsePivot(query, doc);
+    // Surface what we couldn't bind instead of dropping it and stamping the
+    // answer grounded (rec #3): typo corrections we applied, and column tokens
+    // that matched nothing ("by quarter" / "reigon").
+    const clarify = [
+      ...notes.map(n => n.charAt(0).toUpperCase() + n.slice(1) + '.'),
+      ...unbound.map(u => `I don’t see a column called “${u.token}”` + (u.suggestion ? ` — did you mean “${u.suggestion}”?` : ' in this table.')),
+    ].join(' ');
     const fold = window.foldPivot(doc, spec);
     const filtNote = (spec.filters || []).length
       ? ' where ' + spec.filters.map(f => `${f.col} = ${f.val}`).join(', ') : '';
@@ -3780,13 +3787,17 @@ function projectGraph(events, frame = {}) {
       produced = false;
       summary = `${fold.total} of ${rowsN} rows. Ask me to group, total, average, or filter and I’ll fold it.`;
     }
+    const baseNote = produced ? 'Computed mechanically from ' + doc.name + '.' : 'No measure to compute — showing the matching rows from ' + doc.name + '.';
     return {
-      text: summary + '\n\nFolded straight from the table — no model touched the numbers. Adjust grouping or measure on the table and it recomputes live.',
+      text: summary + (clarify ? '\n\n' + clarify : '') + '\n\nFolded straight from the table — no model touched the numbers. Adjust grouping or measure on the table and it recomputes live.',
       // Only claim full coverage when an actual figure was produced; a bare row
-      // listing with no requested measure is not a computed answer. (1d)
-      audit: produced
-        ? { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Computed mechanically from ' + doc.name + '.' }
-        : { status: 'notes', grounded: true, covers: '0/1', stable: true, note: 'No measure to compute — showing the matching rows from ' + doc.name + '.' },
+      // listing with no requested measure is not a computed answer (1d). An
+      // unbound column token means part of the ask went unhonoured — never green.
+      audit: unbound.length
+        ? { status: 'notes', grounded: produced, covers: produced ? '1/1' : '0/1', stable: true, note: clarify }
+        : produced
+          ? { status: 'clean', grounded: true, covers: '1/1', stable: true, note: clarify || baseNote }
+          : { status: 'notes', grounded: true, covers: '0/1', stable: true, note: clarify || baseNote },
       tableSpec: spec, openSelf: true,
     };
   }

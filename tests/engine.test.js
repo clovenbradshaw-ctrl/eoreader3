@@ -9,7 +9,9 @@
    ============================================================ */
 'use strict';
 const { loadEngine, VOSS, CSV } = require('./harness');
-const E = loadEngine().EOEngine;
+const ENG = loadEngine();
+const E = ENG.EOEngine;
+const parsePivot = (q, doc) => ENG.parsePivot(q, doc);
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -134,6 +136,43 @@ group('table — deterministic fold', () => {
   ok(/Grouped by \*\*agent\*\*/.test(a.text), 'fold groups by agent');
   ok(/Beaumont/.test(a.text) && /\$\d/.test(a.text), 'fold reports a money total per agent');
   ok(a.audit.grounded, 'fold is grounded (computed mechanically)');
+});
+
+// PIVOT BY TOKEN CLASSIFICATION: robust to phrasing, word order, typos; and it
+// surfaces what it couldn't bind instead of silently dropping it.
+group('table — token-classified pivot (robust phrasing)', () => {
+  // a question wrapper / trailing '?' must not break the grouping
+  const a = parsePivot('total value by region', deals).spec;
+  const b = parsePivot('What is the total value by region?', deals).spec;
+  eq(a.groupBy, 'region', 'plain phrasing groups by region');
+  eq(b.groupBy, 'region', 'a question wrapper + "?" still groups by region');
+  eq(JSON.stringify(a), JSON.stringify(b), 'wrapper words do not change the spec');
+  eq(b.aggregate && b.aggregate.op, 'sum', 'aggregate is sum');
+  eq(b.aggregate && b.aggregate.col, 'value', 'measure is value');
+
+  // word order independent: "region totals" with no cue still groups by region
+  const ord = parsePivot('region totals', deals).spec;
+  eq(ord.groupBy, 'region', 'a leftover categorical column groups even without a "by" cue');
+
+  // a typo on the column is corrected (edit distance), not dropped
+  const typo = parsePivot('total value by reigon', deals);
+  eq(typo.spec.groupBy, 'region', 'a column typo ("reigon") is read as "region", not dropped');
+  ok(typo.notes.some(n => /reigon/.test(n) && /region/.test(n)), 'the typo correction is reported');
+
+  // the broken filter regex bug: "where status is won" must not manufacture a
+  // phantom filter — exactly one correct filter, status = won
+  const filt = parsePivot('total value where status is won', deals).spec;
+  eq(filt.filters.length, 1, 'one filter, not a phantom from an overlapping substring');
+  eq(filt.filters[0].col, 'status', 'filter column is status');
+  eq(filt.filters[0].val, 'won', 'filter value is won');
+  ok(!filt.groupBy, 'the filter column is not mistaken for a grouping');
+
+  // an unmatched column token is surfaced, not swallowed under a green chip
+  const miss = parsePivot('total value by quarter', deals);
+  ok(miss.unbound.some(u => u.token === 'quarter'), 'an unmatched column token is reported as unbound');
+  const missAns = E.answer(deals, 'total value by quarter');
+  ok(/quarter/.test(missAns.text), 'the answer says it could not bind "quarter"');
+  ok(missAns.audit.status !== 'clean', 'an unbound token keeps the answer off the clean/green chip');
 });
 
 group('table — money vs plain numeric (1c)', () => {
