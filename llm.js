@@ -154,7 +154,14 @@
       toFold = toFold.slice(1); startIdx++;
     }
 
-    return [head, ...(summary ? [summary] : []), ...kept, tail];
+    // MLC/WebLLM accepts exactly one `system` message, and it must be first:
+    // a second one makes chat.completions.create() throw ("System prompt should
+    // always be the first message in `messages`"), which silently drops every
+    // grounded turn onto the mechanical fallback. The condensed recap is
+    // system-level context, so fold it into the head prompt rather than emitting
+    // it as its own system message.
+    const head2 = summary ? { role: 'system', content: `${sys}\n\n${summary.content}` } : head;
+    return [head2, ...kept, tail];
   }
 
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
