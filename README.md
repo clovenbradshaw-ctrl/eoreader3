@@ -1,25 +1,61 @@
-# CODING AGENTS: READ THIS FIRST
+# Cleon
 
-This is a **handoff bundle** from Claude Design (claude.ai/design).
+A private, in-browser assistant for reading documents. Cleon is a ChatGPT-style
+chat app with a twist: when you ask about a document you've loaded, its answers
+are **grounded** — every claim is bound to the exact line it came from and
+audited mechanically, not by the language model.
 
-A user mocked up designs in HTML/CSS/JS using an AI design tool, then exported this bundle so a coding agent can implement the designs for real.
+Everything runs locally. Documents never leave your browser, and the optional
+language model runs on your own GPU via WebGPU.
 
-## What you should do — IMPORTANT
+## Running it
 
-**Read the chat transcripts first.** There are 2 chat transcript(s) in `chats/`. The transcripts show the full back-and-forth between the user and the design assistant — they tell you **what the user actually wants** and **where they landed** after iterating. Don't skip them. The final HTML files are the output, but the chat is where the intent lives.
+It's a static site — no build step. Serve the folder and open it:
 
-**Read `project/Cleon.html` in full.** The user had this file open when they triggered the handoff, so it's almost certainly the primary design they want built. Read it top to bottom — don't skim. Then **follow its imports**: open every file it pulls in (shared components, CSS, scripts) so you understand how the pieces fit together before you start implementing.
+```sh
+python3 -m http.server 8000
+# then visit http://localhost:8000
+```
 
-**If anything is ambiguous, ask the user to confirm before you start implementing.** It's much cheaper to clarify scope up front than to build the wrong thing.
+Open `index.html` through a server (not `file://`) so the engine and component
+scripts load. A WebGPU-capable browser (Chrome/Edge 113+) is needed for the
+local model; without one, grounded answers and pivots still work mechanically.
 
-## About the design files
+## How it works
 
-The design medium is **HTML/CSS/JS** — these are prototypes, not production code. Your job is to **recreate them pixel-perfectly** in whatever technology makes sense for the target codebase (React, Vue, native, whatever fits). Match the visual output; don't copy the prototype's internal structure unless it happens to fit.
+The intelligence is **mechanical**; the language model only phrases things.
 
-**Don't render these files in a browser or take screenshots unless the user asks you to.** Everything you need — dimensions, colors, layout rules — is spelled out in the source. Read the HTML and CSS directly; a screenshot won't tell you anything they don't.
+- **`engine.js`** — the reading engine. Parses prose (sentence indexing, entity
+  extraction) and tables, does retrieval, decides whether a message is about the
+  open document (`referencesDoc`), binds `[sN]` citations, and computes the
+  grounded / coverage / stable audit. Deterministic; no model involved.
+- **`llm.js`** — optional local model (WebLLM / WebGPU, e.g. Qwen2.5). It holds
+  the conversation and phrases answers. On a document question it's handed the
+  retrieved passages and its output is checked and re-cited mechanically — it
+  never writes its own citations and never overrides the page.
+- **`pivot.jsx`** — deterministic pivot/fold over tables (totals, counts,
+  grouping) driven by a small natural-language → spec parser.
+- **UI** (`app.jsx`, `chat.jsx`, `docview.jsx`, `sidebar.jsx`, `rulesets.jsx`,
+  `icons.jsx`) — React via in-browser Babel; `styles.css` for the look.
+- **`data.jsx`** — example documents, model list, and the reading rulesets.
 
-## Bundle contents
+### Chat behaviour
 
-- `README.md` — this file
-- `chats/` — conversation transcripts (read these!)
-- `project/` — the `EO Reader 3` project files (HTML prototypes, assets, components)
+By default Cleon just talks with you — multi-turn, with the conversation passed
+to the model intact. It only pulls in document context when you're actually
+referencing the loaded document (asking what it says, who's in it, summarizing
+it, naming something from it). That keeps ordinary conversation simple while
+document questions stay grounded and cited.
+
+## Reading rules
+
+The "reading rules" in the side panel are the toggleable parameters the engine
+reads under (decay, inertia, anaphora handling, and so on). They can be turned
+on/off, exported as JSON, and imported — parsing stores only invariants, and the
+entity/prominence views are re-projected from the current rules without a
+re-parse.
+
+## Design notes
+
+`docs/operator-void.md` captures a planned next phase (distinguishing a missing
+*operator*/shape from missing *content*) to build on top of the current engine.
