@@ -98,6 +98,23 @@ await group('learns rules, never content', async () => {
     'the learning record holds rules (lowercase verbs), never document content (names)');
 });
 
+await group('learning persists — serialize / restore the ledger', async () => {
+  const teacher = loadEngine().EOEngine;
+  await teacher.parseDocument('t', novelDoc('thrummed', 3), 't');
+  const before = teacher._learnedVerbs().find(v => v.verb === 'thrummed');
+  ok(before && before.mass === 3, 'the teaching engine learned the verb at mass 3');
+
+  const saved = teacher._serializeLedger();
+  ok(Array.isArray(saved) && saved.length > 0, 'the learned delta serializes to a non-empty array');
+  ok(saved.every(e => !e.shipped), 'shipped seed events are excluded from the saved delta');
+
+  const fresh = loadEngine().EOEngine;
+  eq(JSON.stringify(fresh._learnedVerbs()), '[]', 'a brand-new engine starts cold');
+  fresh._restoreLedger(saved);
+  const after = fresh._learnedVerbs().find(v => v.verb === 'thrummed');
+  ok(after && after.mass === 3, 'restoring the ledger rehydrates the verb at its saved mass');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

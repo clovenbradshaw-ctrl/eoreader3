@@ -828,9 +828,34 @@ function deriveSets(proj, opts = {}) {
   return snap;
 }
 
-  /* Cleon manages reading rules through its own UI/ledger, so the
-     OPFS persistence the standalone tool used is a no-op here. */
-  function scheduleLedgerSave() {}
+  /* Persist the LEARNED part of the rules ledger so the engine's induced
+     reading rules (the speech-verb class and its accrued mass) survive a page
+     reload — learning that compounds across visits, not just across one
+     session. Shipped seed events are excluded (they re-seed at init); only the
+     events a reading actually appended are serialized. The host registers
+     `window.EO_onLedgerChange` to do the storage write; debounced so a long
+     ingest that appends many verb events writes once, not once per token.
+     A no-op anywhere that hook isn't present (e.g. the Node test harness). */
+  let _ledgerSaveTimer = null;
+  function scheduleLedgerSave() {
+    if (typeof window === 'undefined' || typeof window.EO_onLedgerChange !== 'function') return;
+    if (_ledgerSaveTimer) clearTimeout(_ledgerSaveTimer);
+    _ledgerSaveTimer = setTimeout(() => {
+      _ledgerSaveTimer = null;
+      try { window.EO_onLedgerChange(_serializeLedger()); } catch (e) {}
+    }, 600);
+  }
+  // The learned delta beyond the shipped seeds — what's worth persisting.
+  function _serializeLedger() { return RULES_LEDGER.filter(e => !e.shipped).map(e => ({ ...e })); }
+  // Replay persisted learning events into a freshly-seeded ledger, then
+  // re-derive. Re-sequenced under the current ledger so seq stays contiguous;
+  // idempotent enough that a double call only re-appends (callers restore once).
+  function _restoreLedger(events) {
+    if (!Array.isArray(events) || !events.length) return false;
+    for (const ev of events) { const copy = { ...ev }; delete copy.seq; ledgerAppend(copy); }
+    deriveSets(projectRules(RULES_LEDGER, currentFrame()));
+    return true;
+  }
 
   /* Drive the rules fold from load, exactly as the standalone tool does
      (minus loadRulesLedger, which read learned events from OPFS). */
@@ -3814,5 +3839,7 @@ function projectGraph(events, frame = {}) {
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
     // read-only: the induced speech-verb class + accrued mass (learning record)
     _learnedVerbs: learnedVerbs,
+    // persistence: serialize/restore the learned ledger delta (host stores it)
+    _serializeLedger, _restoreLedger,
   };
 })();
