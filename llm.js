@@ -14,7 +14,9 @@
   async function importWebLLM() {
     if (mod) return mod;
     // ESM CDN — loaded on demand so the app starts instantly without it.
-    mod = await import('https://esm.run/@mlc-ai/web-llm');
+    // Pinned to an exact version (was unversioned): a floating major could
+    // change the loader API or model defaults under us with no warning.
+    mod = await import('https://esm.run/@mlc-ai/web-llm@0.2.79');
     return mod;
   }
 

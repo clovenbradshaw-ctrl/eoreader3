@@ -65,8 +65,12 @@ function TableDoc({ doc, initialSpec }) {
   const fold = window.foldPivot(doc, spec);
   const [openGroups, setOpenGroups] = React.useState({});
   const numCols = doc.numeric || [];
+  const moneyCols = doc.money || [];
   const key0 = doc.columns[0];
-  const fmt = (col, v) => numCols.includes(col) ? window.fmtMoney(window.num(v)) : v;
+  // Money → dollars; other numeric columns → plain thousands-separated numbers
+  // so a count column isn't shown as currency; everything else verbatim. (1c)
+  const fmt = (col, v) => moneyCols.includes(col) ? window.fmtMoney(window.num(v))
+    : numCols.includes(col) ? window.fmtNum(window.num(v)) : v;
   const set = (patch) => setSpec(s => ({ ...s, ...patch }));
   const active = spec.groupBy || spec.aggregate || spec.sortBy || (spec.filters && spec.filters.length);
 
@@ -75,11 +79,11 @@ function TableDoc({ doc, initialSpec }) {
       <div className="tableview">
         <div className="pivot-controls">
           <div className="pc"><span className="lbl">Group by</span>
-            <select value={spec.groupBy || ''} onChange={e => set({ groupBy: e.target.value || null })}>
+            <select aria-label="Group by column" value={spec.groupBy || ''} onChange={e => set({ groupBy: e.target.value || null })}>
               <option value="">—</option>{doc.columns.map(c => <option key={c} value={c}>{c}</option>)}
             </select></div>
           <div className="pc"><span className="lbl">Measure</span>
-            <select value={spec.aggregate ? spec.aggregate.op : ''} onChange={e => {
+            <select aria-label="Measure" value={spec.aggregate ? spec.aggregate.op : ''} onChange={e => {
               const op = e.target.value; if (!op) return set({ aggregate: null });
               set({ aggregate: { op, col: op === 'count' ? null : (spec.aggregate?.col || numCols[0]) } });
             }}>
@@ -87,16 +91,16 @@ function TableDoc({ doc, initialSpec }) {
               <option value="avg">avg</option><option value="max">max</option><option value="min">min</option>
             </select>
             {spec.aggregate && spec.aggregate.op !== 'count' && numCols.length > 0 && (
-              <select value={spec.aggregate.col || ''} onChange={e => set({ aggregate: { ...spec.aggregate, col: e.target.value } })}>
+              <select aria-label="Measure column" value={spec.aggregate.col || ''} onChange={e => set({ aggregate: { ...spec.aggregate, col: e.target.value } })}>
                 {numCols.map(c => <option key={c} value={c}>{c}</option>)}
               </select>)}
           </div>
           <div className="pc"><span className="lbl">Sort</span>
-            <select value={spec.sortBy ? spec.sortBy.col : ''} onChange={e => set({ sortBy: e.target.value ? { col: e.target.value, dir: spec.sortBy?.dir || 'desc' } : null })}>
+            <select aria-label="Sort by column" value={spec.sortBy ? spec.sortBy.col : ''} onChange={e => set({ sortBy: e.target.value ? { col: e.target.value, dir: spec.sortBy?.dir || 'desc' } : null })}>
               <option value="">—</option>{doc.columns.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
             {spec.sortBy && (
-              <select value={spec.sortBy.dir} onChange={e => set({ sortBy: { ...spec.sortBy, dir: e.target.value } })}>
+              <select aria-label="Sort direction" value={spec.sortBy.dir} onChange={e => set({ sortBy: { ...spec.sortBy, dir: e.target.value } })}>
                 <option value="desc">↓ desc</option><option value="asc">↑ asc</option>
               </select>)}
           </div>
@@ -114,7 +118,7 @@ function TableDoc({ doc, initialSpec }) {
                   <React.Fragment key={g.key}>
                     <tr className="grp" onClick={() => setOpenGroups(o => ({ ...o, [gi]: !o[gi] }))}>
                       <td>{g.key}</td><td className="num">{g.count}</td>
-                      <td className="num">{g.agg.value == null ? '—' : (fold.isMoneyCol(fold.aggregate?.col) ? window.fmtMoney(g.agg.value) : g.agg.value)}</td>
+                      <td className="num">{g.agg.value == null ? '—' : (fold.isMoneyCol(fold.aggregate?.col) ? window.fmtMoney(g.agg.value) : window.fmtNum(g.agg.value))}</td>
                     </tr>
                     {openGroups[gi] && g.rows.map((r, ri) => (
                       <tr key={ri} className="member"><td>{r[key0]}</td>
@@ -181,17 +185,19 @@ function EntityView({ doc, name, onCite, onEntity }) {
 /* the compact entity modal (pivot point), with "open as tab" */
 function EntityModal({ doc, name, onCite, onEntity, onOpenTab, onClose }) {
   const d = window.EOEngine.entityDetail(doc, name);
+  const dialogRef = window.useDialog(onClose);
   if (!d) return null;
   return (
     <div className="overlay center" onClick={onClose}>
-      <div className="ent-modal" onClick={e => e.stopPropagation()}>
+      <div className="ent-modal" role="dialog" aria-modal="true" aria-label={'Entity: ' + d.name}
+           tabIndex={-1} ref={dialogRef} onClick={e => e.stopPropagation()}>
         <div className="ent-modal-head">
           <span className="ent-dot" style={{ background: ENT_COLOR[d.type] || ENT_COLOR.person }} />
           <span className="ent-title">{d.name}</span>
           <span className={'phase-tag ' + d.type}>{d.type}</span>
           <div style={{ flex: 1 }} />
           <button className="ghost-pill" onClick={() => { onOpenTab(doc.id, d.name); onClose(); }}><Icon name="doc" size={14} /> Open as tab</button>
-          <button className="x" onClick={onClose}><Icon name="x" size={17} /></button>
+          <button className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={17} /></button>
         </div>
         <div className="ent-stats">
           <span><b>{d.raw}</b> mentions</span><span><b>{d.sentences.length}</b> sentences</span><span>mass <b>{d.mass}</b></span>
@@ -234,7 +240,7 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
   };
 
   return (
-    <div className="pane-doc" style={{ flex: 1, minWidth: 0 }}>
+    <aside className="pane-doc" aria-label="Document viewer" style={{ flex: 1, minWidth: 0 }}>
       <div className="doc-tabs">
         {openTabs.map(id => (
           <button key={id} className={'doc-tab' + (id === activeTab ? ' active' : '')} onClick={() => onActivate(id)}>
@@ -256,7 +262,7 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
         : cur.kind === 'entity' ? <EntityView doc={cur.doc} name={cur.name} onCite={onCite} onEntity={onEntity} />
         : cur.kind === 'table' ? <TableDoc doc={cur.doc} initialSpec={tableSpec} />
         : <ProseDoc doc={cur.doc} explore={explore} onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={onCite} />}
-    </div>
+    </aside>
   );
 }
 

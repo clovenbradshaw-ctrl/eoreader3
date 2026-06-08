@@ -6,6 +6,9 @@
    ============================================================ */
 const num = (v) => { const n = parseFloat(String(v ?? '').replace(/[^0-9.\-]/g, '')); return isNaN(n) ? null : n; };
 const fmtMoney = (v) => v == null ? '—' : '$' + Math.round(v).toLocaleString('en-US');
+// Plain numeric formatting (thousands separators, no currency) for count-like
+// numeric columns — keeps "120 units" from being rendered as "$120". (1c)
+const fmtNum = (v) => v == null ? '—' : (Math.round(v * 100) / 100).toLocaleString('en-US');
 
 function aggregate(rows, agg) {
   if (!agg || agg.op === 'count') return { op: 'count', value: rows.length, label: rows.length + '' };
@@ -25,7 +28,7 @@ function foldPivot(doc, spec) {
   for (const f of (spec.filters || [])) {
     rows = rows.filter(r => String(r[f.col] ?? '').toLowerCase() === String(f.val).toLowerCase());
   }
-  const isMoneyCol = (c) => (doc.numeric || []).includes(c);
+  const isMoneyCol = (c) => (doc.money || []).includes(c);
   if (!spec.groupBy) {
     if (spec.sortBy) {
       const { col, dir } = spec.sortBy, s = dir === 'desc' ? -1 : 1;
@@ -113,8 +116,26 @@ function parsePivot(question, doc) {
   // filter: COL = VALUE / where status won
   let fm; const fre = /\b(?:where|with|only|status)\s+([a-z_ ]+?)\s*(?:=|is|equals)?\s*["']?([a-z0-9_]+)["']?/g;
   while ((fm = fre.exec(q)) !== null) { const c = matchCol(fm[1], cols); if (c) spec.filters.push({ col: c, op: 'eq', val: fm[2] }); }
+  // bare value filter — "total revenue FOR GADGET": "Gadget" is a value, not a
+  // column, so match a question word against the distinct values of a
+  // low-cardinality column and filter to it. Without this, a question naming a
+  // category never narrows the fold. (1d)
+  const taken = new Set(spec.filters.map(f => String(f.val).toLowerCase()));
+  const valIndex = new Map(); // value(lc) -> column
+  for (const c of cols) {
+    if ((doc.numeric || []).includes(c) || (doc.date || []).includes(c)) continue;
+    const vals = new Set((doc.rows || []).map(r => String(r[c] ?? '').trim()).filter(Boolean));
+    if (vals.size && vals.size <= Math.max(30, (doc.rows || []).length * 0.6)) {
+      for (const v of vals) { const k = v.toLowerCase(); if (!valIndex.has(k)) valIndex.set(k, c); }
+    }
+  }
+  for (const w of (q.match(/[a-z0-9][a-z0-9'’\-]*/g) || [])) {
+    if (w.length < 3 || taken.has(w) || matchCol(w, cols)) continue;
+    const col = valIndex.get(w);
+    if (col) { spec.filters.push({ col, op: 'eq', val: w }); taken.add(w); }
+  }
   const empty = !spec.groupBy && !spec.aggregate && !spec.sortBy && !spec.filters.length;
   return { spec, empty };
 }
 
-Object.assign(window, { foldPivot, parsePivot, matchCol, num, fmtMoney, aggregate });
+Object.assign(window, { foldPivot, parsePivot, matchCol, num, fmtMoney, fmtNum, aggregate });

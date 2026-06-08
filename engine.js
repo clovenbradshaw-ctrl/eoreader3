@@ -29,7 +29,13 @@
     + 'again further once more most some any all each few other such own same one two i we you us me my your our '
     + 'said say says tell about above below between through during before after').split(/\s+/));
 
-  const tok = (s) => (String(s).toLowerCase().match(/[a-z0-9][a-z0-9'’-]*/g) || []).filter(t => t.length > 2 && !QA_STOP.has(t));
+  // Possessives are stripped to their root ("edith's" → "edith") so a question
+  // about "Edith's car" matches the document's "edith" token. Without this, the
+  // possessive surface never equals the bare entity token and a question about
+  // the document's own characters misroutes to ungrounded chat. (1a)
+  const tok = (s) => (String(s).toLowerCase().match(/[a-z0-9][a-z0-9'’-]*/g) || [])
+    .map(t => t.replace(/['’]s$/, ''))
+    .filter(t => t.length > 2 && !QA_STOP.has(t));
   const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   /* ============================================================
@@ -822,9 +828,34 @@ function deriveSets(proj, opts = {}) {
   return snap;
 }
 
-  /* Cleon manages reading rules through its own UI/ledger, so the
-     OPFS persistence the standalone tool used is a no-op here. */
-  function scheduleLedgerSave() {}
+  /* Persist the LEARNED part of the rules ledger so the engine's induced
+     reading rules (the speech-verb class and its accrued mass) survive a page
+     reload — learning that compounds across visits, not just across one
+     session. Shipped seed events are excluded (they re-seed at init); only the
+     events a reading actually appended are serialized. The host registers
+     `window.EO_onLedgerChange` to do the storage write; debounced so a long
+     ingest that appends many verb events writes once, not once per token.
+     A no-op anywhere that hook isn't present (e.g. the Node test harness). */
+  let _ledgerSaveTimer = null;
+  function scheduleLedgerSave() {
+    if (typeof window === 'undefined' || typeof window.EO_onLedgerChange !== 'function') return;
+    if (_ledgerSaveTimer) clearTimeout(_ledgerSaveTimer);
+    _ledgerSaveTimer = setTimeout(() => {
+      _ledgerSaveTimer = null;
+      try { window.EO_onLedgerChange(_serializeLedger()); } catch (e) {}
+    }, 600);
+  }
+  // The learned delta beyond the shipped seeds — what's worth persisting.
+  function _serializeLedger() { return RULES_LEDGER.filter(e => !e.shipped).map(e => ({ ...e })); }
+  // Replay persisted learning events into a freshly-seeded ledger, then
+  // re-derive. Re-sequenced under the current ledger so seq stays contiguous;
+  // idempotent enough that a double call only re-appends (callers restore once).
+  function _restoreLedger(events) {
+    if (!Array.isArray(events) || !events.length) return false;
+    for (const ev of events) { const copy = { ...ev }; delete copy.seq; ledgerAppend(copy); }
+    deriveSets(projectRules(RULES_LEDGER, currentFrame()));
+    return true;
+  }
 
   /* Drive the rules fold from load, exactly as the standalone tool does
      (minus loadRulesLedger, which read learned events from OPFS). */
@@ -3366,8 +3397,18 @@ function projectGraph(events, frame = {}) {
       if (tot && dt / tot >= 0.6) date.push(c);
       else if (tot && nu / tot >= 0.8) numeric.push(c);
     }
+    // Money is a SUBSET of numeric: a numeric column is currency only if its
+    // header reads like money or its cells carry a currency symbol. Plain
+    // counts ("Units", "Quantity") must not be rendered as dollars. (1c)
+    const MONEY_HDR = /price|cost|revenue|amount|total|sales|value|spend|budget|salary|wage|\bfee\b|profit|margin|gross|\bnet\b|usd|eur|gbp|cad|aud|dollar|\$|€|£/i;
+    const money = [];
+    for (const c of numeric) {
+      let sym = 0, tot = 0;
+      for (const r of rows) { const v = r[c]; if (v === '' || v == null) continue; tot++; if (/[$€£]/.test(String(v))) sym++; }
+      if (MONEY_HDR.test(c) || (tot && sym / tot >= 0.6)) money.push(c);
+    }
     return { id, kind: 'table', name, meta: rows.length + ' rows · ' + columns.length + ' cols · table',
-             columns, rows, numeric, date };
+             columns, rows, numeric, date, money };
   }
 
   /* ---------- prose: run the real extractor, shape it for the UI ---------- */
@@ -3611,7 +3652,9 @@ function projectGraph(events, frame = {}) {
      just mean the user re-asks more explicitly. */
   function namesEntity(doc, q) {
     if (!doc || doc.kind !== 'prose') return false;
-    const ql = ' ' + String(q).toLowerCase().replace(/[^a-z0-9'’\- ]+/g, ' ') + ' ';
+    // Strip possessive 's first ("edith's" → "edith") so an entity named in a
+    // possessive ("what colour is Edith's car?") still matches the bare name. (1a)
+    const ql = ' ' + String(q).toLowerCase().replace(/['’]s\b/g, '').replace(/[^a-z0-9'’\- ]+/g, ' ') + ' ';
     const { entities } = projectEntities(doc);
     for (const e of entities) {
       const n = String(e.name).toLowerCase();
@@ -3691,19 +3734,43 @@ function projectGraph(events, frame = {}) {
   function answerTable(doc, query) {
     const { spec } = window.parsePivot(query, doc);
     const fold = window.foldPivot(doc, spec);
-    let summary;
+    const filtNote = (spec.filters || []).length
+      ? ' where ' + spec.filters.map(f => `${f.col} = ${f.val}`).join(', ') : '';
+    const rowsN = doc.rows.length;
+    let summary, produced = true;
     if (fold.kind === 'grouped') {
       const isMoney = fold.isMoneyCol(spec.aggregate && spec.aggregate.col);
-      const val = (g) => g.agg.value == null ? g.count : (isMoney ? window.fmtMoney(g.agg.value) : g.agg.value);
+      const val = (g) => g.agg.value == null ? g.count : (isMoney ? window.fmtMoney(g.agg.value) : window.fmtNum(g.agg.value));
       const lead = spec.sortBy ? `**${fold.groups[0] && fold.groups[0].key}** leads with ${val(fold.groups[0])}. ` : '';
-      summary = lead + `Grouped by **${fold.groupBy}**${spec.aggregate ? `, ${spec.aggregate.op}${spec.aggregate.col ? ' of ' + spec.aggregate.col : ''}` : ''}: `
+      summary = lead + `Grouped by **${fold.groupBy}**${spec.aggregate ? `, ${spec.aggregate.op}${spec.aggregate.col ? ' of ' + spec.aggregate.col : ''}` : ''}${filtNote}: `
         + fold.groups.map(g => `${g.key} (${val(g)})`).join(', ') + '.';
+    } else if (spec.aggregate) {
+      // A measure with no grouping → state the scalar figure directly, rather
+      // than reporting a bare row count that never answers the question. (1d)
+      const agg = window.aggregate(fold.rows, spec.aggregate);
+      const label = spec.aggregate.op + (spec.aggregate.col ? ' of ' + spec.aggregate.col : '');
+      if (spec.aggregate.op !== 'count' && agg.value == null) {
+        produced = false;
+        summary = `I couldn’t compute the ${label}${filtNote} — no numeric values matched.`;
+      } else {
+        const isMoney = fold.isMoneyCol(spec.aggregate.col);
+        const shown = spec.aggregate.op === 'count' ? agg.value
+          : (isMoney ? window.fmtMoney(agg.value) : window.fmtNum(agg.value));
+        summary = `**${shown}** — the ${label}${filtNote}, over ${fold.total} of ${rowsN} row${rowsN !== 1 ? 's' : ''}.`;
+      }
+    } else if ((spec.filters || []).length) {
+      summary = `**${fold.total}** of ${rowsN} rows match${filtNote}. The matching rows are laid out alongside.`;
     } else {
-      summary = `${fold.total} of ${doc.rows.length} rows match. The table is laid out alongside.`;
+      produced = false;
+      summary = `${fold.total} of ${rowsN} rows. Ask me to group, total, average, or filter and I’ll fold it.`;
     }
     return {
       text: summary + '\n\nFolded straight from the table — no model touched the numbers. Adjust grouping or measure on the table and it recomputes live.',
-      audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Computed mechanically from ' + doc.name + '.' },
+      // Only claim full coverage when an actual figure was produced; a bare row
+      // listing with no requested measure is not a computed answer. (1d)
+      audit: produced
+        ? { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Computed mechanically from ' + doc.name + '.' }
+        : { status: 'notes', grounded: true, covers: '0/1', stable: true, note: 'No measure to compute — showing the matching rows from ' + doc.name + '.' },
       tableSpec: spec, openSelf: true,
     };
   }
@@ -3772,5 +3839,7 @@ function projectGraph(events, frame = {}) {
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
     // read-only: the induced speech-verb class + accrued mass (learning record)
     _learnedVerbs: learnedVerbs,
+    // persistence: serialize/restore the learned ledger delta (host stores it)
+    _serializeLedger, _restoreLedger,
   };
 })();

@@ -4,7 +4,16 @@
    only phrases them, citations bound mechanically either way.
    ============================================================ */
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
+// Diagnostics flag (§5): set window.EO_DEBUG = true in the console to surface
+// the errors that are otherwise swallowed by resilience catches. Off by default
+// so a normal session stays quiet, but failures become diagnosable on demand.
+if (typeof window !== 'undefined' && window.EO_DEBUG === undefined) window.EO_DEBUG = false;
+const eoWarn = (...a) => { if (typeof window !== 'undefined' && window.EO_DEBUG) console.warn('[Cleon]', ...a); };
+if (typeof window !== 'undefined') window.eoWarn = eoWarn;
 let _uid = 0; const uid = (p) => p + '-' + (++_uid);
+// After restoring persisted docs/chats, advance the uid counter past every
+// restored id so a new upload this session can't collide with a stored one.
+const bumpUid = (ids) => { for (const id of (ids || [])) { const m = String(id).match(/-(\d+)$/); if (m) _uid = Math.max(_uid, parseInt(m[1], 10)); } };
 
 // Which local model to start on. The 0.5B is a fine phone default — small
 // download, runs anywhere — but on a desktop it's too small to phrase well, so
@@ -68,6 +77,12 @@ function App() {
 
   const docsById = useMemo(() => Object.fromEntries(docs.map(d => [d.id, d])), [docs]);
   const docsRef = useRef(docs); docsRef.current = docs;
+  // Local persistence: `hydrated` gates the save effects so the initial empty
+  // state can't overwrite stored data before it's read back; `suppressReparse`
+  // lets hydration set the restored rule toggles without re-parsing the docs we
+  // just restored (which would also double-count the engine's learning).
+  const hydrated = useRef(false);
+  const suppressReparse = useRef(false);
   // Monotonic token so a fresh ingest / rule re-parse supersedes an in-flight
   // one instead of two heavy parses fighting over the heap at once.
   const ingestTok = useRef(0);
@@ -81,6 +96,9 @@ function App() {
     window.EO_RULES = rules;
     if (window.EOEngine && window.EOEngine.applyRules) window.EOEngine.applyRules(rules);
     if (firstRules.current) { firstRules.current = false; return; } // no docs at mount
+    // Hydration restored these toggles; the restored docs already reflect them,
+    // so push the rules to the engine (above) but skip the re-parse. (§3)
+    if (suppressReparse.current) { suppressReparse.current = false; return; }
     // Re-read open docs under the new rules, staged like a fresh ingest and one
     // document at a time, so toggling a rule on a long document doesn't freeze.
     const targets = docsRef.current.filter(d => d._text != null);
@@ -97,13 +115,77 @@ function App() {
             if (tok !== ingestTok.current) return;
             setIngestStatus({ phase: p.phase, stage: p.stage, pct: p.total ? p.done / p.total : null, name: d.name });
           });
-        } catch (e) { continue; }
+        } catch (e) { eoWarn('re-parse failed for', d.name, e); continue; }
         if (tok !== ingestTok.current) break;
         setDocs(ds => ds.map(x => x.id === nd.id ? nd : x));
       }
       if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
     })();
   }, [rules]);
+
+  // ---- local persistence (§3): rehydrate on load, then save on change. ----
+  // Documents, the running chat, rule toggles, UI prefs, and the engine's
+  // induced learning all live on the device so a refresh doesn't wipe the
+  // workspace. Everything is best-effort — storage may be unavailable.
+  useEffect(() => {
+    if (!window.EOStore) { hydrated.current = true; return; }
+    let cancelled = false;
+    // Persist the engine's learned rules-ledger delta whenever it grows.
+    window.EO_onLedgerChange = (events) => { try { window.EOStore.saveLedger(events); } catch (e) {} };
+    (async () => {
+      // Restore learning BEFORE any document is parsed this session, so the
+      // induced reading rules carry over instead of starting cold.
+      try {
+        const led = window.EOStore.loadLedger();
+        if (led.length && window.EOEngine && window.EOEngine._restoreLedger) window.EOEngine._restoreLedger(led);
+      } catch (e) {}
+
+      const prefs = window.EOStore.loadPrefs();
+      if (prefs && !cancelled) {
+        if (Array.isArray(prefs.rules) && prefs.rules.length) {
+          suppressReparse.current = true;
+          setRules(rs => rs.map(r => { const p = prefs.rules.find(x => x.id === r.id); return p ? { ...r, ...p } : r; }));
+        }
+        if (prefs.modelId) { const m = window.MODELS.find(x => x.id === prefs.modelId); if (m) setModel(m); }
+        if (prefs.mode) setMode(prefs.mode);
+        if (typeof prefs.splitRatio === 'number') setSplitRatio(prefs.splitRatio);
+        if (typeof prefs.explore === 'boolean') setExplore(prefs.explore);
+      }
+
+      let savedDocs = [], savedChat = null;
+      try { [savedDocs, savedChat] = await Promise.all([window.EOStore.loadDocs(), window.EOStore.loadChat()]); } catch (e) {}
+      if (cancelled) { hydrated.current = true; return; }
+
+      const docIds = new Set();
+      if (savedDocs.length) { setDocs(savedDocs); savedDocs.forEach(d => docIds.add(d.id)); bumpUid(savedDocs.map(d => d.id)); }
+      if (savedChat) {
+        if (Array.isArray(savedChat.messages)) setMessages(savedChat.messages);
+        if (Array.isArray(savedChat.chats)) { setChats(savedChat.chats); bumpUid(savedChat.chats.map(c => c.id)); }
+        if (savedChat.activeChat) setActiveChat(savedChat.activeChat);
+        // only re-open tabs whose backing document actually came back
+        const tabOK = (id) => id.startsWith('@ent/') ? docIds.has(id.split('/')[1]) : docIds.has(id);
+        if (Array.isArray(savedChat.openTabs)) setOpenTabs(savedChat.openTabs.filter(tabOK));
+        if (savedChat.activeTab && tabOK(savedChat.activeTab)) setActiveTab(savedChat.activeTab);
+      }
+      hydrated.current = true;
+    })();
+    return () => { cancelled = true; window.EO_onLedgerChange = null; };
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated.current || !window.EOStore) return;
+    const t = setTimeout(() => window.EOStore.saveDocs(docs), 450);
+    return () => clearTimeout(t);
+  }, [docs]);
+  useEffect(() => {
+    if (!hydrated.current || !window.EOStore) return;
+    const t = setTimeout(() => window.EOStore.saveChat({ messages, chats, activeChat, openTabs, activeTab }), 450);
+    return () => clearTimeout(t);
+  }, [messages, chats, activeChat, openTabs, activeTab]);
+  useEffect(() => {
+    if (!hydrated.current || !window.EOStore) return;
+    window.EOStore.savePrefs({ rules, modelId: model.id, mode, splitRatio, explore });
+  }, [rules, model, mode, splitRatio, explore]);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2400); };
 
@@ -290,7 +372,13 @@ function App() {
 
   // Plain conversation with the model — multi-turn, no document forced in,
   // no citations. This is the default; it should feel like a simple chat app.
-  const runChat = async (q, history, modeTag, ctx) => {
+  // When a document IS open, the answer carries an explicit "not grounded"
+  // audit so it can never be mistaken for a cited, document-drawn answer —
+  // the app's whole promise is that grounded and ungrounded look different. (1b)
+  const runChat = async (q, history, modeTag, ctx, docOpen) => {
+    const ungroundedAudit = docOpen
+      ? { status: 'plain', grounded: false, note: 'Answered from the model’s general knowledge — not drawn from the open document.' }
+      : null;
     const attempt = (hist, budget) => window.EOLLM.phrase({
       mlcKey: model.mlc, question: q, history: hist, contextText: ctx || '',
       mode: modeTag === 'creative' ? 'creative' : 'chat',
@@ -308,7 +396,7 @@ function App() {
         replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
         full = await attempt(history.slice(-2), 2200);
       }
-      replaceLast({ role: 'assistant', text: full, audit: null, mode: modeTag });
+      replaceLast({ role: 'assistant', text: full, audit: ungroundedAudit, mode: modeTag });
     } catch (e) {
       replaceLast({ role: 'assistant', text: 'I couldn’t finish that one locally — the model likely ran out of memory or context. Try a shorter message, pick a smaller model from the switcher, or ask about an open document and I’ll answer it mechanically.', audit: null });
     }
@@ -376,7 +464,7 @@ function App() {
     // if one is open, otherwise writes freely. Never cited.
     if (mode === 'creative') {
       if (!ready) { replaceLast({ role: 'assistant', text: 'Creative mode needs the local model, which isn’t available here. Grounded answers from a document still work.', audit: null }); setBusy(false); return; }
-      runChat(q, history, 'creative', doc ? window.EOEngine.context(doc, q, 6) : ''); return;
+      runChat(q, history, 'creative', doc ? window.EOEngine.context(doc, q, 6) : '', !!doc); return;
     }
 
     // The one routing decision: is the user referencing the open document?
@@ -390,7 +478,7 @@ function App() {
     }
 
     // plain chat
-    if (ready) { runChat(q, history); return; }
+    if (ready) { runChat(q, history, undefined, '', !!doc); return; }
     replaceLast({ role: 'assistant', text: canLLM
       ? 'The local model isn’t ready yet — give it a moment. Meanwhile, upload a document and I can answer questions about it directly, with citations.'
       : 'This browser can’t run the local model (no WebGPU), so I can’t free-chat here. Upload a document or paste text and I’ll still answer questions about it, with citations.', audit: null });
@@ -464,8 +552,8 @@ function App() {
 
       {isMobile && !collapsed && <div className="sb-backdrop" onClick={() => setCollapsed(true)} />}
 
-      <div className="workspace">
-        <div className="topbar">
+      <main className="workspace" aria-label="Chat workspace">
+        <header className="topbar">
           {collapsed && <button className="tb-btn" onClick={() => setCollapsed(false)} title="Show sidebar"><Icon name="sidebar" size={18} /></button>}
           <div className="tb-title">{chatTitle}{hasTabs && <span className="sub">· {docs.length} document{docs.length > 1 ? 's' : ''}</span>}</div>
           <div className="tb-spacer" />
@@ -477,7 +565,7 @@ function App() {
             </div>
           )}
           <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> {enabledRules} rules on</button>
-        </div>
+        </header>
 
         <div className="body" ref={bodyRef}>
           {showHero ? (
@@ -501,7 +589,7 @@ function App() {
             </React.Fragment>
           )}
         </div>
-      </div>
+      </main>
 
       {rulesOpen && <RulesDrawer rules={rules} onToggle={toggleRule} onInstall={installRule} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
       {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
@@ -531,4 +619,24 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// A single render throw used to blank #root with no recovery; this catches it
+// and offers a reload instead of a white screen. (§5)
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { if (typeof window !== 'undefined' && window.EO_DEBUG) console.error('[Cleon] render error', err, info); }
+  render() {
+    if (this.state.err) {
+      return (
+        <div className="crash" role="alert">
+          <h1>Something went wrong.</h1>
+          <p>Cleon hit an unexpected error while rendering. Your documents and chat are saved locally — reloading usually recovers.</p>
+          <button className="hero-action primary" onClick={() => location.reload()}>Reload</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);

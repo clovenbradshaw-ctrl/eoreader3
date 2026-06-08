@@ -33,7 +33,8 @@ const MODEL_ANSWER =
   'Sefton argued about the boat before the storm broke. ' +
   'The keeper repaired the shutter against the wind.';
 
-const doc = E.parseDocument('big.txt', makeBigDoc(PARAS), 'big');
+async function main() {
+const doc = await E.parseDocument('big.txt', makeBigDoc(PARAS), 'big');
 console.log(`doc: ${doc.sentences.length} sentences · ${PARAS} paragraphs · ${ITERS} iterations`);
 
 // One full turn, exactly as the chat loop drives it.
@@ -65,3 +66,6 @@ console.log(`  median   ${median.toFixed(4)} ms/turn`);
 console.log(`  mean     ${mean.toFixed(4)} ms/turn`);
 console.log(`  p95      ${p95.toFixed(4)} ms/turn`);
 console.log(`  throughput  ${Math.round(1000 / median).toLocaleString()} turns/sec`);
+}
+
+main().catch(e => { console.error(e); process.exit(1); });

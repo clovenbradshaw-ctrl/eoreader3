@@ -8,7 +8,8 @@ function renderAnswer(text, onCite) {
       if (m.index > last) parts.push(renderBold(block.slice(last, m.index), bi + '-' + last));
       if (m[1] === 'cite') {
         const [docId, idx, label] = m[2].split(':');
-        parts.push(<span key={m.index} className="cite" onClick={() => onCite(docId, parseInt(idx, 10))}>{label}</span>);
+        parts.push(<button key={m.index} type="button" className="cite" title={'Jump to ' + label + ' in the document'}
+          onClick={() => onCite(docId, parseInt(idx, 10))}>{label}</button>);
       } else {
         parts.push(<span key={m.index} className="cite void" title="This term appears nowhere in the sources">{m[2]}</span>);
       }
@@ -31,6 +32,21 @@ function renderBold(s, key) {
 
 function AuditBadge({ audit }) {
   if (!audit) return null;
+  // An explicitly ungrounded answer (plain chat while a document is open): show
+  // that it was NOT drawn from the page, so a model answer is never mistaken for
+  // a grounded, cited one. These carry no coverage/stability figures. (1b)
+  if (audit.grounded === false && audit.covers == null) {
+    return (
+      <div>
+        <div className="audit">
+          <span className="audit-chip plain">
+            <span className="seg"><span className="no">–</span>not from the document</span>
+          </span>
+        </div>
+        {audit.note && <div className="audit-note">{audit.note}</div>}
+      </div>
+    );
+  }
   const Seg = ({ ok, children }) => <span className="seg"><span className={ok ? 'ok' : 'no'}>{ok ? '✓' : '–'}</span>{children}</span>;
   const full = audit.covers && audit.covers.split('/')[0] === audit.covers.split('/')[1];
   return (
@@ -66,7 +82,7 @@ function Message({ msg, onCite }) {
           : <React.Fragment>{renderAnswer(msg.text, onCite)}<AuditBadge audit={msg.audit} /></React.Fragment>}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
-            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void):[^}]*\}\}/g, '')); } catch (e) {} }}><Icon name="copy" size={15} /></button>
+            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
             <button title="Good answer"><Icon name="thumbsup" size={15} /></button>
           </div>
         )}
@@ -96,7 +112,7 @@ function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, place
           ))}
         </div>
         <div className="comp-spacer" />
-        <button className="send-btn" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>
+        <button className="send-btn" aria-label="Send message" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>
       </div>
     </div>
   );
