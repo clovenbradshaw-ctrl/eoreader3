@@ -86,6 +86,22 @@
   function count() { return turns.length; }
   function clear() { turns = []; current = null; notify(); }
 
+  /* Seed the ring buffer from a persisted snapshot (host storage restores it on
+     load). Dedupes by id, caps to MAX_TURNS keeping the newest, and bumps the
+     sequence past the highest restored id so freshly-begun turns never collide
+     with a restored 'turn-N'. Safe to call once on startup. */
+  function restore(saved) {
+    if (!Array.isArray(saved) || !saved.length) return turns.length;
+    const have = new Set(turns.map(t => t && t.id));
+    const add = saved.filter(t => t && t.id && !have.has(t.id));
+    turns = [...add, ...turns].slice(-MAX_TURNS);
+    let max = seq;
+    for (const t of turns) { const m = /(\d+)\s*$/.exec(t.id || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); }
+    seq = max;
+    notify();
+    return turns.length;
+  }
+
   function subscribe(fn) {
     if (typeof fn !== 'function') return () => {};
     listeners.add(fn);
@@ -119,7 +135,7 @@
 
   window.EOAudit = {
     SCHEMA, isEnabled, setEnabled, begin, step, set, end,
-    all, count, clear, subscribe, toJSONL, download, publicTurn,
+    all, count, clear, restore, subscribe, toJSONL, download, publicTurn,
     // convenience for llm.js — records the model call as an 'llm' step
     llm: (data) => step('llm', data),
   };

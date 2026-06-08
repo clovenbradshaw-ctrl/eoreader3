@@ -244,6 +244,38 @@ button { font-family: inherit; cursor: pointer; }
 .audit-chip.plain { background: var(--bg); border-color: var(--border); border-style: dashed; color: var(--text-3); }
 .audit-note { font-size: 12px; color: var(--text-3); margin-top: 7px; font-style: italic; }
 
+/* inline "thinking" disclosure — the glass box, narrated, under the answer */
+.think { margin: 1px 0 11px; }
+.think-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: inherit; font-size: 12.5px; color: var(--text-3);
+  background: none; border: none; padding: 3px 0; cursor: pointer; -webkit-appearance: none; appearance: none;
+}
+.think-toggle:hover { color: var(--text-2); }
+.think-ico { color: var(--text-3); flex-shrink: 0; }
+.think.live .think-ico { color: var(--evidence); }
+.think-label { font-weight: 500; }
+.think.live .think-label { animation: think-pulse 1.4s ease-in-out infinite; }
+@keyframes think-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+.think-chev { opacity: .7; transition: transform .15s; }
+.think-chev.open { transform: rotate(180deg); }
+.think-body {
+  margin-top: 7px; padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--border);
+  display: flex; flex-direction: column; gap: 7px;
+}
+.think.live .think-body { border-left-color: var(--evidence-tint-2); }
+.think-line { font-size: 13px; line-height: 1.55; color: var(--text-2); }
+.think-line.draft { color: var(--text-3); }
+.think-lead { display: block; margin-bottom: 4px; }
+.think-quote {
+  font-family: var(--mono); font-size: 11px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--r-xs);
+  padding: 7px 9px; margin: 0; color: var(--text);
+  max-height: 220px; overflow: auto;
+}
+
 .msg-actions { display: flex; gap: 4px; margin-top: 8px; opacity: 0; transition: opacity .15s; }
 .msg-row.asst:hover .msg-actions { opacity: 1; }
 .msg-actions button {
@@ -835,3 +867,41 @@ table.grid .member td:first-child { padding-left: 30px; }
 .aud-msg pre, .aud-out pre, .aud-answer { font-family: var(--mono); font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; margin: 0; color: var(--text); max-height: 280px; overflow: auto; }
 .aud-answer { background: var(--good-bg); border-color: var(--good-bd); }
 .aud-note { margin-top: 5px; font-style: italic; }
+
+/* glass box — Graph explorer tab */
+.graph-view { font-size: 13px; color: var(--text); }
+.graph-meta { display: flex; flex-wrap: wrap; gap: 14px; padding: 2px 0 13px; color: var(--text-3); font-size: 12px; font-family: var(--mono); border-bottom: 1px solid var(--border); margin-bottom: 15px; }
+.graph-meta b { color: var(--text); }
+.graph-sec { margin-bottom: 18px; }
+.graph-sec h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); font-weight: 650; margin: 0 0 9px; }
+.graph-dim { color: var(--text-3); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11.5px; }
+.graph-ents, .graph-edges, .graph-asserts { display: flex; flex-direction: column; gap: 5px; }
+.graph-ent { display: flex; align-items: center; gap: 8px; }
+.graph-tag { font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: var(--r-pill); background: var(--bg-subtle); color: var(--text-3); flex-shrink: 0; }
+.graph-tag.person { background: var(--accent-tint); color: var(--accent); }
+.graph-tag.place { background: var(--good-bg); color: var(--good-fg); }
+.graph-tag.org { background: var(--warn-bg); color: var(--warn-fg); }
+.graph-ent-name { font-weight: 500; }
+.graph-ent-n { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.graph-edge { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.graph-a, .graph-b, .graph-assert b { font-weight: 600; color: var(--text); }
+.graph-verb { font-family: var(--mono); font-size: 11px; color: var(--evidence); background: var(--evidence-tint); border-radius: 5px; padding: 1px 6px; }
+.graph-asserts { color: var(--text-2); }
+.graph-spine { display: flex; flex-wrap: wrap; gap: 4px; font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.graph-proc { margin-top: 6px; border-top: 1px solid var(--border); padding-top: 12px; }
+.graph-proc summary { font-size: 12px; color: var(--text-2); cursor: pointer; font-weight: 500; }
+.graph-events { margin-top: 9px; display: flex; flex-direction: column; gap: 3px; max-height: 320px; overflow: auto; }
+.graph-ev { display: flex; align-items: baseline; gap: 8px; font-family: var(--mono); font-size: 11px; }
+.graph-ev-op { color: var(--accent); font-weight: 600; width: 42px; flex-shrink: 0; }
+.graph-ev-s { color: var(--text-3); width: 32px; flex-shrink: 0; }
+.graph-ev-t { color: var(--text-2); word-break: break-word; min-width: 0; }
+.graph-pick { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--bg); color: var(--text); max-width: 220px; align-self: center; margin-bottom: 6px; }
+
+/* glass box — unified export footer */
+.glass-foot { border-top: 1px solid var(--border); padding: 10px 16px; display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; background: var(--bg-sunken); }
+.glass-toggles { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.glass-foot-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); font-weight: 650; }
+.glass-tog { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+.glass-tog input { accent-color: var(--accent); }
+.glass-dim { color: var(--text-3); font-size: 11px; }
+.glass-foot .drawer-tools { margin-left: auto; padding-bottom: 0; }
