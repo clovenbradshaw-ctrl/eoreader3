@@ -3449,15 +3449,41 @@ function projectGraph(events, frame = {}) {
   }
 
   /* ============================================================ RETRIEVAL */
+  /* The reading engine is the chat's "unconscious": it runs on every turn
+     before the model speaks (route → retrieve → fold/answer → bind). Its
+     dominant recurring cost is re-tokenising the whole document inside
+     retrieve, which fires several times a turn (routing, context, and once
+     per sentence of the model's reply in bindCitations). A sentence's tokens
+     depend only on its text and the fixed QA_STOP, so they are invariant for
+     the document's lifetime — tokenise once at first contact, reuse forever.
+     Keyed by doc identity (WeakMap): a re-parse mints a new doc + fresh
+     cache; replay-phase rule changes never touch sentence text. */
+  const _sentTokCache = new WeakMap();
+  function sentTokSets(doc) {
+    let sets = _sentTokCache.get(doc);
+    if (sets) return sets;
+    sets = doc.sentences.map(s => new Set(tok(s.t)));
+    _sentTokCache.set(doc, sets);
+    return sets;
+  }
+  const _bodyLCCache = new WeakMap();
+  function docBodyLC(doc) {
+    let body = _bodyLCCache.get(doc);
+    if (body === undefined) { body = (doc.sentenceTexts || []).join(' ').toLowerCase(); _bodyLCCache.set(doc, body); }
+    return body;
+  }
   function retrieve(doc, query, k = 6) {
     const qt = new Set(tok(query));
     if (!qt.size) return [];
-    const scored = doc.sentences.map(s => {
-      const st = new Set(tok(s.t));
+    const sets = sentTokSets(doc);
+    const scored = [];
+    const sents = doc.sentences;
+    for (let n = 0; n < sents.length; n++) {
+      const st = sets[n];
       let overlap = 0; for (const t of qt) if (st.has(t)) overlap++;
-      const score = overlap / Math.sqrt(st.size + 1);
-      return { ...s, score, overlap };
-    }).filter(s => s.overlap > 0);
+      if (!overlap) continue;
+      scored.push({ ...sents[n], score: overlap / Math.sqrt(st.size + 1), overlap });
+    }
     scored.sort((a, b) => b.score - a.score || a.i - b.i);
     return scored.slice(0, k);
   }
@@ -3471,12 +3497,12 @@ function projectGraph(events, frame = {}) {
   }
   function voidTerm(doc, query) {
     const caps = query.match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
-    const body = (doc.sentenceTexts || []).join(' ').toLowerCase();
+    const body = docBodyLC(doc);
     for (const c of caps) if (c.length > 2 && !QA_STOP.has(c.toLowerCase()) && !body.includes(c.toLowerCase())) return c;
     return null;
   }
   function inventedTerms(doc, text) {
-    const body = (doc.sentenceTexts || []).join(' ').toLowerCase();
+    const body = docBodyLC(doc);
     const caps = String(text).match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
     const out = [];
     for (const c of caps) {

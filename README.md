@@ -55,6 +55,20 @@ on/off, exported as JSON, and imported — parsing stores only invariants, and t
 entity/prominence views are re-projected from the current rules without a
 re-parse.
 
+## Tests
+
+The app needs no build, but the engine has a Node test harness (dev-only):
+
+```sh
+npm install      # pulls compromise, the engine's POS tagger
+npm test         # behavioural suite + bit-exact golden parity
+npm run bench    # per-turn timing of the mechanical pipeline
+```
+
+`tests/README.md` explains the harness. The suite pins the mechanical contract
+(parse / retrieve / route / answer / void / fold / cite) and the parity check
+guards it against drift, so engine changes can be proven behaviour-preserving.
+
 ## Design notes
 
 `docs/operator-void.md` captures a planned next phase (distinguishing a missing
