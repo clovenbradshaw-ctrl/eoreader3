@@ -77,6 +77,7 @@ function App() {
 
   const docsById = useMemo(() => Object.fromEntries(docs.map(d => [d.id, d])), [docs]);
   const docsRef = useRef(docs); docsRef.current = docs;
+  const flashTimer = useRef(null);
   // Local persistence: `hydrated` gates the save effects so the initial empty
   // state can't overwrite stored data before it's read back; `suppressReparse`
   // lets hydration set the restored rule toggles without re-parsing the docs we
@@ -223,6 +224,15 @@ function App() {
   // between chunks. The work is the same; it's just sliced so memory rises and
   // falls instead of spiking in one synchronous blast. Slower, but it finishes.
   const ingest = async (name, text) => {
+    // Dedupe: the same file (same name + identical content) already loaded →
+    // focus the existing tab instead of adding a second identical copy.
+    const dup = docsRef.current.find(d => d.name === name && d._text === text);
+    if (dup) {
+      setOpenTabs(t => t.includes(dup.id) ? t : [...t, dup.id]);
+      setActiveTab(dup.id);
+      showToast('“' + name + '” is already loaded.');
+      return dup;
+    }
     const id = uid('doc');
     const tok = ++ingestTok.current;
     setBusy(true);
@@ -281,12 +291,25 @@ function App() {
     if (mobileRef.current) { setLayout('doc'); setCollapsed(true); }
     else setLayout(l => l === 'chat' ? 'split' : l);
     setExplore(true);
-    setTimeout(() => {
-      setFlashSent(idx);
+    setFlashSent(idx);
+    // The target tab may have only just mounted, so wait for the node (a few
+    // frames) and bring it to the CENTRE of the doc scroller — geometry via
+    // getBoundingClientRect, correct regardless of offsetParent. (Was a single
+    // 90ms timeout + offsetTop-150, which often fired before paint and left the
+    // cited sentence off-screen.)
+    let tries = 0;
+    const bring = () => {
       const node = document.getElementById('sent-' + docId + '-' + idx);
-      if (node) { const sc = node.closest('.doc-scroll'); if (sc) sc.scrollTo({ top: node.offsetTop - 150, behavior: 'smooth' }); }
-      setTimeout(() => setFlashSent(null), 1900);
-    }, 90);
+      if (!node) { if (tries++ < 20) requestAnimationFrame(bring); return; }
+      const sc = node.closest('.doc-scroll');
+      if (sc) {
+        const top = sc.scrollTop + (node.getBoundingClientRect().top - sc.getBoundingClientRect().top) - (sc.clientHeight - node.clientHeight) / 2;
+        sc.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+      } else node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+    requestAnimationFrame(bring);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashSent(null), 2600);
   }, []);
 
   const onEntity = (name) => {
