@@ -10,8 +10,9 @@ what runs, unprompted, on **every** chat turn beneath the language model
 
 ```sh
 npm install      # pulls compromise (the engine's POS tagger), dev-only
-npm test         # behavioural suite + golden parity check
+npm test         # behavioural suite + learning suite + golden parity check
 npm run bench    # per-turn timing
+npm run demo     # narrated demo of the engine getting smarter over use
 ```
 
 ## What's here
@@ -29,6 +30,35 @@ npm run bench    # per-turn timing
   be proven to change timing only, never an answer. `--update` re-captures.
 - **`bench.js`** — replays a battery of turns against one parsed document (the
   real case: parse once, ask many) and reports median ms/turn and turns/sec.
+- **`learning.test.js`** — 14 assertions that the engine *gets smarter over
+  use* (below).
+- **`demo-learning.js`** — the same behaviour, narrated (`npm run demo`).
+
+## Does it get smarter over use? — yes, and here's how it's tested
+
+The engine ships **no hardcoded speech-verb lexicon**. It *induces* the
+speech-verb class from each document's own typography (the quote-attribution
+slot), admits a verb after **two sightings**, and accrues **mass** (confidence)
+on every confirming sighting. That state lives in a module-level rules ledger,
+so it **carries across documents** in a session. The new `_learnedVerbs()`
+export makes the induced class and its mass observable, and SIG events expose an
+`attributed` field (`named` = clean verb-based attribution vs. `fallback`/`none`).
+
+`learning.test.js` pins this empirically:
+
+- **starts empty** — a fresh engine has induced nothing; a never-seen verb can't
+  be cleanly attributed.
+- **two-sighting admission** — a verb seen once is not admitted; seen twice it is
+  (at mass 2).
+- **cross-document transfer** — a sentence whose speaker can only be recovered by
+  *knowing* the verb (`"…," quemished Mira.`) attributes via a weak positional
+  guess on a **cold** engine, but cleanly (`named`) once the engine has read the
+  verb in a **prior** document. Reading changed how the later text is read.
+- **confidence accrues** — mass grows with confirming use (2 → 5), while a lone
+  single sighting correctly moves it by 0 (the two-sighting guard holds across
+  docs).
+- **rules, never content** — the learned record holds verbs, never the names or
+  prose of the documents.
 
 ## The speed change this verifies
 

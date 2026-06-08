@@ -3682,6 +3682,21 @@ function projectGraph(events, frame = {}) {
     };
   }
 
+  /* What the engine has LEARNED so far: the speech-verb class it induced
+     from the typography of the documents it has read, with each verb's
+     accrued mass (its confidence — +1 per confirming sighting). The
+     attribution_verbs rule starts empty; this grows as documents are read,
+     so it is the legible record of the engine getting smarter over use.
+     Read-only projection over the rules ledger — same fold deriveSets uses. */
+  function learnedVerbs() {
+    const r = projectRules(RULES_LEDGER, currentFrame()).rules.attribution_verbs;
+    const mass = (r && r.tokenMass) || {};
+    return Object.entries(mass)
+      .filter(([, m]) => m > 0)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([verb, m]) => ({ verb, mass: m }));
+  }
+
   /* ============================================================ EXPORT */
   window.EOEngine = {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
@@ -3689,5 +3704,7 @@ function projectGraph(events, frame = {}) {
     applyRules,
     // expose the raw graph engine for future operator-void / shape work
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
+    // read-only: the induced speech-verb class + accrued mass (learning record)
+    _learnedVerbs: learnedVerbs,
   };
 })();
