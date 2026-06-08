@@ -3449,15 +3449,41 @@ function projectGraph(events, frame = {}) {
   }
 
   /* ============================================================ RETRIEVAL */
+  /* The reading engine is the chat's "unconscious": it runs on every turn
+     before the model speaks (route → retrieve → fold/answer → bind). Its
+     dominant recurring cost is re-tokenising the whole document inside
+     retrieve, which fires several times a turn (routing, context, and once
+     per sentence of the model's reply in bindCitations). A sentence's tokens
+     depend only on its text and the fixed QA_STOP, so they are invariant for
+     the document's lifetime — tokenise once at first contact, reuse forever.
+     Keyed by doc identity (WeakMap): a re-parse mints a new doc + fresh
+     cache; replay-phase rule changes never touch sentence text. */
+  const _sentTokCache = new WeakMap();
+  function sentTokSets(doc) {
+    let sets = _sentTokCache.get(doc);
+    if (sets) return sets;
+    sets = doc.sentences.map(s => new Set(tok(s.t)));
+    _sentTokCache.set(doc, sets);
+    return sets;
+  }
+  const _bodyLCCache = new WeakMap();
+  function docBodyLC(doc) {
+    let body = _bodyLCCache.get(doc);
+    if (body === undefined) { body = (doc.sentenceTexts || []).join(' ').toLowerCase(); _bodyLCCache.set(doc, body); }
+    return body;
+  }
   function retrieve(doc, query, k = 6) {
     const qt = new Set(tok(query));
     if (!qt.size) return [];
-    const scored = doc.sentences.map(s => {
-      const st = new Set(tok(s.t));
+    const sets = sentTokSets(doc);
+    const scored = [];
+    const sents = doc.sentences;
+    for (let n = 0; n < sents.length; n++) {
+      const st = sets[n];
       let overlap = 0; for (const t of qt) if (st.has(t)) overlap++;
-      const score = overlap / Math.sqrt(st.size + 1);
-      return { ...s, score, overlap };
-    }).filter(s => s.overlap > 0);
+      if (!overlap) continue;
+      scored.push({ ...sents[n], score: overlap / Math.sqrt(st.size + 1), overlap });
+    }
     scored.sort((a, b) => b.score - a.score || a.i - b.i);
     return scored.slice(0, k);
   }
@@ -3471,12 +3497,12 @@ function projectGraph(events, frame = {}) {
   }
   function voidTerm(doc, query) {
     const caps = query.match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
-    const body = (doc.sentenceTexts || []).join(' ').toLowerCase();
+    const body = docBodyLC(doc);
     for (const c of caps) if (c.length > 2 && !QA_STOP.has(c.toLowerCase()) && !body.includes(c.toLowerCase())) return c;
     return null;
   }
   function inventedTerms(doc, text) {
-    const body = (doc.sentenceTexts || []).join(' ').toLowerCase();
+    const body = docBodyLC(doc);
     const caps = String(text).match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
     const out = [];
     for (const c of caps) {
@@ -3656,6 +3682,21 @@ function projectGraph(events, frame = {}) {
     };
   }
 
+  /* What the engine has LEARNED so far: the speech-verb class it induced
+     from the typography of the documents it has read, with each verb's
+     accrued mass (its confidence — +1 per confirming sighting). The
+     attribution_verbs rule starts empty; this grows as documents are read,
+     so it is the legible record of the engine getting smarter over use.
+     Read-only projection over the rules ledger — same fold deriveSets uses. */
+  function learnedVerbs() {
+    const r = projectRules(RULES_LEDGER, currentFrame()).rules.attribution_verbs;
+    const mass = (r && r.tokenMass) || {};
+    return Object.entries(mass)
+      .filter(([, m]) => m > 0)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([verb, m]) => ({ verb, mass: m }));
+  }
+
   /* ============================================================ EXPORT */
   window.EOEngine = {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
@@ -3663,5 +3704,7 @@ function projectGraph(events, frame = {}) {
     applyRules,
     // expose the raw graph engine for future operator-void / shape work
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
+    // read-only: the induced speech-verb class + accrued mass (learning record)
+    _learnedVerbs: learnedVerbs,
   };
 })();
