@@ -62,6 +62,12 @@ function AuditStep({ s }) {
       ))}
     </Line>
   );
+  if (s.t === 'escalate') return (
+    <Line label="escalate" kind="retrieve">
+      <span className="aud-dim">{s.reason} · {s.reader} · {s.found} hit{s.found !== 1 ? 's' : ''}</span>
+      {' '}{s.recovered ? <b>recovered</b> : <span className="aud-dim">→ chat</span>}
+    </Line>
+  );
   if (s.t === 'llm') return (
     <div className="aud-step">
       <span className="aud-st llm">llm</span>

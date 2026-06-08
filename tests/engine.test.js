@@ -286,6 +286,39 @@ group('bindCitations — mechanical binding', () => {
   ok(!bad.audit.grounded, 'an unsupported answer is NOT marked grounded');
 });
 
+// Cost-ordered router + hybrid recall: the conversation layer obeying the same
+// cheap-reader-first law the entity layer does. routeTurn is sync; retrieveHybrid
+// is async and, with no window.EOEmbed in the Node harness, MUST degrade to a
+// pure-lexical result identical to retrieveScope (so golden parity is untouched).
+const hyb = await E.retrieveHybrid([voss], 'boat to the mainland', 6);
+const hybMiss = await E.retrieveHybrid([voss], 'zzzqqq nonsense token', 6);
+group('routing — cost-ordered bands (existence → structure → significance)', () => {
+  const band = (q, docs) => E.routeTurn(docs || [voss], q, {});
+  // SIGNIFICANCE — who/summary always belong to the source (graph portrait answers).
+  eq(band('who is in this story').reason, 'who', 'who → mechanical (significance)');
+  eq(band('summarize this').decision, 'mechanical', 'summary → mechanical (significance)');
+  // STRUCTURE — strong lexical overlap answers now; it is never bypassed for the model.
+  eq(band('what did the keeper say about the boat').reason, 'strong-lexical', 'strong overlap → mechanical');
+  // STRUCTURE (entity) — a named figure locks to the page before lexical scoring.
+  eq(band('what did Edith do').reason, 'names-entity', 'a named entity → mechanical');
+  // STRUCTURE (table) — a parseable pivot is an exact lock.
+  eq(band('total value by agent', [deals]).reason, 'pivot', 'a pivotable table query → mechanical');
+  // EXISTENCE floor — an absent proper noun stays doc-directed (resolves to the void).
+  eq(band('What did Zorthax say?').reason, 'antimatter-void', 'an absent name → void, not chat');
+  // The ambiguous middle — a doc-directed question with no lexical signal escalates,
+  // which is exactly where embedding recall earns its keep.
+  eq(band('what colour is the automobile').decision, 'escalate', 'paraphrase miss → escalate band');
+  // No signal at all → ordinary conversation; the model never had to decide routing.
+  eq(band('tell me a joke').decision, 'chat', 'chit-chat → chat');
+  eq(E.routeTurn([], 'anything', {}).decision, 'chat', 'no scope → chat');
+  // HYBRID degradation (pre-computed above): no embedder ⇒ pure lexical, no throw.
+  eq(hyb.reader, 'lexical', 'retrieveHybrid degrades to lexical with no embedder');
+  ok(hyb.hits.length > 0, 'lexical hits still returned on a real overlap');
+  eq(hybMiss.reader, 'lexical', 'a miss with no embedder stays lexical (no throw)');
+  eq(hybMiss.hits.length, 0, 'a true miss returns no hits');
+  ok(/^\[s\d+\] /.test(E.contextFromHits([voss], hyb.hits.slice(0, 1))), 'contextFromHits tags a single-doc span [sN]');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }
