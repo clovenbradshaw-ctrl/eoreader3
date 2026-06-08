@@ -189,15 +189,25 @@ function RulesDrawer({ rules, onToggle, onInstall, onImport, onClose, onToast })
 
 /* ============================================================ Model popover */
 function ModelPopover({ models, current, onPick, onClose, anchor, status, progress }) {
+  const ref = React.useRef(null);
   React.useEffect(() => {
-    const h = () => onClose();
-    window.addEventListener('click', h);
-    return () => window.removeEventListener('click', h);
+    // Close only on a genuine outside press. A containment check on mousedown
+    // (instead of a bare window 'click' → onClose) means a press on a model
+    // row can never be mistaken for an "outside" click — that race was why
+    // picking a different model sometimes did nothing. The trigger chip is
+    // exempt so it still toggles the popover shut.
+    const h = (e) => {
+      if (ref.current && ref.current.contains(e.target)) return;
+      if (e.target.closest && e.target.closest('[data-model-trigger]')) return;
+      onClose();
+    };
+    const id = setTimeout(() => document.addEventListener('mousedown', h), 0);
+    return () => { clearTimeout(id); document.removeEventListener('mousedown', h); };
   }, []);
   const style = anchor ? { left: anchor.left, bottom: anchor.bottom } : { left: 16, bottom: 60 };
   const pct = Math.round((progress || 0) * 100);
   return (
-    <div className="popover" style={style} onClick={e => e.stopPropagation()}>
+    <div className="popover" ref={ref} style={style}>
       <div className="ph">Local model · runs on your GPU</div>
       {models.map(m => {
         const isCur = m.id === current.id;

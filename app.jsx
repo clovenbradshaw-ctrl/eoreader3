@@ -6,6 +6,26 @@
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 let _uid = 0; const uid = (p) => p + '-' + (++_uid);
 
+// Which local model to start on. The 0.5B is a fine phone default — small
+// download, runs anywhere — but on a desktop it's too small to phrase well, so
+// default desktops to the 1.5B "balanced" model. Either can be switched live
+// from the picker; switching now releases the old model before loading the new.
+const defaultModel = () => {
+  const by = (id) => window.MODELS.find(m => m.id === id);
+  const phone = typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches;
+  return (phone ? by('qwen-05') : by('qwen-15')) || window.MODELS[0];
+};
+
+// Human-readable label for an ingest phase. The phases are the medium's own
+// ontology: existence (the text and its sentences come to be) → structure (the
+// reading that relates them) → significance (projecting what matters).
+const INGEST_LABEL = {
+  loading: 'Loading into memory',
+  segmenting: 'Splitting into sentences',
+  reading: 'Reading the structure',
+  projecting: 'Weighing what matters',
+};
+
 function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [docs, setDocs] = useState([]);
@@ -18,10 +38,12 @@ function App() {
 
   const [rules, setRules] = useState(window.RULESETS.map(r => ({ ...r })));
   const [rulesOpen, setRulesOpen] = useState(false);
-  const [model, setModel] = useState(window.MODELS[0]);
+  const [model, setModel] = useState(defaultModel);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
   const [modelProgress, setModelProgress] = useState(0);
+  // Staged-ingest progress: null when idle, else { phase, stage, pct, name }.
+  const [ingestStatus, setIngestStatus] = useState(null);
 
   const [openTabs, setOpenTabs] = useState([]);
   const [activeTab, setActiveTab] = useState(null);
@@ -45,6 +67,10 @@ function App() {
   const dragCount = useRef(0);
 
   const docsById = useMemo(() => Object.fromEntries(docs.map(d => [d.id, d])), [docs]);
+  const docsRef = useRef(docs); docsRef.current = docs;
+  // Monotonic token so a fresh ingest / rule re-parse supersedes an in-flight
+  // one instead of two heavy parses fighting over the heap at once.
+  const ingestTok = useRef(0);
 
   // Push rule changes into the engine, then re-parse open docs so
   // extraction-phase rules (δ, two-sighting, the anaphora discount and
@@ -55,9 +81,28 @@ function App() {
     window.EO_RULES = rules;
     if (window.EOEngine && window.EOEngine.applyRules) window.EOEngine.applyRules(rules);
     if (firstRules.current) { firstRules.current = false; return; } // no docs at mount
-    setDocs(ds => ds.map(d => (d._text != null
-      ? window.EOEngine.parseDocument(d._name || d.name, d._text, d.id)
-      : d)));
+    // Re-read open docs under the new rules, staged like a fresh ingest and one
+    // document at a time, so toggling a rule on a long document doesn't freeze.
+    const targets = docsRef.current.filter(d => d._text != null);
+    if (!targets.length) return;
+    const tok = ++ingestTok.current;
+    (async () => {
+      setBusy(true);
+      for (const d of targets) {
+        if (tok !== ingestTok.current) break;          // superseded by a newer parse
+        setIngestStatus({ phase: 'structure', stage: 'reading', pct: 0, name: d.name });
+        let nd;
+        try {
+          nd = await window.EOEngine.parseDocument(d._name || d.name, d._text, d.id, (p) => {
+            if (tok !== ingestTok.current) return;
+            setIngestStatus({ phase: p.phase, stage: p.stage, pct: p.total ? p.done / p.total : null, name: d.name });
+          });
+        } catch (e) { continue; }
+        if (tok !== ingestTok.current) break;
+        setDocs(ds => ds.map(x => x.id === nd.id ? nd : x));
+      }
+      if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+    })();
   }, [rules]);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2400); };
@@ -91,11 +136,29 @@ function App() {
   };
 
   // ---- ingest ----
-  const ingest = (name, text) => {
+  // Staged so a long document can't crash the tab: existence (load → segment)
+  // → structure (read) → significance (project), each phase reported and yielded
+  // between chunks. The work is the same; it's just sliced so memory rises and
+  // falls instead of spiking in one synchronous blast. Slower, but it finishes.
+  const ingest = async (name, text) => {
     const id = uid('doc');
+    const tok = ++ingestTok.current;
+    setBusy(true);
+    setIngestStatus({ phase: 'existence', stage: 'loading', pct: 0, name });
     let doc;
-    try { doc = window.EOEngine.parseDocument(name, text, id); }
-    catch (e) { showToast('Could not read that file.'); return null; }
+    try {
+      doc = await window.EOEngine.parseDocument(name, text, id, (p) => {
+        if (tok !== ingestTok.current) return;          // superseded — stop reporting
+        const pct = p.total ? p.done / p.total : null;
+        setIngestStatus({ phase: p.phase, stage: p.stage, pct, name });
+      });
+    } catch (e) {
+      if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+      showToast('Could not read that file.'); return null;
+    }
+    // Always commit a new document — the user explicitly added it and nothing
+    // else will reproduce it. Only the banner / busy flag belong to whichever
+    // parse is newest, so a rule re-read that started meanwhile owns the UI.
     setDocs(ds => [...ds, doc]);
     setOpenTabs(t => [...t, id]); setActiveTab(id);
     // on a phone stay in chat after upload so the composer is right there;
@@ -104,11 +167,26 @@ function App() {
     if (doc.kind === 'prose') setExplore(true);
     setTableSpec(null);
     showToast('Added “' + name + '” · ' + doc.meta);
+    if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
     return doc;
   };
-  const handleFiles = (fileList) => {
+  // Read files into memory ONE AT A TIME, then ingest. Serial on purpose: two
+  // big files decoding + parsing at once is exactly the memory spike we're
+  // trying to avoid. The FileReader step is the literal "load into memory" stage.
+  const handleFiles = async (fileList) => {
     const files = [...fileList];
-    files.forEach(f => { const r = new FileReader(); r.onload = () => ingest(f.name, String(r.result)); r.readAsText(f); });
+    for (const f of files) {
+      let text;
+      try {
+        text = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result));
+          r.onerror = () => rej(r.error || new Error('read failed'));
+          r.readAsText(f);
+        });
+      } catch (e) { showToast('Could not read “' + f.name + '”.'); continue; }
+      await ingest(f.name, text);
+    }
   };
   const onExample = (ex) => ingest(ex.name, ex.text);
 
@@ -212,15 +290,27 @@ function App() {
   // Plain conversation with the model — multi-turn, no document forced in,
   // no citations. This is the default; it should feel like a simple chat app.
   const runChat = async (q, history, modeTag, ctx) => {
+    const attempt = (hist, budget) => window.EOLLM.phrase({
+      mlcKey: model.mlc, question: q, history: hist, contextText: ctx || '',
+      mode: modeTag === 'creative' ? 'creative' : 'chat',
+      grounded: false, budget, onToken: streamInto({ mode: modeTag }),
+    });
     try {
       replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
-      const full = await window.EOLLM.phrase({
-        mlcKey: model.mlc, question: q, history, contextText: ctx || '',
-        mode: modeTag === 'creative' ? 'creative' : 'chat',
-        grounded: false, onToken: streamInto({ mode: modeTag }),
-      });
+      let full;
+      try {
+        full = await attempt(history, undefined);
+      } catch (e1) {
+        // Most local-model failures mid-session are context / VRAM pressure,
+        // not bad input. Retry once with just the last couple of turns and a
+        // tight budget before giving up — recovers the common case silently.
+        replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
+        full = await attempt(history.slice(-2), 2200);
+      }
       replaceLast({ role: 'assistant', text: full, audit: null, mode: modeTag });
-    } catch (e) { replaceLast({ role: 'assistant', text: 'The local model hit an error. Give it a moment and try again.', audit: null }); }
+    } catch (e) {
+      replaceLast({ role: 'assistant', text: 'I couldn’t finish that one locally — the model likely ran out of memory or context. Try a shorter message, pick a smaller model from the switcher, or ask about an open document and I’ll answer it mechanically.', audit: null });
+    }
     setBusy(false);
   };
 
@@ -420,6 +510,21 @@ function App() {
           onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />
       ) : null; })()}
       {dragOver && <div className="drop-veil"><div className="drop-card"><Icon name="upload" size={26} /> Drop to read</div></div>}
+      {ingestStatus && (
+        <div className="ingest-banner">
+          <span className="ib-spin" />
+          <div className="ib-main">
+            <div className="ib-head">
+              <span className="ib-phase">{ingestStatus.phase}</span>
+              <span className="ib-stage">{INGEST_LABEL[ingestStatus.stage] || ingestStatus.stage}</span>
+              {ingestStatus.name && <span className="ib-name">· {ingestStatus.name}</span>}
+              {ingestStatus.pct != null && <b className="ib-pct">{Math.round(ingestStatus.pct * 100)}%</b>}
+            </div>
+            <div className="ib-bar"><div className={'ib-fill' + (ingestStatus.pct == null ? ' indet' : '')}
+              style={ingestStatus.pct != null ? { width: Math.round(ingestStatus.pct * 100) + '%' } : undefined} /></div>
+          </div>
+        </div>
+      )}
       {toast && <div className="toast"><span className="tk"><Icon name="check" size={15} /></span>{toast}</div>}
     </div>
   );
