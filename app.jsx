@@ -454,6 +454,10 @@ function App() {
   // downloading right away on phones too rather than waiting for the first turn.
   useEffect(() => {
     if (window.EOLLM && window.EOLLM.hasWebGPU()) loadModel(model);
+    // Warm the structure-layer embedding reader in the background so the first
+    // escalation isn't also paying the (one-time, cached) model download. Inert
+    // if embed.js is absent or the model fails to load — routing stays lexical.
+    try { if (window.EOEmbed && window.EOEmbed.warm) window.EOEmbed.warm(); } catch (e) {}
   }, []);
 
   // ---- responsive: collapse the sidebar to an off-canvas drawer on phones and
