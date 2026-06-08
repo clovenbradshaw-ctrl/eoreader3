@@ -127,6 +127,19 @@ button { font-family: inherit; cursor: pointer; }
 .sb-item .tl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-item .tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .sb-item .meta { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+.sb-item .count { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
+.sb-label .sb-mini { border: 0; background: none; cursor: pointer; color: var(--text-3); padding: 1px; border-radius: 4px; display: inline-flex; }
+.sb-label .sb-mini:hover { color: var(--accent); background: var(--accent-tint); }
+.sb-item .sb-x, .sb-item .sb-src {
+  border: 0; background: none; cursor: pointer; color: var(--text-3); padding: 1px; border-radius: 4px;
+  display: none; align-items: center; flex-shrink: 0;
+}
+.sb-item:hover .sb-x, .sb-item:hover .sb-src { display: inline-flex; }
+.sb-item .sb-x:hover { color: #c0392b; background: var(--bg-sunken); }
+.sb-item .sb-src.on { display: inline-flex; color: var(--accent); }
+.sb-item .sb-src:hover { background: var(--accent-tint); color: var(--accent); }
+.sb-link { background: none; border: 0; cursor: pointer; color: var(--accent); font-size: 12px; padding: 4px 8px; text-align: left; }
+.sb-link:hover { text-decoration: underline; }
 
 .sb-foot { border-top: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .sb-foot-row {
@@ -225,6 +238,9 @@ button { font-family: inherit; cursor: pointer; }
 .audit-chip.clean { background: var(--good-bg); border-color: var(--good-bd); }
 .audit-chip.notes { background: var(--warn-bg); border-color: var(--warn-bd); }
 .audit-chip.warn  { background: var(--bad-bg);  border-color: var(--bad-bd); }
+/* held: related lines were found but don't cover the question — shown and cited,
+   but explicitly NOT grounded. Amber like notes, dashed to read as "partial". */
+.audit-chip.held  { background: var(--warn-bg); border-color: var(--warn-bd); border-style: dashed; }
 .audit-chip.plain { background: var(--bg); border-color: var(--border); border-style: dashed; color: var(--text-3); }
 .audit-note { font-size: 12px; color: var(--text-3); margin-top: 7px; font-style: italic; }
 
@@ -257,6 +273,33 @@ button { font-family: inherit; cursor: pointer; }
 }
 .composer textarea:focus { outline: none; }
 .composer textarea::placeholder { color: var(--text-3); }
+/* source chips — the conversation's explicit grounding set */
+.source-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 9px 10px 2px; }
+.src-label { font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); margin-right: 2px; }
+.src-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+  padding: 3px 6px 3px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-sunken); font-size: 12px; color: var(--text-2);
+}
+.src-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); flex: none; }
+.src-dot.table { background: #2f9e6b; }
+.src-chip.table .src-dot { background: #2f9e6b; }
+.src-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-x { border: 0; background: none; cursor: pointer; color: var(--text-3); font-size: 15px; line-height: 1; padding: 0 1px; border-radius: 4px; }
+.src-x:hover { color: var(--text); background: var(--border); }
+.src-add { position: relative; display: inline-flex; }
+.src-chip.add { cursor: pointer; color: var(--accent); border-style: dashed; background: transparent; }
+.src-chip.add:hover { background: var(--accent-tint); }
+.src-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; min-width: 200px; max-height: 260px; overflow-y: auto;
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r); box-shadow: var(--sh);
+  padding: 4px;
+}
+.src-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; cursor: pointer;
+  padding: 7px 9px; border-radius: var(--r-sm); font-size: 13px; color: var(--text);
+}
+.src-menu button:hover { background: var(--bg-sunken); }
 .composer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; }
 .comp-btn {
   display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 11px;
@@ -348,7 +391,13 @@ button { font-family: inherit; cursor: pointer; }
 .prose .doc-h2 { font-family: var(--sans); font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); margin: 30px 0 12px; }
 .prose .doc-p { font-family: var(--serif); font-size: 17.5px; line-height: 1.75; color: #26282d; margin: 0 0 18px; }
 .prose .sent { transition: background .2s; border-radius: 3px; padding: 0 1px; }
-.prose .sent.flash { background: var(--evidence-tint-2); box-shadow: 0 0 0 4px var(--evidence-tint-2); }
+/* highlight a jumped-to citation, then fade — long enough to find after a
+   smooth scroll, matched to the flashSent clear in flashCitation. */
+.prose .sent.flash { animation: cite-flash 2.6s ease-out; }
+@keyframes cite-flash {
+  0%, 55% { background: var(--evidence-tint-2); box-shadow: 0 0 0 4px var(--evidence-tint-2); }
+  100% { background: transparent; box-shadow: 0 0 0 4px transparent; }
+}
 .prose .sidx { font-family: var(--mono); font-size: 10px; color: var(--evidence); opacity: .55; margin-right: 5px; vertical-align: 2px; cursor: pointer; user-select: none; }
 .prose .sidx:hover { opacity: 1; text-decoration: underline; }
 .prose .ent { border-bottom: 1.5px solid transparent; cursor: pointer; transition: background .12s; border-radius: 3px; }

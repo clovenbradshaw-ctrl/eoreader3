@@ -227,13 +227,13 @@
   "hasGround:What did Zorthax say?": true,
   "context:What did Zorthax say?": "",
   "answer:What did Zorthax say?": {
-   "text": "“Zorthax” appears nowhere in this document {{void:[⊥]}}. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.",
+   "text": "{{void:Zorthax}} appears nowhere in this document. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.",
    "audit": {
     "status": "warn",
     "grounded": true,
     "covers": "0/1",
     "stable": true,
-    "note": "A term named in the question is absent — resolved to the one void."
+    "note": "Anti-matter referent — named in the question, absent from the page."
    },
    "cites": null
   },
@@ -740,13 +740,13 @@
   "hasGround:What did Zorthax say?": true,
   "context:What did Zorthax say?": "",
   "answer:What did Zorthax say?": {
-   "text": "“Zorthax” appears nowhere in this document {{void:[⊥]}}. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.",
+   "text": "{{void:Zorthax}} appears nowhere in this document. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.",
    "audit": {
     "status": "warn",
     "grounded": true,
     "covers": "0/1",
     "stable": true,
-    "note": "A term named in the question is absent — resolved to the one void."
+    "note": "Anti-matter referent — named in the question, absent from the page."
    },
    "cites": null
   },

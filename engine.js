@@ -282,6 +282,11 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Titles of rank or address. Sharing a title alone is not identity — Prince Andrew ≠ Prince Bagratión.',
   },
+  sentence_abbreviations: {
+    value: ['mr','mrs','ms','mx','dr','prof','rev','fr','hon','capt','col','gen','sgt','cpl','lt','sr','jr','st','mt','messrs','mlle','mme'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Abbreviations whose trailing period does NOT end a sentence (a title before a name: "Dr." , "Mr."). The segmenter rejoins a sentence cut after one of these so a citation never lands mid-name. Lives here in the ruliad — extend, export, or disable it like any reading rule — rather than being hardcoded in the segmenter. Short forms only (never sentence-final); the full words live in title_tokens.',
+  },
   function_words: {
     value: ['own','much','many','few','less','every','another','other','both','either','neither','several','various'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -291,6 +296,11 @@ const READING_RULES = {
     value: ['he','she','it','they','him','her','them','his','hers','its','their','theirs','this','that','these','those','who','whom','i','we','you','us','me'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Pronouns. Bind by type/momentum (working memory), not by shared substantive tokens.',
+  },
+  anaphor_pronouns: {
+    value: ['he','she','it','they','him','her','them','his','hers','its','their','theirs'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Third-person personal pronouns — the anaphors that carry a topic across turns. Routing reads this class for conversation continuity: a follow-up like "tell me more about it" continues the previous grounded turn. Excludes first/second person (I, you, we) and the demonstratives this/that (which dominate gratitude — "that helps"), so continuity never drags chit-chat onto the page.',
   },
   person_pronouns: {
     value: ['he','she','him','her','his','hers','who','whom'],
@@ -482,7 +492,8 @@ function getAttribVerbs() {
 }
 let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     MALE_PRONOUNS, FEMALE_TITLES, MALE_TITLES, CLITIC_SUFFIXES, ADVERB_HEADS,
-    NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST;
+    NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS,
+    ANAPHOR_PRONOUNS;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -490,6 +501,7 @@ function rebuildLangSets() {
     ...mod_values('function_words'),
   ]);
   PRONOUNS = new Set(mod_values('pronouns'));
+  ANAPHOR_PRONOUNS = new Set(mod_values('anaphor_pronouns'));
   PERSON_PRONOUNS = new Set(mod_values('person_pronouns'));
   NONPERSON_PRONOUNS = new Set(mod_values('nonperson_pronouns'));
   FEMALE_PRONOUNS = new Set(mod_values('female_pronouns'));
@@ -502,6 +514,7 @@ function rebuildLangSets() {
   PREP_LEAD_DISQUALIFY = new Set(mod_values('prep_lead_disqualify'));
   ARTICLES = new Set(mod_values('articles'));
   ATTRIB_VERB_LIST = getAttribVerbs().join('|');
+  ABBREVIATIONS = new Set(mod_values('sentence_abbreviations'));
 }
 // Apply a language pack: write its detectors into the rules with
 // provenance, register the module, rebuild the lexical sets. English
@@ -1002,6 +1015,12 @@ function cleanEntitySurface(surf) {
       return null;
     }
   }
+  // All-caps multi-word surfaces are headers / section labels ("SECOND WIFE",
+  // "PART ONE"), not names; spaced one/two-letter tokens ("I N") are OCR noise.
+  // A single all-caps token may be a real acronym, so only the multi-word case.
+  const _letters = s.replace(/[^\p{L}]/gu, '');
+  if (words.length > 1 && _letters.length > 1 && _letters === _letters.toUpperCase() && _letters !== _letters.toLowerCase()) return null;
+  if (words.length > 1 && words.every(w => w.replace(/[^\p{L}]/gu, '').length <= 2)) return null;
   // Reject if reduced to nothing or a stopword
   if (!s) return null;
   if (STOP.has(s.toLowerCase())) return null;
@@ -1295,7 +1314,22 @@ async function extractEoGraph(text, onProgress) {
         if (q) paraDocs.push(nlp(q));
       }
     } else {
-      nlp(p).sentences().forEach(s => paraDocs.push(s));
+      // English split, then rejoin a sentence the segmenter cut after an
+      // abbreviation: a known title (lexicon in the ruliad, not hardcoded here)
+      // or any "Abbr." immediately before a number ("No. 12", "Fig. 3"). Keeps a
+      // citation from ever landing mid-name. No-op when nothing merges, so a
+      // title-free document segments exactly as before.
+      const subs = []; nlp(p).sentences().forEach(s => subs.push(s));
+      for (let k = 0; k < subs.length; k++) {
+        let txt = subs[k].text(), merged = false;
+        while (k + 1 < subs.length) {
+          const tail = txt.match(/(?:^|[\s(“"‘])(\p{L}+)\.\s*$/u);
+          const nextIsNum = /^\s*\d/.test(subs[k + 1].text());
+          if (tail && (ABBREVIATIONS.has(tail[1].toLowerCase()) || nextIsNum)) { txt += ' ' + subs[++k].text(); merged = true; }
+          else break;
+        }
+        paraDocs.push(merged ? nlp(txt) : subs[k]);
+      }
     }
     for (const s of paraDocs) { sentenceDocs.push(s); sentParaSolo.push(paraDocs.length === 1); }
     if (onProgress && performance.now() - _segClock > 24) {
@@ -3602,12 +3636,31 @@ function projectGraph(events, frame = {}) {
     const hit = qt.filter(t => st.has(t)).length;
     return { n: hit, d: qt.length };
   }
-  function voidTerm(doc, query) {
-    const caps = query.match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
+  // ── Anti-matter referents ───────────────────────────────────────────────
+  // A REFERENT is a name the query points at. It has MATTER when the page
+  // carries it, and ANTI-MATTER when it doesn't: referenced, but with no
+  // presence to bind to. Contact with an anti-matter referent annihilates
+  // grounding — it is the ⊥ the void holds on. Consecutive capitals read as one
+  // referent ("Amos Dresser"); interrogatives/stopwords (in QA_STOP) are not
+  // names. Returns { matter, antimatter } so a hold can say what it CAN see.
+  function referents(doc, query) {
     const body = docBodyLC(doc);
-    for (const c of caps) if (c.length > 2 && !QA_STOP.has(c.toLowerCase()) && !body.includes(c.toLowerCase())) return c;
-    return null;
+    const names = String(query).match(/\p{Lu}[\p{L}’'\-]+(?:\s+\p{Lu}[\p{L}’'\-]+)*/gu) || [];
+    const matter = [], antimatter = [];
+    for (const raw of names) {
+      // a sentence-initial interrogative ("Did Caesar…") is capitalised but is
+      // not part of the name — trim stopwords off both ends before deciding.
+      const parts = raw.split(/\s+/);
+      while (parts.length && QA_STOP.has(parts[0].toLowerCase())) parts.shift();
+      while (parts.length && QA_STOP.has(parts[parts.length - 1].toLowerCase())) parts.pop();
+      const sig = parts.filter(t => t.length > 2 && !QA_STOP.has(t.toLowerCase()));
+      if (!sig.length) continue;
+      (sig.some(t => body.includes(t.toLowerCase())) ? matter : antimatter).push(parts.join(' '));
+    }
+    return { matter, antimatter };
   }
+  // the first anti-matter referent (or null) — what the void holds on
+  function voidTerm(doc, query) { return referents(doc, query).antimatter[0] || null; }
   function inventedTerms(doc, text) {
     const body = docBodyLC(doc);
     const caps = String(text).match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
@@ -3664,25 +3717,41 @@ function projectGraph(events, frame = {}) {
     }
     return false;
   }
-  function referencesDoc(doc, q) {
+  // Conversation continuity (mechanical, ruliad-driven). A turn that resolves to
+  // no subject of its own still belongs to the page when it CONTINUES the prior
+  // grounded turn: it carries an anaphor — a pronoun drawn from the ruliad's
+  // anaphor_pronouns class, not a hand-written list — and names no new, off-page
+  // entity that would pull the topic elsewhere. "tell me more about it", "and
+  // what about her?". Inert unless the caller supplies ctx.prevGrounded, so batch
+  // callers (parity, bench) see exactly the prior routing.
+  function continuesPrior(doc, q, ctx) {
+    if (!ctx || !ctx.prevGrounded) return false;
+    if (referents(doc, q).antimatter.length) return false;      // introduced a new, absent subject
+    const toks = String(q).toLowerCase().replace(/[’']/g, "'").match(/[\p{L}]+/gu) || [];
+    return toks.some(t => ANAPHOR_PRONOUNS.has(t));
+  }
+  function referencesDoc(doc, q, ctx) {
     if (!doc) return false;
     const intent = classifyIntent(q);
     if (intent === 'who' || intent === 'summary') return true;   // asking about the doc
     if (doc.kind === 'table') {
       try { if (!window.parsePivot(q, doc).empty) return true; } catch (e) {}
       const ql = ' ' + String(q).toLowerCase() + ' ';
-      return (doc.columns || []).some(c => ql.includes(' ' + String(c).toLowerCase() + ' '));
+      if ((doc.columns || []).some(c => ql.includes(' ' + String(c).toLowerCase() + ' '))) return true;
+      return continuesPrior(doc, q, ctx);
     }
     if (namesEntity(doc, q)) return true;                        // mentions someone/somewhere in it
     const hits = retrieve(doc, q, 3);                            // or shares real content with the page
-    if (!hits.length) return false;
-    const top = hits[0];
-    if (top.score >= 0.5 || top.overlap >= 2) return true;
-    // a real question ("what does the letter say?") that lands on even one word
-    // from the page is almost certainly about the page, not chit-chat.
-    const isQuestion = /\?\s*$/.test(q) ||
-      /^\s*(what|which|whose|where|when|why|how|who|does|did|do|is|are|was|were|can|could|would|should|tell me|describe|explain|list|show|name)\b/i.test(q);
-    return isQuestion && top.overlap >= 1;
+    if (hits.length) {
+      const top = hits[0];
+      if (top.score >= 0.5 || top.overlap >= 2) return true;
+      // a real question ("what does the letter say?") that lands on even one word
+      // from the page is almost certainly about the page, not chit-chat.
+      const isQuestion = /\?\s*$/.test(q) ||
+        /^\s*(what|which|whose|where|when|why|how|who|does|did|do|is|are|was|were|can|could|would|should|tell me|describe|explain|list|show|name)\b/i.test(q);
+      if (isQuestion && top.overlap >= 1) return true;
+    }
+    return continuesPrior(doc, q, ctx);                          // a follow-up to a grounded turn
   }
   function answerWho(doc) {
     const { entities } = projectEntities(doc);
@@ -3701,28 +3770,62 @@ function projectGraph(events, frame = {}) {
     const text = leads.map(s => `${s.t} {{cite:${doc.id}:${s.i}:s${s.i}}}`).join(' ') + (ppl.length ? `\n\nKey figures: ${ppl.join(', ')}.` : '');
     return { text, cites: leads.map(s => ({ docId: doc.id, idx: s.i })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'A grounded précis from the opening lines and the most-mentioned figures. Load the model for a fuller summary.' } };
   }
-  function answerProse(doc, query) {
-    const hits = retrieve(doc, query, 4);
-    const vt = voidTerm(doc, query);
-    if (!hits.length) {
-      if (vt) return {
-        text: `“${vt}” appears nowhere in this document {{void:[⊥]}}. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.`,
-        audit: { status: 'warn', grounded: true, covers: '0/1', stable: true, note: 'A term named in the question is absent — resolved to the one void.' },
-      };
+  // Coverage ratio (covered query content-terms / total) at or above which an
+  // answer is allowed to claim "grounded". Below it the answer is HELD, not
+  // green: the closest lines are still shown and cited, but never pass as
+  // grounded. Reserves the green chip for answers that actually cover the ask.
+  const COVERAGE_FLOOR = 0.5;
+  function answerProse(doc, query, opts = {}) {
+    // AUDIT-FIRST. A proper noun the query names that is absent from the page is
+    // a scoped void — checked BEFORE retrieval, so a stray hit on some unrelated
+    // term ("what did Napoleon say to Elena?" landing on an Elena line) can no
+    // longer stamp the answer grounded. The void fires even when other terms did
+    // match; that is the whole point.
+    let { matter, antimatter } = referents(doc, query);
+    // Scope-aware voids: when answering inside a multi-source conversation, a
+    // name absent from THIS doc but present in another source is not a void — the
+    // caller passes the scope-wide anti-matter set as the only terms allowed to
+    // void here. The rest move to matter (present somewhere in scope).
+    if (opts.voidWhitelist) {
+      const present = antimatter.filter(t => !opts.voidWhitelist.has(t));
+      antimatter = antimatter.filter(t => opts.voidWhitelist.has(t));
+      if (present.length) matter = matter.concat(present);
+    }
+    if (antimatter.length) {
+      // Surface every anti-matter referent as a marked void, and name the
+      // present (matter) referents so the hold says what it CAN bind to.
+      const voids = antimatter.map(t => `{{void:${t}}}`);
+      const list = voids.length > 1 ? voids.slice(0, -1).join(', ') + ' and ' + voids[voids.length - 1] : voids[0];
+      const many = antimatter.length > 1;
+      const ackn = matter.length ? `${matter.join(' and ')} ${matter.length > 1 ? 'are' : 'is'} on the page, but ` : '';
       return {
-        text: 'I read the document for that and didn’t find a passage that answers it cleanly, so I’d rather hold than guess. Try naming a person, place, or phrase from the text.',
-        audit: { status: 'notes', grounded: true, covers: '0/1', stable: true, note: 'Held rather than invented — the page wouldn’t carry an answer.' },
+        text: `${ackn}${list} ${many ? 'appear' : 'appears'} nowhere in this document. I won’t invent ${many ? 'answers' : 'an answer'} for ${many ? 'terms' : 'a term'} the page doesn’t contain — load a source that mentions ${many ? 'them' : 'it'} and I’ll read ${many ? 'them' : 'it'}.`,
+        audit: { status: 'warn', grounded: true, covers: `0/${antimatter.length}`, stable: true,
+          note: `Anti-matter referent${many ? 's' : ''} — named in the question, absent from the page.` },
       };
     }
+    const hits = retrieve(doc, query, 4);
+    if (!hits.length) return {
+      text: 'I read the document for that and didn’t find a passage that answers it cleanly, so I’d rather hold than guess. Try naming a person, place, or phrase from the text.',
+      audit: { status: 'notes', grounded: true, covers: '0/1', stable: true, note: 'Held rather than invented — the page wouldn’t carry an answer.' },
+    };
     const floor = 0.34;
     const used = hits.filter(h => h.score >= floor).slice(0, 3);
     const support = (used.length ? used : hits.slice(0, 1));
     const text = support.map(s => `${s.t} {{cite:${doc.id}:${s.i}:s${s.i}}}`).join(' ');
     const cov = coverage(query, support.map(s => s.t).join(' '));
     const full = cov.n >= cov.d;
+    const cites = support.map(s => ({ docId: doc.id, idx: s.i }));
+    // COVERAGE GATES THE BADGE. Thin coverage is HELD, not grounded: a "covers
+    // 1/4" answer must not wear the same green chip as a "covers 3/3" one.
+    if (cov.d && cov.n / cov.d < COVERAGE_FLOOR) return {
+      text, cites,
+      audit: { status: 'held', grounded: false, covers: `${cov.n}/${cov.d}`, stable: true,
+        note: 'These are the closest lines I found, but they don’t cover your question — holding rather than calling this grounded.' },
+    };
     return {
       text,
-      cites: support.map(s => ({ docId: doc.id, idx: s.i })),
+      cites,
       audit: {
         status: full ? 'clean' : 'notes', grounded: true,
         covers: `${cov.n}/${cov.d}`, stable: true,
@@ -3732,7 +3835,14 @@ function projectGraph(events, frame = {}) {
     };
   }
   function answerTable(doc, query) {
-    const { spec } = window.parsePivot(query, doc);
+    const { spec, unbound = [], notes = [] } = window.parsePivot(query, doc);
+    // Surface what we couldn't bind instead of dropping it and stamping the
+    // answer grounded (rec #3): typo corrections we applied, and column tokens
+    // that matched nothing ("by quarter" / "reigon").
+    const clarify = [
+      ...notes.map(n => n.charAt(0).toUpperCase() + n.slice(1) + '.'),
+      ...unbound.map(u => `I don’t see a column called “${u.token}”` + (u.suggestion ? ` — did you mean “${u.suggestion}”?` : ' in this table.')),
+    ].join(' ');
     const fold = window.foldPivot(doc, spec);
     const filtNote = (spec.filters || []).length
       ? ' where ' + spec.filters.map(f => `${f.col} = ${f.val}`).join(', ') : '';
@@ -3764,23 +3874,27 @@ function projectGraph(events, frame = {}) {
       produced = false;
       summary = `${fold.total} of ${rowsN} rows. Ask me to group, total, average, or filter and I’ll fold it.`;
     }
+    const baseNote = produced ? 'Computed mechanically from ' + doc.name + '.' : 'No measure to compute — showing the matching rows from ' + doc.name + '.';
     return {
-      text: summary + '\n\nFolded straight from the table — no model touched the numbers. Adjust grouping or measure on the table and it recomputes live.',
+      text: summary + (clarify ? '\n\n' + clarify : '') + '\n\nFolded straight from the table — no model touched the numbers. Adjust grouping or measure on the table and it recomputes live.',
       // Only claim full coverage when an actual figure was produced; a bare row
-      // listing with no requested measure is not a computed answer. (1d)
-      audit: produced
-        ? { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Computed mechanically from ' + doc.name + '.' }
-        : { status: 'notes', grounded: true, covers: '0/1', stable: true, note: 'No measure to compute — showing the matching rows from ' + doc.name + '.' },
+      // listing with no requested measure is not a computed answer (1d). An
+      // unbound column token means part of the ask went unhonoured — never green.
+      audit: unbound.length
+        ? { status: 'notes', grounded: produced, covers: produced ? '1/1' : '0/1', stable: true, note: clarify }
+        : produced
+          ? { status: 'clean', grounded: true, covers: '1/1', stable: true, note: clarify || baseNote }
+          : { status: 'notes', grounded: true, covers: '0/1', stable: true, note: clarify || baseNote },
       tableSpec: spec, openSelf: true,
     };
   }
-  function answer(doc, query) {
+  function answer(doc, query, opts) {
     if (!doc) return { text: 'Load a document or spreadsheet first — drop a file or paste text, and I’ll read it locally.', audit: null };
     if (doc.kind === 'table') return answerTable(doc, query);
     const intent = classifyIntent(query);
     if (intent === 'who') return answerWho(doc);
     if (intent === 'summary') return answerSummary(doc);
-    return answerProse(doc, query);
+    return answerProse(doc, query, opts);
   }
 
   /* retrieval context for the optional LLM path — intent-aware */
@@ -3815,6 +3929,133 @@ function projectGraph(events, frame = {}) {
     };
   }
 
+  /* ============================================================ MULTI-DOC SCOPE
+     The conversation grounds against an EXPLICIT set of source documents (added
+     as chips, or pulled in by a project), not whichever tab is focused. These
+     fold the single-doc functions over the set, so every single-doc contract —
+     citations carry their own docId, anti-matter, coverage gating — carries over.
+     A scope of one is byte-identical to the single-doc path. */
+  function scopeDocs(docs) { return (Array.isArray(docs) ? docs : [docs]).filter(Boolean); }
+
+  // Does the turn reference ANY source in scope? Continuity ctx applies per-doc.
+  function referencesScope(docs, q, ctx) {
+    return scopeDocs(docs).some(d => referencesDoc(d, q, ctx));
+  }
+
+  // Retrieve across every prose source, tag each hit with its docId, rank
+  // globally by the same score the single-doc retriever uses.
+  function retrieveScope(docs, query, k = 6) {
+    const all = [];
+    for (const d of scopeDocs(docs)) {
+      if (d.kind === 'table') continue;
+      for (const h of retrieve(d, query, k)) all.push({ ...h, docId: d.id });
+    }
+    all.sort((a, b) => b.score - a.score || a.i - b.i);
+    return all.slice(0, k);
+  }
+
+  // The single source a turn is most about — strongest retrieval wins, falling
+  // back to the first that referencesDoc, then the first in scope. This is where
+  // a mechanical (single-doc) answer is grounded.
+  function routePrimary(docs, query, ctx) {
+    const ds = scopeDocs(docs);
+    if (!ds.length) return null;
+    let best = null, bestScore = -1;
+    for (const d of ds) {
+      if (d.kind === 'table') continue;
+      const h = retrieve(d, query, 1)[0];
+      const s = h ? h.score : 0;
+      if (s > bestScore) { bestScore = s; best = d; }
+    }
+    if (best && bestScore > 0) return best;
+    return ds.find(d => referencesDoc(d, query, ctx)) || ds[0];
+  }
+
+  // Anti-matter across the whole scope: a named referent is matter if present in
+  // ANY source, anti-matter only if absent from EVERY one. "What did Voss say?"
+  // over two sources surfaces a void only when Voss is in neither.
+  function referentsScope(docs, query) {
+    const bodies = scopeDocs(docs).map(d => docBodyLC(d));
+    const names = String(query).match(/\p{Lu}[\p{L}’'\-]+(?:\s+\p{Lu}[\p{L}’'\-]+)*/gu) || [];
+    const matter = [], antimatter = [];
+    for (const raw of names) {
+      const parts = raw.split(/\s+/);
+      while (parts.length && QA_STOP.has(parts[0].toLowerCase())) parts.shift();
+      while (parts.length && QA_STOP.has(parts[parts.length - 1].toLowerCase())) parts.pop();
+      const sig = parts.filter(t => t.length > 2 && !QA_STOP.has(t.toLowerCase()));
+      if (!sig.length) continue;
+      const present = bodies.some(b => sig.some(t => b.includes(t.toLowerCase())));
+      (present ? matter : antimatter).push(parts.join(' '));
+    }
+    return { matter, antimatter };
+  }
+
+  // Mechanical answer over the scope. One source → the single-doc path verbatim.
+  // Many → answer against the primary, but only flag voids that are absent from
+  // EVERY source (a name living in another chip is not a void here). Cross-source
+  // synthesis is the model's job (context across sources); this is the floor.
+  function answerScope(docs, query) {
+    const ds = scopeDocs(docs);
+    if (!ds.length) return answer(null, query);
+    if (ds.length === 1) return answer(ds[0], query);
+    const primary = routePrimary(ds, query) || ds[0];
+    if (primary.kind === 'table') return answer(primary, query);
+    const voidWhitelist = new Set(referentsScope(ds, query).antimatter);
+    return answer(primary, query, { voidWhitelist });
+  }
+
+  // LLM context across the scope: passages from each source, headed by its title
+  // and tagged [docId:idx] so citations re-bind to the right source. A scope of
+  // one defers to the single-doc context unchanged.
+  function contextScope(docs, query, k = 6) {
+    const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
+    if (!ds.length) return '';
+    if (ds.length === 1) return context(ds[0], query, k);
+    const intent = classifyIntent(query);
+    if (intent === 'summary' || intent === 'who') {
+      const per = Math.max(2, Math.ceil(k / ds.length));
+      return ds.map(d => `## ${d.name}\n${context(d, query, per)}`).join('\n\n');
+    }
+    const byDoc = new Map();
+    for (const h of retrieveScope(ds, query, k)) {
+      if (!byDoc.has(h.docId)) byDoc.set(h.docId, []);
+      byDoc.get(h.docId).push(h);
+    }
+    const nameOf = id => (ds.find(d => d.id === id) || {}).name || id;
+    return [...byDoc.entries()]
+      .map(([id, hs]) => `## ${nameOf(id)}\n` + hs.map(s => `[${id}:${s.i}] ${s.t}`).join('\n'))
+      .join('\n\n');
+  }
+
+  // Bind {{cite}} markers onto a model answer across the scope: each answer
+  // sentence is re-retrieved over every source and bound to the best-matching
+  // line, so a multi-source answer carries citations into whichever doc each
+  // claim came from. A scope of one defers to the single-doc binder.
+  function bindCitationsScope(docs, answerText, query, intent) {
+    const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
+    if (ds.length <= 1) return bindCitations(ds[0] || scopeDocs(docs)[0], answerText, query, intent);
+    const floor = 0.34;
+    const clean = answerText.replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim();
+    const parts = clean.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [clean];
+    const cited = [];
+    const out = parts.map(sent => {
+      const cand = retrieveScope(ds, sent, 1)[0];
+      if (cand && cand.score >= floor) { cited.push({ docId: cand.docId, idx: cand.i }); return `${sent.trim()} {{cite:${cand.docId}:${cand.i}:s${cand.i}}}`; }
+      return sent.trim();
+    }).join(' ');
+    const grounded = cited.length > 0 && cited.length >= parts.length * 0.5;
+    const cov = (intent && intent !== 'factual') ? { n: 1, d: 1 } : coverage(query, parts.join(' '));
+    return {
+      text: out, cites: cited,
+      audit: {
+        status: grounded ? (cov.n >= cov.d ? 'clean' : 'notes') : 'warn',
+        grounded, covers: `${cov.n}/${cov.d}`, stable: true,
+        note: grounded ? 'Phrased by the local model; every citation bound mechanically to a re-read sentence across your sources.'
+                       : 'Phrased by the model but support was thin — treat with care.',
+      },
+    };
+  }
+
   /* What the engine has LEARNED so far: the speech-verb class it induced
      from the typography of the documents it has read, with each verb's
      accrued mass (its confidence — +1 per confirming sighting). The
@@ -3835,6 +4076,9 @@ function projectGraph(events, frame = {}) {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
     applyRules,
+    // multi-doc scope: ground a conversation against an explicit set of sources
+    referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
+    contextScope, bindCitationsScope,
     // expose the raw graph engine for future operator-void / shape work
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
     // read-only: the induced speech-verb class + accrued mass (learning record)
