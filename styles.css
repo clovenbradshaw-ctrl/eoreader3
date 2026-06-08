@@ -127,6 +127,19 @@ button { font-family: inherit; cursor: pointer; }
 .sb-item .tl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-item .tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .sb-item .meta { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+.sb-item .count { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
+.sb-label .sb-mini { border: 0; background: none; cursor: pointer; color: var(--text-3); padding: 1px; border-radius: 4px; display: inline-flex; }
+.sb-label .sb-mini:hover { color: var(--accent); background: var(--accent-tint); }
+.sb-item .sb-x, .sb-item .sb-src {
+  border: 0; background: none; cursor: pointer; color: var(--text-3); padding: 1px; border-radius: 4px;
+  display: none; align-items: center; flex-shrink: 0;
+}
+.sb-item:hover .sb-x, .sb-item:hover .sb-src { display: inline-flex; }
+.sb-item .sb-x:hover { color: #c0392b; background: var(--bg-sunken); }
+.sb-item .sb-src.on { display: inline-flex; color: var(--accent); }
+.sb-item .sb-src:hover { background: var(--accent-tint); color: var(--accent); }
+.sb-link { background: none; border: 0; cursor: pointer; color: var(--accent); font-size: 12px; padding: 4px 8px; text-align: left; }
+.sb-link:hover { text-decoration: underline; }
 
 .sb-foot { border-top: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .sb-foot-row {

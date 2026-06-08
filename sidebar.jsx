@@ -1,8 +1,11 @@
 /* ============================================================ Sidebar ===== */
 function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc,
                    chats, activeChat, onNewChat, onSelectChat, model, onModelClick, onRulesClick,
-                   enabledRules, modelStatus }) {
+                   enabledRules, modelStatus,
+                   projects, activeProject, onSelectProject, onNewProject, onDeleteProject, onClearProject,
+                   sourceIds, onToggleSource }) {
   const iconFor = (d) => d.kind === 'table' ? 'table' : 'doc';
+  const inScope = (id) => sourceIds && sourceIds.has(id);
   return (
     <aside className={'sidebar' + (collapsed ? ' collapsed' : '')} aria-label="Workspace navigation">
       <div className="sb-top">
@@ -30,6 +33,22 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc,
         )}
 
         <div className="sb-section">
+          <div className="sb-label">Projects <span className="count">{(projects || []).length}</span>
+            <button className="sb-mini" title="New project from the current sources" onClick={onNewProject}><Icon name="plus" size={13} /></button>
+          </div>
+          {(!projects || projects.length === 0) && <div className="sb-empty">Group sources into a project to engage them together.</div>}
+          {(projects || []).map(p => (
+            <div key={p.id} className={'sb-item' + (p.id === activeProject ? ' active' : '')} onClick={() => onSelectProject(p.id)}>
+              <span className="ti"><Icon name="folder" size={16} /></span>
+              <span className="tl">{p.name}</span>
+              <span className="count">{p.docIds.length}</span>
+              <button className="sb-x" title="Delete project" onClick={(e) => { e.stopPropagation(); onDeleteProject(p.id); }}><Icon name="x" size={12} /></button>
+            </div>
+          ))}
+          {activeProject && <button className="sb-link" onClick={onClearProject}>Clear project scope</button>}
+        </div>
+
+        <div className="sb-section">
           <div className="sb-label">Documents <span className="count">{docs.length}</span></div>
           {docs.length === 0 && <div className="sb-empty">Upload or paste to add a document.</div>}
           {docs.map(d => (
@@ -37,6 +56,11 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc,
               <span className="ti"><Icon name={iconFor(d)} size={16} /></span>
               <span className="tl">{d.name}</span>
               {d.id === activeDoc && <span className="tdot" />}
+              <button className={'sb-src' + (inScope(d.id) ? ' on' : '')}
+                title={inScope(d.id) ? 'Remove from sources' : 'Add as a source'}
+                onClick={(e) => { e.stopPropagation(); onToggleSource(d.id); }}>
+                <Icon name={inScope(d.id) ? 'check' : 'plus'} size={13} />
+              </button>
             </div>
           ))}
         </div>

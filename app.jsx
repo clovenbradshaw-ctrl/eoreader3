@@ -45,6 +45,10 @@ function App() {
   // chips. Added intentionally (on upload, via the + menu, or by a project), not
   // just by being the focused tab. Empty falls back to the active doc.
   const [sources, setSources] = useState([]);
+  // Projects are named, persistent source sets. Selecting one loads its docs as
+  // the scope; editing the scope while a project is active updates the project.
+  const [projects, setProjects] = useState([]);
+  const [activeProject, setActiveProject] = useState(null);
   const [input, setInput] = useState('');
   const [mode, setMode] = useState('auto');
   const [busy, setBusy] = useState(false);
@@ -155,6 +159,8 @@ function App() {
           setRules(rs => rs.map(r => { const p = prefs.rules.find(x => x.id === r.id); return p ? { ...r, ...p } : r; }));
         }
         if (prefs.modelId) { const m = window.MODELS.find(x => x.id === prefs.modelId); if (m) setModel(m); }
+        if (Array.isArray(prefs.projects)) { setProjects(prefs.projects); bumpUid(prefs.projects.map(p => p.id)); }
+        if (prefs.activeProject) setActiveProject(prefs.activeProject);
         if (prefs.mode) setMode(prefs.mode);
         if (typeof prefs.splitRatio === 'number') setSplitRatio(prefs.splitRatio);
         if (typeof prefs.explore === 'boolean') setExplore(prefs.explore);
@@ -193,8 +199,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, modelId: model.id, mode, splitRatio, explore });
-  }, [rules, model, mode, splitRatio, explore]);
+    window.EOStore.savePrefs({ rules, modelId: model.id, mode, splitRatio, explore, projects, activeProject });
+  }, [rules, model, mode, splitRatio, explore, projects, activeProject]);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2400); };
 
@@ -210,8 +216,42 @@ function App() {
     return docs.filter(d => d.kind === 'prose').slice(-1)[0] || null;
   };
   // ---- conversation scope (sources) ----
-  const addSource = (id) => setSources(s => s.includes(id) ? s : [...s, id]);
-  const removeSource = (id) => setSources(s => s.filter(x => x !== id));
+  // Editing the scope while a project is active keeps that project in sync, so a
+  // project always reflects the set you're actually working with.
+  const addSource = (id) => {
+    setSources(s => s.includes(id) ? s : [...s, id]);
+    if (activeProject) setProjects(ps => ps.map(p => p.id === activeProject && !p.docIds.includes(id) ? { ...p, docIds: [...p.docIds, id] } : p));
+  };
+  const removeSource = (id) => {
+    setSources(s => s.filter(x => x !== id));
+    if (activeProject) setProjects(ps => ps.map(p => p.id === activeProject ? { ...p, docIds: p.docIds.filter(x => x !== id) } : p));
+  };
+  const toggleSource = (id) => (sources.includes(id) ? removeSource : addSource)(id);
+  // ---- projects (named source sets) ----
+  const selectProject = (id) => {
+    const p = projects.find(x => x.id === id);
+    if (!p) return;
+    setActiveProject(id);
+    const ids = p.docIds.filter(d => docsById[d]);
+    setSources(ids);
+    setOpenTabs(t => { const set = new Set(t); ids.forEach(d => set.add(d)); return [...set]; });
+    if (ids[0]) setActiveTab(ids[0]);
+    showToast('Project “' + p.name + '” — ' + ids.length + ' source' + (ids.length !== 1 ? 's' : ''));
+    if (mobileRef.current) setCollapsed(true);
+  };
+  const newProject = () => {
+    const fallback = 'Project ' + (projects.length + 1);
+    const name = ((window.prompt && window.prompt('Name this project', fallback)) || '').trim() || fallback;
+    const id = uid('p');
+    setProjects(ps => [{ id, name, docIds: sources.slice() }, ...ps]);
+    setActiveProject(id);
+    showToast('Created project “' + name + '”');
+  };
+  const deleteProject = (id) => {
+    setProjects(ps => ps.filter(p => p.id !== id));
+    if (activeProject === id) setActiveProject(null);
+  };
+  const clearProject = () => setActiveProject(null);
   // The documents the turn grounds against: the explicit source set if any,
   // otherwise the focused doc (preserves the single-doc experience).
   const scopeList = () => {
@@ -600,7 +640,11 @@ function App() {
         docs={docs} openTabs={openTabs} activeDoc={activeTab} onOpenDoc={openTab}
         chats={chats} activeChat={activeChat} onNewChat={newChat} onSelectChat={selectChat}
         model={model} onModelClick={() => setModelOpen(o => !o)} onRulesClick={() => setRulesOpen(true)}
-        enabledRules={enabledRules} modelStatus={modelStatus} />
+        enabledRules={enabledRules} modelStatus={modelStatus}
+        projects={projects} activeProject={activeProject}
+        onSelectProject={selectProject} onNewProject={newProject}
+        onDeleteProject={deleteProject} onClearProject={clearProject}
+        sourceIds={new Set(sources)} onToggleSource={toggleSource} />
 
       {isMobile && !collapsed && <div className="sb-backdrop" onClick={() => setCollapsed(true)} />}
 
