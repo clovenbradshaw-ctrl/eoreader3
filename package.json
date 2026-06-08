@@ -4,7 +4,7 @@
   "private": true,
   "description": "Dev-only test/benchmark harness for the Cleon reading engine. The app itself is a no-build static site (see index.html); this exists only so the deterministic engine can be exercised and timed from Node.",
   "scripts": {
-    "test": "node tests/engine.test.js && node tests/learning.test.js && node tests/audit.test.js && node tests/parity.js",
+    "test": "node tests/engine.test.js && node tests/learning.test.js && node tests/audit.test.js && node tests/llm.test.js && node tests/parity.js",
     "test:update": "node tests/parity.js --update",
     "bench": "node tests/bench.js",
     "demo": "node tests/demo-learning.js",
