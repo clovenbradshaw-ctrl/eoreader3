@@ -5,6 +5,7 @@
 import './globals.js';
 import '../engine.js';
 import '../store.js';
+import '../audit.js';
 import '../data.jsx';
 import '../pivot.jsx';
 import '../icons.jsx';
@@ -12,4 +13,5 @@ import '../sidebar.jsx';
 import '../chat.jsx';
 import '../docview.jsx';
 import '../rulesets.jsx';
+import '../auditview.jsx';
 import '../app.jsx';

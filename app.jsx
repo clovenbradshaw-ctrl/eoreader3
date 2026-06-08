@@ -10,6 +10,19 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 if (typeof window !== 'undefined' && window.EO_DEBUG === undefined) window.EO_DEBUG = false;
 const eoWarn = (...a) => { if (typeof window !== 'undefined' && window.EO_DEBUG) console.warn('[Cleon]', ...a); };
 if (typeof window !== 'undefined') window.eoWarn = eoWarn;
+
+// Audit log shim — records the chat pipeline when window.EOAudit is present,
+// and no-ops cleanly when it isn't. Keeps the call sites in the chat path terse.
+const AUD = (m, ...a) => { try { const A = window.EOAudit; return A && A[m] ? A[m](...a) : undefined; } catch (e) { eoWarn('audit', m, e); } };
+const auditScope = (scope) => (scope || []).map(d => ({ id: d.id, name: d.name, kind: d.kind }));
+// Re-run the (deterministic, cheap) scope retrieval purely to capture the scored
+// hits for the trace — the engine stays untouched, so this never changes routing.
+const auditHits = (scope, q, k = 6) => {
+  try {
+    return (window.EOEngine.retrieveScope(scope, q, k) || [])
+      .map(h => ({ docId: h.docId, idx: h.i, score: Math.round((h.score || 0) * 1e4) / 1e4, overlap: h.overlap, text: h.t }));
+  } catch (e) { return []; }
+};
 let _uid = 0; const uid = (p) => p + '-' + (++_uid);
 // After restoring persisted docs/chats, advance the uid counter past every
 // restored id so a new upload this session can't collide with a stored one.
@@ -55,6 +68,11 @@ function App() {
 
   const [rules, setRules] = useState(window.RULESETS.map(r => ({ ...r })));
   const [rulesOpen, setRulesOpen] = useState(false);
+  // Auditing mode: a glass box over the chat pipeline (window.EOAudit), inspected
+  // in a drawer and exportable as JSONL. Recording is on by default.
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
+  const [auditCount, setAuditCount] = useState(0);
   const [model, setModel] = useState(defaultModel);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
@@ -164,6 +182,7 @@ function App() {
         if (prefs.mode) setMode(prefs.mode);
         if (typeof prefs.splitRatio === 'number') setSplitRatio(prefs.splitRatio);
         if (typeof prefs.explore === 'boolean') setExplore(prefs.explore);
+        if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
       }
 
       let savedDocs = [], savedChat = null;
@@ -199,10 +218,24 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, modelId: model.id, mode, splitRatio, explore, projects, activeProject });
-  }, [rules, model, mode, splitRatio, explore, projects, activeProject]);
+    window.EOStore.savePrefs({ rules, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled });
+  }, [rules, model, mode, splitRatio, explore, projects, activeProject, auditEnabled]);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2400); };
+
+  // Keep the topbar's turn count in sync with the recorder. setState bails out when
+  // the count is unchanged, so per-step notifications don't re-render the app.
+  useEffect(() => {
+    if (!window.EOAudit) return;
+    const update = () => setAuditCount(window.EOAudit.count());
+    update();
+    return window.EOAudit.subscribe(update);
+  }, []);
+  const toggleAudit = (on) => {
+    const v = on != null ? on : !auditEnabled;
+    setAuditEnabled(v);
+    if (window.EOAudit) window.EOAudit.setEnabled(v);
+  };
 
   const backingDoc = () => {
     if (activeTab) {
@@ -445,11 +478,20 @@ function App() {
   });
 
   const runMechanicalScope = (scope, q) => {
+    // Capture the deterministic basis of the answer for the trace: intent, the
+    // matter/anti-matter referents, and the scored retrieval hits.
+    let intent = null, refs = null;
+    try { intent = window.EOEngine.classifyIntent(q); } catch (e) {}
+    try { refs = window.EOEngine.referentsScope(scope, q); } catch (e) {}
+    AUD('step', 'intent', { intent });
+    if (refs) AUD('step', 'referents', { matter: refs.matter, antimatter: refs.antimatter });
+    AUD('step', 'retrieve', { k: 6, engine: 'mechanical', hits: auditHits(scope, q, 6) });
     const plan = window.EOEngine.answerScope(scope, q);
     const primary = window.EOEngine.routePrimary(scope, q) || scope[0];
     replaceLast({ role: 'assistant', text: plan.text, audit: plan.audit, mode: mode === 'creative' ? 'creative' : 'grounded' });
     if (plan.tableSpec && primary) { openTab(primary.id); setTableSpec({ ...plan.tableSpec }); }
     if (plan.cites && plan.cites.length) setTimeout(() => flashCitation(plan.cites[0].docId, plan.cites[0].idx), 380);
+    AUD('end', { engine: 'mechanical', text: plan.text, audit: plan.audit, cites: plan.cites || [], tableSpec: plan.tableSpec || null });
     setBusy(false);
   };
 
@@ -476,12 +518,17 @@ function App() {
         // Most local-model failures mid-session are context / VRAM pressure,
         // not bad input. Retry once with just the last couple of turns and a
         // tight budget before giving up — recovers the common case silently.
+        AUD('step', 'error', { where: 'chat', attempt: 1, message: String((e1 && e1.message) || e1) });
         replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
         full = await attempt(history.slice(-2), 2200);
       }
       replaceLast({ role: 'assistant', text: full, audit: ungroundedAudit, mode: modeTag });
+      AUD('end', { engine: 'model', text: full, audit: ungroundedAudit, cites: [] });
     } catch (e) {
-      replaceLast({ role: 'assistant', text: 'I couldn’t finish that one locally — the model likely ran out of memory or context. Try a shorter message, pick a smaller model from the switcher, or ask about an open document and I’ll answer it mechanically.', audit: null });
+      const msg = 'I couldn’t finish that one locally — the model likely ran out of memory or context. Try a shorter message, pick a smaller model from the switcher, or ask about an open document and I’ll answer it mechanically.';
+      replaceLast({ role: 'assistant', text: msg, audit: null });
+      AUD('step', 'error', { where: 'chat', fatal: true, message: String((e && e.message) || e) });
+      AUD('end', { engine: 'none', text: msg, audit: null, reason: 'model-failed' });
     }
     setBusy(false);
   };
@@ -491,22 +538,29 @@ function App() {
   // "who" is exact-mechanical; no ground → honest hold; the model only phrases.
   const runGroundedScope = async (scope, q, history) => {
     const intent = window.EOEngine.classifyIntent(q);
-    if (intent === 'who') { runMechanicalScope(scope, q); return; }
-    if (!scope.some(d => window.EOEngine.hasGround(d, q))) { runMechanicalScope(scope, q); return; }
+    AUD('step', 'intent', { intent });
+    if (intent === 'who') { AUD('step', 'route', { detour: 'who → mechanical' }); runMechanicalScope(scope, q); return; }
+    const perDocGround = scope.map(d => ({ id: d.id, name: d.name, has: window.EOEngine.hasGround(d, q) }));
+    const grounded = perDocGround.some(d => d.has);
+    AUD('step', 'ground', { hasGround: grounded, perDoc: perDocGround });
+    if (!grounded) { AUD('step', 'route', { detour: 'no-ground → mechanical' }); runMechanicalScope(scope, q); return; }
     const ctx = window.EOEngine.contextScope(scope, q, 6);
     const task = intent === 'summary' ? 'summary' : 'answer';
+    AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       const full = await window.EOLLM.phrase({
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
         grounded: true, onToken: streamInto({ mode: 'grounded' }),
       });
-      const settle = (res) => {
+      const settle = (res, decision) => {
         replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
+        AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
       };
       if (/passages?\s+do\s?n.?t\s+say/i.test(full) || full.trim().length < 3) {
-        settle(window.EOEngine.answerScope(scope, q));
+        AUD('step', 'veto', { decision: 'mechanical', reason: 'model declined / empty' });
+        settle(window.EOEngine.answerScope(scope, q), 'mechanical (model declined)');
       } else {
         // MECHANICAL VETO across the whole scope: a name present in NONE of the
         // sources is invented; if the phrasing won't bind to any source, discard
@@ -514,9 +568,11 @@ function App() {
         const perDoc = scope.map(d => new Set(window.EOEngine.inventedTerms(d, full)));
         const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
         const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent);
-        settle((invented.length || !bound.audit.grounded) ? window.EOEngine.answerScope(scope, q) : bound);
+        const useModel = !(invented.length || !bound.audit.grounded);
+        AUD('step', 'veto', { decision: useModel ? 'model' : 'mechanical', invented, boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
+        settle(useModel ? bound : window.EOEngine.answerScope(scope, q), useModel ? 'model + mechanical cite' : 'mechanical (veto)');
       }
-    } catch (e) { runMechanicalScope(scope, q); return; }
+    } catch (e) { AUD('step', 'error', { where: 'grounded', message: String((e && e.message) || e) }); runMechanicalScope(scope, q); return; }
     setBusy(false);
   };
 
@@ -536,41 +592,73 @@ function App() {
     const doc = backingDoc();
     const scope = scopeList();   // explicit source chips, else the focused doc
     const canLLM = !!(window.EOLLM && window.EOLLM.hasWebGPU());
+    const wasLoaded = canLLM && window.EOLLM.isLoaded(model.mlc);
+
+    // Open the turn's audit record before anything branches, so the routing
+    // decision, model load, retrieval and the model call all attach to it.
+    AUD('begin', {
+      input: q, mode,
+      scope: auditScope(scope),
+      model: { id: model.id, name: model.name, mlc: model.mlc },
+      hasWebGPU: canLLM, modelLoadedAtStart: wasLoaded,
+      prevGrounded: lastGroundedRef.current,
+    });
 
     // load the real model on demand if it isn't ready yet
-    if (canLLM && !window.EOLLM.isLoaded(model.mlc)) {
+    if (canLLM && !wasLoaded) {
       patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name });
-      await loadModel(model);
+      const ok = await loadModel(model);
+      AUD('step', 'model', { action: 'load', model: model.name, ok: !!ok });
       patchLast({ loading: false, typing: true });
     }
     const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
+    AUD('set', { modelReady: ready });
 
     // CREATIVE: free composition (needs the model). Phrases over doc passages
     // if one is open, otherwise writes freely. Never cited.
     if (mode === 'creative') {
-      if (!ready) { replaceLast({ role: 'assistant', text: 'Creative mode needs the local model, which isn’t available here. Grounded answers from a document still work.', audit: null }); setBusy(false); return; }
+      if (!ready) {
+        const msg = 'Creative mode needs the local model, which isn’t available here. Grounded answers from a document still work.';
+        AUD('step', 'route', { path: 'creative', referencing: scope.length > 0, blocked: 'model-unavailable' });
+        replaceLast({ role: 'assistant', text: msg, audit: null });
+        AUD('end', { engine: 'none', text: msg, audit: null, reason: 'creative-needs-model' });
+        setBusy(false); return;
+      }
       lastGroundedRef.current = false;
-      runChat(q, history, 'creative', scope.length ? window.EOEngine.contextScope(scope, q, 6) : '', scope.length > 0); return;
+      const ctx = scope.length ? window.EOEngine.contextScope(scope, q, 6) : '';
+      AUD('step', 'route', { path: 'creative', referencing: scope.length > 0 });
+      if (scope.length) AUD('step', 'retrieve', { k: 6, engine: 'creative-context', hits: auditHits(scope, q, 6) });
+      runChat(q, history, 'creative', ctx, scope.length > 0); return;
     }
 
     // The one routing decision: is the user referencing a source in scope?
     // Grounded mode forces it; Auto lets the engine decide across the whole
     // source set, with continuity from the previous turn so an anaphoric
     // follow-up stays on the page. Otherwise it's a conversation with the model.
-    const referencing = scope.length > 0 && (mode === 'grounded' || window.EOEngine.referencesScope(scope, q, { prevGrounded: lastGroundedRef.current }));
+    let referencing = false, refReason = 'no-scope';
+    if (scope.length > 0) {
+      if (mode === 'grounded') { referencing = true; refReason = 'grounded-mode'; }
+      else { referencing = window.EOEngine.referencesScope(scope, q, { prevGrounded: lastGroundedRef.current }); refReason = referencing ? 'references-scope' : 'not-referenced'; }
+    }
     lastGroundedRef.current = referencing;
 
     if (referencing) {
       const primary = window.EOEngine.routePrimary(scope, q) || scope[0];
-      if (ready && primary && primary.kind === 'prose') { runGroundedScope(scope, q, history); return; }
+      const useLLM = ready && primary && primary.kind === 'prose';
+      AUD('step', 'route', { referencing: true, reason: refReason, path: useLLM ? 'grounded-llm' : 'mechanical',
+        primary: primary ? { id: primary.id, name: primary.name, kind: primary.kind } : null });
+      if (useLLM) { runGroundedScope(scope, q, history); return; }
       runMechanicalScope(scope, q); return;   // tables, or no model → mechanical pivot / grounded answer
     }
 
     // plain chat
+    AUD('step', 'route', { referencing: false, reason: refReason, path: ready ? 'plain-chat' : 'plain-unavailable' });
     if (ready) { runChat(q, history, undefined, '', !!doc); return; }
-    replaceLast({ role: 'assistant', text: canLLM
+    const msg = canLLM
       ? 'The local model isn’t ready yet — give it a moment. Meanwhile, upload a document and I can answer questions about it directly, with citations.'
-      : 'This browser can’t run the local model (no WebGPU), so I can’t free-chat here. Upload a document or paste text and I’ll still answer questions about it, with citations.', audit: null });
+      : 'This browser can’t run the local model (no WebGPU), so I can’t free-chat here. Upload a document or paste text and I’ll still answer questions about it, with citations.';
+    replaceLast({ role: 'assistant', text: msg, audit: null });
+    AUD('end', { engine: 'none', text: msg, audit: null, reason: canLLM ? 'model-not-ready' : 'no-webgpu' });
     setBusy(false);
   };
 
@@ -660,6 +748,10 @@ function App() {
               <button className={layout === 'doc' ? 'on' : ''} onClick={() => setLayout('doc')} title="Fullscreen document"><Icon name="expand" size={14} /></button>
             </div>
           )}
+          <button className="tb-pill" onClick={() => setAuditOpen(true)} title="Audit — see every step the chat takes, exportable as JSONL">
+            <Icon name="activity" size={15} /> Audit{auditCount ? ' · ' + auditCount : ''}
+            {auditEnabled && <span className="dot rec" title="Recording" />}
+          </button>
           <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> {enabledRules} rules on</button>
         </header>
 
@@ -688,6 +780,7 @@ function App() {
       </main>
 
       {rulesOpen && <RulesDrawer rules={rules} onToggle={toggleRule} onInstall={installRule} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
+      {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast} />}
       {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
                      status={modelStatus} progress={modelProgress} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (

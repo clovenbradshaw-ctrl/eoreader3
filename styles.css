@@ -763,3 +763,75 @@ table.grid .member td:first-child { padding-left: 30px; }
   .popover { left: 8px !important; right: 8px; min-width: 0; width: auto; max-width: calc(100vw - 16px); }
   .toast { left: 12px; right: 12px; transform: none; bottom: 14px; justify-content: center; }
 }
+
+/* ============================================================ Audit drawer
+   The glass box: each chat turn's pipeline, step by step, exportable as JSONL. */
+.tb-pill .dot.rec { background: var(--bad-fg); box-shadow: 0 0 0 3px rgba(162,58,44,.14); animation: recpulse 1.8s ease-in-out infinite; }
+@keyframes recpulse { 50% { opacity: .35; } }
+
+.audit-drawer { width: min(680px, 100vw); }
+.aud-body { padding: 12px 14px 48px; }
+
+/* recording toggle + count, sharing the rules-drawer toolbar row */
+.drawer-tabs .aud-rec { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 8px 6px 12px; color: var(--text-2); font-weight: 500; cursor: pointer; }
+.drawer-tabs .aud-rec.on { color: var(--text); }
+.aud-rec-lbl { font-family: var(--mono); font-size: 11.5px; }
+.aud-count { align-self: center; font-family: var(--mono); font-size: 11px; color: var(--text-3); padding-bottom: 4px; }
+
+/* one turn */
+.aud-turn { border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 8px; background: var(--bg); overflow: hidden; }
+.aud-turn.open { border-color: var(--border-strong); }
+.aud-turn-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 11px; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; }
+.aud-turn-head:hover { background: var(--bg-subtle); }
+.aud-chev { color: var(--text-3); transition: transform .14s; flex-shrink: 0; }
+.aud-chev.open { transform: rotate(180deg); }
+.aud-time { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
+.aud-grow { flex: 1; }
+.aud-mode, .aud-path, .aud-engine { font-family: var(--mono); font-size: 10px; padding: 1px 6px; border-radius: var(--r-pill); border: 1px solid var(--border); color: var(--text-2); flex-shrink: 0; white-space: nowrap; }
+.aud-mode.grounded { color: var(--accent); border-color: var(--accent-tint-2); background: var(--accent-tint); }
+.aud-mode.creative { color: #7b4bd0; border-color: #e2d6f6; background: #f4eefc; }
+.aud-path { color: var(--text-3); }
+.aud-engine { color: var(--text-3); background: var(--bg-subtle); border-color: transparent; }
+.aud-q { font-size: 12.5px; color: var(--text); font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38%; }
+.aud-ms { font-family: var(--mono); font-size: 10px; color: var(--text-3); flex-shrink: 0; }
+
+.aud-badge { font-family: var(--mono); font-size: 10.5px; padding: 2px 8px; border-radius: var(--r-pill); border: 1px solid var(--border); background: var(--bg); color: var(--text-2); flex-shrink: 0; }
+.aud-badge.clean { background: var(--good-bg); border-color: var(--good-bd); color: var(--good-fg); }
+.aud-badge.notes { background: var(--warn-bg); border-color: var(--warn-bd); color: var(--warn-fg); }
+.aud-badge.warn  { background: var(--bad-bg);  border-color: var(--bad-bd);  color: var(--bad-fg); }
+.aud-badge.held  { background: var(--warn-bg); border-color: var(--warn-bd); color: var(--warn-fg); border-style: dashed; }
+.aud-badge.plain { border-style: dashed; color: var(--text-3); }
+.aud-badge.run   { color: var(--accent); border-color: var(--accent-tint-2); background: var(--accent-tint); }
+
+/* turn body */
+.aud-turn-body { border-top: 1px solid var(--border); padding: 10px 12px 12px; background: #fbfbfc; }
+.aud-meta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); padding-bottom: 9px; margin-bottom: 9px; border-bottom: 1px dashed var(--border); }
+.aud-meta .audit-link { margin-left: auto; }
+
+.aud-steps { display: flex; flex-direction: column; gap: 6px; }
+.aud-step { display: flex; gap: 9px; align-items: baseline; font-size: 12px; line-height: 1.5; }
+.aud-st { font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; color: var(--text-2); background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; flex-shrink: 0; width: 76px; text-align: center; }
+.aud-st.route { color: var(--accent); background: var(--accent-tint); border-color: var(--accent-tint-2); }
+.aud-st.llm { color: #7b4bd0; background: #f4eefc; border-color: #e2d6f6; }
+.aud-st.veto, .aud-st.error { color: var(--bad-fg); background: var(--bad-bg); border-color: var(--bad-bd); }
+.aud-st.answer { color: var(--good-fg); background: var(--good-bg); border-color: var(--good-bd); }
+.aud-sb { flex: 1; min-width: 0; color: var(--text); }
+.aud-dt { font-family: var(--mono); font-size: 9.5px; color: var(--text-3); flex-shrink: 0; }
+.aud-dim { color: var(--text-3); }
+.aud-void { color: var(--bad-fg); }
+
+/* retrieval hits */
+.aud-hit { display: flex; gap: 7px; align-items: baseline; font-size: 11.5px; padding: 2px 0; }
+.aud-score { font-family: var(--mono); font-size: 10px; color: var(--accent); flex-shrink: 0; width: 40px; }
+.aud-hit .aud-cite { font-family: var(--mono); font-size: 10px; color: var(--text-3); flex-shrink: 0; }
+.aud-hit-t { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* the model call: prompt (collapsed) + raw output */
+.aud-det { margin: 4px 0; }
+.aud-det summary { font-family: var(--mono); font-size: 11px; color: var(--accent); cursor: pointer; }
+.aud-msg, .aud-out { margin: 5px 0; }
+.aud-role { font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); display: block; margin-bottom: 2px; }
+.aud-role.out { color: var(--good-fg); }
+.aud-msg pre, .aud-out pre, .aud-answer { font-family: var(--mono); font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; margin: 0; color: var(--text); max-height: 280px; overflow: auto; }
+.aud-answer { background: var(--good-bg); border-color: var(--good-bd); }
+.aud-note { margin-top: 5px; font-style: italic; }
