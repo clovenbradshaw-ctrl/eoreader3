@@ -35,6 +35,8 @@ const deals = await E.parseDocument('deals.csv', CSV, 'deals');
 const sales = await E.parseDocument('sales.csv', SALES, 'sales');
 const abbrDoc = await E.parseDocument('abbr.txt', 'Report\n\nWe checked No. 12 and Fig. 3 below. Dr. Pell signed off.', 'abbr');
 const noiseDoc = await E.parseDocument('noise.txt', 'SECOND WIFE\n\nMauricio Pellegrini married again. SECOND WIFE was the chapter title. Mauricio kept the old maps. I N scanned this page. I N appears once more.', 'noise');
+// A second prose source with entities disjoint from voss, for multi-doc scope.
+const harbor = await E.parseDocument('harbor.txt', 'The Harbor Office\n\nByrne logged the tides each dawn. Tessaro reviewed the charts and frowned. Byrne said the channel had shifted overnight.', 'harbor');
 
 group('parse — prose', () => {
   eq(voss.kind, 'prose', 'prose doc detected as prose');
@@ -167,6 +169,32 @@ group('entity extraction — header/fragment noise filtered', () => {
   ok(names.some(n => /Mauricio/.test(n)), 'a real repeated name still surfaces');
   ok(!names.some(n => /^second wife$/i.test(n)), 'an all-caps multi-word header does not surface as a person');
   ok(!names.includes('I N'), 'a spaced single-letter OCR fragment does not surface');
+});
+
+// The conversation grounds against an explicit SET of sources (chips/projects),
+// not just the active tab. A scope of one is identical to the single-doc path.
+group('scope — grounding across an explicit source set', () => {
+  const scope = [voss, harbor];
+  ok(E.referencesScope(scope, 'what does Marlow want?'), 'a query about the first source routes to the scope');
+  ok(E.referencesScope(scope, 'what did Byrne log at dawn?'), 'a query about the second source routes to the scope');
+  ok(!E.referencesScope(scope, 'tell me a joke about penguins'), 'an unrelated request stays conversational');
+
+  eq(E.routePrimary(scope, 'what did Byrne log at dawn?').id, harbor.id, 'a Byrne question routes to the harbor source');
+  eq(E.routePrimary(scope, 'what did Marlow see at Voss Point?').id, voss.id, 'a Voss question routes to the lighthouse source');
+
+  const hits = E.retrieveScope(scope, 'Byrne tides Marlow keeper', 6);
+  ok(hits.some(h => h.docId === harbor.id), 'retrieval reaches the harbor source');
+  ok(hits.some(h => h.docId === voss.id), 'retrieval also reaches the lighthouse source');
+  ok(hits.every(h => h.docId), 'every scope hit is tagged with its source id');
+
+  eq(E.referentsScope(scope, 'did Byrne ever meet Marlow?').antimatter.length, 0, 'names each present in some source are not voids');
+  ok(E.referentsScope(scope, 'what did Zorthax say?').antimatter.includes('Zorthax'), 'a name absent from every source is anti-matter');
+
+  // Scope-aware voids: a name living in the OTHER source is not voided here.
+  ok(!/void:/.test(E.answerScope(scope, 'what did Marlow and Tessaro discuss?').text),
+    'a name in another source is not voided when answering across scope');
+  ok(/void:/.test(E.answer(voss, 'what did Marlow and Tessaro discuss?').text),
+    'against a single doc, the absent name IS a void (contrast)');
 });
 
 group('void / invented terms', () => {

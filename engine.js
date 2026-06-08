@@ -3775,13 +3775,22 @@ function projectGraph(events, frame = {}) {
   // green: the closest lines are still shown and cited, but never pass as
   // grounded. Reserves the green chip for answers that actually cover the ask.
   const COVERAGE_FLOOR = 0.5;
-  function answerProse(doc, query) {
+  function answerProse(doc, query, opts = {}) {
     // AUDIT-FIRST. A proper noun the query names that is absent from the page is
     // a scoped void — checked BEFORE retrieval, so a stray hit on some unrelated
     // term ("what did Napoleon say to Elena?" landing on an Elena line) can no
     // longer stamp the answer grounded. The void fires even when other terms did
     // match; that is the whole point.
-    const { matter, antimatter } = referents(doc, query);
+    let { matter, antimatter } = referents(doc, query);
+    // Scope-aware voids: when answering inside a multi-source conversation, a
+    // name absent from THIS doc but present in another source is not a void — the
+    // caller passes the scope-wide anti-matter set as the only terms allowed to
+    // void here. The rest move to matter (present somewhere in scope).
+    if (opts.voidWhitelist) {
+      const present = antimatter.filter(t => !opts.voidWhitelist.has(t));
+      antimatter = antimatter.filter(t => opts.voidWhitelist.has(t));
+      if (present.length) matter = matter.concat(present);
+    }
     if (antimatter.length) {
       // Surface every anti-matter referent as a marked void, and name the
       // present (matter) referents so the hold says what it CAN bind to.
@@ -3879,13 +3888,13 @@ function projectGraph(events, frame = {}) {
       tableSpec: spec, openSelf: true,
     };
   }
-  function answer(doc, query) {
+  function answer(doc, query, opts) {
     if (!doc) return { text: 'Load a document or spreadsheet first — drop a file or paste text, and I’ll read it locally.', audit: null };
     if (doc.kind === 'table') return answerTable(doc, query);
     const intent = classifyIntent(query);
     if (intent === 'who') return answerWho(doc);
     if (intent === 'summary') return answerSummary(doc);
-    return answerProse(doc, query);
+    return answerProse(doc, query, opts);
   }
 
   /* retrieval context for the optional LLM path — intent-aware */
@@ -3920,6 +3929,133 @@ function projectGraph(events, frame = {}) {
     };
   }
 
+  /* ============================================================ MULTI-DOC SCOPE
+     The conversation grounds against an EXPLICIT set of source documents (added
+     as chips, or pulled in by a project), not whichever tab is focused. These
+     fold the single-doc functions over the set, so every single-doc contract —
+     citations carry their own docId, anti-matter, coverage gating — carries over.
+     A scope of one is byte-identical to the single-doc path. */
+  function scopeDocs(docs) { return (Array.isArray(docs) ? docs : [docs]).filter(Boolean); }
+
+  // Does the turn reference ANY source in scope? Continuity ctx applies per-doc.
+  function referencesScope(docs, q, ctx) {
+    return scopeDocs(docs).some(d => referencesDoc(d, q, ctx));
+  }
+
+  // Retrieve across every prose source, tag each hit with its docId, rank
+  // globally by the same score the single-doc retriever uses.
+  function retrieveScope(docs, query, k = 6) {
+    const all = [];
+    for (const d of scopeDocs(docs)) {
+      if (d.kind === 'table') continue;
+      for (const h of retrieve(d, query, k)) all.push({ ...h, docId: d.id });
+    }
+    all.sort((a, b) => b.score - a.score || a.i - b.i);
+    return all.slice(0, k);
+  }
+
+  // The single source a turn is most about — strongest retrieval wins, falling
+  // back to the first that referencesDoc, then the first in scope. This is where
+  // a mechanical (single-doc) answer is grounded.
+  function routePrimary(docs, query, ctx) {
+    const ds = scopeDocs(docs);
+    if (!ds.length) return null;
+    let best = null, bestScore = -1;
+    for (const d of ds) {
+      if (d.kind === 'table') continue;
+      const h = retrieve(d, query, 1)[0];
+      const s = h ? h.score : 0;
+      if (s > bestScore) { bestScore = s; best = d; }
+    }
+    if (best && bestScore > 0) return best;
+    return ds.find(d => referencesDoc(d, query, ctx)) || ds[0];
+  }
+
+  // Anti-matter across the whole scope: a named referent is matter if present in
+  // ANY source, anti-matter only if absent from EVERY one. "What did Voss say?"
+  // over two sources surfaces a void only when Voss is in neither.
+  function referentsScope(docs, query) {
+    const bodies = scopeDocs(docs).map(d => docBodyLC(d));
+    const names = String(query).match(/\p{Lu}[\p{L}’'\-]+(?:\s+\p{Lu}[\p{L}’'\-]+)*/gu) || [];
+    const matter = [], antimatter = [];
+    for (const raw of names) {
+      const parts = raw.split(/\s+/);
+      while (parts.length && QA_STOP.has(parts[0].toLowerCase())) parts.shift();
+      while (parts.length && QA_STOP.has(parts[parts.length - 1].toLowerCase())) parts.pop();
+      const sig = parts.filter(t => t.length > 2 && !QA_STOP.has(t.toLowerCase()));
+      if (!sig.length) continue;
+      const present = bodies.some(b => sig.some(t => b.includes(t.toLowerCase())));
+      (present ? matter : antimatter).push(parts.join(' '));
+    }
+    return { matter, antimatter };
+  }
+
+  // Mechanical answer over the scope. One source → the single-doc path verbatim.
+  // Many → answer against the primary, but only flag voids that are absent from
+  // EVERY source (a name living in another chip is not a void here). Cross-source
+  // synthesis is the model's job (context across sources); this is the floor.
+  function answerScope(docs, query) {
+    const ds = scopeDocs(docs);
+    if (!ds.length) return answer(null, query);
+    if (ds.length === 1) return answer(ds[0], query);
+    const primary = routePrimary(ds, query) || ds[0];
+    if (primary.kind === 'table') return answer(primary, query);
+    const voidWhitelist = new Set(referentsScope(ds, query).antimatter);
+    return answer(primary, query, { voidWhitelist });
+  }
+
+  // LLM context across the scope: passages from each source, headed by its title
+  // and tagged [docId:idx] so citations re-bind to the right source. A scope of
+  // one defers to the single-doc context unchanged.
+  function contextScope(docs, query, k = 6) {
+    const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
+    if (!ds.length) return '';
+    if (ds.length === 1) return context(ds[0], query, k);
+    const intent = classifyIntent(query);
+    if (intent === 'summary' || intent === 'who') {
+      const per = Math.max(2, Math.ceil(k / ds.length));
+      return ds.map(d => `## ${d.name}\n${context(d, query, per)}`).join('\n\n');
+    }
+    const byDoc = new Map();
+    for (const h of retrieveScope(ds, query, k)) {
+      if (!byDoc.has(h.docId)) byDoc.set(h.docId, []);
+      byDoc.get(h.docId).push(h);
+    }
+    const nameOf = id => (ds.find(d => d.id === id) || {}).name || id;
+    return [...byDoc.entries()]
+      .map(([id, hs]) => `## ${nameOf(id)}\n` + hs.map(s => `[${id}:${s.i}] ${s.t}`).join('\n'))
+      .join('\n\n');
+  }
+
+  // Bind {{cite}} markers onto a model answer across the scope: each answer
+  // sentence is re-retrieved over every source and bound to the best-matching
+  // line, so a multi-source answer carries citations into whichever doc each
+  // claim came from. A scope of one defers to the single-doc binder.
+  function bindCitationsScope(docs, answerText, query, intent) {
+    const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
+    if (ds.length <= 1) return bindCitations(ds[0] || scopeDocs(docs)[0], answerText, query, intent);
+    const floor = 0.34;
+    const clean = answerText.replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim();
+    const parts = clean.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [clean];
+    const cited = [];
+    const out = parts.map(sent => {
+      const cand = retrieveScope(ds, sent, 1)[0];
+      if (cand && cand.score >= floor) { cited.push({ docId: cand.docId, idx: cand.i }); return `${sent.trim()} {{cite:${cand.docId}:${cand.i}:s${cand.i}}}`; }
+      return sent.trim();
+    }).join(' ');
+    const grounded = cited.length > 0 && cited.length >= parts.length * 0.5;
+    const cov = (intent && intent !== 'factual') ? { n: 1, d: 1 } : coverage(query, parts.join(' '));
+    return {
+      text: out, cites: cited,
+      audit: {
+        status: grounded ? (cov.n >= cov.d ? 'clean' : 'notes') : 'warn',
+        grounded, covers: `${cov.n}/${cov.d}`, stable: true,
+        note: grounded ? 'Phrased by the local model; every citation bound mechanically to a re-read sentence across your sources.'
+                       : 'Phrased by the model but support was thin — treat with care.',
+      },
+    };
+  }
+
   /* What the engine has LEARNED so far: the speech-verb class it induced
      from the typography of the documents it has read, with each verb's
      accrued mass (its confidence — +1 per confirming sighting). The
@@ -3940,6 +4076,9 @@ function projectGraph(events, frame = {}) {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
     applyRules,
+    // multi-doc scope: ground a conversation against an explicit set of sources
+    referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
+    contextScope, bindCitationsScope,
     // expose the raw graph engine for future operator-void / shape work
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
     // read-only: the induced speech-verb class + accrued mass (learning record)
