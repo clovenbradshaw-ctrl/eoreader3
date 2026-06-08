@@ -92,12 +92,45 @@ function Message({ msg, onCite }) {
 }
 
 const MODES = [{ id: 'auto', label: 'Auto' }, { id: 'grounded', label: 'Grounded' }, { id: 'creative', label: 'Creative' }];
-function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, placeholder }) {
+function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
+  const [open, setOpen] = React.useState(false);
+  const has = (sources && sources.length) || (addable && addable.length);
+  if (!has) return null;
+  return (
+    <div className="source-chips">
+      <span className="src-label">Sources</span>
+      {(sources || []).map(s => (
+        <span key={s.id} className={'src-chip' + (s.kind === 'table' ? ' table' : '')} title={s.name}>
+          <span className="src-dot" />
+          <span className="src-name">{s.name}</span>
+          <button className="src-x" onClick={() => onRemoveSource(s.id)} aria-label={'Remove ' + s.name + ' from sources'}>×</button>
+        </span>
+      ))}
+      {(addable && addable.length > 0) && (
+        <span className="src-add">
+          <button className="src-chip add" onClick={() => setOpen(o => !o)} aria-expanded={open}>+ Source</button>
+          {open && (
+            <div className="src-menu" onMouseLeave={() => setOpen(false)}>
+              {addable.map(d => (
+                <button key={d.id} onClick={() => { onAddSource(d.id); setOpen(false); }}>
+                  <span className={'src-dot' + (d.kind === 'table' ? ' table' : '')} /> {d.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
   return (
     <div className="composer-box">
+      <SourceChips sources={sources} addable={addable} onAddSource={onAddSource} onRemoveSource={onRemoveSource} />
       <textarea ref={ref} value={value} rows={1} placeholder={placeholder || 'Message Cleon…'}
         onChange={e => onChange(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }} />

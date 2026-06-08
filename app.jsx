@@ -41,6 +41,10 @@ function App() {
   const [chats, setChats] = useState([]);
   const [activeChat, setActiveChat] = useState('new');
   const [messages, setMessages] = useState([]);
+  // The conversation's SOURCE SET: docIds the chat grounds against, shown as
+  // chips. Added intentionally (on upload, via the + menu, or by a project), not
+  // just by being the focused tab. Empty falls back to the active doc.
+  const [sources, setSources] = useState([]);
   const [input, setInput] = useState('');
   const [mode, setMode] = useState('auto');
   const [busy, setBusy] = useState(false);
@@ -170,6 +174,7 @@ function App() {
         const tabOK = (id) => id.startsWith('@ent/') ? docIds.has(id.split('/')[1]) : docIds.has(id);
         if (Array.isArray(savedChat.openTabs)) setOpenTabs(savedChat.openTabs.filter(tabOK));
         if (savedChat.activeTab && tabOK(savedChat.activeTab)) setActiveTab(savedChat.activeTab);
+        if (Array.isArray(savedChat.sources)) setSources(savedChat.sources.filter(id => docIds.has(id)));
       }
       hydrated.current = true;
     })();
@@ -183,9 +188,9 @@ function App() {
   }, [docs]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    const t = setTimeout(() => window.EOStore.saveChat({ messages, chats, activeChat, openTabs, activeTab }), 450);
+    const t = setTimeout(() => window.EOStore.saveChat({ messages, chats, activeChat, openTabs, activeTab, sources }), 450);
     return () => clearTimeout(t);
-  }, [messages, chats, activeChat, openTabs, activeTab]);
+  }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
     window.EOStore.savePrefs({ rules, modelId: model.id, mode, splitRatio, explore });
@@ -203,6 +208,17 @@ function App() {
   const proseDocFor = () => {
     const b = backingDoc(); if (b && b.kind === 'prose') return b;
     return docs.filter(d => d.kind === 'prose').slice(-1)[0] || null;
+  };
+  // ---- conversation scope (sources) ----
+  const addSource = (id) => setSources(s => s.includes(id) ? s : [...s, id]);
+  const removeSource = (id) => setSources(s => s.filter(x => x !== id));
+  // The documents the turn grounds against: the explicit source set if any,
+  // otherwise the focused doc (preserves the single-doc experience).
+  const scopeList = () => {
+    const ds = sources.map(id => docsById[id]).filter(Boolean);
+    if (ds.length) return ds;
+    const b = backingDoc();
+    return b ? [b] : [];
   };
 
   const openTab = useCallback((id) => {
@@ -232,7 +248,7 @@ function App() {
     const dup = docsRef.current.find(d => d.name === name && d._text === text);
     if (dup) {
       setOpenTabs(t => t.includes(dup.id) ? t : [...t, dup.id]);
-      setActiveTab(dup.id);
+      setActiveTab(dup.id); addSource(dup.id);
       showToast('“' + name + '” is already loaded.');
       return dup;
     }
@@ -255,7 +271,7 @@ function App() {
     // else will reproduce it. Only the banner / busy flag belong to whichever
     // parse is newest, so a rule re-read that started meanwhile owns the UI.
     setDocs(ds => [...ds, doc]);
-    setOpenTabs(t => [...t, id]); setActiveTab(id);
+    setOpenTabs(t => [...t, id]); setActiveTab(id); addSource(id);
     // Stay chat-first after an upload on every device: the doc is added as a
     // tab but doesn't seize the stage. The user opens it (split on desktop,
     // fullscreen on a phone) from the view toggle when they actually want it.
@@ -388,10 +404,11 @@ function App() {
     return c;
   });
 
-  const runMechanical = (doc, q) => {
-    const plan = window.EOEngine.answer(doc, q);
+  const runMechanicalScope = (scope, q) => {
+    const plan = window.EOEngine.answerScope(scope, q);
+    const primary = window.EOEngine.routePrimary(scope, q) || scope[0];
     replaceLast({ role: 'assistant', text: plan.text, audit: plan.audit, mode: mode === 'creative' ? 'creative' : 'grounded' });
-    if (plan.tableSpec && doc) { openTab(doc.id); setTableSpec({ ...plan.tableSpec }); }
+    if (plan.tableSpec && primary) { openTab(primary.id); setTableSpec({ ...plan.tableSpec }); }
     if (plan.cites && plan.cites.length) setTimeout(() => flashCitation(plan.cites[0].docId, plan.cites[0].idx), 380);
     setBusy(false);
   };
@@ -432,11 +449,11 @@ function App() {
   // Document-referencing turn: feed the model the relevant passages and bind
   // citations mechanically. The seeker still decides what's there to say —
   // "who" is exact-mechanical; no ground → honest hold; the model only phrases.
-  const runGrounded = async (doc, q, history) => {
+  const runGroundedScope = async (scope, q, history) => {
     const intent = window.EOEngine.classifyIntent(q);
-    if (intent === 'who') { runMechanical(doc, q); return; }
-    if (!window.EOEngine.hasGround(doc, q)) { runMechanical(doc, q); return; }
-    const ctx = window.EOEngine.context(doc, q, 6);
+    if (intent === 'who') { runMechanicalScope(scope, q); return; }
+    if (!scope.some(d => window.EOEngine.hasGround(d, q))) { runMechanicalScope(scope, q); return; }
+    const ctx = window.EOEngine.contextScope(scope, q, 6);
     const task = intent === 'summary' ? 'summary' : 'answer';
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
@@ -449,16 +466,17 @@ function App() {
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
       };
       if (/passages?\s+do\s?n.?t\s+say/i.test(full) || full.trim().length < 3) {
-        settle(window.EOEngine.answer(doc, q));
+        settle(window.EOEngine.answerScope(scope, q));
       } else {
-        // MECHANICAL VETO: if the model invented a name that's nowhere in the
-        // document, or its phrasing won't bind to the page, discard it and show
-        // the mechanical grounded answer. The model never wins over the page.
-        const invented = window.EOEngine.inventedTerms(doc, full);
-        const bound = window.EOEngine.bindCitations(doc, full, q, intent);
-        settle((invented.length || !bound.audit.grounded) ? window.EOEngine.answer(doc, q) : bound);
+        // MECHANICAL VETO across the whole scope: a name present in NONE of the
+        // sources is invented; if the phrasing won't bind to any source, discard
+        // it for the mechanical answer. The model never wins over the page(s).
+        const perDoc = scope.map(d => new Set(window.EOEngine.inventedTerms(d, full)));
+        const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
+        const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent);
+        settle((invented.length || !bound.audit.grounded) ? window.EOEngine.answerScope(scope, q) : bound);
       }
-    } catch (e) { runMechanical(doc, q); return; }
+    } catch (e) { runMechanicalScope(scope, q); return; }
     setBusy(false);
   };
 
@@ -476,6 +494,7 @@ function App() {
     setBusy(true); ensureChat(q);
 
     const doc = backingDoc();
+    const scope = scopeList();   // explicit source chips, else the focused doc
     const canLLM = !!(window.EOLLM && window.EOLLM.hasWebGPU());
 
     // load the real model on demand if it isn't ready yet
@@ -491,19 +510,20 @@ function App() {
     if (mode === 'creative') {
       if (!ready) { replaceLast({ role: 'assistant', text: 'Creative mode needs the local model, which isn’t available here. Grounded answers from a document still work.', audit: null }); setBusy(false); return; }
       lastGroundedRef.current = false;
-      runChat(q, history, 'creative', doc ? window.EOEngine.context(doc, q, 6) : '', !!doc); return;
+      runChat(q, history, 'creative', scope.length ? window.EOEngine.contextScope(scope, q, 6) : '', scope.length > 0); return;
     }
 
-    // The one routing decision: is the user referencing the open document?
-    // Grounded mode forces it; Auto lets the engine decide, with continuity from
-    // the previous turn so an anaphoric follow-up stays on the page. Otherwise
-    // it's just a conversation with the model.
-    const referencing = !!doc && (mode === 'grounded' || window.EOEngine.referencesDoc(doc, q, { prevGrounded: lastGroundedRef.current }));
+    // The one routing decision: is the user referencing a source in scope?
+    // Grounded mode forces it; Auto lets the engine decide across the whole
+    // source set, with continuity from the previous turn so an anaphoric
+    // follow-up stays on the page. Otherwise it's a conversation with the model.
+    const referencing = scope.length > 0 && (mode === 'grounded' || window.EOEngine.referencesScope(scope, q, { prevGrounded: lastGroundedRef.current }));
     lastGroundedRef.current = referencing;
 
     if (referencing) {
-      if (ready && doc.kind === 'prose') { runGrounded(doc, q, history); return; }
-      runMechanical(doc, q); return;   // tables, or no model → mechanical pivot / grounded answer
+      const primary = window.EOEngine.routePrimary(scope, q) || scope[0];
+      if (ready && primary && primary.kind === 'prose') { runGroundedScope(scope, q, history); return; }
+      runMechanicalScope(scope, q); return;   // tables, or no model → mechanical pivot / grounded answer
     }
 
     // plain chat
@@ -558,6 +578,9 @@ function App() {
   const composerProps = {
     value: input, onChange: setInput, onSend: () => send(), mode, onMode: setMode,
     onAttach: () => fileRef.current.click(), busy,
+    sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
+    addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
+    onAddSource: addSource, onRemoveSource: removeSource,
   };
 
   const hasTabs = openTabs.length > 0;

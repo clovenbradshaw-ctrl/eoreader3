@@ -260,6 +260,33 @@ button { font-family: inherit; cursor: pointer; }
 }
 .composer textarea:focus { outline: none; }
 .composer textarea::placeholder { color: var(--text-3); }
+/* source chips — the conversation's explicit grounding set */
+.source-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 9px 10px 2px; }
+.src-label { font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); margin-right: 2px; }
+.src-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+  padding: 3px 6px 3px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-sunken); font-size: 12px; color: var(--text-2);
+}
+.src-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); flex: none; }
+.src-dot.table { background: #2f9e6b; }
+.src-chip.table .src-dot { background: #2f9e6b; }
+.src-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-x { border: 0; background: none; cursor: pointer; color: var(--text-3); font-size: 15px; line-height: 1; padding: 0 1px; border-radius: 4px; }
+.src-x:hover { color: var(--text); background: var(--border); }
+.src-add { position: relative; display: inline-flex; }
+.src-chip.add { cursor: pointer; color: var(--accent); border-style: dashed; background: transparent; }
+.src-chip.add:hover { background: var(--accent-tint); }
+.src-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; min-width: 200px; max-height: 260px; overflow-y: auto;
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r); box-shadow: var(--sh);
+  padding: 4px;
+}
+.src-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; cursor: pointer;
+  padding: 7px 9px; border-radius: var(--r-sm); font-size: 13px; color: var(--text);
+}
+.src-menu button:hover { background: var(--bg-sunken); }
 .composer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; }
 .comp-btn {
   display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 11px;
