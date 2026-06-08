@@ -160,6 +160,19 @@ function App() {
   const replaceLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch, typing: false }; return c; });
   const patchLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch }; return c; });
 
+  // strip citation/void markup so prior turns read as plain text in history
+  const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
+  // the running conversation, as plain {role, content} turns for the model
+  const historyFor = () => messages
+    .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.typing && !m.loading && m.text)
+    .map(m => ({ role: m.role, content: stripMarkup(m.text) }));
+
+  const streamInto = (patch) => (d) => setMessages(m => {
+    const c = m.slice(); const prev = c[c.length - 1];
+    c[c.length - 1] = { role: 'assistant', text: (prev.text || '') + d, streaming: true, ...patch };
+    return c;
+  });
+
   const runMechanical = (doc, q) => {
     const plan = window.EOEngine.answer(doc, q);
     replaceLast({ role: 'assistant', text: plan.text, audit: plan.audit, mode: mode === 'creative' ? 'creative' : 'grounded' });
@@ -168,46 +181,51 @@ function App() {
     setBusy(false);
   };
 
-  const runLLM = async (doc, q) => {
-    // SEEKER (mechanical) decides what there is to say. The model only
-    // phrases it. Meta-asks route by intent; "who" is exact-mechanical;
-    // if the seeker finds no ground, fall to the mechanical hold / void.
-    const intent = doc && doc.kind === 'prose' ? window.EOEngine.classifyIntent(q) : 'chat';
-    if (doc && doc.kind === 'prose') {
-      if (intent === 'who') { runMechanical(doc, q); return; }
-      if (!window.EOEngine.hasGround(doc, q)) { runMechanical(doc, q); return; }
-    }
-    const ctx = doc ? window.EOEngine.context(doc, q, 6) : '';
-    const task = mode === 'creative' ? 'creative' : (intent === 'summary' ? 'summary' : 'answer');
+  // Plain conversation with the model — multi-turn, no document forced in,
+  // no citations. This is the default; it should feel like a simple chat app.
+  const runChat = async (q, history, modeTag, ctx) => {
     try {
-      replaceLast({ role: 'assistant', text: '', mode, streaming: true });
-      let full = '';
-      full = await window.EOLLM.phrase({
-        mlcKey: model.mlc, question: q, contextText: ctx, mode, task,
-        onToken: (d) => { full += d; setMessages(m => { const c = m.slice(); c[c.length - 1] = { role: 'assistant', text: full, mode, streaming: true }; return c; }); },
+      replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
+      const full = await window.EOLLM.phrase({
+        mlcKey: model.mlc, question: q, history, contextText: ctx || '',
+        mode: modeTag === 'creative' ? 'creative' : 'chat',
+        grounded: false, onToken: streamInto({ mode: modeTag }),
       });
-      if (!doc || mode === 'creative') replaceLast({ role: 'assistant', text: full, audit: null, mode });
-      else if (/passages?\s+do\s?n.?t\s+say/i.test(full) || full.trim().length < 3) {
-        const mech = window.EOEngine.answer(doc, q);
-        replaceLast({ role: 'assistant', text: mech.text, audit: mech.audit, mode });
-        if (mech.cites && mech.cites.length) setTimeout(() => flashCitation(mech.cites[0].docId, mech.cites[0].idx), 380);
+      replaceLast({ role: 'assistant', text: full, audit: null, mode: modeTag });
+    } catch (e) { replaceLast({ role: 'assistant', text: 'The local model hit an error. Give it a moment and try again.', audit: null }); }
+    setBusy(false);
+  };
+
+  // Document-referencing turn: feed the model the relevant passages and bind
+  // citations mechanically. The seeker still decides what's there to say —
+  // "who" is exact-mechanical; no ground → honest hold; the model only phrases.
+  const runGrounded = async (doc, q, history) => {
+    const intent = window.EOEngine.classifyIntent(q);
+    if (intent === 'who') { runMechanical(doc, q); return; }
+    if (!window.EOEngine.hasGround(doc, q)) { runMechanical(doc, q); return; }
+    const ctx = window.EOEngine.context(doc, q, 6);
+    const task = intent === 'summary' ? 'summary' : 'answer';
+    try {
+      replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
+      const full = await window.EOLLM.phrase({
+        mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
+        grounded: true, onToken: streamInto({ mode: 'grounded' }),
+      });
+      const settle = (res) => {
+        replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
+        if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
+      };
+      if (/passages?\s+do\s?n.?t\s+say/i.test(full) || full.trim().length < 3) {
+        settle(window.EOEngine.answer(doc, q));
       } else {
-        // MECHANICAL VETO: if the model invented a name that's nowhere in
-        // the document, or its phrasing won't bind, discard it and show
-        // the mechanical grounded answer instead. The model never wins
-        // over the page.
+        // MECHANICAL VETO: if the model invented a name that's nowhere in the
+        // document, or its phrasing won't bind to the page, discard it and show
+        // the mechanical grounded answer. The model never wins over the page.
         const invented = window.EOEngine.inventedTerms(doc, full);
         const bound = window.EOEngine.bindCitations(doc, full, q, intent);
-        if (invented.length || !bound.audit.grounded) {
-          const mech = window.EOEngine.answer(doc, q);
-          replaceLast({ role: 'assistant', text: mech.text, audit: mech.audit, mode });
-          if (mech.cites && mech.cites.length) setTimeout(() => flashCitation(mech.cites[0].docId, mech.cites[0].idx), 380);
-        } else {
-          replaceLast({ role: 'assistant', text: bound.text, audit: bound.audit, mode });
-          if (bound.cites && bound.cites.length) setTimeout(() => flashCitation(bound.cites[0].docId, bound.cites[0].idx), 380);
-        }
+        settle((invented.length || !bound.audit.grounded) ? window.EOEngine.answer(doc, q) : bound);
       }
-    } catch (e) { if (doc) runMechanical(doc, q); else replaceLast({ role: 'assistant', text: 'The local model hit an error mid-answer. Try again, or add a document and I’ll answer from it directly.', audit: null }); return; }
+    } catch (e) { runMechanical(doc, q); return; }
     setBusy(false);
   };
 
@@ -220,6 +238,7 @@ function App() {
     const noDocs = docs.length === 0;
     if (noDocs && (q.length > 140 || /\n/.test(q))) { ingest('Pasted text.txt', q); return; }
 
+    const history = historyFor();
     setMessages(m => [...m, { role: 'user', text: q }, { role: 'assistant', typing: true }]);
     setBusy(true); ensureChat(q);
 
@@ -234,17 +253,29 @@ function App() {
     }
     const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
 
-    if (!doc) {
-      if (ready) { runLLM(null, q); return; }
-      replaceLast({ role: 'assistant', text: canLLM
-        ? 'The local model isn’t ready yet. Add a document or paste some text and I’ll answer straight from it.'
-        : 'This browser doesn’t support WebGPU, so the local model can’t run here. Add a document or paste text and I’ll still answer from it, with citations.', audit: null });
-      setBusy(false); return;
+    // CREATIVE: free composition (needs the model). Phrases over doc passages
+    // if one is open, otherwise writes freely. Never cited.
+    if (mode === 'creative') {
+      if (!ready) { replaceLast({ role: 'assistant', text: 'Creative mode needs the local model, which isn’t available here. Grounded answers from a document still work.', audit: null }); setBusy(false); return; }
+      runChat(q, history, 'creative', doc ? window.EOEngine.context(doc, q, 6) : ''); return;
     }
-    const useLLM = ready && (doc.kind === 'prose');
-    if (mode === 'creative' && !ready) { replaceLast({ role: 'assistant', text: 'Creative mode needs the local model, which isn’t available here. Grounded answers still work.', audit: null }); setBusy(false); return; }
-    if (useLLM) runLLM(doc, q);
-    else runMechanical(doc, q);
+
+    // The one routing decision: is the user referencing the open document?
+    // Grounded mode forces it; Auto lets the engine decide. Otherwise it's
+    // just a conversation with the model.
+    const referencing = !!doc && (mode === 'grounded' || window.EOEngine.referencesDoc(doc, q));
+
+    if (referencing) {
+      if (ready && doc.kind === 'prose') { runGrounded(doc, q, history); return; }
+      runMechanical(doc, q); return;   // tables, or no model → mechanical pivot / grounded answer
+    }
+
+    // plain chat
+    if (ready) { runChat(q, history); return; }
+    replaceLast({ role: 'assistant', text: canLLM
+      ? 'The local model isn’t ready yet — give it a moment. Meanwhile, upload a document and I can answer questions about it directly, with citations.'
+      : 'This browser can’t run the local model (no WebGPU), so I can’t free-chat here. Upload a document or paste text and I’ll still answer questions about it, with citations.', audit: null });
+    setBusy(false);
   };
 
   const newChat = () => { setMessages([]); setActiveChat('new'); };
