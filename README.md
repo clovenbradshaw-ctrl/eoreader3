@@ -21,6 +21,25 @@ Open `index.html` through a server (not `file://`) so the engine and component
 scripts load. A WebGPU-capable browser (Chrome/Edge 113+) is needed for the
 local model; without one, grounded answers and pivots still work mechanically.
 
+### Optional production build
+
+The no-build flow ships React's dev build and the Babel compiler to the browser.
+For a deploy, an optional esbuild step precompiles the JSX and bundles React +
+compromise + the engine + the UI into one minified, production file (no
+Babel-in-browser, no React/compromise CDN):
+
+```sh
+npm install        # dev deps incl. esbuild + react
+npm run build      # → ./dist  (serve dist/index.html)
+```
+
+### Local storage & privacy
+
+Documents, the running chat, rule toggles, and the engine's induced learning are
+saved on the device (IndexedDB + localStorage), so a refresh keeps your
+workspace — nothing is uploaded. Set `window.EO_DEBUG = true` in the console to
+surface errors that resilience catches otherwise swallow.
+
 ## How it works
 
 The intelligence is **mechanical**; the language model only phrases things.
@@ -38,6 +57,8 @@ The intelligence is **mechanical**; the language model only phrases things.
 - **UI** (`app.jsx`, `chat.jsx`, `docview.jsx`, `sidebar.jsx`, `rulesets.jsx`,
   `icons.jsx`) — React via in-browser Babel; `styles.css` for the look.
 - **`data.jsx`** — example documents, model list, and the reading rulesets.
+- **`store.js`** — local persistence (IndexedDB for docs/chat, localStorage for
+  prefs/rules and the learned rules-ledger delta).
 
 ### Chat behaviour
 

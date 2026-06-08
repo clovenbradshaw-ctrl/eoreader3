@@ -12,8 +12,12 @@
 <body>
 <div id="root"></div>
 
-<!-- compromise.js — POS-tagged parsing for the engine -->
-<script src="https://cdn.jsdelivr.net/npm/compromise@14/builds/compromise.min.js"></script>
+<!-- compromise.js — POS-tagged parsing for the engine. Pinned to an exact
+     version (not a floating major) so a silent upstream change can't shift the
+     extractor's output and break the golden-parity contract. Matches the
+     version the Node test harness resolves. Add an SRI integrity hash when
+     regenerating against this exact file. -->
+<script src="https://cdn.jsdelivr.net/npm/compromise@14.15.1/builds/compromise.min.js"></script>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>

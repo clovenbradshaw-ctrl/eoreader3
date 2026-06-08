@@ -82,7 +82,7 @@ function Message({ msg, onCite }) {
           : <React.Fragment>{renderAnswer(msg.text, onCite)}<AuditBadge audit={msg.audit} /></React.Fragment>}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
-            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void):[^}]*\}\}/g, '')); } catch (e) {} }}><Icon name="copy" size={15} /></button>
+            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
             <button title="Good answer"><Icon name="thumbsup" size={15} /></button>
           </div>
         )}

@@ -4,6 +4,12 @@
    only phrases them, citations bound mechanically either way.
    ============================================================ */
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
+// Diagnostics flag (§5): set window.EO_DEBUG = true in the console to surface
+// the errors that are otherwise swallowed by resilience catches. Off by default
+// so a normal session stays quiet, but failures become diagnosable on demand.
+if (typeof window !== 'undefined' && window.EO_DEBUG === undefined) window.EO_DEBUG = false;
+const eoWarn = (...a) => { if (typeof window !== 'undefined' && window.EO_DEBUG) console.warn('[Cleon]', ...a); };
+if (typeof window !== 'undefined') window.eoWarn = eoWarn;
 let _uid = 0; const uid = (p) => p + '-' + (++_uid);
 // After restoring persisted docs/chats, advance the uid counter past every
 // restored id so a new upload this session can't collide with a stored one.
@@ -109,7 +115,7 @@ function App() {
             if (tok !== ingestTok.current) return;
             setIngestStatus({ phase: p.phase, stage: p.stage, pct: p.total ? p.done / p.total : null, name: d.name });
           });
-        } catch (e) { continue; }
+        } catch (e) { eoWarn('re-parse failed for', d.name, e); continue; }
         if (tok !== ingestTok.current) break;
         setDocs(ds => ds.map(x => x.id === nd.id ? nd : x));
       }
@@ -613,4 +619,24 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// A single render throw used to blank #root with no recovery; this catches it
+// and offers a reload instead of a white screen. (§5)
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { if (typeof window !== 'undefined' && window.EO_DEBUG) console.error('[Cleon] render error', err, info); }
+  render() {
+    if (this.state.err) {
+      return (
+        <div className="crash" role="alert">
+          <h1>Something went wrong.</h1>
+          <p>Cleon hit an unexpected error while rendering. Your documents and chat are saved locally — reloading usually recovers.</p>
+          <button className="hero-action primary" onClick={() => location.reload()}>Reload</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);

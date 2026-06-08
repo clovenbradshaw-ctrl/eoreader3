@@ -287,6 +287,10 @@ button { font-family: inherit; cursor: pointer; }
 .composer-hint b { color: var(--text-2); font-weight: 600; }
 
 /* ============================================================ EMPTY / HERO */
+.crash { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px; text-align: center; }
+.crash h1 { font-size: 22px; }
+.crash p { color: var(--text-2); max-width: 440px; }
+
 .hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; overflow-y: auto; }
 .hero-inner { width: 100%; max-width: 660px; }
 .hero-eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--evidence); text-align: center; margin-bottom: 12px; }

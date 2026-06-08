@@ -7,9 +7,13 @@
     "test": "node tests/engine.test.js && node tests/learning.test.js && node tests/parity.js",
     "test:update": "node tests/parity.js --update",
     "bench": "node tests/bench.js",
-    "demo": "node tests/demo-learning.js"
+    "demo": "node tests/demo-learning.js",
+    "build": "node build.mjs"
   },
   "devDependencies": {
-    "compromise": "^14.14.0"
+    "compromise": "^14.14.0",
+    "esbuild": "^0.24.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   }
 }
