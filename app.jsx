@@ -23,10 +23,17 @@ const auditHits = (scope, q, k = 6) => {
       .map(h => ({ docId: h.docId, idx: h.i, score: Math.round((h.score || 0) * 1e4) / 1e4, overlap: h.overlap, text: h.t }));
   } catch (e) { return []; }
 };
-// 5-gram shingle overlap between two strings (0..1). Used to catch the one
-// failure the mechanical veto can't see: a "summary" that is just one source
-// span echoed back verbatim binds and audits clean, but is not an answer.
-const shingleOverlap = (a, b) => {
+// Catch the one failure the mechanical veto can't see: a "summary" that is just
+// one source span echoed back verbatim binds and audits clean, but is not an
+// answer. spanCoverage = what fraction of the DRAFT is just this SPAN — shared
+// 5-gram shingles over the DRAFT's own shingles. Directional on purpose: a real
+// answer that merely quotes a span scores low (most of it is the answer's own
+// words), while a draft that IS the span scores ~1. The earlier min(draft, span)
+// denominator broke on short spans — any retrieved line of ≤5 words is a single
+// shingle, so the denominator collapsed to 1 and every grounded answer that
+// quoted it read as a 1.0 "echo" and got vetoed (e.g. "[Scanned at 300dpi /
+// Univ. Lib.").
+const spanCoverage = (draft, span) => {
   const grams = (s) => {
     const w = String(s).toLowerCase().replace(/\{\{[^}]*\}\}/g, '').match(/[a-z0-9']+/g) || [];
     const g = new Set();
@@ -34,17 +41,17 @@ const shingleOverlap = (a, b) => {
     if (!g.size && w.length) g.add(w.join(' '));   // short text: whole-string gram
     return g;
   };
-  const ga = grams(a), gb = grams(b);
-  if (!ga.size || !gb.size) return 0;
-  let shared = 0; for (const x of ga) if (gb.has(x)) shared++;
-  return shared / Math.min(ga.size, gb.size);
+  const gd = grams(draft), gs = grams(span);
+  if (!gd.size || !gs.size) return 0;
+  let shared = 0; for (const x of gd) if (gs.has(x)) shared++;
+  return shared / gd.size;
 };
 // Is `text` essentially a copy of one of the retrieved spans? (the degenerate
 // echo). Threshold mirrors the old sentinel_draft_overlap (0.82).
 const echoesASpan = (scope, q, text, k = 6) => {
   try {
     const hits = window.EOEngine.retrieveScope(scope, q, k) || [];
-    return hits.some(h => shingleOverlap(text, h.t) >= 0.82);
+    return hits.some(h => spanCoverage(text, h.t) >= 0.82);
   } catch (e) { return false; }
 };
 
@@ -610,6 +617,7 @@ function App() {
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
         grounded: true, onToken: streamInto({ mode: 'grounded' }),
       });
+      full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
       const settle = (res, decision) => {
         replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
@@ -635,6 +643,7 @@ function App() {
               mlcKey: model.mlc, question: q, contextText: stricter, history, mode: 'grounded', task,
               grounded: true, onToken: streamInto({ mode: 'grounded' }),
             });
+            retry = window.EOEngine.dedupeSentences(retry);
           } catch (e) { retry = ''; }
           // If the retry still echoes (or came back empty), the model can't do
           // this turn — use the mechanical portrait answer, which never echoes.
@@ -732,6 +741,22 @@ function App() {
       lastGroundedRef.current = false;
       const ctx = scope.length ? window.EOEngine.contextScope(scope, q, 6) : '';
       AUD('step', 'route', { path: 'creative', referencing: scope.length > 0 });
+      if (scope.length) AUD('step', 'retrieve', { k: 6, engine: 'creative-context', hits: auditHits(scope, q, 6) });
+      runChat(q, history, 'creative', ctx, scope.length > 0); return;
+    }
+
+    // CREATIVE COMPOSITION in auto mode: "write a song/poem/story about this".
+    // It references the open doc, so the cost-ordered router below would send it
+    // to the grounded summary path — whose prompt only yields a 2–4 sentence
+    // overview, so the model refuses ("I cannot provide a song") and recycles the
+    // summary. A generative form can't be a grounded QA answer; route it to the
+    // same free-composition path the Creative toggle uses, grounded on the
+    // passages when a document is open. (Explicit grounded/creative modes are
+    // left to their own branches.)
+    if (mode === 'auto' && ready && window.EOEngine.isCreativeCompose(q)) {
+      lastGroundedRef.current = false;
+      const ctx = scope.length ? window.EOEngine.contextScope(scope, q, 6) : '';
+      AUD('step', 'route', { path: 'creative', referencing: scope.length > 0, reason: 'creative-compose' });
       if (scope.length) AUD('step', 'retrieve', { k: 6, engine: 'creative-context', hits: auditHits(scope, q, 6) });
       runChat(q, history, 'creative', ctx, scope.length > 0); return;
     }

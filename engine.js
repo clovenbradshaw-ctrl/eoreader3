@@ -3666,6 +3666,12 @@ function projectGraph(events, frame = {}) {
     const caps = String(text).match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
     const out = [];
     for (const c of caps) {
+      // "I", "I'm", "I'd", "I'll", "I've" are the capitalized first-person
+      // pronoun, never a document entity. The cap-harvest would otherwise flag
+      // them as invented and strike them through ("it named I'm…"): QA_STOP holds
+      // "i" but not the contracted forms, and the possessive strip only removes
+      // 's, so guard the first-person forms explicitly.
+      if (/^i(['’](m|d|ll|ve))?$/i.test(c)) continue;
       // Strip a trailing possessive ("Fyodor's" → "Fyodor") before the membership
       // check, so a real entity named in a possessive isn't flagged invented —
       // mirrors the same strip in namesEntity. (1a)
@@ -3708,6 +3714,31 @@ function projectGraph(events, frame = {}) {
     if (/\b(write|draft|compose|put together|give me|make me|prepare|generate|create)\b[^?!.]*\b(report|essay|summary|overview|synopsis|recap|rundown|write[\s-]?up|breakdown)\b/.test(t)) return 'summary';
     if (/\b(write|report|essay|tell me|talk to me)\b[^?!.]*\babout\s+(this|the\s+(document|text|story|file|piece|passage|reading|script|screenplay|book))\b/.test(t)) return 'summary';
     return 'factual';
+  }
+  // A generative ask for an artistic form — "write a song/poem/story about
+  // this". Distinct from "write a report/essay/summary" (those are overviews,
+  // which classifyIntent routes to the summary path); a poem can't be produced
+  // by the grounded summary/QA prompt — it just refuses and recycles the
+  // summary — so the router sends these to the free-composition path instead.
+  function isCreativeCompose(q) {
+    const t = ' ' + String(q).toLowerCase().replace(/[’']/g, "'") + ' ';
+    return /\b(write|compose|create|make|give|pen)\b[^?!.]*\b(song|songs|poem|poems|sonnet|haiku|limerick|ballad|rap|verse|verses|lyric|lyrics|rhyme|ode|story|tale|jingle|hymn|villanelle|monologue|dialogue)\b/.test(t);
+  }
+  // The small models loop, emitting the same sentence twice in a grounded
+  // summary. Drop a later sentence that repeats one already kept (compared
+  // case/space/punctuation-insensitively); distinct sentences and order survive.
+  function dedupeSentences(text) {
+    const s = String(text == null ? '' : text);
+    const parts = s.match(/[^.!?]+[.!?]*\s*/g);
+    if (!parts) return s;
+    const seen = new Set(); const out = [];
+    for (const p of parts) {
+      const key = p.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      out.push(p);
+    }
+    return out.join('').trim();
   }
   function salientContext(doc) {
     const picks = new Set();
@@ -4317,7 +4348,7 @@ function projectGraph(events, frame = {}) {
   window.EOEngine = {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
-    applyRules, voidInvented,
+    applyRules, voidInvented, isCreativeCompose, dedupeSentences,
     // the extracted graph: a portrait, and a portable per-doc snapshot (explorer + export)
     graphPortrait, graphSnapshot,
     // multi-doc scope: ground a conversation against an explicit set of sources
