@@ -45,14 +45,60 @@
       return task === 'summary'
         ? 'You are Cleon. Summarize the supplied passages faithfully in 2 to 4 sentences, using only what they state. Do not add anything not present in them. Do not write citation markers; those are added mechanically afterward.'
         : 'You are Cleon. Answer using ONLY the supplied passages. Reply in one or two sentences, staying close to the passages\' own facts and wording. Never add anything the passages do not state. If they do not answer the question, reply exactly: The passages don\'t say. Do not write citation markers like [s1]; those are added mechanically afterward.';
-    return 'You are Cleon, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
+    return 'You are Cleon, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
   }
 
-  // Assemble the chat messages: system + as much recent history as fits the
-  // budget (oldest turns dropped, never summarized) + this turn. Exposed for
+  // Chat-history policy.
+  //  - The most recent RECENT_TURNS turns are always kept verbatim.
+  //  - Everything older is folded into a single compact recap so the model keeps
+  //    the gist without spending the whole context budget on stale turns. The
+  //    recap is mechanical (no model call), so it can never hallucinate, and each
+  //    folded line is tagged with its absolute turn index.
+  //  - Because every turn keeps its index, an exact span can be pulled back out
+  //    verbatim with recallSpan() when an answer needs the precise earlier wording.
+  const RECENT_TURNS = 8;         // most recent turns kept word-for-word
+  const SUMMARY_LINE_CHARS = 160; // per-turn cap inside the condensed recap
+
+  function condense(s, cap = SUMMARY_LINE_CHARS) {
+    const t = String(s || '').replace(/\s+/g, ' ').trim();
+    return t.length > cap ? t.slice(0, cap - 1).trimEnd() + '…' : t;
+  }
+
+  // Fold a block of older turns into one index-tagged recap message. `startIndex`
+  // is the absolute index (into the full history) of the first folded turn.
+  function summarizeTurns(turns, startIndex = 0) {
+    const lines = turns.map((m, i) =>
+      `#${startIndex + i} ${m.role === 'assistant' ? 'Cleon' : 'user'}: ${condense(m.content)}`);
+    return {
+      role: 'system',
+      content:
+        `Earlier conversation, condensed (turns #${startIndex}–#${startIndex + turns.length - 1}). ` +
+        `This recap is lossy; the exact wording of any turn can be recalled by index. Do not treat omissions as facts.\n` +
+        lines.join('\n'),
+    };
+  }
+
+  // Pull an exact, verbatim span of earlier turns back out of the full history by
+  // absolute turn index — the precise-recall escape hatch for when the condensed
+  // recap is not enough. Inclusive range; out-of-range indices are clamped. When
+  // `to` is omitted a single turn is returned.
+  function recallSpan(history, from, to) {
+    const hist = Array.isArray(history) ? history : [];
+    const a = Math.max(0, from | 0);
+    const b = Math.min(hist.length - 1, (to == null ? from : to) | 0);
+    const out = [];
+    for (let i = a; i <= b; i++)
+      if (hist[i] && hist[i].content) out.push({ index: i, role: hist[i].role, content: hist[i].content });
+    return out;
+  }
+
+  // Assemble the chat messages: system + a condensed recap of older turns + as
+  // many recent turns verbatim as fit the budget + this turn. Exposed for
   // testing. `est` is a coarse chars/4 token estimate — good enough to keep us
-  // off the context ceiling without condensing healthy conversations.
-  function assembleMessages({ sys, history, contextText, question, grounded, budget = 7000 }) {
+  // off the context ceiling. Past RECENT_TURNS, older turns are summarized rather
+  // than dropped, and any recent turn that won't fit verbatim is folded into the
+  // recap too, so nothing silently vanishes from the model's view.
+  function assembleMessages({ sys, history, contextText, question, grounded, budget = 7000, recentTurns = RECENT_TURNS }) {
     const est = (m) => Math.ceil(((m && m.content) || '').length / 4);
     const userContent = (grounded && contextText)
       ? `Passages from the document:\n${contextText}\n\nUsing only the passages above, answer: ${question}`
@@ -60,16 +106,38 @@
     const head = { role: 'system', content: sys };
     const tail = { role: 'user', content: userContent };
     let used = est(head) + est(tail);
+
+    const hist = (Array.isArray(history) ? history : []).filter(m => m && m.content);
+    // The most recent `recentTurns` turns are the verbatim window; the rest are
+    // candidates for condensing.
+    const splitAt = Math.max(0, hist.length - recentTurns);
+    const recent = hist.slice(splitAt);
+
+    // Keep as many recent turns verbatim as the budget allows, newest first; any
+    // that don't fit fall back into the recap rather than being dropped outright.
     const kept = [];
-    const hist = Array.isArray(history) ? history : [];
-    for (let i = hist.length - 1; i >= 0; i--) {
-      const m = hist[i];
-      if (!m || !m.content) continue;
-      const t = est(m);
-      if (used + t > budget) break;   // near the ceiling — drop the oldest, don't condense
-      used += t; kept.unshift({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
+    let firstKept = recent.length; // index (within `recent`) of the oldest verbatim turn
+    for (let i = recent.length - 1; i >= 0; i--) {
+      const t = est(recent[i]);
+      if (used + t > budget) break;
+      used += t; firstKept = i;
+      kept.unshift({ role: recent[i].role === 'assistant' ? 'assistant' : 'user', content: recent[i].content });
     }
-    return [head, ...kept, tail];
+
+    // Everything before the verbatim window gets condensed into one recap. If even
+    // the recap overflows, drop its oldest lines (and advance the start index) until
+    // it fits — oldest context degrades first, but only after being condensed.
+    const foldEnd = splitAt + firstKept; // exclusive: all turns before the kept window
+    let toFold = hist.slice(0, foldEnd);
+    let startIdx = 0;
+    let summary = null;
+    while (toFold.length) {
+      const s = summarizeTurns(toFold, startIdx);
+      if (used + est(s) <= budget) { summary = s; used += est(s); break; }
+      toFold = toFold.slice(1); startIdx++;
+    }
+
+    return [head, ...(summary ? [summary] : []), ...kept, tail];
   }
 
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
@@ -92,5 +160,5 @@
     return full.trim();
   }
 
-  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages };
+  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, summarizeTurns, recallSpan, RECENT_TURNS };
 })();
