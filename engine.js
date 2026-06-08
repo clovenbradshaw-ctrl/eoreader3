@@ -3692,7 +3692,17 @@ function projectGraph(events, frame = {}) {
     for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) picks.add(b.sentences[0].i);
     [0, 1, 2].forEach(i => doc.sentences[i] && picks.add(doc.sentences[i].i));
     const n = doc.sentences.length; [n - 1, n - 2].forEach(i => i >= 0 && doc.sentences[i] && picks.add(doc.sentences[i].i));
-    return [...picks].sort((a, b) => a - b).slice(0, 16).map(i => `[s${i}] ${doc.sentenceTexts[i]}`).join('\n');
+    // Lead with the structural portrait in reader's voice, so the model
+    // composes from what the reading noticed rather than echoing a span. The
+    // raw spans follow as evidence, but the portrait sets the task.
+    const p = graphPortrait(doc);
+    const head = p && p.heavy.length
+      ? 'What the reading came to rest on: ' + p.heavy.map(e => e.name).join(', ')
+        + (p.assertions.length ? '. It took ' + p.assertions.map(a => `${a.name} to be ${a.is}`).join(', ') : '')
+        + (p.spine.length > 1 ? '. It moved through: ' + p.spine.join(' → ') : '') + '.\n\n'
+      : '';
+    const spans = [...picks].sort((a, b) => a - b).slice(0, 16).map(i => `[s${i}] ${doc.sentenceTexts[i]}`).join('\n');
+    return head + spans;
   }
   function entityContext(doc) {
     const { entities } = projectEntities(doc);
@@ -3768,14 +3778,74 @@ function projectGraph(events, frame = {}) {
     const text = 'The figures who appear most often: ' + list.map(e => `${e.name} (${e.raw}) {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`).join(', ') + '.';
     return { text, cites: list.map(e => ({ docId: doc.id, idx: e.sents[0] })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Counted directly from the document’s mentions — no model involved.' } };
   }
-  function answerSummary(doc) {
-    const leads = [];
-    for (const b of doc.blocks) { if (b.type === 'p' && b.sentences.length) { leads.push(b.sentences[0]); if (leads.length >= 3) break; } }
-    if (!leads.length) return { text: 'This document doesn’t have enough prose to summarize.', audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'Too little text.' } };
+  // ── The graph's portrait ──────────────────────────────────────────
+  // A summary already exists in the graph, unstated: which sites carry the
+  // weight, which edges run between them, what the text asserted about them,
+  // and the section spine. This takes that photo at the end position and says
+  // it in words — mechanically, no model. Ported from eo-extractor.html's
+  // graphPortrait(); reads Cleon's projected entities + edges + sections.
+  function graphPortrait(doc) {
+    if (!doc || doc.kind !== 'prose') return null;
     const { entities } = projectEntities(doc);
-    const ppl = entities.slice(0, 5).map(e => e.name);
-    const text = leads.map(s => `${s.t} {{cite:${doc.id}:${s.i}:s${s.i}}}`).join(' ') + (ppl.length ? `\n\nKey figures: ${ppl.join(', ')}.` : '');
-    return { text, cites: leads.map(s => ({ docId: doc.id, idx: s.i })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'A grounded précis from the opening lines and the most-mentioned figures. Load the model for a fuller summary.' } };
+    if (!entities.length) return null;
+    const heavy = entities.slice(0, 6);
+    const heavyKeys = new Set(heavy.map(e => e.key));
+    // edges between the heavy sites, by projectGraph (text-layer SYN)
+    let edges = [];
+    try { edges = (projectGraph(doc._events).edges || []); } catch (e) {}
+    const heavyEdges = edges
+      .filter(ed => heavyKeys.has(ed.a) && heavyKeys.has(ed.b) && ed.verb)
+      .slice(0, 6);
+    // DEF assertions the text makes about the heaviest subjects: copular
+    // "X is/was Y" and appositive "a TRADE named X" land as DEF path:'class'.
+    const defByTarget = new Map();
+    for (const ev of (doc._events || [])) {
+      if (ev.op !== 'DEF' || ev.path !== 'class' || !ev.value) continue;
+      const k = normSurface(ev.target);
+      if (!defByTarget.has(k)) defByTarget.set(k, ev.value);
+    }
+    const assertions = heavy
+      .map(e => ({ name: e.name, is: defByTarget.get(e.key) }))
+      .filter(a => a.is);
+    const spine = (doc._sections || []).map(s => s.label).filter(Boolean).slice(0, 8);
+    return { heavy, heavyEdges, assertions, spine };
+  }
+
+  function answerSummary(doc) {
+    const p = graphPortrait(doc);
+    if (!p || !p.heavy.length) {
+      // Fall back to the old lead-sentence précis only when the graph is too
+      // thin to portray (very short or entity-less text).
+      const leads = [];
+      for (const b of doc.blocks) { if (b.type === 'p' && b.sentences.length) { leads.push(b.sentences[0]); if (leads.length >= 3) break; } }
+      if (!leads.length) return { text: 'This document doesn’t have enough prose to summarize.', audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'Too little text.' } };
+      const text = leads.map(s => `${s.t} {{cite:${doc.id}:${s.i}:s${s.i}}}`).join(' ');
+      return { text, cites: leads.map(s => ({ docId: doc.id, idx: s.i })), audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'Too little structure to portray — a précis from the opening lines.' } };
+    }
+    // Read the portrait in words. Heaviest figures (with anchor citations),
+    // what the text asserts about them, the relations between them, the spine.
+    const cites = [];
+    const figs = p.heavy.map(e => {
+      cites.push({ docId: doc.id, idx: e.sents[0] });
+      return `${e.name} {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`;
+    });
+    const parts = [];
+    parts.push(`This ${doc._lang && doc._lang !== 'en' ? doc._lang + ' ' : ''}document turns most on ${figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]}.`);
+    if (p.assertions.length) {
+      parts.push('It says ' + p.assertions.map(a => `${a.name} is ${a.is}`).join('; ') + '.');
+    }
+    if (p.heavyEdges.length) {
+      parts.push('The relations it draws: ' + p.heavyEdges.map(ed => `${ed.aName} ${ed.verb} ${ed.bName}`).join('; ') + '.');
+    }
+    if (p.spine.length > 1) {
+      parts.push('Its sections: ' + p.spine.join(' · ') + '.');
+    }
+    return {
+      text: parts.join(' '),
+      cites,
+      audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
+        note: 'Read mechanically from the shape of the whole document — the heaviest figures, what the text asserts about them, and the relations between them. No model involved.' },
+    };
   }
   // Coverage ratio (covered query content-terms / total) at or above which an
   // answer is allowed to claim "grounded". Below it the answer is HELD, not

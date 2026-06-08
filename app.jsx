@@ -23,6 +23,31 @@ const auditHits = (scope, q, k = 6) => {
       .map(h => ({ docId: h.docId, idx: h.i, score: Math.round((h.score || 0) * 1e4) / 1e4, overlap: h.overlap, text: h.t }));
   } catch (e) { return []; }
 };
+// 5-gram shingle overlap between two strings (0..1). Used to catch the one
+// failure the mechanical veto can't see: a "summary" that is just one source
+// span echoed back verbatim binds and audits clean, but is not an answer.
+const shingleOverlap = (a, b) => {
+  const grams = (s) => {
+    const w = String(s).toLowerCase().replace(/\{\{[^}]*\}\}/g, '').match(/[a-z0-9']+/g) || [];
+    const g = new Set();
+    for (let i = 0; i + 5 <= w.length; i++) g.add(w.slice(i, i + 5).join(' '));
+    if (!g.size && w.length) g.add(w.join(' '));   // short text: whole-string gram
+    return g;
+  };
+  const ga = grams(a), gb = grams(b);
+  if (!ga.size || !gb.size) return 0;
+  let shared = 0; for (const x of ga) if (gb.has(x)) shared++;
+  return shared / Math.min(ga.size, gb.size);
+};
+// Is `text` essentially a copy of one of the retrieved spans? (the degenerate
+// echo). Threshold mirrors the old sentinel_draft_overlap (0.82).
+const echoesASpan = (scope, q, text, k = 6) => {
+  try {
+    const hits = window.EOEngine.retrieveScope(scope, q, k) || [];
+    return hits.some(h => shingleOverlap(text, h.t) >= 0.82);
+  } catch (e) { return false; }
+};
+
 let _uid = 0; const uid = (p) => p + '-' + (++_uid);
 // After restoring persisted docs/chats, advance the uid counter past every
 // restored id so a new upload this session can't collide with a stored one.
@@ -549,7 +574,7 @@ function App() {
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
-      const full = await window.EOLLM.phrase({
+      let full = await window.EOLLM.phrase({
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
         grounded: true, onToken: streamInto({ mode: 'grounded' }),
       });
@@ -562,6 +587,33 @@ function App() {
         AUD('step', 'veto', { decision: 'mechanical', reason: 'model declined / empty' });
         settle(window.EOEngine.answerScope(scope, q), 'mechanical (model declined)');
       } else {
+        // DEGENERACY VETO (audit-reject retry, ported from eo-extractor.html):
+        // a near-verbatim copy of one retrieved span binds and audits clean but
+        // is not an answer — the failure the grounding checks can't see. Reject
+        // once, re-prompt the model under a stricter rule, and only then fall to
+        // the mechanical answer. Mainly bites summaries on a small model.
+        if (echoesASpan(scope, q, full)) {
+          AUD('step', 'veto', { decision: 'reject', reason: 'echoes a single span — retrying under a stricter rule' });
+          const stricter = ctx + '\n\nDo NOT copy or lightly reword any single passage. Compose a fresh ' +
+            (task === 'summary' ? 'summary that synthesizes across the passages in your own words.' : 'answer in your own words.');
+          let retry = '';
+          try {
+            replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
+            retry = await window.EOLLM.phrase({
+              mlcKey: model.mlc, question: q, contextText: stricter, history, mode: 'grounded', task,
+              grounded: true, onToken: streamInto({ mode: 'grounded' }),
+            });
+          } catch (e) { retry = ''; }
+          // If the retry still echoes (or came back empty), the model can't do
+          // this turn — use the mechanical portrait answer, which never echoes.
+          if (!retry || retry.trim().length < 3 || echoesASpan(scope, q, retry)) {
+            AUD('step', 'veto', { decision: 'mechanical', reason: 'retry still echoed — using the mechanical answer' });
+            settle(window.EOEngine.answerScope(scope, q), 'mechanical (echo veto)');
+            setBusy(false);
+            return;
+          }
+          full = retry;   // retry produced a real answer; fall through to bind it
+        }
         // MECHANICAL VETO across the whole scope: a name present in NONE of the
         // sources is invented; if the phrasing won't bind to any source, discard
         // it for the mechanical answer. The model never wins over the page(s).
