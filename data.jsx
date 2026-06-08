@@ -92,6 +92,53 @@ const RULESETS = [
 
 const RULE_GROUPS = ['Languages', 'Parsing', 'Chatting & grounding', 'Medium constants'];
 
+/* ---------------- the three tiers of the rules drawer ----------------
+   Laws ≠ rules. The MEDIUM is the physics — the four binding-laws and their
+   constants, language-independent and always on; you read them, you don't
+   toggle them. LANGUAGE RULESETS are the ruliad — surface conventions that
+   plug in and out per language, each in Original (shipped-only, frozen) or
+   Self-learning (adaptive) mode. GROUNDING is the cross-cutting QA layer:
+   how answers are cited and audited, not a language convention. The flat
+   RULESETS list above still backs every card; these just regroup it. */
+
+// Tier 1 — the medium: the four binding-laws (the layer ladder), read-only,
+// in existence → structure → significance order, sign before proportion.
+const MEDIUM_LAWS = [
+  { layer: 'existence',    name: 'Confinement', glyph: '⊙',
+    desc: 'The admission threshold. A surface must be sighted to admission before it exists as a referent at all — one binding-law freezes out here.' },
+  { layer: 'structure',    name: 'Charge', glyph: '±',
+    desc: 'Sign / polar exclusion. A referent carries a sign (gender); same sign repels, applied as a hard exclusion before any magnitude is weighed. The first of the structure pair.' },
+  { layer: 'structure',    name: 'Gravity', glyph: 'δ',
+    desc: 'Proportion — the δ dominance ratio. Among the survivors of the sign exclusion, the heaviest pull must out-pull the runner-up by δ or the field abstains to the void. Built on the poles.' },
+  { layer: 'significance', name: 'Weak', glyph: '⚡',
+    desc: 'Flavor change. The one law that changes an established type — a thing promoted to a person, an unknown made gendered. Everything else conserves type.' },
+];
+// The medium constants, shown as the laws' read-only parameters (RULESETS ids).
+const MEDIUM_PARAM_IDS = ['two-sighting', 'inertia-delta', 'pronoun-floor', 'decay-gamma', 'eva-energy', 'quote-weight', 'anaphora-weight'];
+
+// Tier 2 — language rulesets: one card per language. `lang` is the engine's
+// language code (drives the per-language Original/Self-learning mode); `ruleId`
+// is the backing RULESETS language rule (its enable toggle); `induces` marks the
+// narrative languages that learn speech-verb conventions (the mode is inert for
+// the others). `advanced` lists the shared parsing rules folded into the card.
+const LANGUAGES = [
+  { lang: 'en',   ruleId: 'en-narrative', name: 'English',      glyph: 'EN', induces: true,
+    conventions: 'stopwords · pronouns & their gender · titles · “X said / said X” attribution · capitalization as a proper-noun cue' },
+  { lang: 'zh',   ruleId: 'zh-narrative', name: 'Mandarin',     glyph: '中', induces: true,
+    conventions: 'no case, no whitespace · names mined as repeated 2–4 character runs · colon-quote attribution' },
+  { lang: 'es',   ruleId: 'es-narrative', name: 'Spanish',      glyph: 'ES', induces: true,
+    conventions: 'raya (—) dialogue with mid-quote attribution · guillemets · gendered articles · don/doña as name heads' },
+  { lang: 'code', ruleId: 'code',         name: 'JavaScript',   glyph: '{}', induces: false,
+    conventions: 'a line is a sentence · declaration = insertion · assignment = definition · a call = an edge between scopes' },
+  { lang: 'csv',  ruleId: 'tables',       name: 'CSV & Tables', glyph: 'TB', induces: false,
+    conventions: 'header row = schema · each row = a record · drives the spreadsheet & pivot engine, no model touches the data' },
+];
+// Parsing rules shared by the narrative languages, surfaced in their advanced view.
+const LANG_SHARED_PARSING = ['attribution', 'reconcile'];
+
+// Tier 3 — grounding: cross-cutting QA conventions (RULESETS ids), chat phase.
+const GROUNDING_IDS = ['auditor', 'cite-binding', 'paraphrase', 'void', 'two-voice', 'mode-policy', 'cross-check'];
+
 /* ---------------- rule-pack schema + LLM authoring prompt ---------------- */
 const RULE_PACK_SCHEMA = {
   pack: 'my-pack-id',
@@ -196,4 +243,5 @@ D-1055,Rhee,East,2026-03-31,44000,lost`,
   },
 ];
 
-Object.assign(window, { MODELS, RULESETS, RULE_GROUPS, RULE_PACK_SCHEMA, AUTHOR_PROMPT, EXAMPLE_PACK, EXAMPLES });
+Object.assign(window, { MODELS, RULESETS, RULE_GROUPS, RULE_PACK_SCHEMA, AUTHOR_PROMPT, EXAMPLE_PACK, EXAMPLES,
+  MEDIUM_LAWS, MEDIUM_PARAM_IDS, LANGUAGES, LANG_SHARED_PARSING, GROUNDING_IDS });
