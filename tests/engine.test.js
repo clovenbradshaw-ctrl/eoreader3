@@ -102,6 +102,26 @@ group('answer — grounded paths', () => {
   eq(vd.audit.status, 'warn', 'void answer is flagged warn');
 });
 
+// AUDIT-FIRST: the engine must resolve/audit before it stamps "grounded".
+group('audit gates the answer (audit-first)', () => {
+  // Scoped void even when ANOTHER term matched — the "Napoleon → Elena" bug:
+  // Zorthax is absent, Edith is present, but the absent named entity wins.
+  const mixed = E.answer(voss, 'What did Zorthax say to Edith?');
+  ok(/Zorthax/.test(mixed.text) && /void|⊥/.test(mixed.text), 'an absent named entity voids even when another term matched');
+  ok(!mixed.audit.grounded || mixed.audit.status === 'warn', 'the mixed-match answer is not a clean grounded answer');
+
+  // Thin coverage is HELD, not green: one weak hit (boat) cannot carry three
+  // absent content terms.
+  const held = E.answer(voss, 'boat quantum algorithm flux');
+  eq(held.audit.status, 'held', 'a thinly-covered answer is held, not grounded');
+  eq(held.audit.grounded, false, 'a held answer is explicitly NOT grounded');
+  ok(/\{\{cite:voss:\d+:s\d+\}\}/.test(held.text), 'a held answer still shows the closest cited line for verification');
+
+  // A genuinely covered factual answer stays grounded.
+  const good = E.answer(voss, 'what did the keeper say about the boat');
+  ok(good.audit.grounded, 'a well-covered factual answer is still grounded');
+});
+
 group('void / invented terms', () => {
   eq(JSON.stringify(E.inventedTerms(voss, 'Zorthax met Blorbo')), JSON.stringify(['Zorthax', 'Blorbo']),
     'capitalised terms absent from the page are flagged invented');

@@ -225,6 +225,9 @@ button { font-family: inherit; cursor: pointer; }
 .audit-chip.clean { background: var(--good-bg); border-color: var(--good-bd); }
 .audit-chip.notes { background: var(--warn-bg); border-color: var(--warn-bd); }
 .audit-chip.warn  { background: var(--bad-bg);  border-color: var(--bad-bd); }
+/* held: related lines were found but don't cover the question — shown and cited,
+   but explicitly NOT grounded. Amber like notes, dashed to read as "partial". */
+.audit-chip.held  { background: var(--warn-bg); border-color: var(--warn-bd); border-style: dashed; }
 .audit-chip.plain { background: var(--bg); border-color: var(--border); border-style: dashed; color: var(--text-3); }
 .audit-note { font-size: 12px; color: var(--text-3); margin-top: 7px; font-style: italic; }
 

@@ -3701,28 +3701,44 @@ function projectGraph(events, frame = {}) {
     const text = leads.map(s => `${s.t} {{cite:${doc.id}:${s.i}:s${s.i}}}`).join(' ') + (ppl.length ? `\n\nKey figures: ${ppl.join(', ')}.` : '');
     return { text, cites: leads.map(s => ({ docId: doc.id, idx: s.i })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'A grounded précis from the opening lines and the most-mentioned figures. Load the model for a fuller summary.' } };
   }
+  // Coverage ratio (covered query content-terms / total) at or above which an
+  // answer is allowed to claim "grounded". Below it the answer is HELD, not
+  // green: the closest lines are still shown and cited, but never pass as
+  // grounded. Reserves the green chip for answers that actually cover the ask.
+  const COVERAGE_FLOOR = 0.5;
   function answerProse(doc, query) {
-    const hits = retrieve(doc, query, 4);
+    // AUDIT-FIRST. A proper noun the query names that is absent from the page is
+    // a scoped void — checked BEFORE retrieval, so a stray hit on some unrelated
+    // term ("what did Napoleon say to Elena?" landing on an Elena line) can no
+    // longer stamp the answer grounded. The void fires even when other terms did
+    // match; that is the whole point.
     const vt = voidTerm(doc, query);
-    if (!hits.length) {
-      if (vt) return {
-        text: `“${vt}” appears nowhere in this document {{void:[⊥]}}. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.`,
-        audit: { status: 'warn', grounded: true, covers: '0/1', stable: true, note: 'A term named in the question is absent — resolved to the one void.' },
-      };
-      return {
-        text: 'I read the document for that and didn’t find a passage that answers it cleanly, so I’d rather hold than guess. Try naming a person, place, or phrase from the text.',
-        audit: { status: 'notes', grounded: true, covers: '0/1', stable: true, note: 'Held rather than invented — the page wouldn’t carry an answer.' },
-      };
-    }
+    if (vt) return {
+      text: `“${vt}” appears nowhere in this document {{void:[⊥]}}. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.`,
+      audit: { status: 'warn', grounded: true, covers: '0/1', stable: true, note: 'A term named in the question is absent — resolved to the one void.' },
+    };
+    const hits = retrieve(doc, query, 4);
+    if (!hits.length) return {
+      text: 'I read the document for that and didn’t find a passage that answers it cleanly, so I’d rather hold than guess. Try naming a person, place, or phrase from the text.',
+      audit: { status: 'notes', grounded: true, covers: '0/1', stable: true, note: 'Held rather than invented — the page wouldn’t carry an answer.' },
+    };
     const floor = 0.34;
     const used = hits.filter(h => h.score >= floor).slice(0, 3);
     const support = (used.length ? used : hits.slice(0, 1));
     const text = support.map(s => `${s.t} {{cite:${doc.id}:${s.i}:s${s.i}}}`).join(' ');
     const cov = coverage(query, support.map(s => s.t).join(' '));
     const full = cov.n >= cov.d;
+    const cites = support.map(s => ({ docId: doc.id, idx: s.i }));
+    // COVERAGE GATES THE BADGE. Thin coverage is HELD, not grounded: a "covers
+    // 1/4" answer must not wear the same green chip as a "covers 3/3" one.
+    if (cov.d && cov.n / cov.d < COVERAGE_FLOOR) return {
+      text, cites,
+      audit: { status: 'held', grounded: false, covers: `${cov.n}/${cov.d}`, stable: true,
+        note: 'These are the closest lines I found, but they don’t cover your question — holding rather than calling this grounded.' },
+    };
     return {
       text,
-      cites: support.map(s => ({ docId: doc.id, idx: s.i })),
+      cites,
       audit: {
         status: full ? 'clean' : 'notes', grounded: true,
         covers: `${cov.n}/${cov.d}`, stable: true,
