@@ -621,3 +621,66 @@ table.grid .member td:first-child { padding-left: 30px; }
 .model-loading .ml-bar { height: 5px; background: var(--bg-subtle); border-radius: 999px; margin: 9px 0 6px; overflow: hidden; }
 .model-loading .ml-fill { height: 100%; background: var(--evidence); border-radius: 999px; transition: width .25s; }
 .model-loading .ml-note { font-size: 11.5px; color: var(--text-3); }
+
+/* ============================================================ RESPONSIVE / MOBILE
+   On phones the sidebar becomes an off-canvas drawer over a backdrop, the body
+   collapses to a single pane (the app forces chat/doc instead of split), and
+   the touch targets / type sizes relax for small screens. */
+@media (max-width: 760px) {
+  /* full-height layout that survives the mobile URL-bar resize */
+  .app { height: 100vh; height: 100dvh; }
+
+  /* sidebar → slide-over drawer */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 100;
+    width: min(86vw, var(--sidebar-w)); box-shadow: var(--sh-lg);
+    transition: transform .26s cubic-bezier(.4,0,.2,1);
+  }
+  .sidebar.collapsed { margin-left: 0; transform: translateX(-100%); box-shadow: none; }
+  .sb-backdrop { position: fixed; inset: 0; z-index: 99; background: rgba(22,24,28,.42); animation: fade .18s ease; }
+
+  /* topbar: tighten and drop the secondary subtitle */
+  .topbar { padding: 0 8px; gap: 6px; }
+  .tb-title .sub { display: none; }
+  /* the split toggle is meaningless when only one pane shows at a time */
+  .topbar-seg button:nth-child(2) { display: none; }
+  .tb-pill { padding: 5px 9px; }
+
+  /* single pane — no draggable divider on touch */
+  .divider { display: none; }
+
+  /* chat: edge-to-edge, larger tap area */
+  .chat-inner,
+  .pane-chat.narrow .chat-inner,
+  .pane-chat.wide .chat-inner { max-width: 100%; padding: 16px 14px 10px; }
+  .composer,
+  .pane-chat.narrow .composer,
+  .pane-chat.wide .composer { max-width: 100%; padding: 0 12px; }
+  .composer-wrap { padding: 8px 0 12px; }
+  .composer textarea { font-size: 16px; } /* >=16px stops iOS zoom-on-focus */
+  .bubble-user { max-width: 92%; }
+  .msg-actions { opacity: 1; } /* no hover on touch — keep actions visible */
+
+  /* the segmented mode control can wrap on narrow composers */
+  .composer-bar { flex-wrap: wrap; row-gap: 8px; }
+
+  /* hero */
+  .hero { padding: 16px 14px; }
+  .hero h1 { font-size: 26px; }
+  .hero .lede { font-size: 14px; margin-bottom: 20px; }
+  .composer textarea { -webkit-text-size-adjust: 100%; }
+
+  /* document / table views */
+  .doc-tabs { height: 42px; }
+  .prose { padding: 22px 16px 64px; }
+  .prose .doc-h1 { font-size: 23px; }
+  .prose .doc-p { font-size: 16px; line-height: 1.7; }
+  .tableview { padding: 12px 12px 48px; overflow-x: auto; }
+  .pivot-controls { gap: 10px; padding: 10px; }
+
+  /* overlays go full-bleed */
+  .drawer { width: 100vw; }
+  .ent-modal { width: 94vw; max-height: 88vh; }
+  .popover { left: 8px !important; right: 8px; min-width: 0; width: auto; max-width: calc(100vw - 16px); }
+  .toast { left: 12px; right: 12px; transform: none; bottom: 14px; justify-content: center; }
+}

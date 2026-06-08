@@ -34,6 +34,10 @@ function App() {
 
   const [splitRatio, setSplitRatio] = useState(0.46);
   const [dragging, setDragging] = useState(false);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
+  const mobileRef = useRef(isMobile);
+  mobileRef.current = isMobile;
   const [dragOver, setDragOver] = useState(false);
   const [toast, setToast] = useState(null);
   const bodyRef = useRef(null);
@@ -73,7 +77,9 @@ function App() {
   const openTab = useCallback((id) => {
     setOpenTabs(t => t.includes(id) ? t : [...t, id]);
     setActiveTab(id);
-    setLayout(l => l === 'chat' ? 'split' : l);
+    // phones show one pane at a time: opening a doc brings it fullscreen.
+    if (mobileRef.current) { setLayout('doc'); setCollapsed(true); }
+    else setLayout(l => l === 'chat' ? 'split' : l);
   }, []);
 
   const closeTab = (id) => {
@@ -91,7 +97,10 @@ function App() {
     try { doc = window.EOEngine.parseDocument(name, text, id); }
     catch (e) { showToast('Could not read that file.'); return null; }
     setDocs(ds => [...ds, doc]);
-    setOpenTabs(t => [...t, id]); setActiveTab(id); setLayout('split');
+    setOpenTabs(t => [...t, id]); setActiveTab(id);
+    // on a phone stay in chat after upload so the composer is right there;
+    // on desktop open the side-by-side split.
+    setLayout(mobileRef.current ? 'chat' : 'split');
     if (doc.kind === 'prose') setExplore(true);
     setTableSpec(null);
     showToast('Added “' + name + '” · ' + doc.meta);
@@ -107,7 +116,9 @@ function App() {
   const flashCitation = useCallback((docId, idx) => {
     setOpenTabs(t => t.includes(docId) ? t : [...t, docId]);
     setActiveTab(docId);
-    setLayout(l => l === 'chat' ? 'split' : l);
+    // following a citation on a phone brings the document fullscreen to show it.
+    if (mobileRef.current) { setLayout('doc'); setCollapsed(true); }
+    else setLayout(l => l === 'chat' ? 'split' : l);
     setExplore(true);
     setTimeout(() => {
       setFlashSent(idx);
@@ -137,9 +148,26 @@ function App() {
   };
   const pickModel = (m) => { setModel(m); setModelStatus('idle'); loadModel(m); };
 
-  // auto-load on startup so the demo is live with the actual model
+  // auto-load on startup so the demo is live with the actual model. The default
+  // (MODELS[0]) is the smallest, most mobile-friendly model, so it begins
+  // downloading right away on phones too rather than waiting for the first turn.
   useEffect(() => {
     if (window.EOLLM && window.EOLLM.hasWebGPU()) loadModel(model);
+  }, []);
+
+  // ---- responsive: collapse the sidebar to an off-canvas drawer on phones and
+  // keep the body to a single pane (side-by-side split doesn't fit a phone). ----
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 760px)');
+    const apply = (matches) => {
+      setIsMobile(matches);
+      if (matches) { setCollapsed(true); setLayout(l => l === 'split' ? 'chat' : l); }
+      else setCollapsed(false);
+    };
+    apply(mq.matches);
+    const on = (e) => apply(e.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
   }, []);
 
   // keep an in-chat "loading model" message in sync with download progress
@@ -278,8 +306,8 @@ function App() {
     setBusy(false);
   };
 
-  const newChat = () => { setMessages([]); setActiveChat('new'); };
-  const selectChat = (id) => { setActiveChat(id); };
+  const newChat = () => { setMessages([]); setActiveChat('new'); if (mobileRef.current) setCollapsed(true); };
+  const selectChat = (id) => { setActiveChat(id); if (mobileRef.current) setCollapsed(true); };
 
   // ---- rules ----
   const toggleRule = (id) => setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
@@ -342,6 +370,8 @@ function App() {
         chats={chats} activeChat={activeChat} onNewChat={newChat} onSelectChat={selectChat}
         model={model} onModelClick={() => setModelOpen(o => !o)} onRulesClick={() => setRulesOpen(true)}
         enabledRules={enabledRules} modelStatus={modelStatus} />
+
+      {isMobile && !collapsed && <div className="sb-backdrop" onClick={() => setCollapsed(true)} />}
 
       <div className="workspace">
         <div className="topbar">
