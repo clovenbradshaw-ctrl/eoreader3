@@ -106,6 +106,17 @@ group('intent — classification', () => {
   eq(E.classifyIntent('who are the characters'), 'who', 'who-intent');
   eq(E.classifyIntent('give me a summary'), 'summary', 'summary-intent');
   eq(E.classifyIntent('what did the keeper say'), 'factual', 'factual-intent');
+  // Generative whole-document asks must reach the summary (salient-sample) path,
+  // not the factual one — otherwise they retrieve a single lexically-overlapping
+  // line and the model parrots it instead of synthesizing.
+  eq(E.classifyIntent('write a report about this'), 'summary', 'write-a-report → summary');
+  eq(E.classifyIntent('write an essay'), 'summary', 'write-an-essay → summary');
+  eq(E.classifyIntent('write the essay'), 'summary', 'write-the-essay → summary');
+  eq(E.classifyIntent('give me a rundown'), 'summary', 'give-me-a-rundown → summary');
+  eq(E.classifyIntent('write about this document'), 'summary', 'write-about-this-document → summary');
+  // Specific factual asks (and table-style queries) must stay factual.
+  eq(E.classifyIntent('what colour is the lamp'), 'factual', 'specific question stays factual');
+  eq(E.classifyIntent('write down what Edith said'), 'factual', 'write-down-a-quote stays factual');
 });
 
 group('answer — grounded paths', () => {
