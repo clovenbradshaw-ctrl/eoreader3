@@ -3602,12 +3602,31 @@ function projectGraph(events, frame = {}) {
     const hit = qt.filter(t => st.has(t)).length;
     return { n: hit, d: qt.length };
   }
-  function voidTerm(doc, query) {
-    const caps = query.match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
+  // ── Anti-matter referents ───────────────────────────────────────────────
+  // A REFERENT is a name the query points at. It has MATTER when the page
+  // carries it, and ANTI-MATTER when it doesn't: referenced, but with no
+  // presence to bind to. Contact with an anti-matter referent annihilates
+  // grounding — it is the ⊥ the void holds on. Consecutive capitals read as one
+  // referent ("Amos Dresser"); interrogatives/stopwords (in QA_STOP) are not
+  // names. Returns { matter, antimatter } so a hold can say what it CAN see.
+  function referents(doc, query) {
     const body = docBodyLC(doc);
-    for (const c of caps) if (c.length > 2 && !QA_STOP.has(c.toLowerCase()) && !body.includes(c.toLowerCase())) return c;
-    return null;
+    const names = String(query).match(/\p{Lu}[\p{L}’'\-]+(?:\s+\p{Lu}[\p{L}’'\-]+)*/gu) || [];
+    const matter = [], antimatter = [];
+    for (const raw of names) {
+      // a sentence-initial interrogative ("Did Caesar…") is capitalised but is
+      // not part of the name — trim stopwords off both ends before deciding.
+      const parts = raw.split(/\s+/);
+      while (parts.length && QA_STOP.has(parts[0].toLowerCase())) parts.shift();
+      while (parts.length && QA_STOP.has(parts[parts.length - 1].toLowerCase())) parts.pop();
+      const sig = parts.filter(t => t.length > 2 && !QA_STOP.has(t.toLowerCase()));
+      if (!sig.length) continue;
+      (sig.some(t => body.includes(t.toLowerCase())) ? matter : antimatter).push(parts.join(' '));
+    }
+    return { matter, antimatter };
   }
+  // the first anti-matter referent (or null) — what the void holds on
+  function voidTerm(doc, query) { return referents(doc, query).antimatter[0] || null; }
   function inventedTerms(doc, text) {
     const body = docBodyLC(doc);
     const caps = String(text).match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
@@ -3712,11 +3731,20 @@ function projectGraph(events, frame = {}) {
     // term ("what did Napoleon say to Elena?" landing on an Elena line) can no
     // longer stamp the answer grounded. The void fires even when other terms did
     // match; that is the whole point.
-    const vt = voidTerm(doc, query);
-    if (vt) return {
-      text: `“${vt}” appears nowhere in this document {{void:[⊥]}}. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.`,
-      audit: { status: 'warn', grounded: true, covers: '0/1', stable: true, note: 'A term named in the question is absent — resolved to the one void.' },
-    };
+    const { matter, antimatter } = referents(doc, query);
+    if (antimatter.length) {
+      // Surface every anti-matter referent as a marked void, and name the
+      // present (matter) referents so the hold says what it CAN bind to.
+      const voids = antimatter.map(t => `{{void:${t}}}`);
+      const list = voids.length > 1 ? voids.slice(0, -1).join(', ') + ' and ' + voids[voids.length - 1] : voids[0];
+      const many = antimatter.length > 1;
+      const ackn = matter.length ? `${matter.join(' and ')} ${matter.length > 1 ? 'are' : 'is'} on the page, but ` : '';
+      return {
+        text: `${ackn}${list} ${many ? 'appear' : 'appears'} nowhere in this document. I won’t invent ${many ? 'answers' : 'an answer'} for ${many ? 'terms' : 'a term'} the page doesn’t contain — load a source that mentions ${many ? 'them' : 'it'} and I’ll read ${many ? 'them' : 'it'}.`,
+        audit: { status: 'warn', grounded: true, covers: `0/${antimatter.length}`, stable: true,
+          note: `Anti-matter referent${many ? 's' : ''} — named in the question, absent from the page.` },
+      };
+    }
     const hits = retrieve(doc, query, 4);
     if (!hits.length) return {
       text: 'I read the document for that and didn’t find a passage that answers it cleanly, so I’d rather hold than guess. Try naming a person, place, or phrase from the text.',

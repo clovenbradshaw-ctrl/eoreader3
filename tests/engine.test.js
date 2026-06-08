@@ -124,6 +124,21 @@ group('audit gates the answer (audit-first)', () => {
   ok(good.audit.grounded, 'a well-covered factual answer is still grounded');
 });
 
+// ANTI-MATTER REFERENTS: names the query points at with no matter on the page.
+group('anti-matter referents', () => {
+  // every absent referent is surfaced, not just the first
+  const multi = E.answer(voss, 'Did Caesar meet Napoleon at Voss Point?');
+  ok(/Caesar/.test(multi.text) && /Napoleon/.test(multi.text), 'all anti-matter referents are surfaced, not just the first');
+  eq(multi.audit.covers, '0/2', 'two anti-matter referents → covers 0/2');
+  ok(/Voss Point/.test(multi.text), 'a present (matter) referent is acknowledged in the hold');
+  ok(/\{\{void:Caesar\}\}/.test(multi.text), 'an anti-matter referent renders as a marked void span');
+
+  // a single absent name still holds; a fully-present query does not
+  const one = E.answer(voss, 'What did Zorthax say?');
+  eq(one.audit.status, 'warn', 'a lone anti-matter referent holds (warn)');
+  ok(!/appears nowhere/.test(E.answer(voss, 'what did Edith carry').text), 'an all-matter query does not trip the void');
+});
+
 group('void / invented terms', () => {
   eq(JSON.stringify(E.inventedTerms(voss, 'Zorthax met Blorbo')), JSON.stringify(['Zorthax', 'Blorbo']),
     'capitalised terms absent from the page are flagged invented');
