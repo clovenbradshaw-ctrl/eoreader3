@@ -98,6 +98,10 @@ function App() {
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
   const [auditCount, setAuditCount] = useState(0);
+  // Glass-box export toggles: include the extraction half (graph + processing)
+  // and/or the chat half (audit turns). Persisted with prefs. Both on by default.
+  const [exportIngestion, setExportIngestion] = useState(true);
+  const [exportOutput, setExportOutput] = useState(true);
   const [model, setModel] = useState(defaultModel);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
@@ -208,11 +212,16 @@ function App() {
         if (typeof prefs.splitRatio === 'number') setSplitRatio(prefs.splitRatio);
         if (typeof prefs.explore === 'boolean') setExplore(prefs.explore);
         if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
+        if (typeof prefs.exportIngestion === 'boolean') setExportIngestion(prefs.exportIngestion);
+        if (typeof prefs.exportOutput === 'boolean') setExportOutput(prefs.exportOutput);
       }
 
-      let savedDocs = [], savedChat = null;
-      try { [savedDocs, savedChat] = await Promise.all([window.EOStore.loadDocs(), window.EOStore.loadChat()]); } catch (e) {}
+      let savedDocs = [], savedChat = null, savedAudit = [];
+      try { [savedDocs, savedChat, savedAudit] = await Promise.all([window.EOStore.loadDocs(), window.EOStore.loadChat(), window.EOStore.loadAudit()]); } catch (e) {}
       if (cancelled) { hydrated.current = true; return; }
+      // Restore the persisted glass-box trace (best-effort; survives reloads
+      // until the user clears it).
+      if (savedAudit.length && window.EOAudit && window.EOAudit.restore) { try { window.EOAudit.restore(savedAudit); } catch (e) {} }
 
       const docIds = new Set();
       if (savedDocs.length) { setDocs(savedDocs); savedDocs.forEach(d => docIds.add(d.id)); bumpUid(savedDocs.map(d => d.id)); }
@@ -243,8 +252,19 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled });
-  }, [rules, model, mode, splitRatio, explore, projects, activeProject, auditEnabled]);
+    window.EOStore.savePrefs({ rules, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput });
+  }, [rules, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput]);
+  // Persist the audit trace (debounced) on every change, so the glass box
+  // survives reloads. EOAudit.clear() fires a notify too, so an intentional
+  // wipe persists as empty automatically — "persist unless wiped". The
+  // hydrated gate skips the save that restore() itself would trigger on load.
+  useEffect(() => {
+    if (!window.EOAudit || !window.EOStore) return;
+    let t = null;
+    const save = () => { if (!hydrated.current) return; clearTimeout(t); t = setTimeout(() => window.EOStore.saveAudit(window.EOAudit.all()), 600); };
+    const off = window.EOAudit.subscribe(save);
+    return () => { clearTimeout(t); off(); };
+  }, []);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2400); };
 
@@ -502,7 +522,9 @@ function App() {
 
   const streamInto = (patch) => (d) => setMessages(m => {
     const c = m.slice(); const prev = c[c.length - 1];
-    c[c.length - 1] = { role: 'assistant', text: (prev.text || '') + d, streaming: true, ...patch };
+    // Spread `prev` first so streaming a token never drops fields already on the
+    // message (auditId, mode, audit); the explicit keys and caller patch win.
+    c[c.length - 1] = { ...prev, role: 'assistant', text: (prev.text || '') + d, streaming: true, ...patch };
     return c;
   });
 
@@ -624,15 +646,31 @@ function App() {
           }
           full = retry;   // retry produced a real answer; fall through to bind it
         }
-        // MECHANICAL VETO across the whole scope: a name present in NONE of the
-        // sources is invented; if the phrasing won't bind to any source, discard
-        // it for the mechanical answer. The model never wins over the page(s).
+        // SOFTENED VETO across the whole scope. The page still overrules the
+        // model, but a draft that genuinely binds is no longer thrown away whole
+        // just because it named one unsupported term — that term is marked as a
+        // void and the (better) phrasing is kept, badged as a caveat. Only a
+        // draft that won't bind to ANY source falls back to the mechanical answer.
         const perDoc = scope.map(d => new Set(window.EOEngine.inventedTerms(d, full)));
         const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
         const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent);
-        const useModel = !(invented.length || !bound.audit.grounded);
-        AUD('step', 'veto', { decision: useModel ? 'model' : 'mechanical', invented, boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
-        settle(useModel ? bound : window.EOEngine.answerScope(scope, q), useModel ? 'model + mechanical cite' : 'mechanical (veto)');
+        if (!bound.audit.grounded) {
+          // Unmoored: the phrasing matched no passage — use the mechanical answer.
+          AUD('step', 'veto', { decision: 'mechanical', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
+          settle(window.EOEngine.answerScope(scope, q), 'mechanical (veto)');
+        } else if (invented.length) {
+          // Grounded, but names term(s) the page doesn't contain: KEEP the draft,
+          // strike those terms as voids, downgrade the badge to an honest caveat.
+          const list = invented.length > 1 ? invented.slice(0, -1).join(', ') + ' and ' + invented[invented.length - 1] : invented[0];
+          const caveated = { ...bound, text: window.EOEngine.voidInvented(bound.text, invented),
+            audit: { ...bound.audit, status: 'warn',
+              note: `Phrased by the model and grounded in the passages, but it named ${list} — which the document doesn’t contain, shown struck as unverified.` } };
+          AUD('step', 'veto', { decision: 'model-caveat', invented, boundGrounded: true, boundCovers: bound.audit.covers });
+          settle(caveated, 'model + caveat');
+        } else {
+          AUD('step', 'veto', { decision: 'model', invented: [], boundGrounded: true, boundCovers: bound.audit.covers });
+          settle(bound, 'model + mechanical cite');
+        }
       }
     } catch (e) { AUD('step', 'error', { where: 'grounded', message: String((e && e.message) || e) }); runMechanicalScope(scope, q); return; }
     setBusy(false);
@@ -658,13 +696,18 @@ function App() {
 
     // Open the turn's audit record before anything branches, so the routing
     // decision, model load, retrieval and the model call all attach to it.
-    AUD('begin', {
+    const auditId = AUD('begin', {
       input: q, mode,
       scope: auditScope(scope),
       model: { id: model.id, name: model.name, mlc: model.mlc },
       hasWebGPU: canLLM, modelLoadedAtStart: wasLoaded,
       prevGrounded: lastGroundedRef.current,
     });
+    // Pin the turn's audit id to the assistant message so its inline "thinking"
+    // panel can read the trace. replaceLast/patchLast/streamInto all spread the
+    // prior message, so this id rides through every settle path. (null when
+    // recording is paused → the panel renders nothing.)
+    if (auditId) patchLast({ auditId });
 
     // load the real model on demand if it isn't ready yet
     if (canLLM && !wasLoaded) {
@@ -828,8 +871,8 @@ function App() {
               <button className={layout === 'doc' ? 'on' : ''} onClick={() => setLayout('doc')} title="Fullscreen document"><Icon name="expand" size={14} /></button>
             </div>
           )}
-          <button className="tb-pill" onClick={() => setAuditOpen(true)} title="Audit — see every step the chat takes, exportable as JSONL">
-            <Icon name="activity" size={15} /> Audit{auditCount ? ' · ' + auditCount : ''}
+          <button className="tb-pill" onClick={() => setAuditOpen(true)} title="Glass box — the extracted graph and every step the chat takes, exportable as JSONL">
+            <Icon name="activity" size={15} /> Glass box{auditCount ? ' · ' + auditCount : ''}
             {auditEnabled && <span className="dot rec" title="Recording" />}
           </button>
           <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> {enabledRules} rules on</button>
@@ -860,7 +903,9 @@ function App() {
       </main>
 
       {rulesOpen && <RulesDrawer rules={rules} onToggle={toggleRule} onInstall={installRule} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
-      {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast} />}
+      {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
+                      docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
+                      onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
       {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
                      status={modelStatus} progress={modelProgress} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (

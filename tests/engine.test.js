@@ -213,6 +213,14 @@ group('void / invented terms', () => {
     'capitalised terms absent from the page are flagged invented');
   eq(E.inventedTerms(voss, 'Edith and Marlow spoke').length, 0,
     'real entities are NOT flagged invented');
+  // (1a) A real entity named in the possessive ("Edith's") must not be flagged —
+  // the body check strips a trailing 's first, mirroring namesEntity.
+  eq(E.inventedTerms(voss, "Edith's kettle was warm").length, 0,
+    'a real entity in possessive form (Edith’s) is not flagged invented');
+  // voidInvented marks each flagged term as {{void:term}} so a kept-but-caveated
+  // answer shows it struck rather than passing it off as grounded.
+  eq(E.voidInvented('Zorthax met Edith', ['Zorthax']), '{{void:Zorthax}} met Edith',
+    'voidInvented wraps an invented term and leaves real ones alone');
 });
 
 group('table — deterministic fold', () => {

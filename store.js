@@ -70,6 +70,11 @@
   async function saveChat(snapshot) { return kvPut('chat', snapshot || {}); }
   async function loadChat() { const c = await kvGet('chat'); return c && typeof c === 'object' ? c : null; }
 
+  // ---- the audit trace (the glass box; persisted so it survives reloads,
+  //      until the user intentionally clears it) ----
+  async function saveAudit(turns) { return kvPut('audit', Array.isArray(turns) ? turns : []); }
+  async function loadAudit() { const a = await kvGet('audit'); return Array.isArray(a) ? a : []; }
+
   // ---- small JSON in localStorage ----
   const lsGet = (k) => { try { const s = localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch (e) { return null; } };
   const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
@@ -84,12 +89,12 @@
   // Wipe everything (used by a "clear local data" affordance / tests).
   async function clearAll() {
     try { localStorage.removeItem(LS_PREFS); localStorage.removeItem(LS_LEDGER); } catch (e) {}
-    try { await kvPut('docs', []); await kvPut('chat', {}); } catch (e) {}
+    try { await kvPut('docs', []); await kvPut('chat', {}); await kvPut('audit', []); } catch (e) {}
   }
 
   window.EOStore = {
     available: typeof indexedDB !== 'undefined',
-    saveDocs, loadDocs, saveChat, loadChat,
+    saveDocs, loadDocs, saveChat, loadChat, saveAudit, loadAudit,
     savePrefs, loadPrefs, saveLedger, loadLedger, clearAll,
   };
 })();

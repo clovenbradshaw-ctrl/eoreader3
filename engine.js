@@ -3666,8 +3666,30 @@ function projectGraph(events, frame = {}) {
     const caps = String(text).match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
     const out = [];
     for (const c of caps) {
-      const lc = c.toLowerCase();
-      if (c.length > 2 && !QA_STOP.has(lc) && !body.includes(lc) && !out.includes(c)) out.push(c);
+      // Strip a trailing possessive ("Fyodor's" → "Fyodor") before the membership
+      // check, so a real entity named in a possessive isn't flagged invented —
+      // mirrors the same strip in namesEntity. (1a)
+      const bare = c.replace(/['’]s\b/g, '');
+      const lc = bare.toLowerCase();
+      if (bare.length > 2 && !QA_STOP.has(lc) && !body.includes(lc) && !out.includes(bare)) out.push(bare);
+    }
+    return out;
+  }
+
+  // Mark each invented term as a {{void:term}} so a kept-but-caveated model
+  // answer shows the unsupported names struck through rather than passing them
+  // off as grounded. Word-boundary, case-insensitive; never re-wraps a term that
+  // already sits inside a {{…}} marker. (softened veto)
+  function voidInvented(text, terms) {
+    let out = String(text == null ? '' : text);
+    for (const t of (terms || [])) {
+      const term = String(t || '').trim();
+      if (term.length < 1) continue;
+      // <prev char that isn't a letter / { / :> TERM <not a letter or }> — so we
+      // match a standalone word, skip anything already inside a {{…}} marker, and
+      // leave a trailing possessive ('s) outside the void.
+      const re = new RegExp('(^|[^\\p{L}{:])(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?=$|[^\\p{L}}])', 'gu');
+      out = out.replace(re, (m, pre, hit) => pre + '{{void:' + hit + '}}');
     }
     return out;
   }
@@ -3809,6 +3831,33 @@ function projectGraph(events, frame = {}) {
       .filter(a => a.is);
     const spine = (doc._sections || []).map(s => s.label).filter(Boolean).slice(0, 8);
     return { heavy, heavyEdges, assertions, spine };
+  }
+
+  // ── The graph, made portable ──────────────────────────────────────
+  // A self-contained, JSON-safe snapshot of everything the reading extracted
+  // from one document: the entities (with mass + mention sites), the relations
+  // between them, the copular assertions, the section spine, the physics frame,
+  // and the full event log — "all the processing that took place". This is what
+  // the Graph explorer reads and what the unified export writes as a
+  // `cleon-graph/1` line. Read-only; never mutates the doc.
+  function graphSnapshot(doc) {
+    if (!doc || doc.kind !== 'prose' || !doc._events) return null;
+    const clone = (v) => { try { return v == null ? v : JSON.parse(JSON.stringify(v)); } catch (e) { return null; } };
+    let edges = [], frame = null;
+    try { const g = projectGraph(doc._events); edges = g.edges || []; frame = g.frame || null; } catch (e) {}
+    const { entities } = projectEntities(doc);
+    const p = graphPortrait(doc) || { assertions: [], spine: [] };
+    return {
+      schema: 'cleon-graph/1',
+      at: new Date().toISOString(),
+      doc: { id: doc.id, name: doc.name, kind: doc.kind, lang: doc._lang || 'en', sentences: (doc.sentenceTexts || []).length },
+      entities: entities.map(e => ({ name: e.name, key: e.key, type: e.type, mentions: e.raw, mass: e.mass, sents: e.sents })),
+      edges: edges.map(e => ({ a: e.a, b: e.b, aName: e.aName, bName: e.bName, verb: e.verb, weight: e.weight })),
+      assertions: (p.assertions || []).map(a => ({ subject: a.name, is: a.is })),
+      spine: p.spine || [],
+      frame: clone(frame),
+      events: clone(doc._events) || [],
+    };
   }
 
   function answerSummary(doc) {
@@ -4268,7 +4317,9 @@ function projectGraph(events, frame = {}) {
   window.EOEngine = {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
-    applyRules,
+    applyRules, voidInvented,
+    // the extracted graph: a portrait, and a portable per-doc snapshot (explorer + export)
+    graphPortrait, graphSnapshot,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
     contextScope, bindCitationsScope,
