@@ -649,8 +649,10 @@ table.grid .member td:first-child { padding-left: 30px; }
    collapses to a single pane (the app forces chat/doc instead of split), and
    the touch targets / type sizes relax for small screens. */
 @media (max-width: 760px) {
-  /* full-height layout that survives the mobile URL-bar resize */
-  .app { height: 100vh; height: 100dvh; }
+  /* full-height layout that survives the mobile URL-bar resize, and tracks the
+     soft keyboard via --app-height (set from visualViewport in app.jsx) so the
+     composer stays pinned just above the on-screen keyboard. */
+  .app { height: 100vh; height: 100dvh; height: var(--app-height, 100dvh); }
 
   /* sidebar → slide-over drawer */
   .sidebar {
