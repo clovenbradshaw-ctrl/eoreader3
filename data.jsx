@@ -80,7 +80,7 @@ const RULESETS = [
     layer: 'significance', value: 0.7, mass: '∞', src: 'medium constant', installed: true, enabled: true, locked: true,
     desc: 'Each referent’s momentum is multiplied by γ between sentences — recent mentions stay warm, old ones cool.' },
   { id: 'inertia-delta', group: 'Medium constants', phase: 'medium', name: 'Inertia δ', glyph: 'δ',
-    layer: 'significance', value: 2.0, mass: '∞', src: 'medium constant', installed: true, enabled: true, locked: true,
+    layer: 'structure', value: 2.0, mass: '∞', src: 'medium constant', installed: true, enabled: true, locked: true,
     desc: 'Dominance ratio for resolution: the heaviest pull must be ≥ δ× the second pull to absorb, else the surfaces stall and the reader abstains. The SAME δ now gates pronoun binding — a contested “it”/“they”/“he” resolves to the void instead of forcing the heaviest wrong answer.' },
   { id: 'pronoun-floor', group: 'Medium constants', phase: 'medium', name: 'Pronoun Floor', glyph: '⊥p',
     layer: 'significance', value: 0.1, mass: '∞', src: 'medium constant', installed: true, enabled: true, locked: false, live: true,

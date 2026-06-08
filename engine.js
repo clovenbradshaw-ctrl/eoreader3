@@ -255,7 +255,7 @@ const READING_RULES = {
     desc: 'Momentum decay rate per sentence. Each site\'s momentum is multiplied by γ between sentences — recent mentions stay warm, old mentions cool.',
   },
   inertia_delta: {
-    value: 2.0, mass: Infinity, layer: 'significance', src: 'medium-constant', module: 'core',
+    value: 2.0, mass: Infinity, layer: 'structure', src: 'medium-constant', module: 'core',
     desc: 'Dominance ratio for gravitational collision. If the heaviest pull is ≥ δ × the second pull, it absorbs; otherwise the surfaces stall and NUL fires. The SAME δ gates re-collisions after EVA deposits — no reader gets a different law.',
   },
   eva_energy_budget: {
@@ -2703,11 +2703,15 @@ function resolveByActivation(pronoun, sites) {
   // Score on SURFACE mass only (Fix 1): mass earned from the name appearing,
   // not from prior pronoun bindings. Inferred mass never enters the score, so
   // a cluster cannot bootstrap itself into a black hole on its own guesses.
+  // STRUCTURE LAYER, STEP 1 — SIGN (electromagnetism): a hard polar exclusion.
+  // Same sign repels: a confirmed-opposite-gender site is dropped from the
+  // field entirely before any magnitude is compared. This must run BEFORE
+  // step 2 — proportion is built on the poles, not the other way round.
   const elig = [];
   for (const [k, v] of sites) {
-    if (needPerson && v.type !== 'person') continue;
-    if (needFemale && v.gender === 'm') continue;
-    if (needMale && v.gender === 'f') continue;
+    if (needPerson && v.type !== 'person') continue;      // type charge
+    if (needFemale && v.gender === 'm') continue;         // sign exclusion
+    if (needMale && v.gender === 'f') continue;           // sign exclusion
     const surfaceMass = v.surfaceMass != null ? v.surfaceMass : v.mass;
     let score = surfaceMass * MASS_WEIGHT + v.momentum;
     if (preferNonPerson && v.type === 'person') score -= 0.15;
@@ -2717,6 +2721,10 @@ function resolveByActivation(pronoun, sites) {
   elig.sort((a, b) => b.score - a.score);
   const best = elig[0];
   const competing = () => elig.slice(0, 4).map(e => ({ site: e.key, siteName: e.v.name, score: +e.score.toFixed(3) }));
+  // STRUCTURE LAYER, STEP 2 — PROPORTION (gravity / δ): among the survivors of
+  // the sign exclusion, the winner must out-pull the runner-up by the δ ratio,
+  // else the field stalls to the void. Proportion decides among what sign left
+  // standing — it is built on the poles, never the other way round.
   // Fix 2 — absolute floor: nothing is warm enough to claim the pronoun.
   if (best.score <= 0 || best.score < PRONOUN_FLOOR()) {
     return { nul: true, reason: 'below-floor', competing: competing() };
@@ -3546,6 +3554,65 @@ function projectGraph(events, frame = {}) {
     return RULES_REV;
   }
 
+  // A transmuting DEF changes an ESTABLISHED type/flavor (the significance-layer
+  // "weak" law) as opposed to attaching a property. Derived from event provenance,
+  // so it never touches the event log. Conserving DEFs (copular class, appositive,
+  // married, died, gloss, paren) are NOT transmutations.
+  const _TRANSMUTE_SRC = new Set(['speech-induction', 'speech-implies-person', 'pronoun-binding']);
+  function isTransmutingDef(ev) {
+    if (!ev || ev.op !== 'DEF') return false;
+    if (_TRANSMUTE_SRC.has(ev.src)) return true;
+    if (ev.path === 'type') return true;                 // explicit type promotion
+    return false;
+  }
+
+  // ── The layer ladder: the essay's force-count test, made live. ──
+  // Counts the distinguishable binding-laws operative at each EO layer
+  // (existence → structure → significance) by precondition, and checks the
+  // predicted 1-2-1 differentiation rate and monotone cumulative count.
+  // Read-only. Returns null for tables / empty prose (the ladder is a
+  // narrative instrument). The panel MUST be able to show a mismatch.
+  function layerLadder(doc) {
+    if (!doc || doc.kind !== 'prose' || !doc._events) return null;
+    const ev = doc._events;
+    const count = (p) => ev.filter(p).length;
+    const { entities } = projectEntities(doc);
+    let gentities = [];
+    try { gentities = projectGraph(doc._events).entities || []; } catch (e) {}
+    // EXISTENCE — confinement: no free unbound surface; a referent had to be
+    // sighted to admission (two-sighting gate) to exist at all.
+    const admitted = entities.length;
+    const confinement = admitted >= 1;
+    // STRUCTURE — gravity (proportion / δ): needs ≥2 bodies to relate.
+    const absorptions = count(e => e.op === 'SYN' && e.method === 'gravity');
+    const gravity = admitted >= 2;
+    // STRUCTURE — charge (sign / EM exclusion): a referent carries a sign and a
+    // binding was attempted. Same sign repels (gender exclusion in resolution).
+    const charged = gentities.filter(e => e.gender).length;
+    const genderDefs = count(e => e.op === 'DEF' && e.path === 'gender');
+    const charge = charged >= 1;
+    // SIGNIFICANCE — weak (flavor change): the lone law that changes an
+    // established type. Use the shared transmuting-DEF classifier (WI-4).
+    const transmutes = ev.filter(isTransmutingDef);
+    const weak = transmutes.length >= 1;
+    const laws = {
+      existence:    [{ name: 'confinement',          present: confinement, fired: admitted,     note: admitted + ' referents admitted (no free unbound surface)' }],
+      structure:    [{ name: 'gravity (δ proportion)', present: gravity,    fired: absorptions, note: absorptions + ' δ-gated absorptions over ' + admitted + ' referents' },
+                     { name: 'charge (sign exclusion)', present: charge,    fired: genderDefs,  note: charged + ' referents carry a sign; ' + genderDefs + ' sign assignments' }],
+      significance: [{ name: 'weak (flavor change)',  present: weak,        fired: transmutes.length, note: transmutes.length + ' type-changing DEFs' }],
+    };
+    const perLayerNew = [
+      laws.existence.filter(l => l.present).length,
+      laws.structure.filter(l => l.present).length,
+      laws.significance.filter(l => l.present).length,
+    ];
+    let acc = 0; const cumulative = perLayerNew.map(n => (acc += n));
+    const predicted = [1, 2, 1];
+    const rateMatches = JSON.stringify(perLayerNew) === JSON.stringify(predicted);
+    const monotone = cumulative.every((v, i) => i === 0 || v >= cumulative[i - 1]);
+    return { laws, perLayerNew, cumulative, predicted, rateMatches, monotone };
+  }
+
   /* ---------- projected entity view (events → weighted clusters) ---------- */
   let _projCache = new WeakMap();
   function projectEntities(doc) {
@@ -4356,6 +4423,9 @@ function projectGraph(events, frame = {}) {
     contextScope, bindCitationsScope,
     // cost-ordered routing (existence → structure → significance) + embedding recall
     routeTurn, retrieveHybrid, contextFromHits,
+    // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
+    // and the transmuting-DEF classifier (the significance-layer "weak" law)
+    layerLadder, isTransmutingDef,
     // expose the raw graph engine for future operator-void / shape work
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
     // read-only: the induced speech-verb class + accrued mass (learning record)
