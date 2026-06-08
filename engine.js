@@ -3510,6 +3510,45 @@ function projectGraph(events, frame = {}) {
     if (classifyIntent(q) !== 'factual') return true;
     return retrieve(doc, q, 6).length > 0 || !!voidTerm(doc, q);
   }
+
+  /* Does this turn seem to be ABOUT the loaded document? This is the only
+     routing the chat needs: a "yes" feeds the model the relevant passages
+     and binds citations; a "no" is just conversation, handled by the model
+     with the running history and no forced grounding. Kept deliberately
+     light — false positives drag chit-chat into the page, false negatives
+     just mean the user re-asks more explicitly. */
+  function namesEntity(doc, q) {
+    if (!doc || doc.kind !== 'prose') return false;
+    const ql = ' ' + String(q).toLowerCase().replace(/[^a-z0-9'’\- ]+/g, ' ') + ' ';
+    const { entities } = projectEntities(doc);
+    for (const e of entities) {
+      const n = String(e.name).toLowerCase();
+      if (n.length >= 3 && ql.includes(' ' + n + ' ')) return true;
+      const parts = n.split(/\s+/);
+      if (parts.length > 1 && parts.some(p => p.length >= 4 && ql.includes(' ' + p + ' '))) return true;
+    }
+    return false;
+  }
+  function referencesDoc(doc, q) {
+    if (!doc) return false;
+    const intent = classifyIntent(q);
+    if (intent === 'who' || intent === 'summary') return true;   // asking about the doc
+    if (doc.kind === 'table') {
+      try { if (!window.parsePivot(q, doc).empty) return true; } catch (e) {}
+      const ql = ' ' + String(q).toLowerCase() + ' ';
+      return (doc.columns || []).some(c => ql.includes(' ' + String(c).toLowerCase() + ' '));
+    }
+    if (namesEntity(doc, q)) return true;                        // mentions someone/somewhere in it
+    const hits = retrieve(doc, q, 3);                            // or shares real content with the page
+    if (!hits.length) return false;
+    const top = hits[0];
+    if (top.score >= 0.5 || top.overlap >= 2) return true;
+    // a real question ("what does the letter say?") that lands on even one word
+    // from the page is almost certainly about the page, not chit-chat.
+    const isQuestion = /\?\s*$/.test(q) ||
+      /^\s*(what|which|whose|where|when|why|how|who|does|did|do|is|are|was|were|can|could|would|should|tell me|describe|explain|list|show|name)\b/i.test(q);
+    return isQuestion && top.overlap >= 1;
+  }
   function answerWho(doc) {
     const { entities } = projectEntities(doc);
     const ppl = entities.filter(e => e.type === 'person');
@@ -3620,7 +3659,7 @@ function projectGraph(events, frame = {}) {
   /* ============================================================ EXPORT */
   window.EOEngine = {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
-    context, bindCitations, tok, classifyIntent, hasGround, inventedTerms,
+    context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
     applyRules,
     // expose the raw graph engine for future operator-void / shape work
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
