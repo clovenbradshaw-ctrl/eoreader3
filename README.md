@@ -72,6 +72,34 @@ referencing the loaded document (asking what it says, who's in it, summarizing
 it, naming something from it). That keeps ordinary conversation simple while
 document questions stay grounded and cited.
 
+Prior turns re-enter the model's history with **epistemic tags**: a reply that
+was vetoed, went out ungrounded, or carried struck (unverified) terms is
+prefixed with a note saying so, so the model never defends an earlier answer
+the system itself didn't stand behind.
+
+### Transcripts
+
+A transcript declares itself through its own typography — timecode lines
+(`0:00:14.240,0:00:16.560`, SRT/WebVTT cues, `[00:14]`) and `Speaker N:` /
+`NAME:` turn labels — and the reader adapts the same way it does for Spanish
+or Chinese. Timecodes become structure (turn boundaries), never sentence
+content; speaker labels become attribution (each turn's sentences land on
+their voice through the same SIG events quoted speech earns). A council
+meeting reads as voices and turns — who spoke, how much, about whom — rather
+than a soup of stray capitals and timestamps.
+
+### Thinking depth
+
+The composer's effort dial (1–3) buys *graph* work, not just more retrieval.
+Above the floor, a factual turn **walks the document graph** out from the
+entities the question names — the page's recorded assertions (DEF events), its
+drawn relations, co-occurrence — and the prompt opens with that reading before
+the verbatim passages. At the deepest stop a **propositional veto** audits the
+draft against the page's own assertions: a draft that denies what the page
+asserts ("X was not Y" while the graph holds *X is Y*) binds cleanly at the
+string layer and is caught only here, claim against claim. Depth 1 is the
+parity floor — byte-identical to the reflex pipeline.
+
 ### Auditing the chat
 
 Because the intelligence is mechanical, every chat turn is a sequence of
@@ -83,11 +111,15 @@ over them. For each turn it records, step by step:
 - **intent / ground / referents** — `who` vs `summary` vs `factual`, whether the
   page can answer, and the matter / anti-matter (void) referents the question
   names;
-- **retrieve** — the passages actually retrieved, each with its relevance score;
+- **retrieve** — the passages actually retrieved, each with its relevance score
+  (deeper turns add numbered *seek* rounds, with unseekable query terms named);
+- **traverse** — the graph walk (depth > 1): entry nodes, the assertions and
+  relations held along the walk, and the evidence sentences it gathered;
 - **llm** — the *exact* prompt the model saw (system + assembled history +
   passages), its parameters, and the raw text it streamed back, verbatim;
 - **veto** — the mechanical check: any invented terms, whether the phrasing
-  re-bound to the page, and whether the model's draft or the mechanical answer
+  re-bound to the page, whether the draft contradicts a recorded assertion
+  (deepest depth), and whether the model's draft or the mechanical answer
   won;
 - **answer** — the final text, citations, and the grounded / coverage / stable
   audit it ended on.

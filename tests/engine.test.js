@@ -486,6 +486,129 @@ group('reconsideration — a refusal is detected (plan SEG)', () => {
   ok(!E.looksRefused('The keeper said no one could row to the mainland.'), 'a substantive sentence is not a refusal');
 });
 
+// ── The transcript pack: timecodes are structure, labels are attribution ──
+const MEETING = `0:00:01.000,0:00:04.000
+Speaker 1: Good evening everyone and welcome to the council meeting.
+0:00:05.000,0:00:09.000
+Speaker 1: We will begin with the invocation. Thank you.
+0:00:10.000,0:00:14.000
+Speaker 2: Thank you, Mister Chairman. Please rise.
+0:00:15.000,0:00:21.000
+Speaker 4: Amos Dresser was a white minister who came south. Amos Dresser was seized by the committee.
+0:00:22.000,0:00:25.000
+Speaker 4: He was whipped in the public square. Steven Watts recorded the event.
+0:00:26.000,0:00:28.000
+Speaker 3: Thank you. The motion passes.
+`;
+const meeting = await E.parseDocument('meeting.txt', MEETING, 'meet');
+group('transcript pack — the page declares the genre, the reader adapts', () => {
+  eq(meeting.kind, 'prose', 'timecode commas do not misread as a CSV table');
+  eq(meeting._genre, 'transcript', 'the genre is detected and recorded');
+  ok(/transcript/.test(meeting.meta), 'the meta line names the genre');
+  ok(!meeting.sentenceTexts.some(t => /0:00:\d\d/.test(t)), 'timecodes never become sentence content');
+  ok(!meeting.sentenceTexts.some(t => /^Speaker \d+:/.test(t)), 'speaker labels are stripped from the prose');
+  const { entities } = E.projectEntities(meeting);
+  const names = entities.map(e => e.name);
+  ok(names.includes('Speaker 4'), 'a voice is admitted as an entity through the label slot');
+  const s4 = entities.find(e => e.name === 'Speaker 4');
+  ok(s4 && s4.type === 'person' && s4.sents.length >= 3, 'a voice is a person whose mentions are its turn sentences');
+  ok(!names.includes('Speaker'), 'the bare label "Speaker" is not an entity');
+  ok(!names.some(n => /^Thank$/i.test(n)), 'formulaic discourse ("Thank") is not an entity');
+  ok(names.includes('Amos Dresser'), 'a figure spoken ABOUT still surfaces');
+  ok((meeting._voices || []).length === 4, 'all four voices are recorded');
+});
+
+{
+  const PLAY = 'MAYOR: The session will come to order. We have a full agenda.\nCLERK: The minutes are ready for review.\nMAYOR: Thank you. Moving on to public comment.\nCLERK: Three speakers signed up.\nMAYOR: Call the first.\n';
+  const play = await E.parseDocument('play.txt', PLAY, 'play');
+  group('transcript pack — labels alone declare the genre', () => {
+    eq(play._genre, 'transcript', 'recurring NAME: labels read as a transcript');
+    const names = E.projectEntities(play).entities.map(e => e.name);
+    ok(names.includes('MAYOR') || names.includes('Mayor'), 'the MAYOR voice is an entity');
+    ok(!play.sentenceTexts.some(t => /^(MAYOR|CLERK):/.test(t)), 'labels left the prose');
+  });
+}
+group('transcript pack — ordinary prose is untouched', () => {
+  ok(voss._genre == null, 'a short story is not a transcript');
+  ok(!VOSS.includes('normalized'), 'sanity: fixture unchanged');
+});
+
+// ── Graph traversal: the graph as the answer mechanism ──
+group('traversal — entries, walk, assertions, attached evidence', () => {
+  const t1 = E.traverseGraph(meeting, 'was Amos Dresser a white minister?', 1);
+  ok(t1 && t1.entries.includes('Amos Dresser'), 'the question\'s referent is the entry node');
+  ok(t1.assertions.some(a => /white minister/.test(a.is)), 'the page\'s DEF assertion rides the walk');
+  ok(t1.sentences.some(s => /white minister/.test(s.t)), 'the assertion\'s sentence is gathered as evidence');
+  ok(t1.sentences.every(s => s.via), 'every gathered sentence names how the walk reached it');
+  const t2 = E.traverseGraph(meeting, 'was Amos Dresser a white minister?', 2);
+  const w2 = t2.walked.map(w => w.name);
+  ok(w2.includes('Steven Watts'), 'a second hop reaches a co-occurring referent the first hop cannot');
+  ok(t2.walked.every(w => w.hop >= 1 && w.via), 'walked nodes carry their hop and their path');
+  eq(E.traverseGraph(meeting, 'what is the airspeed of a swallow?', 2), null, 'a question naming nothing on the page walks nowhere (null)');
+  eq(E.traverseGraph(meeting, 'was Amos Dresser a white minister?', 0), null, 'zero hops (the floor) never walks');
+});
+
+group('traversal — scope fold and the reading context (the graph speaking)', () => {
+  const trav = E.traverseScope([meeting], 'tell me about Amos Dresser', 1);
+  ok(trav && trav.perDoc.length === 1 && trav.perDoc[0].docId === 'meet', 'scope traversal tags its source');
+  const base = '[s8] Steven Watts recorded the event.';
+  const ctx = E.readingContext([meeting], trav, base);
+  ok(/What the reading holds/.test(ctx), 'the context opens with the reading, not a span dump');
+  ok(/The page asserts: Amos Dresser is white minister/.test(ctx), 'the page\'s assertion is presented as the page\'s');
+  ok(ctx.includes(base), 'the retrieval passages survive underneath');
+  ok(/\[s5\]/.test(ctx), 'evidence the walk reached that retrieval missed is appended in citation format');
+  eq((ctx.match(/\[s8\]/g) || []).length, 1, 'a span already in the context is not duplicated');
+  eq(E.readingContext([meeting], null, base), base, 'no traversal ⇒ context unchanged (parity)');
+});
+
+// ── The propositional veto: claim against claim ──
+group('assertions — the page\'s own DEF claims, resolved onto entities', () => {
+  const defs = E.assertionsOf(meeting);
+  ok(defs.some(d => d.subject === 'Amos Dresser' && /white minister/.test(d.is)), 'the copular assertion is held with its subject resolved');
+  ok(defs.every(d => d.sent == null || meeting.sentenceTexts[d.sent]), 'every assertion points at a real sentence');
+  ok(!defs.some(d => /^(he|she|they|it)$/i.test(d.subject)), 'an unresolved pronoun subject is never an assertion');
+});
+
+group('propositional veto — a draft that denies the page\'s assertion is caught', () => {
+  const draft = 'The passage states that Amos Dresser was not a white minister.';
+  const c = E.checkAssertions(meeting, draft);
+  ok(c.length === 1 && c[0].subject === 'Amos Dresser', 'the contradiction is caught and names its subject');
+  ok(/white minister/.test(c[0].is) && /not a white minister/.test(c[0].claim), 'it carries both the page\'s claim and the draft\'s');
+  eq(E.checkAssertions(meeting, 'Amos Dresser was a white minister who was seized.').length, 0, 'an agreeing draft passes');
+  eq(E.checkAssertions(meeting, 'Dresser was not only a white minister but also brave.').length, 0, '"not only" affirms and is not flagged');
+  eq(E.checkAssertions(meeting, 'The committee never apologized.').length, 0, 'a negation about something unasserted passes');
+  const sc = E.checkAssertionsScope([meeting, voss], 'Dresser was never seized by the committee.');
+  ok(sc.length === 1 && sc[0].docId === 'meet', 'the scope check carries the source docId');
+});
+
+// ── Seeking aims at the page, not at words about the question ──
+group('seekable terms — meta-words from the user\'s phrasing are unseekable', () => {
+  const terms = E.seekableTerms([meeting], ['mistakes', 'minister', 'committee', 'unicorn']);
+  ok(terms.includes('minister') && terms.includes('committee'), 'terms the page carries stay seekable');
+  ok(!terms.includes('mistakes') && !terms.includes('unicorn'), 'terms nowhere in the sources are dropped');
+  eq(E.seekableTerms([], ['minister']).length, 0, 'no sources ⇒ nothing seekable');
+});
+
+// ── The dial buys graph work; the floor stays inert (parity) ──
+group('thinking depth — graph knobs scale, the floor is byte-inert', () => {
+  const b1 = E.thinkingBudget(1), b2 = E.thinkingBudget(2), b3 = E.thinkingBudget(3);
+  eq(b1.graphHops, 0, 'floor: no walk');
+  eq(b2.graphHops, 1, 'mid-dial: one hop');
+  eq(b3.graphHops, 2, 'deepest: the full ceiling');
+  eq(b1.assertionCheck, false, 'floor: no propositional veto');
+  eq(b2.assertionCheck, false, 'mid-dial: still off — the check is the deepest stop\'s');
+  eq(b3.assertionCheck, true, 'deepest: the draft is audited against the page\'s assertions');
+  eq(b1.maxSeekRounds, 1, 'floor seek rounds unchanged (parity)');
+  eq(b1.replan, false, 'floor replan unchanged (parity)');
+});
+
+// ── The cap-harvest no longer strikes connective tissue ──
+group('invented terms — a capitalized discourse adverb is not an entity', () => {
+  ok(!E.inventedTerms(voss, 'Therefore, Edith waited by the lamp.').includes('Therefore'), '"Therefore" is the draft\'s own connective, never invented');
+  ok(!E.inventedTerms(voss, 'However, the keeper stayed.').includes('However'), '"However" likewise');
+  ok(E.inventedTerms(voss, 'Zorthax waited by the lamp.').includes('Zorthax'), 'a real off-page name still trips the veto');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

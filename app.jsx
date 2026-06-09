@@ -552,10 +552,26 @@ function App() {
 
   // strip citation/void markup so prior turns read as plain text in history
   const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void|infer):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
+  // HISTORY HYGIENE: a prior turn that was vetoed, went out ungrounded, or
+  // earned a warn badge re-enters the history WEARING that badge — never as
+  // clean assistant text the model will defend. Handed its own unverified
+  // reply as something it apparently said, a small model defends it, because
+  // the history says it happened; the tag breaks that spiral at the source.
+  // Prepended (not appended) so it survives the recap's tail truncation.
+  const epistemicTag = (m) => {
+    if (m.role !== 'assistant' || !m.text) return '';
+    if (m.mode === 'creative') return '[an earlier creative composition, not a document answer] ';
+    const a = m.audit;
+    if (!a) return '';
+    if (a.status === 'plain') return '[an earlier reply from general knowledge, not the document] ';
+    if (a.status === 'warn' && a.grounded) return '[an earlier reply with terms the document does not contain struck as unverified — do not repeat or defend the struck parts] ';
+    if (a.grounded === false) return '[an earlier reply that was NOT verified against the document — do not repeat or defend its claims] ';
+    return '';
+  };
   // the running conversation, as plain {role, content} turns for the model
   const historyFor = () => messages
     .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.typing && !m.loading && m.text)
-    .map(m => ({ role: m.role, content: stripMarkup(m.text) }));
+    .map(m => ({ role: m.role, content: epistemicTag(m) + stripMarkup(m.text) }));
 
   const streamInto = (patch) => (d) => setMessages(m => {
     const c = m.slice(); const prev = c[c.length - 1];
@@ -619,13 +635,28 @@ function App() {
     let prevN = gaps.n;
     for (let r = 2; r <= budget.maxSeekRounds; r++) {
       if (!gaps.uncovered.length) break;                         // fully covered — nothing left to seek
-      const subq = gaps.uncovered.concat(matter).join(' ');
+      // A gap can only be sought if the term exists SOMEWHERE in the sources.
+      // Sub-querying on a meta-word from the user's own phrasing ("mistakes")
+      // spends the round on words ABOUT the question instead of words on the
+      // page — drop the unseekable terms, and stop when nothing seekable is left.
+      let seekable = gaps.uncovered, unseekable = [];
+      try {
+        seekable = E.seekableTerms ? E.seekableTerms(scope, gaps.uncovered) : gaps.uncovered;
+        unseekable = gaps.uncovered.filter(t => !seekable.includes(t));
+      } catch (e) { eoWarn('seekable', e); }
+      if (!seekable.length) {
+        AUD('step', 'retrieve', { round: r, k, engine: 'seek', skipped: true, unseekable,
+          note: 'the uncovered terms appear nowhere in the sources — nothing left to seek' });
+        break;
+      }
+      const subq = seekable.concat(matter).join(' ');
       let more = []; try { more = E.retrieveScope(scope, subq, k); } catch (e) { break; }
       const before = chosen.size;
       add(more);
       const g2 = E.coverageGaps(q, support());
       const novelty = r4((g2.n - prevN) / (gaps.d || 1));        // fraction of NEW query terms this round covered
       AUD('step', 'retrieve', { round: r, k, engine: 'seek', subquery: subq, novelty,
+        unseekable: unseekable.length ? unseekable : undefined,
         covered: g2.n + '/' + g2.d, newHits: chosen.size - before,
         hits: (more || []).slice(0, 6).map(h => ({ docId: h.docId, idx: h.i, score: r4(h.score), text: h.t })) });
       prevN = g2.n; gaps = g2;
@@ -789,6 +820,29 @@ function App() {
       : (useSeek ? seekContext(scope, q, budget) : window.EOEngine.contextScope(scope, q, 6));
     const task = intent === 'summary' ? 'summary' : 'answer';
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
+    // GRAPH TRAVERSAL (depth > 1): depth buys graph work, not just more
+    // retrieval. Walk out from the entities the question names — the page's
+    // assertions, its drawn relations, co-occurrence — and let the walk's
+    // reading head the prompt, with the sentences attached along the walk as
+    // added evidence. The walk itself is recorded as the trace. No entry
+    // nodes ⇒ no-op; at the floor graphHops is 0 ⇒ never runs (parity).
+    if (budget && budget.graphHops > 0 && task !== 'summary') {
+      try {
+        const trav = window.EOEngine.traverseScope(scope, q, budget.graphHops);
+        if (trav) {
+          AUD('step', 'traverse', {
+            hops: budget.graphHops, entries: trav.entries,
+            perDoc: trav.perDoc.map(p => ({
+              docId: p.docId, entries: p.entries, walked: p.walked,
+              assertions: p.assertions.map(a => ({ subject: a.subject, is: a.is, sent: a.sent })),
+              edges: p.edges,
+              evidence: p.sentences.map(s => ({ idx: s.i, via: s.via, text: s.t })),
+            })),
+          });
+          ctx = window.EOEngine.readingContext(scope, trav, ctx);
+        }
+      } catch (e) { eoWarn('traverse', e); }
+    }
     // Associative wandering (Phase 3, deepest depth + embedder): warm in spans the
     // page never lexically connects. No embedder ⇒ ctx unchanged (graph-hop only).
     if (budget && budget.assocCoupling > 0 && window.EOEmbed && window.EOEmbed.ready()) {
@@ -881,6 +935,17 @@ function App() {
         const perDoc = scope.map(d => new Set(window.EOEngine.inventedTerms(d, full)));
         const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
         const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent);
+        // PROPOSITIONAL VETO (deepest depth): the string-layer checks above
+        // wave through a draft that NEGATES what the page itself asserted —
+        // "X was not Y" binds cleanly while the graph holds DEF X is Y. Audit
+        // the draft's claims against the page's recorded assertions, claim
+        // against claim; a contradiction falls back to the mechanical answer
+        // with the disagreement named in the trace.
+        let contradictions = [];
+        if (budget && budget.assertionCheck) {
+          try { contradictions = window.EOEngine.checkAssertionsScope(scope, full) || []; }
+          catch (e) { eoWarn('assertion-check', e); }
+        }
         if (!bound.audit.grounded) {
           // Unmoored: the phrasing matched no passage — use the mechanical answer.
           // Reconsideration (Phase 5): at the deepest depth, read a factual draft
@@ -889,6 +954,11 @@ function App() {
           if (budget && budget.replan) AUD('step', 'plan-seg', { from: 'factual', to: 'question-about-silence', reason: 'the draft bound to nothing on the page' });
           AUD('step', 'veto', { decision: 'mechanical', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
           settle(window.EOEngine.answerScope(scope, q), 'mechanical (veto)');
+        } else if (contradictions.length) {
+          AUD('step', 'veto', { decision: 'mechanical', reason: 'contradicts-assertion',
+            contradictions: contradictions.map(c => ({ subject: c.subject, is: c.is, sent: c.sent, claim: c.claim, docId: c.docId })),
+            boundGrounded: true, boundCovers: bound.audit.covers });
+          settle(window.EOEngine.answerScope(scope, q), 'mechanical (contradicted the page)');
         } else if (invented.length) {
           // Grounded, but names term(s) the page doesn't contain: KEEP the draft,
           // strike those terms as voids, downgrade the badge to an honest caveat.

@@ -192,9 +192,11 @@ function detectLanguage(text) {
   // function words that are NOT English homographs. "don" is excluded —
   // it matches inside "don't" — and é/ü alone are loanword noise.
   // CSV: several rows of consistent comma-delimited fields. Prose has
-  // irregular comma counts; a table does not.
+  // irregular comma counts; a table does not. Timecode cue lines
+  // ("0:00:14.240,0:00:16.560") carry one comma each and would read as a
+  // consistent table — a transcript's typography, not a schema.
   const nonEmpty = lines.filter(l => l.trim());
-  if (nonEmpty.length >= 3) {
+  if (nonEmpty.length >= 3 && countTimecodeLines(sample) < 3) {
     const counts = nonEmpty.map(l => (l.match(/,/g) || []).length);
     const mode = counts.slice().sort((a, b) => counts.filter(x => x === a).length - counts.filter(x => x === b).length).pop();
     if (mode >= 1 && counts.filter(c => c === mode).length / counts.length >= 0.7) return 'csv';
@@ -207,6 +209,118 @@ function detectLanguage(text) {
 // Structured sources declare their relations; unstructured ones withhold
 // them. The mode decides whether the inference apparatus engages.
 function modeForLang(lang) { return (lang === 'csv' || lang === 'json' || lang === 'html' || lang === 'code') ? 'structured' : 'unstructured'; }
+
+/* ---------- transcript reading (a genre pack on English) ----------
+   A transcript declares itself through its own typography: timecode lines
+   ("0:00:14.240,0:00:16.560", "00:00:14,240 --> 00:00:16,560", "[00:14]"),
+   SRT cue counters, and "Speaker N:" / "NAME:" turn labels. That typography
+   is STRUCTURE, not prose — read as narrative it poisons the graph at birth:
+   timecodes become sentence content, "Speaker" becomes a two-sighting entity,
+   and the one structure a transcript has in abundance (who is speaking when)
+   is thrown away. The reader here does what the other packs do for their
+   languages: timecode lines are boundaries, never sentences; speaker labels
+   are attribution — the same SIG events the quote machinery mints, arriving
+   through a different typographic slot. The grammar (the nine operators)
+   stays the shared core. */
+const _TC = '\\d{1,2}:\\d{2}(?::\\d{2})?(?:[.,]\\d{1,3})?';
+const TC_LINE_RE = new RegExp('^\\s*(?:\\[' + _TC + '\\]|\\(' + _TC + '\\)|' + _TC + ')(?:\\s*(?:-->|–|—|,)\\s*(?:\\[?' + _TC + '\\]?))?\\s*$');
+const TC_LEAD_RE = new RegExp('^\\s*(?:\\[' + _TC + '\\]|\\(' + _TC + '\\))\\s*');
+const TRANSCRIPT_HEADER_LABELS = new Set(['webvtt', 'kind', 'language', 'style', 'region']);
+// Active for the duration of one extraction (same lifecycle as ACTIVE_LANG):
+// gates the transcript-only surface filters in entity admission.
+let TRANSCRIPT_ACTIVE = false;
+// Formulaic discourse a transcript is full of ("Thank you.", "Okay.") — these
+// open sentences capitalized, recur past the two-sighting gate, and are never
+// referents. Checked only in entity admission while a transcript is active.
+const TRANSCRIPT_FORMULA = new Set([
+  'thank', 'thanks', 'thank you', 'okay', 'ok', 'yes', 'yeah', 'no', 'well', 'good',
+  'right', 'hello', 'hi', 'sorry', 'please', 'amen', 'aye', 'nay', 'um', 'uh', 'huh',
+  'hmm', 'bye', 'goodbye', 'welcome', 'correct', 'exactly', 'absolutely', 'sure', 'alright',
+]);
+// How many timecode-shaped lines the head of the text carries. Used to keep
+// the comma-mode CSV/table detectors from reading "0:00:14.240,0:00:16.560"
+// rows as a spreadsheet, and by the transcript decision itself.
+function countTimecodeLines(text) {
+  let n = 0;
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n', 400);
+  for (const l of lines) { const t = l.trim(); if (t && TC_LINE_RE.test(t)) n++; }
+  return n;
+}
+// A "Name:"-slot turn label, or null. The slot is narrow on purpose: short,
+// starts uppercase, plain name characters, not document apparatus ("Note:",
+// "Summary:") and not a lone stopword ("So:", "He:").
+function transcriptLabel(line) {
+  const m = /^([^:]{1,40}):\s*(.*)$/.exec(String(line));
+  if (!m) return null;
+  const label = m[1].trim();
+  if (!/^\p{Lu}/u.test(label)) return null;
+  if (!/^[\p{L}\p{N}][\p{L}\p{N} .'’\-]*$/u.test(label)) return null;
+  const words = label.split(/\s+/);
+  if (words.length > 5) return null;
+  const lc = label.toLowerCase();
+  if (TRANSCRIPT_HEADER_LABELS.has(lc) || STRUCTURE_LABELS.has(lc)) return null;
+  if (words.length === 1 && QA_STOP.has(lc)) return null;
+  return { label, rest: m[2] };
+}
+// Decide whether the text reads as a transcript and, if so, normalize it:
+// returns { text, turns, speakers, cues, labelled } where `text` carries one
+// paragraph per turn (labels and timecodes removed — they became structure)
+// and turns[i] aligns with the i-th non-empty paragraph. Null when the page
+// does not declare the genre.
+function readTranscript(raw) {
+  const rawLines = String(raw).replace(/\r\n?/g, '\n').split('\n');
+  // ── the decision: enough cue typography, or enough recurring turn labels ──
+  let cues = 0, labelled = 0, content = 0;
+  const labelCounts = new Map();
+  for (let i = 0; i < rawLines.length; i++) {
+    const t = rawLines[i].trim();
+    if (!t) continue;
+    if (/^WEBVTT\b/.test(t)) { cues++; continue; }
+    if (TC_LINE_RE.test(t)) { cues++; continue; }
+    if (/^\d{1,4}$/.test(t) && rawLines[i + 1] && TC_LINE_RE.test(rawLines[i + 1].trim())) continue; // SRT counter
+    const lab = transcriptLabel(t.replace(TC_LEAD_RE, ''));
+    if (lab) { labelled++; const k = lab.label.toLowerCase(); labelCounts.set(k, (labelCounts.get(k) || 0) + 1); }
+    content++;
+  }
+  const recurring = [...labelCounts.values()].filter(n => n >= 2).length;
+  const isTranscript = (cues >= 3 && content > 0)
+    || (recurring >= 2 && labelled >= 4 && labelled / Math.max(1, content) >= 0.3);
+  if (!isTranscript) return null;
+  // ── normalization: cues out, labels into attribution, one paragraph per turn ──
+  const turns = [];
+  let cur = null, sawCueBreak = false;
+  const open = (speaker) => { cur = { speaker: speaker || null, lines: [] }; turns.push(cur); };
+  for (let i = 0; i < rawLines.length; i++) {
+    let t = rawLines[i].trim();
+    if (!t) { sawCueBreak = true; continue; }
+    if (/^WEBVTT\b/.test(t)) continue;
+    if (TC_LINE_RE.test(t)) { sawCueBreak = true; continue; }
+    if (/^\d{1,4}$/.test(t) && rawLines[i + 1] && TC_LINE_RE.test(rawLines[i + 1].trim())) continue;
+    t = t.replace(TC_LEAD_RE, '').trim();
+    if (!t) { sawCueBreak = true; continue; }
+    const lab = transcriptLabel(t);
+    if (lab) {
+      open(lab.label);
+      if (lab.rest) cur.lines.push(lab.rest);
+      sawCueBreak = false;
+      continue;
+    }
+    // Unlabeled content stays with the voice that holds the floor. With no
+    // voice on the floor (cue-only captions), a cue boundary after a closed
+    // sentence starts a fresh paragraph, so a caption stream still segments.
+    if (!cur) open(null);
+    else if (cur.speaker == null && sawCueBreak && cur.lines.length
+             && /[.!?…]["'”’)]?$/.test(cur.lines[cur.lines.length - 1])) open(null);
+    cur.lines.push(t);
+    sawCueBreak = false;
+  }
+  const cleanTurns = turns
+    .map(t => ({ speaker: t.speaker, text: t.lines.join(' ').replace(/\s+/g, ' ').trim() }))
+    .filter(t => t.text);
+  if (!cleanTurns.length) return null;
+  const speakers = [...new Set(cleanTurns.map(t => t.speaker).filter(Boolean))];
+  return { text: cleanTurns.map(t => t.text).join('\n\n'), turns: cleanTurns, speakers, cues, labelled };
+}
 
 const LANGUAGE_MODULES = {
   'en-narrative-v1': {
@@ -988,6 +1102,10 @@ function tryAdmit(surface, isPropNoun, tentatives) {
   if (!trimmed) return false;
   const lower = trimmed.toLowerCase();
   if (DISCOURSE_JUNK.has(lower)) return false;
+  // In a transcript, formulaic discourse ("Thank you.", "Okay.") opens
+  // sentences capitalized and recurs past the two-sighting gate — politeness,
+  // not a referent.
+  if (TRANSCRIPT_ACTIVE && TRANSCRIPT_FORMULA.has(lower)) return false;
   if (/^\d{4}$/.test(trimmed)) return false;
   if (/^[$€£¥]?[\d,.]+\s*(million|billion|trillion|thousand|m|b|k)?$/i.test(trimmed)) return false;
   const tokens = trimmed.split(/\s+/);
@@ -1342,8 +1460,29 @@ async function extractEoGraph(text, onProgress) {
   // detectors and leaves the grammar alone.
   const LANG = detectLanguage(text);
   applyLanguageModule(LANG);
+  TRANSCRIPT_ACTIVE = false;
   if (LANG === 'code') return extractCodeGraph(text, t0);
   if (LANG === 'csv') return extractCsvGraph(text, t0);
+  // A transcript is a GENRE the page declares through its own typography —
+  // timecodes and turn labels. The genre pack normalizes that typography into
+  // structure (cues → boundaries, labels → attribution) and the shared
+  // English grammar reads the prose that remains.
+  let TRANSCRIPT = null;
+  if (LANG === 'en') {
+    TRANSCRIPT = readTranscript(text);
+    if (TRANSCRIPT) {
+      text = TRANSCRIPT.text;
+      LANGUAGE_MODULES['transcript-v1'] = {
+        id: 'transcript-v1', name: 'Transcript Conventions', version: '1.0',
+        applies_to: { language: 'en', mode: 'transcript' }, enabled: true,
+        provides: ['timecode_boundaries', 'speaker_turn_attribution', 'discourse_formula_filter'],
+        desc: 'Timecode lines and cue counters are structure, never sentence content; "Speaker N:" / "NAME:" labels are attribution, landing each turn on its voice through the same SIG slot quoted speech uses.',
+      };
+    } else if (LANGUAGE_MODULES['transcript-v1']) {
+      LANGUAGE_MODULES['transcript-v1'].enabled = false;
+    }
+  }
+  TRANSCRIPT_ACTIVE = !!TRANSCRIPT;
   // Unwrap hard line breaks (Gutenberg-style wrapped prose). A single
   // newline inside a paragraph is typography, not syntax — left in place
   // it splits sentences mid-clause, truncates names ("Prince\nNicholas
@@ -1358,6 +1497,11 @@ async function extractEoGraph(text, onProgress) {
   // boundary; no sentence crosses it.
   const sentenceDocs = [];
   const sentParaSolo = [];
+  // sentence index → transcript turn index (the i-th non-empty paragraph IS
+  // the i-th turn, by construction in readTranscript). Empty when not a
+  // transcript; consumed by the voice-attribution pass below.
+  const sentTurn = [];
+  let _turnIdx = -1;
   // ── Stage: chunk the text into sentences ──
   // Paragraph-first, then sentence within each paragraph (unchanged). We just
   // walk the paragraphs on a clock and yield about every frame, so segmenting
@@ -1368,6 +1512,7 @@ async function extractEoGraph(text, onProgress) {
     const para = _paras[_pi];
     const p = para.trim();
     if (!p) continue;
+    _turnIdx++;
     const paraDocs = [];
     if (LANG === 'zh') {
       // CJK sentence terminals; compromise neither splits nor needs to.
@@ -1395,7 +1540,7 @@ async function extractEoGraph(text, onProgress) {
         paraDocs.push(merged ? nlp(txt) : subs[k]);
       }
     }
-    for (const s of paraDocs) { sentenceDocs.push(s); sentParaSolo.push(paraDocs.length === 1); }
+    for (const s of paraDocs) { sentenceDocs.push(s); sentParaSolo.push(paraDocs.length === 1); if (TRANSCRIPT) sentTurn.push(_turnIdx); }
     if (onProgress && performance.now() - _segClock > 24) {
       onProgress({ phase: 'existence', stage: 'segmenting', done: _pi + 1, total: _paras.length });
       await _yieldToBrowser(); _segClock = performance.now();
@@ -1413,6 +1558,13 @@ async function extractEoGraph(text, onProgress) {
   const sections = [];
   sentenceDocs.forEach((s, idx) => {
     if (!sentParaSolo[idx]) return;
+    // A voice's turn is speech, not structure; and caption streams routinely
+    // drop terminal punctuation, so for transcripts only emphatic typography
+    // (caps, numerals) reads as a section \u2014 "PLEDGE OF ALLEGIANCE", "ITEM 4".
+    if (TRANSCRIPT) {
+      const turn = TRANSCRIPT.turns[sentTurn[idx]];
+      if (turn && turn.speaker) return;
+    }
     const t = s.text().trim();
     if (!t || t.length > 60) return;
     if (/["\u201C\u2018']/.test(t)) return;  // dialogue isn't structure
@@ -1422,7 +1574,7 @@ async function extractEoGraph(text, onProgress) {
     const allCaps = letters.length > 1 && letters === letters.toUpperCase() && letters !== letters.toLowerCase();
     const noTerminal = !/[.!?\u3002\uFF01\uFF1F\u2026]\s*$/.test(t);
     const numeralOnly = /^[IVXLCDM]+\.?$/.test(t) || /^\d+\.?$/.test(t);
-    if (noTerminal || allCaps || numeralOnly) sections.push({ label: t, start_sentence: idx });
+    if (TRANSCRIPT ? (allCaps || numeralOnly) : (noTerminal || allCaps || numeralOnly)) sections.push({ label: t, start_sentence: idx });
   });
 
   const events = [];
@@ -1671,6 +1823,38 @@ async function extractEoGraph(text, onProgress) {
         speakerHint: speaker ? { name: speaker } : null, speakerRaw: speaker,
         attributed: speaker ? 'named' : 'none',
         in_quote: false, sentence_idx: si, sentence: s, src: 'dash-dialogue',
+      });
+    });
+  }
+  if (TRANSCRIPT) {
+    // ── Transcript voices ──
+    // The "Name:" slot already attributed every sentence to its voice at
+    // normalization; mint that as graph structure. Each new label is an INS
+    // (the voice exists — admitted by the typography, not the cap-harvest);
+    // each sentence of a labeled turn is a SIG on that voice — the same
+    // attribution event quoted speech earns, so mass reflects how much each
+    // voice speaks and entityDetail/co-occurrence see a voice's sentences.
+    const seenVoices = new Set();
+    sentenceDocs.forEach((d, si) => {
+      const turn = TRANSCRIPT.turns[sentTurn[si]];
+      const speaker = turn && turn.speaker;
+      if (!speaker) return;
+      const sTxt = d.text().trim();
+      if (!seenVoices.has(speaker.toLowerCase())) {
+        seenVoices.add(speaker.toLowerCase());
+        events.push({
+          id: 'ev-' + seq, seq: seq++, op: 'INS', stance: 'Instantiating',
+          target: speaker, targetRaw: speaker, entityType: 'person',
+          referent_id: mintReferent(), in_quote: false,
+          sentence_idx: si, sentence: sTxt, src: 'transcript-voice',
+        });
+      }
+      events.push({
+        id: 'ev-' + seq, seq: seq++, op: 'SIG', stance: 'Tending',
+        speaker, quote: sTxt.replace(/\s+/g, ' ').slice(0, 300),
+        speakerHint: { name: speaker }, speakerRaw: speaker,
+        attributed: 'named', in_quote: false,
+        sentence_idx: si, sentence: sTxt, src: 'transcript-turn',
       });
     });
   }
@@ -2693,6 +2877,12 @@ async function extractEoGraph(text, onProgress) {
 
   return {
     lang: LANG, mode: modeForLang(LANG),
+    genre: TRANSCRIPT ? 'transcript' : undefined,
+    voices: TRANSCRIPT ? TRANSCRIPT.speakers : undefined,
+    // the text the reading actually segmented (cues and labels normalized
+    // away) — the host must rebuild blocks from THIS, not the raw paste,
+    // or sentence indices drift and timecodes leak back into the view
+    normalized_text: TRANSCRIPT ? text : undefined,
     input_chars: text.length,
     sentences: sentCount,
     events,
@@ -3468,7 +3658,9 @@ function projectGraph(events, frame = {}) {
   /* ---------- document kind ---------- */
   function detectKind(text) {
     const lines = text.replace(/\r\n?/g, '\n').split('\n').filter(l => l.trim());
-    if (lines.length >= 3) {
+    // Timecode cue lines carry a consistent comma each; that's a transcript's
+    // typography declaring itself, not a table schema.
+    if (lines.length >= 3 && countTimecodeLines(text) < 3) {
       const counts = lines.map(l => (l.match(/,/g) || []).length);
       const mode = counts.slice().sort((a, b) => counts.filter(x => x === b).length - counts.filter(x => x === a).length)[0];
       if (mode >= 1 && counts.filter(c => c === mode).length / counts.length >= 0.7) return 'table';
@@ -3555,17 +3747,22 @@ function projectGraph(events, frame = {}) {
     const result = await extractEoGraph(text, onProgress);
     const sentenceTexts = (result.sentence_texts || []).map(s => String(s));
     const sentences = sentenceTexts.map((t, i) => ({ i, t }));
-    const blocks = rebuildBlocks(text, sentenceTexts, result.sections);
+    // A transcript was normalized inside the extractor (cues and speaker
+    // labels became structure); the blocks must mirror the text the reading
+    // actually segmented, or sentence indices drift and timecodes leak back.
+    const blocks = rebuildBlocks(result.normalized_text || text, sentenceTexts, result.sections);
     // seq → sentence index, so projected entities can list their mentions
     const seqToSent = new Map();
     for (const ev of (result.events || [])) if (ev.sentence_idx != null) seqToSent.set(ev.seq, ev.sentence_idx);
     return {
       id, kind: 'prose', name,
-      meta: sentences.length + ' sentences · prose (' + (result.lang || 'en') + ')',
+      meta: sentences.length + ' sentences · ' + (result.genre === 'transcript' ? 'transcript' : 'prose') + ' (' + (result.lang || 'en') + ')',
       blocks, sentences, sentenceTexts,
       _events: result.events || [],
       _sections: result.sections || [],
       _lang: result.lang || 'en',
+      _genre: result.genre || null,
+      _voices: result.voices || null,
       _seqToSent: seqToSent,
     };
   }
@@ -3620,6 +3817,8 @@ function projectGraph(events, frame = {}) {
     'wm-heat-floor':      { value: 0.25 },  // heat threshold for "hot" in working memory
     'infer-bind-floor':   { value: 0.62 },  // closeness needed to phrase an inference across spans
     'replan-enabled':     { value: 1 },     // may a turn reconsider its own plan (deepest only)
+    'graph-walk-hops':    { value: 2 },     // ceiling on graph-traversal hops from the question's entry nodes
+    'assertion-check':    { value: 1 },     // may a draft be audited against the page's DEF assertions (deepest only)
   };
   // Current tunable state, id → { value, enabled }. Filled by applyRules; defaults
   // to the ceilings + enabled so a host that never calls applyRules (the Node test
@@ -3651,6 +3850,12 @@ function projectGraph(events, frame = {}) {
       inferBindFloor: on('infer-bind-floor') ? ceil('infer-bind-floor') : Infinity,
       // reconsideration: only at the deepest stop
       replan: !!(on('replan-enabled') && L >= max),
+      // graph traversal: depth buys GRAPH work, not just more retrieval — no
+      // walk at the floor, one hop mid-dial, the full ceiling at the deepest
+      graphHops: on('graph-walk-hops') ? Math.max(0, Math.round(frac * ceil('graph-walk-hops'))) : 0,
+      // the propositional veto (draft vs the page's own DEF assertions):
+      // claim-against-claim audit, only at the deepest stop
+      assertionCheck: !!(on('assertion-check') && L >= max && ceil('assertion-check') > 0),
     };
   }
 
@@ -3889,6 +4094,10 @@ function projectGraph(events, frame = {}) {
       // mirrors the same strip in namesEntity. (1a)
       const bare = c.replace(/['’]s\b/g, '');
       const lc = bare.toLowerCase();
+      // A capitalized discourse adverb at sentence start ("Therefore", "However")
+      // is the draft's own connective tissue, never an entity the page must
+      // contain — without this guard the veto strikes "Therefore" as invented.
+      if (DISCOURSE_JUNK.has(lc)) continue;
       if (bare.length > 2 && !QA_STOP.has(lc) && !body.includes(lc) && !out.includes(bare)) out.push(bare);
     }
     return out;
@@ -4130,7 +4339,7 @@ function projectGraph(events, frame = {}) {
     return {
       schema: 'cleon-graph/1',
       at: new Date().toISOString(),
-      doc: { id: doc.id, name: doc.name, kind: doc.kind, lang: doc._lang || 'en', sentences: (doc.sentenceTexts || []).length },
+      doc: { id: doc.id, name: doc.name, kind: doc.kind, lang: doc._lang || 'en', genre: doc._genre || null, sentences: (doc.sentenceTexts || []).length },
       entities: entities.map(e => ({ name: e.name, key: e.key, type: e.type, mentions: e.raw, mass: e.mass, sents: e.sents })),
       edges: edges.map(e => ({ a: e.a, b: e.b, aName: e.aName, bName: e.bName, verb: e.verb, weight: e.weight })),
       assertions: (p.assertions || []).map(a => ({ subject: a.name, is: a.is })),
@@ -4159,7 +4368,8 @@ function projectGraph(events, frame = {}) {
       return `${e.name} {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`;
     });
     const parts = [];
-    parts.push(`This ${doc._lang && doc._lang !== 'en' ? doc._lang + ' ' : ''}document turns most on ${figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]}.`);
+    const kindWord = doc._genre === 'transcript' ? 'transcript' : 'document';
+    parts.push(`This ${doc._lang && doc._lang !== 'en' ? doc._lang + ' ' : ''}${kindWord} turns most on ${figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]}.`);
     if (p.assertions.length) {
       parts.push('It says ' + p.assertions.map(a => `${a.name} is ${a.is}`).join('; ') + '.');
     }
@@ -4460,6 +4670,239 @@ function projectGraph(events, frame = {}) {
                        : 'Phrased by the model but support was thin — treat with care.',
       },
     };
+  }
+
+  /* ============================================================ GRAPH TRAVERSAL
+     The graph is built, displayed — and until now abandoned at answer time:
+     the QA path retrieved by token overlap as if the graph never existed.
+     Traversal makes the graph the answer mechanism. A question arrives; the
+     referent machinery names the matter; those entities are the ENTRY NODES.
+     From each entry the walk expands — out along page-drawn edges, across
+     co-occurrence in shared sentences — and gathers the DEF assertions and
+     the sentences structurally attached along the way. The walk itself is
+     the trace: an answer with a skeleton, not a similarity score.
+     Read-only over the projected entities + event log; gated by the thinking
+     dial (budget.graphHops: 0 at the floor ⇒ never runs ⇒ parity). */
+
+  // The assertions the page itself recorded: copular/appositive DEF events
+  // (path 'class'), resolved onto the projected entity clusters. Type changes
+  // the READER inferred (speech-implies-person, pronoun binding) are not the
+  // page's own claims and are excluded — these are the propositions a draft
+  // can be audited against, claim against claim.
+  // word-boundary containment for entity keys: 'dresser' ⊂ 'amos dresser'
+  // but never 'he' ⊂ 'the keeper'
+  const _keyWithin = (a, b) => (' ' + b + ' ').includes(' ' + a + ' ');
+  function assertionsOf(doc) {
+    if (!doc || doc.kind !== 'prose' || !doc._events) return [];
+    const { entities } = projectEntities(doc);
+    const out = [], seen = new Set();
+    for (const ev of doc._events) {
+      if (ev.op !== 'DEF' || ev.path !== 'class' || !ev.value || !ev.target) continue;
+      if (_TRANSMUTE_SRC.has(ev.src)) continue;
+      // a pronoun subject only counts through its resolved binding — an
+      // unbound "He is …" is not an assertion ABOUT anyone
+      let targetName = String(ev.target).trim();
+      if (isPronoun(targetName)) {
+        if (ev.targetHint && ev.targetHint.name) targetName = String(ev.targetHint.name).trim();
+        else continue;
+      }
+      const k = normSurface(targetName);
+      const ent = entities.find(e => e.key === k)
+        || (k.length >= 4 ? entities.find(e => _keyWithin(k, e.key) || _keyWithin(e.key, k)) : null);
+      const subject = ent ? ent.name : targetName;
+      const dedupe = (ent ? ent.key : k) + '|' + normSurface(String(ev.value));
+      if (seen.has(dedupe)) continue;
+      seen.add(dedupe);
+      out.push({ subject, key: ent ? ent.key : k, is: String(ev.value).trim(),
+                 sent: ev.sentence_idx != null ? ev.sentence_idx : null });
+    }
+    return out;
+  }
+
+  // Walk the graph out from the entities the question names. Returns null when
+  // the question names nothing the page carries (nothing to walk — the caller
+  // keeps its retrieval-only path). hops: how far the dial lets the walk go.
+  function traverseGraph(doc, query, hops = 1) {
+    if (!doc || doc.kind !== 'prose' || !doc._events || !(hops > 0)) return null;
+    const { entities } = projectEntities(doc);
+    if (!entities.length) return null;
+    // Entry nodes: entities the question names (same matching namesEntity
+    // uses — full name, or a ≥4-char part of a multi-word name, possessives
+    // stripped), i.e. the matter referents resolved onto the graph.
+    const ql = ' ' + String(query).toLowerCase().replace(/['’]s\b/g, '').replace(/[^\p{L}\p{N}'’\- ]+/gu, ' ').replace(/\s+/g, ' ') + ' ';
+    const entries = [];
+    for (const e of entities) {
+      const n = String(e.name).toLowerCase();
+      let hit = n.length >= 3 && ql.includes(' ' + n + ' ');
+      if (!hit) {
+        const parts = n.split(/\s+/);
+        hit = parts.length > 1 && parts.some(p => p.length >= 4 && ql.includes(' ' + p + ' '));
+      }
+      if (hit) entries.push(e);
+    }
+    if (!entries.length) return null;
+    let edges = [];
+    try { edges = projectGraph(doc._events).edges || []; } catch (e) {}
+    const defs = assertionsOf(doc);
+    const byKey = new Map(entities.map(e => [e.key, e]));
+    const walked = new Map();   // key → { entity, hop, via }
+    for (const e of entries) walked.set(e.key, { entity: e, hop: 0, via: 'named in the question' });
+    let frontier = entries.map(e => e.key);
+    for (let h = 1; h <= hops && frontier.length; h++) {
+      const next = [];
+      for (const key of frontier) {
+        const here = byKey.get(key); if (!here) continue;
+        // page-drawn relations first — an edge is the page's own connection
+        for (const ed of edges) {
+          const otherKey = ed.a === key ? ed.b : ed.b === key ? ed.a : null;
+          if (!otherKey || walked.has(otherKey) || !byKey.has(otherKey)) continue;
+          // keep the page's own direction: the edge reads aName verb bName
+          walked.set(otherKey, { entity: byKey.get(otherKey), hop: h, via: `${ed.aName} ${ed.verb || '—'} ${ed.bName}` });
+          next.push(otherKey);
+        }
+        // then co-occurrence: who shares this node's sentences
+        const co = [];
+        for (const other of entities) {
+          if (walked.has(other.key)) continue;
+          const shared = other.sents.filter(s => here.sents.includes(s)).length;
+          if (shared) co.push({ other, shared });
+        }
+        co.sort((a, b) => b.shared - a.shared);
+        for (const { other, shared } of co.slice(0, 3)) {
+          walked.set(other.key, { entity: other, hop: h, via: `appears with ${here.name} in ${shared} sentence${shared === 1 ? '' : 's'}` });
+          next.push(other.key);
+        }
+      }
+      frontier = next;
+    }
+    const walkedKeys = new Set(walked.keys());
+    const heldDefs = defs.filter(d => walkedKeys.has(d.key)
+      || (d.key.length >= 4 && [...walkedKeys].some(k => _keyWithin(k, d.key) || _keyWithin(d.key, k))));
+    const heldEdges = edges
+      .filter(ed => walkedKeys.has(ed.a) && walkedKeys.has(ed.b))
+      .map(ed => ({ a: ed.aName, verb: ed.verb || '', b: ed.bName }));
+    // Evidence: sentences structurally attached along the walk — assertion
+    // sites first (the page's claims), then each node's anchor sentences
+    // (entries carry more than hop nodes). Capped and index-ordered.
+    const picks = new Map();
+    const take = (i, via) => { if (i != null && i >= 0 && i < doc.sentenceTexts.length && !picks.has(i)) picks.set(i, via); };
+    for (const d of heldDefs) take(d.sent, `asserted of ${d.subject}`);
+    for (const w of walked.values()) for (const i of w.entity.sents.slice(0, w.hop === 0 ? 3 : 1)) take(i, w.entity.name);
+    const sentences = [...picks.entries()].sort((a, b) => a[0] - b[0]).slice(0, 12)
+      .map(([i, via]) => ({ i, t: doc.sentenceTexts[i], via }));
+    return {
+      entries: entries.map(e => e.name),
+      walked: [...walked.values()].filter(w => w.hop > 0).map(w => ({ name: w.entity.name, hop: w.hop, via: w.via })),
+      assertions: heldDefs,
+      edges: heldEdges,
+      sentences,
+    };
+  }
+
+  // Traversal folded over the scope, hits tagged per source. Null when no
+  // source's graph carries an entry node for this question.
+  function traverseScope(docs, query, hops = 1) {
+    const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
+    const perDoc = [];
+    for (const d of ds) {
+      let t = null; try { t = traverseGraph(d, query, hops); } catch (e) {}
+      if (t) perDoc.push({ docId: d.id, name: d.name, ...t });
+    }
+    if (!perDoc.length) return null;
+    return { perDoc, entries: [...new Set(perDoc.flatMap(p => p.entries))] };
+  }
+
+  // The prompt as the graph speaking. The reading presents itself — what the
+  // question turns on, what the page asserts about it, the relations it
+  // draws, what sits nearby — and only then the verbatim passages underneath.
+  // Evidence the walk reached that retrieval missed is appended in the same
+  // [sN]/[docId:N] format, so citation binding is untouched.
+  function readingContext(docs, trav, baseCtx) {
+    const ctx = String(baseCtx == null ? '' : baseCtx);
+    if (!trav || !trav.perDoc || !trav.perDoc.length) return ctx;
+    const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
+    const multi = ds.length > 1;
+    const head = ['What the reading holds on this question (from the document\'s own graph):'];
+    for (const p of trav.perDoc) {
+      const lines = [`- It turns on ${p.entries.join(', ')}.`];
+      for (const a of p.assertions.slice(0, 4))
+        lines.push(`- The page asserts: ${a.subject} is ${a.is}` + (a.sent != null ? ` [${multi ? p.docId + ':' + a.sent : 's' + a.sent}]` : '') + '.');
+      if (p.edges.length)
+        lines.push('- Relations the page draws: ' + p.edges.slice(0, 4).map(e => `${e.a} ${e.verb || '—'} ${e.b}`).join('; ') + '.');
+      if (p.walked.length)
+        lines.push('- Nearby in the graph: ' + p.walked.slice(0, 4).map(w => `${w.name} (${w.via})`).join('; ') + '.');
+      head.push(multi ? `## ${p.name}\n` + lines.join('\n') : lines.join('\n'));
+    }
+    const extra = [];
+    for (const p of trav.perDoc) {
+      for (const s of p.sentences) {
+        const tag = multi ? `[${p.docId}:${s.i}]` : `[s${s.i}]`;
+        if (ctx.includes(tag)) continue;
+        extra.push(`${tag} ${s.t}`);
+      }
+    }
+    return head.join('\n') + '\n\nPassages:\n' + ctx + (extra.length ? '\n' + extra.join('\n') : '');
+  }
+
+  /* ---------- the propositional veto: claim against claim ----------
+     The string-layer veto checks invented terms and citation binding; it
+     waves through a draft that NEGATES what the page itself asserted —
+     "X was not Y" binds cleanly while the graph holds DEF X is Y. This
+     check compares the draft's negated claims against the page's recorded
+     assertions: the deepest available form of grounding, mechanically
+     checkable because the assertions are first-class events. Conservative
+     by design — subject named, a real negation present, every content term
+     of the asserted value present — and its failure mode is the honest
+     mechanical answer plus a legible audit step. */
+  function checkAssertions(doc, draftText) {
+    const defs = assertionsOf(doc);
+    if (!defs.length) return [];
+    const parts = String(draftText == null ? '' : draftText)
+      .replace(/\{\{[^}]*\}\}/g, ' ')
+      .match(/[^.!?]+[.!?]*/g) || [];
+    const out = [], seen = new Set();
+    for (const sent of parts) {
+      const raw = ' ' + sent.toLowerCase().replace(/[’]/g, "'") + ' ';
+      if (!/\b(?:not|never|no longer)\b|n't\b/.test(raw)) continue;
+      if (/\bnot only\b/.test(raw)) continue;                  // "not only X but Y" affirms
+      const sToks = new Set(tok(sent));
+      for (const d of defs) {
+        const subjToks = String(d.subject).toLowerCase().split(/\s+/).filter(t => t.length >= 3 && !QA_STOP.has(t));
+        if (!subjToks.length || !subjToks.some(t => sToks.has(t))) continue;
+        // The negation targets the HEAD of the asserted value ("a white
+        // minister who came south" → "white minister"); requiring the whole
+        // relative clause would let "was not a white minister" slip past.
+        const valHead = tok(d.is).slice(0, 2);
+        if (!valHead.length || !valHead.every(t => sToks.has(t))) continue;
+        const key = d.key + '|' + normSurface(d.is);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ subject: d.subject, is: d.is, sent: d.sent, claim: sent.trim() });
+      }
+    }
+    return out.slice(0, 3);
+  }
+  function checkAssertionsScope(docs, draftText) {
+    const out = [];
+    for (const d of scopeDocs(docs)) {
+      if (d.kind === 'table') continue;
+      let cs = []; try { cs = checkAssertions(d, draftText); } catch (e) {}
+      for (const c of cs) out.push({ ...c, docId: d.id });
+    }
+    return out;
+  }
+
+  // A coverage gap can only be SOUGHT if the term exists somewhere in the
+  // sources. Sub-querying on a meta-word from the user's own phrasing
+  // ("mistakes", "summary") seeks nothing and spends a round on the wrong
+  // layer — the depth machinery aiming effort at words about the question
+  // instead of words on the page.
+  function seekableTerms(docs, terms) {
+    const bodies = scopeDocs(docs).filter(d => d.kind !== 'table').map(d => docBodyLC(d));
+    return (terms || []).filter(t => {
+      const lc = String(t).toLowerCase();
+      return lc && bodies.some(b => b.includes(lc));
+    });
   }
 
   /* What the engine has LEARNED so far: the speech-verb class it induced
@@ -4843,7 +5286,12 @@ function projectGraph(events, frame = {}) {
     // (working memory) it spends across. Inert at depth 1 (parity floor).
     thinkingBudget, conversationField, buildWorkingMemory, recallByHeat,
     // iterative seeking: coverage + which query clusters a retrieval leaves uncovered
-    coverage, coverageGaps,
+    coverage, coverageGaps, seekableTerms,
+    // graph traversal: the graph as the answer mechanism (entries → walk →
+    // assertions/edges/evidence), the prompt as the graph speaking, and the
+    // propositional veto (draft claims audited against DEF assertions)
+    traverseGraph, traverseScope, readingContext, assertionsOf,
+    checkAssertions, checkAssertionsScope,
     // the embedder as a wandering reader: associative, δ-gated neighbors (no-op without an embedder)
     associativeNeighbors,
     // the inference void: mark what the reader ADDED across two cited spans

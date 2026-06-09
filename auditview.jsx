@@ -57,8 +57,9 @@ function AuditStep({ s }) {
   );
   if (s.t === 'retrieve') return (
     <Line label={s.round ? 'seek ·' + s.round : 'retrieve'} kind="retrieve">
-      <div className="aud-dim">k={s.k}{s.task ? ' · ' + s.task : ''} · {(s.hits || []).length} hits{s.engine ? ' · ' + s.engine : ''}{s.round ? ' · round ' + s.round : ''}{s.novelty != null ? ' · novelty ' + s.novelty : ''}{s.covered ? ' · covers ' + s.covered : ''}</div>
+      <div className="aud-dim">k={s.k}{s.task ? ' · ' + s.task : ''} · {(s.hits || []).length} hits{s.engine ? ' · ' + s.engine : ''}{s.round ? ' · round ' + s.round : ''}{s.novelty != null ? ' · novelty ' + s.novelty : ''}{s.covered ? ' · covers ' + s.covered : ''}{s.skipped ? ' · stopped' : ''}</div>
       {s.subquery ? <div className="aud-dim">⟲ sought: {s.subquery}</div> : null}
+      {(s.unseekable && s.unseekable.length) ? <div className="aud-dim">⊘ unseekable (nowhere in the sources): <span className="aud-void">{s.unseekable.join(', ')}</span></div> : null}
       {(s.hits || []).map((h, i) => (
         <div key={i} className="aud-hit"><b className="aud-score">{h.score}</b><span className="aud-cite">s{h.idx}</span><span className="aud-hit-t">{h.text}</span></div>
       ))}
@@ -92,6 +93,24 @@ function AuditStep({ s }) {
       {(s.invented && s.invented.length) ? <span> · invented: <span className="aud-void">{s.invented.join(', ')}</span></span> : null}
       {s.boundCovers && <span className="aud-dim"> · bound covers {s.boundCovers}</span>}
       {s.reason && <span className="aud-dim"> · {s.reason}</span>}
+      {(s.contradictions || []).map((c, i) => (
+        <div key={i} className="aud-dim">⊨ the page asserts “{c.subject} is {c.is}”{c.sent != null ? <span> <span className="aud-cite">s{c.sent}</span></span> : null} · the draft said: <span className="aud-void">{c.claim}</span></div>
+      ))}
+    </Line>
+  );
+  if (s.t === 'traverse') return (
+    <Line label="traverse" kind="retrieve">
+      <span className="aud-dim">hops {s.hops} · from:</span> <b>{(s.entries || []).join(', ')}</b>
+      {(s.perDoc || []).map((p, i) => (
+        <div key={i}>
+          {(p.assertions || []).length ? <div className="aud-dim">asserts: {p.assertions.map((a, j) => <span key={j}>{j ? '; ' : ''}{a.subject} is {a.is}{a.sent != null ? <span> <span className="aud-cite">s{a.sent}</span></span> : null}</span>)}</div> : null}
+          {(p.edges || []).length ? <div className="aud-dim">relations: {p.edges.map(e => `${e.a} ${e.verb || '—'} ${e.b}`).join('; ')}</div> : null}
+          {(p.walked || []).length ? <div className="aud-dim">walked: {p.walked.map((w, j) => <span key={j}>{j ? ' · ' : ''}{w.name} <span className="aud-score">hop {w.hop}</span> ({w.via})</span>)}</div> : null}
+          {(p.evidence || []).map((h, j) => (
+            <div key={'e' + j} className="aud-hit"><span className="aud-cite">s{h.idx}</span><span className="aud-hit-t">{h.text}</span><span className="aud-dim"> · via {h.via}</span></div>
+          ))}
+        </div>
+      ))}
     </Line>
   );
   if (s.t === 'working-memory') {
