@@ -92,17 +92,19 @@ function AuditStep({ s }) {
       {s.reason && <span className="aud-dim"> · {s.reason}</span>}
     </Line>
   );
-  if (s.t === 'working-memory') return (
-    <Line label="working memory" kind="ground">
-      <span className="aud-dim">turn {s.turn} · depth {s.depth}{s.heatFloor != null ? ' · hot ≥ ' + s.heatFloor : ' · nothing hot (floor depth)'}</span>
-      <span> · <b>{s.hot}</b> hot · <b>{s.warm}</b> warm · <b>{s.cooled}</b> cooled</span>
-      {(s.carried && s.carried.length) ? (
-        <div className="aud-dim" style={{ marginTop: 2 }}>
-          {s.carried.map((c, i) => <span key={i}>{i ? ' · ' : ''}{c.label} <span className="aud-score">{c.band} {c.heat}</span></span>)}
-        </div>
-      ) : null}
-    </Line>
-  );
+  if (s.t === 'working-memory') {
+    const hot = s.hot || [], warm = s.warm || [], cold = s.cold || [], recalled = s.recalled || [];
+    const rng = (c) => c.range ? ' [s' + c.range[0] + (c.range[1] !== c.range[0] ? '–s' + c.range[1] : '') + ']' : '';
+    return (
+      <Line label="working memory" kind="ground">
+        <span className="aud-dim">depth {s.depth}{s.heatFloor != null ? ' · hot ≥ ' + s.heatFloor : ''}</span>
+        <span> · <b>{hot.length}</b> hot · <b>{warm.length}</b> warm · <b>{cold.length}</b> cooled{recalled.length ? <span> · <b>{recalled.length}</b> recalled</span> : null}</span>
+        {hot.length ? <div className="aud-dim" style={{ marginTop: 2 }}>hot: {hot.map((h, i) => <span key={i}>{i ? ' · ' : ''}{h.label} <span className="aud-score">{h.heat}</span></span>)}</div> : null}
+        {warm.length ? <div className="aud-dim">warm: {warm.map((w, i) => <span key={i}>{i ? ' · ' : ''}{w.label} <span className="aud-score">via {w.via}</span></span>)}</div> : null}
+        {cold.length ? <div className="aud-dim">cooled: {cold.map((c, i) => <span key={i}>{i ? ', ' : ''}{c.label}{rng(c)}</span>)}</div> : null}
+      </Line>
+    );
+  }
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }

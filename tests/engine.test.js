@@ -379,6 +379,42 @@ group('conversation field — deposit / decay / snapshot / restore / reset', () 
   F.reset();
 });
 
+// Working memory reads the field through the budget into a hot/warm/cold
+// subgraph. It needs NO embedder (graph-hop only), so it works in the Node
+// harness exactly as it degrades in the browser — and it is empty at the floor.
+group('working memory — hot/warm/cold subgraph (no embedder, parity at floor)', () => {
+  const F = E.conversationField; F.reset();
+  F.deposit({ entities: ['Edith'], sentences: [{ docId: 'voss', idx: 1 }] }, 1);
+  F.deposit({ entities: ['Edith', 'Sefton'] }, 1);
+  // Floor depth ⇒ empty (the prompt then takes today's exact path).
+  const wmFloor = E.buildWorkingMemory([voss], F, E.thinkingBudget(1), 'what about the boat');
+  eq(wmFloor.hot.length, 0, 'floor depth carries nothing hot');
+  eq(wmFloor.warm.length, 0, 'floor depth carries nothing warm');
+  // Deeper ⇒ the carried entities surface, each with its document sentences, and
+  // a one-hop graph neighbor warms alongside.
+  const wm = E.buildWorkingMemory([voss], F, E.thinkingBudget(3), 'what about the boat');
+  const edith = wm.hot.find(h => h.entity === 'Edith');
+  ok(edith, 'the carried entity Edith is hot at depth 3');
+  ok(edith.sents.length > 0 && edith.sents.every(s => typeof s.t === 'string'), 'a hot entity resolves to its verbatim document sentences');
+  ok(wm.warm.length > 0 && wm.warm.every(w => w.oneHopFrom), 'warm entities are one graph-hop from a hot one');
+  ok(wm.hot.every(h => h.heat >= E.thinkingBudget(3).wmHeatFloor), 'every hot entity clears the budget heat floor');
+  F.reset();
+});
+
+// recallByHeat rewarms a cooled, carried sentence to full text when it overlaps
+// the new query — old-but-relevant material reconstructs into the hot zone.
+group('recall by heat — a cooled carried sentence comes back', () => {
+  const F = E.conversationField; F.reset();
+  const boatIdx = voss.sentenceTexts.findIndex(t => /boat/i.test(t));
+  ok(boatIdx >= 0, 'the fixture has a sentence mentioning the boat');
+  F.deposit({ entities: ['Sefton'], sentences: [{ docId: 'voss', idx: boatIdx }] }, 1);
+  F.decayTurn(); F.decayTurn();                     // let it cool
+  const rec = E.recallByHeat([voss], F, 'tell me again about the boat');
+  ok(rec.some(r => r.i === boatIdx && /boat/i.test(r.t)), 'a cooled carried sentence overlapping the query is recalled with full text');
+  eq(E.recallByHeat([voss], F, 'the of a to').length, 0, 'an all-stopword query recalls nothing');
+  F.reset();
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

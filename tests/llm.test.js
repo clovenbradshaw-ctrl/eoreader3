@@ -87,5 +87,51 @@ group('no history — bare system + question', () => {
   eq(messages.length, 2, 'system + the single user turn');
 });
 
+// Heat-ranked working memory (thinking depth > 1) folds into the prompt without
+// breaking the one-system-message-first invariant, and shrinks the verbatim
+// recency window. Absent/empty working memory must be byte-identical to before.
+group('working memory folds into the single system message (depth > 1)', () => {
+  const wm = {
+    hot: [{ entity: 'Edith', heat: 2, sents: [{ i: 1, t: 'She set the kettle down and listened.' }] }],
+    warm: [{ entity: 'Marlow', oneHopFrom: 'Edith', portraitLine: 'Edith thought about Marlow.' }],
+    cold: [{ label: 'the boat', sentRange: [3, 3] }],
+    recalled: [],
+  };
+  const history = [];
+  for (let i = 0; i < 10; i++) history.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `turn ${i} content here` });
+  const messages = LLM.assembleMessages({ sys: 'SYS', history, contextText: '[s1] hi', question: 'what now?', grounded: true, workingMemory: wm });
+  eq(systemCount(messages), 1, 'exactly one system message with working memory present');
+  eq(messages[0].role, 'system', 'the system message is first');
+  ok(messages.slice(1).every(m => m.role !== 'system'), 'working memory does not become a second system message');
+  ok(messages[0].content.startsWith('SYS'), 'the base system prompt is preserved at the front');
+  ok(/Working memory/.test(messages[0].content), 'the working-memory block is folded into the system message');
+  ok(/Edith/.test(messages[0].content) && /Marlow/.test(messages[0].content), 'hot and warm entities appear in the block');
+  ok(/the boat/.test(messages[0].content), 'a cooled pointer is listed');
+  eq(messages[messages.length - 1].role, 'user', 'the final message is the current user turn');
+});
+
+group('working memory shrinks the verbatim recency window', () => {
+  const history = [];
+  for (let i = 0; i < 12; i++) history.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `turn ${i}` });
+  const wm = { hot: [{ entity: 'Edith', sents: [] }], warm: [], cold: [], recalled: [] };
+  const verbatim = (msgs) => msgs.slice(1, -1).length;   // drop the system head and the tail question
+  const withWM = LLM.assembleMessages({ sys: 'SYS', history, contextText: '', question: 'q', grounded: false, budget: 100000, workingMemory: wm });
+  const without = LLM.assembleMessages({ sys: 'SYS', history, contextText: '', question: 'q', grounded: false, budget: 100000 });
+  ok(verbatim(withWM) <= 3, 'with working memory, at most 3 turns are kept verbatim');
+  ok(verbatim(without) > verbatim(withWM), 'without working memory, more turns are kept verbatim');
+});
+
+group('no working memory ⇒ byte-identical to before (parity floor)', () => {
+  const history = [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }];
+  const base = { sys: 'SYS', history, contextText: '[s1] x', question: 'q', grounded: true };
+  const a = LLM.assembleMessages(base);
+  const b = LLM.assembleMessages({ ...base, workingMemory: null });
+  const c = LLM.assembleMessages({ ...base, workingMemory: { hot: [], warm: [], cold: [], recalled: [] } });
+  eq(JSON.stringify(a), JSON.stringify(b), 'workingMemory:null matches the no-arg path');
+  eq(JSON.stringify(a), JSON.stringify(c), 'an empty workingMemory matches the no-arg path');
+  eq(LLM.renderWorkingMemory(null), '', 'renderWorkingMemory(null) is empty');
+  eq(LLM.renderWorkingMemory({ hot: [], warm: [], cold: [], recalled: [] }), '', 'an empty working memory renders empty');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }

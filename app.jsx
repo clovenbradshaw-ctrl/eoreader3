@@ -564,30 +564,39 @@ function App() {
   });
 
   // Deposit a settled, document-grounded turn into the conversation field
-  // (working memory) and record what the budget bought as a `working-memory`
-  // audit step. Legible-THAT: the step shows the carried subgraph and its heat,
-  // never a claim about why the field linked things. At depth 1 the heat floor is
-  // ∞, so nothing reads as hot — the audit shows it, answers are untouched.
-  const settleField = (scope, q, cites) => {
+  // (working memory): warm the entities it named and the sentences it cited, so
+  // the NEXT turn can carry them forward. Always runs (depth-independent); what
+  // the depth dial governs is how much of the field is read back into a prompt.
+  const depositSettled = (scope, q, cites) => {
     const F = window.EOEngine && window.EOEngine.conversationField;
     if (!F) return;
     let matter = [];
     try { matter = (window.EOEngine.referentsScope(scope, q) || {}).matter || []; } catch (e) {}
     try { F.deposit({ entities: matter, sentences: (cites || []).map(c => ({ docId: c.docId, idx: c.idx })) }, 1); }
-    catch (e) { eoWarn('field deposit', e); return; }
+    catch (e) { eoWarn('field deposit', e); }
+  };
+
+  // Build the heat-ranked working memory carried INTO this turn from the
+  // (already-decayed, pre-deposit) field, and record it as a `working-memory`
+  // audit step. Legible-THAT: the step shows the carried hot/warm/cold subgraph,
+  // never a claim about why the field linked things. Null at the dial's floor
+  // (∞ heat floor) — the prompt then takes today's exact path (parity).
+  const buildWMForTurn = (scope, q) => {
+    const E = window.EOEngine, budget = turnBudgetRef.current;
+    if (!E || !E.buildWorkingMemory || !E.conversationField || !budget || !isFinite(budget.wmHeatFloor)) return null;
+    let wm;
+    try { wm = E.buildWorkingMemory(scope, E.conversationField, budget, q); } catch (e) { eoWarn('buildWorkingMemory', e); return null; }
+    if (!wm || !(wm.hot.length || wm.warm.length || wm.cold.length || wm.recalled.length)) return null;
     try {
-      const budget = turnBudgetRef.current || (window.EOEngine.thinkingBudget ? window.EOEngine.thinkingBudget(depthRef.current) : null);
-      const floor = budget && isFinite(budget.wmHeatFloor) ? budget.wmHeatFloor : Infinity;
-      const snap = F.snapshot();
-      const band = (h) => h >= floor ? 'hot' : (h >= floor / 2 ? 'warm' : 'cooled');
-      let hot = 0, warm = 0, cooled = 0;
-      for (const e of snap.entities) { const b = band(e.heat); if (b === 'hot') hot++; else if (b === 'warm') warm++; else cooled++; }
       AUD('step', 'working-memory', {
-        turn: snap.turn, depth: budget ? budget.level : depthRef.current,
-        heatFloor: isFinite(floor) ? floor : null, hot, warm, cooled,
-        carried: snap.entities.slice(0, 6).map(e => ({ label: e.label, heat: e.heat, band: band(e.heat) })),
+        depth: budget.level, heatFloor: budget.wmHeatFloor,
+        hot: wm.hot.map(h => ({ label: h.entity, heat: h.heat, sents: (h.sents || []).length })),
+        warm: wm.warm.map(w => ({ label: w.entity, via: w.oneHopFrom })),
+        cold: wm.cold.map(c => ({ label: c.label, range: c.sentRange })),
+        recalled: (wm.recalled || []).map(r => ({ docId: r.docId, i: r.i })),
       });
     } catch (e) { eoWarn('working-memory step', e); }
+    return wm;
   };
 
   const runMechanicalScope = (scope, q) => {
@@ -604,7 +613,7 @@ function App() {
     replaceLast({ role: 'assistant', text: plan.text, audit: plan.audit, mode: mode === 'creative' ? 'creative' : 'grounded' });
     if (plan.tableSpec && primary) { openTab(primary.id); setTableSpec({ ...plan.tableSpec }); }
     if (plan.cites && plan.cites.length) setTimeout(() => flashCitation(plan.cites[0].docId, plan.cites[0].idx), 380);
-    settleField(scope, q, plan.cites);
+    depositSettled(scope, q, plan.cites);
     AUD('end', { engine: 'mechanical', text: plan.text, audit: plan.audit, cites: plan.cites || [], tableSpec: plan.tableSpec || null });
     setBusy(false);
   };
@@ -667,17 +676,19 @@ function App() {
       : window.EOEngine.contextScope(scope, q, 6);
     const task = intent === 'summary' ? 'summary' : 'answer';
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
+    // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
+    const wm = buildWMForTurn(scope, q);
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       let full = await window.EOLLM.phrase({
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
-        grounded: true, onToken: streamInto({ mode: 'grounded' }),
+        grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
       });
       full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
       const settle = (res, decision) => {
         replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
-        settleField(scope, q, res.cites);
+        depositSettled(scope, q, res.cites);
         AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
       };
       if (/passages?\s+do\s?n.?t\s+say/i.test(full) || full.trim().length < 3) {
@@ -698,7 +709,7 @@ function App() {
             replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
             retry = await window.EOLLM.phrase({
               mlcKey: model.mlc, question: q, contextText: stricter, history, mode: 'grounded', task,
-              grounded: true, onToken: streamInto({ mode: 'grounded' }),
+              grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
             });
             retry = window.EOEngine.dedupeSentences(retry);
           } catch (e) { retry = ''; }

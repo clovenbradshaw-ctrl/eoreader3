@@ -4615,6 +4615,96 @@ function projectGraph(events, frame = {}) {
     reset() { _convField.turn = 0; _convField.ent.clear(); _convField.sent.clear(); _convField.edge.clear(); },
   };
 
+  /* ---------- Working memory: the conversation field as a hot subgraph ----------
+     buildWorkingMemory reads the conversation field through the turn's budget and
+     resolves it into three bands the prompt assembler ranks by heat:
+       • hot  — entities above the budget's heat floor, with their verbatim sentences
+       • warm — one graph-hop from a hot entity (reuse projectGraph edges), a portrait line
+       • cold — touched-but-cooled: a rewarmable POINTER (label + sentence range), no text
+     The field holds pointers only; the docs resolve them to text HERE, so the field
+     stays light and chat-scoped. At the dial's floor the budget's heat floor is ∞,
+     so every band is empty and the assembler takes today's path — parity holds.
+     Embedding-near warm spans are a later phase; this degrades to graph-hop only,
+     which needs no embedder. */
+  function buildWorkingMemory(scope, field, budget, query) {
+    const empty = { hot: [], warm: [], cold: [], recalled: [] };
+    if (!field || !budget || !isFinite(budget.wmHeatFloor)) return empty;
+    const ds = scopeDocs(scope).filter(d => d && d.kind !== 'table');
+    if (!ds.length) return empty;
+    const snap = (typeof field.snapshot === 'function') ? field.snapshot() : field;
+    const floor = budget.wmHeatFloor;
+    // Index every scope entity once: key → { name, docId, sents:[{i,t}], mass }.
+    const entIndex = new Map();
+    for (const d of ds) {
+      let proj; try { proj = projectEntities(d); } catch (e) { continue; }
+      for (const e of (proj.entities || [])) {
+        const key = normSurface(e.name);
+        if (!entIndex.has(key)) entIndex.set(key, { name: e.name, docId: d.id, mass: e.mass, sents: (e.sents || []).map(i => ({ i, t: d.sentenceTexts[i] })) });
+      }
+    }
+    // One-hop neighbors of an entity key, from the projected graph edges.
+    const neighborsOf = (key) => {
+      const out = [];
+      for (const d of ds) {
+        if (!d._events) continue;
+        let g; try { g = projectGraph(d._events); } catch (e) { continue; }
+        for (const ed of (g.edges || [])) {
+          if (ed.a === key) out.push({ key: ed.b, name: ed.bName, verb: ed.verb });
+          else if (ed.b === key) out.push({ key: ed.a, name: ed.aName, verb: ed.verb });
+        }
+      }
+      return out;
+    };
+    const hot = [], cold = [], hotKeys = new Set();
+    for (const e of (snap.entities || [])) {
+      const idx = entIndex.get(e.key);
+      if (e.heat >= floor) {
+        hot.push({ entity: e.label || e.key, heat: e.heat, docId: idx ? idx.docId : null, mass: idx ? idx.mass : null, sents: idx ? idx.sents.slice(0, 3) : [] });
+        hotKeys.add(e.key);
+      } else {
+        const sids = idx ? idx.sents.map(s => s.i) : [];
+        cold.push({ label: e.label || e.key, heat: e.heat, docId: idx ? idx.docId : null, sentRange: sids.length ? [Math.min(...sids), Math.max(...sids)] : null });
+      }
+    }
+    // warm: one graph-hop out from a hot entity (dedup, never re-list a hot one).
+    const warm = [], warmKeys = new Set();
+    for (const h of hot) {
+      for (const nb of neighborsOf(normSurface(h.entity))) {
+        if (!nb.key || hotKeys.has(nb.key) || warmKeys.has(nb.key)) continue;
+        warmKeys.add(nb.key);
+        const idx = entIndex.get(nb.key);
+        const line = (idx && idx.sents.length) ? idx.sents[0].t : (nb.verb ? `${h.entity} ${nb.verb} ${nb.name}` : nb.name);
+        warm.push({ entity: nb.name || nb.key, oneHopFrom: h.entity, portraitLine: line });
+      }
+    }
+    // recall by heat: cold material that overlaps THIS query reconstructs to full
+    // fidelity (old-but-relevant turns come back into the hot zone).
+    const recalled = query ? recallByHeat(ds, field, query) : [];
+    return { hot, warm: warm.slice(0, 6), cold, recalled };
+  }
+
+  // When cooled material overlaps the current retrieval, rewarm it to full text.
+  // Operates on the field's carried SENTENCE pointers; recallSpan (in llm.js) stays
+  // the by-index primitive for the chat history. Lexical overlap, so no embedder.
+  function recallByHeat(scope, field, query) {
+    if (!field || !query) return [];
+    const ds = scopeDocs(scope).filter(d => d && d.kind !== 'table');
+    const snap = (typeof field.snapshot === 'function') ? field.snapshot() : field;
+    const qt = new Set(tok(query));
+    if (!qt.size) return [];
+    const byId = new Map(ds.map(d => [d.id, d]));
+    const out = [];
+    for (const s of (snap.sentences || [])) {
+      const d = byId.get(s.docId); if (!d || !d.sentenceTexts) continue;
+      const t = d.sentenceTexts[s.idx]; if (!t) continue;
+      const st = new Set(tok(t));
+      let overlap = 0; for (const x of qt) if (st.has(x)) overlap++;
+      if (overlap >= 1) out.push({ docId: s.docId, i: s.idx, t, heat: s.heat, overlap });
+    }
+    out.sort((a, b) => b.overlap - a.overlap || b.heat - a.heat);
+    return out.slice(0, 4);
+  }
+
   window.EOEngine = {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
@@ -4628,7 +4718,7 @@ function projectGraph(events, frame = {}) {
     routeTurn, retrieveHybrid, contextFromHits,
     // thinking depth: the effort dial's per-turn budget + the conversation field
     // (working memory) it spends across. Inert at depth 1 (parity floor).
-    thinkingBudget, conversationField,
+    thinkingBudget, conversationField, buildWorkingMemory, recallByHeat,
     // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
     // and the transmuting-DEF classifier (the significance-layer "weak" law)
     layerLadder, isTransmutingDef,

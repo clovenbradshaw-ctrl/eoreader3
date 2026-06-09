@@ -143,13 +143,14 @@ function narrateTurn(turn) {
         }
         break;
       case 'working-memory': {
-        // Legible-that: name what the turn is carrying forward, hottest first.
-        // At floor depth nothing reads as hot, so this stays silent (parity).
-        const carried = (s.carried || []).filter(c => c.band !== 'cooled');
-        if (carried.length) {
-          const parts = carried.map(c => c.label + ' (' + c.band + (c.band === 'warm' ? ', 1 hop' : '') + ')');
-          push('Carried forward: ' + (parts.length <= 1 ? parts[0] : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1]) + '.');
-        }
+        // Legible-that: name what the turn carried forward, hottest first. This
+        // step is only recorded above the dial's floor, so it stays silent at
+        // reflex depth (parity).
+        const parts = (s.hot || []).map(h => h.label + ' (hot)')
+          .concat((s.warm || []).map(w => w.label + ' (warm, 1 hop)'))
+          .concat((s.cold || []).slice(0, 2).map(c => c.label + ' (cooled)'));
+        if (parts.length) push('Carried forward: ' + (parts.length <= 1 ? parts[0] : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1]) + '.');
+        if (s.recalled && s.recalled.length) push('Recalled ' + s.recalled.length + ' earlier passage' + (s.recalled.length === 1 ? '' : 's') + ' that became relevant again.');
         break;
       }
       case 'error':
