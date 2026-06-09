@@ -176,6 +176,13 @@ function narrateTurn(turn) {
         if (s.pairs && s.pairs.length)
           push('Marked an inference: I connected ' + s.pairs.map(p => '[s' + p.a + '] and [s' + p.b + ']').join(', ') + ' — a link the field drew that the page never states. Badged inferred, not grounded.');
         break;
+      case 'plan-seg':
+        // Reconsideration: the turn reconsidered its own plan after drafting.
+        push(s.to === 'creative' ? 'Reconsidered: the draft refused the summary, so I re-routed to compose it freely instead.'
+          : s.to === 'gap-retrieve' ? 'Reconsidered: rather than just retrying harder, I went back for what the question still hadn’t covered' + (s.reason ? ' (' + s.reason.replace(/^uncovered:\s*/, '') + ')' : '') + '.'
+          : s.to === 'question-about-silence' ? 'Reconsidered: the draft answered nothing on the page, so I read it as a question the document doesn’t address.'
+          : 'Reconsidered the plan: ' + s.from + ' → ' + s.to + '.');
+        break;
       case 'error':
         push('Hit a problem' + (s.where ? ' (' + s.where + ')' : '') + ': ' + (s.message || 'unknown') + '.');
         break;

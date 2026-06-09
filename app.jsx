@@ -783,6 +783,16 @@ function App() {
         grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
       });
       full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
+      // Reconsideration (Phase 5, deepest depth): a refused summary is not a
+      // summary — SEG the plan and re-route to free composition rather than
+      // recycling the refusal. One re-plan per turn (mirrors the echo-veto).
+      if (budget && budget.replan && task === 'summary' && ready &&
+          window.EOEngine.looksRefused && window.EOEngine.looksRefused(full)) {
+        AUD('step', 'plan-seg', { from: 'grounded-summary', to: 'creative', reason: 'the model refused the summary' });
+        lastGroundedRef.current = false;
+        runChat(q, history, 'creative', ctx, true);
+        return;
+      }
       const settle = (res, decision) => {
         // Only a model-phrased answer can carry an inference void; a mechanical
         // fallback states only what the page does.
@@ -803,8 +813,23 @@ function App() {
         // the mechanical answer. Mainly bites summaries on a small model.
         if (echoesASpan(scope, q, full)) {
           AUD('step', 'veto', { decision: 'reject', reason: 'echoes a single span — retrying under a stricter rule' });
-          const stricter = ctx + '\n\nDo NOT copy or lightly reword any single passage. Compose a fresh ' +
+          let stricter = ctx + '\n\nDo NOT copy or lightly reword any single passage. Compose a fresh ' +
             (task === 'summary' ? 'summary that synthesizes across the passages in your own words.' : 'answer in your own words.');
+          // Reconsideration (Phase 5, deepest depth): retry via the GAP, not just
+          // "stricter" — find what the question still doesn't cover and re-retrieve
+          // on it, so the second pass has new material rather than the same spans.
+          if (budget && budget.replan) {
+            try {
+              const gaps = window.EOEngine.coverageGaps(q, ctx);
+              if (gaps.uncovered.length) {
+                const more = window.EOEngine.retrieveScope(scope, gaps.uncovered.join(' '), 4) || [];
+                if (more.length) {
+                  stricter += '\n' + window.EOEngine.contextFromHits(scope, more);
+                  AUD('step', 'plan-seg', { from: 'echo-veto', to: 'gap-retrieve', reason: 'uncovered: ' + gaps.uncovered.join(', ') });
+                }
+              }
+            } catch (e) { eoWarn('veto-gap', e); }
+          }
           let retry = '';
           try {
             replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
@@ -834,6 +859,10 @@ function App() {
         const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent);
         if (!bound.audit.grounded) {
           // Unmoored: the phrasing matched no passage — use the mechanical answer.
+          // Reconsideration (Phase 5): at the deepest depth, read a factual draft
+          // that binds nothing as a question the page does not address, not a
+          // failed answer — the mechanical reading surfaces that silence/void.
+          if (budget && budget.replan) AUD('step', 'plan-seg', { from: 'factual', to: 'question-about-silence', reason: 'the draft bound to nothing on the page' });
           AUD('step', 'veto', { decision: 'mechanical', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
           settle(window.EOEngine.answerScope(scope, q), 'mechanical (veto)');
         } else if (invented.length) {

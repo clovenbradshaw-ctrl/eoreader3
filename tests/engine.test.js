@@ -459,6 +459,16 @@ group('inference void — mark what the reader added across two cited spans', ()
   eq(oneEnd.text, 'Only one span {{cite:voss:1:s1}} here.', 'a non-inference leaves the text untouched');
 });
 
+// Reconsideration reads a draft for refusal so a turn can SEG its own plan
+// (a refused summary re-routes to creative rather than recycling the refusal).
+group('reconsideration — a refusal is detected (plan SEG)', () => {
+  ok(E.looksRefused('I cannot provide a summary of this document.'), 'a plain refusal is detected');
+  ok(E.looksRefused("I'm sorry, but I can't create that."), 'a softened refusal is detected');
+  ok(E.looksRefused(''), 'an empty draft counts as a refusal');
+  ok(!E.looksRefused('Edith set the kettle down and listened by the lamp.'), 'a real answer is not a refusal');
+  ok(!E.looksRefused('The keeper said no one could row to the mainland.'), 'a substantive sentence is not a refusal');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

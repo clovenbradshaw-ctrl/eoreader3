@@ -117,6 +117,12 @@ function AuditStep({ s }) {
       <span className="aud-dim">floor {s.floor} · reader-added connection:</span> {(s.pairs || []).map((p, i) => <span key={i}>{i ? ', ' : ' '}<span className="aud-cite">s{p.a}</span>+<span className="aud-cite">s{p.b}</span></span>)}
     </Line>
   );
+  if (s.t === 'plan-seg') return (
+    <Line label="reconsider" kind="veto">
+      <b>{s.from}</b> <span className="aud-dim">→</span> <b>{s.to}</b>
+      {s.reason && <span className="aud-dim"> · {s.reason}</span>}
+    </Line>
+  );
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }

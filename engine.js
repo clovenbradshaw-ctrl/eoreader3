@@ -3910,6 +3910,15 @@ function projectGraph(events, frame = {}) {
     return { text: out, inferred: marked };
   }
 
+  // Phase 5: does a draft read as a refusal / non-answer? Used by reconsideration
+  // to SEG a turn's plan after drafting — a refused summary re-routes to creative
+  // rather than recycling the refusal. Empty/near-empty counts as a refusal.
+  function looksRefused(text) {
+    const t = String(text == null ? '' : text).toLowerCase().trim();
+    if (t.length < 3) return true;
+    return /\b(i (cannot|can ?not|can'?t|am unable to|won'?t|am not able)|i'?m sorry,? but|i'?m unable|unable to (provide|summari|comply|help|do)|as an ai|i do(n'?t| not) have (enough|the|access)|cannot (provide|create|write|generate)|can'?t (provide|create|write|generate))\b/.test(t);
+  }
+
   /* ============================================================ INTENT */
   function classifyIntent(q) {
     const t = ' ' + String(q).toLowerCase().replace(/[’']/g, "'") + ' ';
@@ -4809,6 +4818,8 @@ function projectGraph(events, frame = {}) {
     associativeNeighbors,
     // the inference void: mark what the reader ADDED across two cited spans
     markInferred,
+    // reconsideration: does a draft read as a refusal / non-answer (plan SEG)
+    looksRefused,
     // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
     // and the transmuting-DEF classifier (the significance-layer "weak" law)
     layerLadder, isTransmutingDef,
