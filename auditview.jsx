@@ -92,6 +92,19 @@ function AuditStep({ s }) {
       {s.reason && <span className="aud-dim"> · {s.reason}</span>}
     </Line>
   );
+  if (s.t === 'working-memory') {
+    const hot = s.hot || [], warm = s.warm || [], cold = s.cold || [], recalled = s.recalled || [];
+    const rng = (c) => c.range ? ' [s' + c.range[0] + (c.range[1] !== c.range[0] ? '–s' + c.range[1] : '') + ']' : '';
+    return (
+      <Line label="working memory" kind="ground">
+        <span className="aud-dim">depth {s.depth}{s.heatFloor != null ? ' · hot ≥ ' + s.heatFloor : ''}</span>
+        <span> · <b>{hot.length}</b> hot · <b>{warm.length}</b> warm · <b>{cold.length}</b> cooled{recalled.length ? <span> · <b>{recalled.length}</b> recalled</span> : null}</span>
+        {hot.length ? <div className="aud-dim" style={{ marginTop: 2 }}>hot: {hot.map((h, i) => <span key={i}>{i ? ' · ' : ''}{h.label} <span className="aud-score">{h.heat}</span></span>)}</div> : null}
+        {warm.length ? <div className="aud-dim">warm: {warm.map((w, i) => <span key={i}>{i ? ' · ' : ''}{w.label} <span className="aud-score">via {w.via}</span></span>)}</div> : null}
+        {cold.length ? <div className="aud-dim">cooled: {cold.map((c, i) => <span key={i}>{i ? ', ' : ''}{c.label}{rng(c)}</span>)}</div> : null}
+      </Line>
+    );
+  }
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }
@@ -128,6 +141,7 @@ function AuditTurn({ turn }) {
           <div className="aud-meta">
             <span>scope: {(turn.scope && turn.scope.length) ? turn.scope.map(s => s.name).join(', ') : '—'}</span>
             <span>model: {(turn.model && turn.model.name) || '—'}{turn.modelReady === false ? ' (not ready)' : ''}</span>
+            {turn.depth != null && <span>depth: {turn.depth}{turn.budget && turn.budget.maxSeekRounds > 1 ? ' · ≤' + turn.budget.maxSeekRounds + ' seek' : ''}{turn.budget && turn.budget.replan ? ' · replan' : ''}</span>}
             {turn.prevGrounded != null && <span>prevGrounded: {String(turn.prevGrounded)}</span>}
             <button className="audit-link" onClick={() => setJson(v => !v)}>{json ? 'timeline' : 'raw JSON'}</button>
           </div>

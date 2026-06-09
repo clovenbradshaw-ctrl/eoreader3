@@ -96,6 +96,13 @@ function App() {
   const [activeProject, setActiveProject] = useState(null);
   const [input, setInput] = useState('');
   const [mode, setMode] = useState('auto');
+  // Thinking depth: the effort dial (1 = reflex/today … 3 = deepest). Persisted in
+  // prefs. Level 1 resolves every depth knob to its inert floor, so it is
+  // byte-identical to current Cleon — the parity floor. Mirrored into a ref for
+  // the async settle paths, and the turn's resolved budget into another.
+  const [depth, setDepth] = useState(1);
+  const depthRef = useRef(1); depthRef.current = depth;
+  const turnBudgetRef = useRef(null);
   const [busy, setBusy] = useState(false);
 
   const [rules, setRules] = useState(window.RULESETS.map(r => ({ ...r })));
@@ -223,6 +230,7 @@ function App() {
         if (Array.isArray(prefs.projects)) { setProjects(prefs.projects); bumpUid(prefs.projects.map(p => p.id)); }
         if (prefs.activeProject) setActiveProject(prefs.activeProject);
         if (prefs.mode) setMode(prefs.mode);
+        if (typeof prefs.depth === 'number') setDepth(prefs.depth);
         if (typeof prefs.splitRatio === 'number') setSplitRatio(prefs.splitRatio);
         if (typeof prefs.explore === 'boolean') setExplore(prefs.explore);
         if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
@@ -251,6 +259,11 @@ function App() {
         if (Array.isArray(savedChat.openTabs)) setOpenTabs(savedChat.openTabs.filter(tabOK));
         if (savedChat.activeTab && tabOK(savedChat.activeTab)) setActiveTab(savedChat.activeTab);
         if (Array.isArray(savedChat.sources)) setSources(savedChat.sources.filter(id => docIds.has(id)));
+        // Restore the chat's working-memory field so a reload keeps what the
+        // conversation was carrying (best-effort; reset on a new/switched chat).
+        if (savedChat.field && window.EOEngine && window.EOEngine.conversationField) {
+          try { window.EOEngine.conversationField.restore(savedChat.field); } catch (e) {}
+        }
       }
       hydrated.current = true;
     })();
@@ -264,13 +277,18 @@ function App() {
   }, [docs]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    const t = setTimeout(() => window.EOStore.saveChat({ messages, chats, activeChat, openTabs, activeTab, sources }), 450);
+    const t = setTimeout(() => window.EOStore.saveChat({
+      messages, chats, activeChat, openTabs, activeTab, sources,
+      // The conversation field (working memory) is chat-scoped: it rides in the
+      // chat snapshot, NOT the cross-session learned ledger. Pointers only.
+      field: (window.EOEngine && window.EOEngine.conversationField) ? window.EOEngine.conversationField.snapshot() : null,
+    }), 450);
     return () => clearTimeout(t);
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput });
-  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, depth, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput });
+  }, [rules, langModes, model, mode, depth, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -545,6 +563,42 @@ function App() {
     return c;
   });
 
+  // Deposit a settled, document-grounded turn into the conversation field
+  // (working memory): warm the entities it named and the sentences it cited, so
+  // the NEXT turn can carry them forward. Always runs (depth-independent); what
+  // the depth dial governs is how much of the field is read back into a prompt.
+  const depositSettled = (scope, q, cites) => {
+    const F = window.EOEngine && window.EOEngine.conversationField;
+    if (!F) return;
+    let matter = [];
+    try { matter = (window.EOEngine.referentsScope(scope, q) || {}).matter || []; } catch (e) {}
+    try { F.deposit({ entities: matter, sentences: (cites || []).map(c => ({ docId: c.docId, idx: c.idx })) }, 1); }
+    catch (e) { eoWarn('field deposit', e); }
+  };
+
+  // Build the heat-ranked working memory carried INTO this turn from the
+  // (already-decayed, pre-deposit) field, and record it as a `working-memory`
+  // audit step. Legible-THAT: the step shows the carried hot/warm/cold subgraph,
+  // never a claim about why the field linked things. Null at the dial's floor
+  // (∞ heat floor) — the prompt then takes today's exact path (parity).
+  const buildWMForTurn = (scope, q) => {
+    const E = window.EOEngine, budget = turnBudgetRef.current;
+    if (!E || !E.buildWorkingMemory || !E.conversationField || !budget || !isFinite(budget.wmHeatFloor)) return null;
+    let wm;
+    try { wm = E.buildWorkingMemory(scope, E.conversationField, budget, q); } catch (e) { eoWarn('buildWorkingMemory', e); return null; }
+    if (!wm || !(wm.hot.length || wm.warm.length || wm.cold.length || wm.recalled.length)) return null;
+    try {
+      AUD('step', 'working-memory', {
+        depth: budget.level, heatFloor: budget.wmHeatFloor,
+        hot: wm.hot.map(h => ({ label: h.entity, heat: h.heat, sents: (h.sents || []).length })),
+        warm: wm.warm.map(w => ({ label: w.entity, via: w.oneHopFrom })),
+        cold: wm.cold.map(c => ({ label: c.label, range: c.sentRange })),
+        recalled: (wm.recalled || []).map(r => ({ docId: r.docId, i: r.i })),
+      });
+    } catch (e) { eoWarn('working-memory step', e); }
+    return wm;
+  };
+
   const runMechanicalScope = (scope, q) => {
     // Capture the deterministic basis of the answer for the trace: intent, the
     // matter/anti-matter referents, and the scored retrieval hits.
@@ -559,6 +613,7 @@ function App() {
     replaceLast({ role: 'assistant', text: plan.text, audit: plan.audit, mode: mode === 'creative' ? 'creative' : 'grounded' });
     if (plan.tableSpec && primary) { openTab(primary.id); setTableSpec({ ...plan.tableSpec }); }
     if (plan.cites && plan.cites.length) setTimeout(() => flashCitation(plan.cites[0].docId, plan.cites[0].idx), 380);
+    depositSettled(scope, q, plan.cites);
     AUD('end', { engine: 'mechanical', text: plan.text, audit: plan.audit, cites: plan.cites || [], tableSpec: plan.tableSpec || null });
     setBusy(false);
   };
@@ -621,16 +676,19 @@ function App() {
       : window.EOEngine.contextScope(scope, q, 6);
     const task = intent === 'summary' ? 'summary' : 'answer';
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
+    // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
+    const wm = buildWMForTurn(scope, q);
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       let full = await window.EOLLM.phrase({
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
-        grounded: true, onToken: streamInto({ mode: 'grounded' }),
+        grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
       });
       full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
       const settle = (res, decision) => {
         replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
+        depositSettled(scope, q, res.cites);
         AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
       };
       if (/passages?\s+do\s?n.?t\s+say/i.test(full) || full.trim().length < 3) {
@@ -651,7 +709,7 @@ function App() {
             replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
             retry = await window.EOLLM.phrase({
               mlcKey: model.mlc, question: q, contextText: stricter, history, mode: 'grounded', task,
-              grounded: true, onToken: streamInto({ mode: 'grounded' }),
+              grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
             });
             retry = window.EOEngine.dedupeSentences(retry);
           } catch (e) { retry = ''; }
@@ -713,10 +771,18 @@ function App() {
     const canLLM = !!(window.EOLLM && window.EOLLM.hasWebGPU());
     const wasLoaded = canLLM && window.EOLLM.isLoaded(model.mlc);
 
+    // Thinking depth → this turn's budget (inert at depth 1). Decay the
+    // conversation field one tick of conversational time at turn start, before
+    // this turn deposits into it — recent topics stay warm, dropped ones cool.
+    const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(depth) : null;
+    turnBudgetRef.current = budget;
+    try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.decayTurn(); }
+    catch (e) { eoWarn('field decay', e); }
+
     // Open the turn's audit record before anything branches, so the routing
     // decision, model load, retrieval and the model call all attach to it.
     const auditId = AUD('begin', {
-      input: q, mode,
+      input: q, mode, depth, budget,
       scope: auditScope(scope),
       model: { id: model.id, name: model.name, mlc: model.mlc },
       hasWebGPU: canLLM, modelLoadedAtStart: wasLoaded,
@@ -820,8 +886,11 @@ function App() {
     setBusy(false);
   };
 
-  const newChat = () => { setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; if (mobileRef.current) setCollapsed(true); };
-  const selectChat = (id) => { setActiveChat(id); lastGroundedRef.current = false; if (mobileRef.current) setCollapsed(true); };
+  // Reset the conversation field on a fresh or switched chat — working memory is
+  // chat-scoped, matching newChat's reset semantics (distinct from the learned ledger).
+  const resetField = () => { try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.reset(); } catch (e) { eoWarn('field reset', e); } };
+  const newChat = () => { setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; resetField(); if (mobileRef.current) setCollapsed(true); };
+  const selectChat = (id) => { setActiveChat(id); lastGroundedRef.current = false; resetField(); if (mobileRef.current) setCollapsed(true); };
 
   // ---- rules ----
   const toggleRule = (id) => setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
@@ -864,6 +933,7 @@ function App() {
 
   const composerProps = {
     value: input, onChange: setInput, onSend: () => send(), mode, onMode: setMode,
+    depth, onDepth: setDepth,
     onAttach: () => fileRef.current.click(), busy,
     sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),

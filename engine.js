@@ -3577,6 +3577,62 @@ function projectGraph(events, frame = {}) {
     'eva-energy': 'eva_energy_budget',
     'mass-weight': 'mass_weight',
   };
+
+  /* ---------- Thinking depth: the effort dial's tunable budget ----------
+     Depth is not a new pipeline; it is a ceiling and a set of thresholds the
+     existing δ/γ/EVA machinery already obeys. One user-facing dial sets a level
+     (1 = today's reflex … DEPTH_LEVELS = deepest); thinkingBudget(level) resolves
+     it into the concrete per-turn knobs every deeper-thinking path reads.
+
+     Each knob is a RULE (data.jsx RULESETS, group "Thinking depth"), captured
+     here from applyRules so it stays tunable/exportable — never a magic number.
+     A rule's `value` is its CEILING (the value at the deepest stop); depth scales
+     each knob from an inert FLOOR up to that ceiling. The floor is today: at
+     level 1 EVERY knob resolves to its inert value, so the dial's floor is
+     byte-identical to current Cleon and parity holds there. */
+  const DEPTH_LEVELS = 3;
+  const DEPTH_DEFAULTS = {
+    'max-seek-rounds':    { value: 4 },     // ceiling on iterative retrieval cycles
+    'seek-novelty-floor': { value: 0.15 },  // min new-coverage fraction to justify another round
+    'assoc-delta':        { value: 1.6 },   // dominance ratio an embedding link must clear to survive
+    'assoc-coupling':     { value: 0.6 },   // how hard the wandering embedder-reader presses
+    'wm-heat-floor':      { value: 0.25 },  // heat threshold for "hot" in working memory
+    'infer-bind-floor':   { value: 0.62 },  // closeness needed to phrase an inference across spans
+    'replan-enabled':     { value: 1 },     // may a turn reconsider its own plan (deepest only)
+  };
+  // Current tunable state, id → { value, enabled }. Filled by applyRules; defaults
+  // to the ceilings + enabled so a host that never calls applyRules (the Node test
+  // harness) still gets a coherent budget — and thinkingBudget(1) stays inert.
+  const _depth = {};
+  for (const k in DEPTH_DEFAULTS) _depth[k] = { value: DEPTH_DEFAULTS[k].value, enabled: true };
+
+  // Resolve a depth level into the per-turn budget. At level 1 every field is the
+  // inert/today value (1 seek round, no wander, no replan, nothing carried hot);
+  // higher levels scale each enabled knob toward its rule ceiling.
+  function thinkingBudget(level) {
+    const max = DEPTH_LEVELS;
+    let L = (level | 0) || 1; if (L < 1) L = 1; if (L > max) L = max;
+    const frac = max > 1 ? (L - 1) / (max - 1) : 0;        // 0 at floor, 1 at deepest
+    const st = (id) => _depth[id] || { value: (DEPTH_DEFAULTS[id] || {}).value, enabled: !!DEPTH_DEFAULTS[id] };
+    const on = (id) => L > 1 && !!DEPTH_DEFAULTS[id] && st(id).enabled !== false;
+    const ceil = (id) => { const v = st(id).value; return v != null ? Number(v) : DEPTH_DEFAULTS[id].value; };
+    return {
+      level: L, levels: max,
+      // iterative seeking: 1 (today) → ceil rounds, scaled by depth
+      maxSeekRounds: on('max-seek-rounds') ? Math.max(1, Math.round(1 + frac * (ceil('max-seek-rounds') - 1))) : 1,
+      seekNoveltyFloor: on('seek-novelty-floor') ? ceil('seek-novelty-floor') : 1,
+      // associative wander: no neighbor survives (δ=∞) and the reader doesn't press (coupling 0) at floor
+      assocDelta: on('assoc-delta') ? ceil('assoc-delta') : Infinity,
+      assocCoupling: on('assoc-coupling') ? +(frac * ceil('assoc-coupling')).toFixed(3) : 0,
+      // working memory: nothing is hot at floor (∞ heat floor ⇒ empty hot/warm)
+      wmHeatFloor: on('wm-heat-floor') ? ceil('wm-heat-floor') : Infinity,
+      // inference void: never infer at floor
+      inferBindFloor: on('infer-bind-floor') ? ceil('infer-bind-floor') : Infinity,
+      // reconsideration: only at the deepest stop
+      replan: !!(on('replan-enabled') && L >= max),
+    };
+  }
+
   function applyRules(uiRules) {
     if (!Array.isArray(uiRules)) return RULES_REV;
     for (const r of uiRules) {
@@ -3590,6 +3646,15 @@ function projectGraph(events, frame = {}) {
         continue;
       }
       if (r.value != null) { const n = Number(r.value); if (!isNaN(n)) READING_RULES[id].value = n; }
+    }
+    // Depth-governed knobs (the effort dial's thresholds) are rules too, but they
+    // gate the chat-phase budget rather than the extractor's physics — capture
+    // their tunable state for thinkingBudget() without touching READING_RULES.
+    for (const r of uiRules) {
+      if (!DEPTH_DEFAULTS[r.id]) continue;
+      const off = r.installed === false || r.enabled === false;
+      const v = (r.value != null && !isNaN(Number(r.value))) ? Number(r.value) : DEPTH_DEFAULTS[r.id].value;
+      _depth[r.id] = { value: v, enabled: !off };
     }
     // refresh the snapshot constants so the next parse reads new physics
     GAMMA = READING_RULES.decay_gamma.value;
@@ -4472,6 +4537,174 @@ function projectGraph(events, frame = {}) {
   }
 
   /* ============================================================ EXPORT */
+  /* ============================================================
+     Conversation field — working memory as a hot subgraph.
+
+     A chat-scoped overlay on the document field. Where the document field's
+     mass/momentum is PROJECTED from the event log, the conversation field is
+     deposited by the turns themselves: each settled answer warms the entities
+     it named and the sentences it cited. Heat decays once per turn by the SAME
+     γ the medium uses between sentences — recent topics stay warm, dropped ones
+     cool to a rewarmable pointer. Chat-scoped and serializable (it rides in the
+     chat snapshot, never the cross-session learned ledger); reset on a new or
+     switched chat, mirroring newChat.
+
+     Legible-THAT, not legible-why: the field records THAT a topic was carried,
+     and with how much heat — never a claim about why. buildWorkingMemory() reads
+     it into hot / warm / cold. It holds POINTERS (docId/idx/label), never text. */
+  const _convField = { turn: 0, ent: new Map(), sent: new Map(), edge: new Map() };
+  const _cfKey = (s) => normSurface(String(s || ''));
+  function _cfWarm(map, key, meta, w) {
+    if (!key) return;
+    const cur = map.get(key);
+    if (cur) { cur.heat += w; if (meta) Object.assign(cur, meta); }
+    else map.set(key, Object.assign({ heat: w }, meta || {}));
+  }
+  const conversationField = {
+    // Deposit heat from a settled turn. payload: { entities:[name…],
+    // sentences:[{docId,idx}…], edges:[[a,b]…] }. weight scales the deposit.
+    deposit(payload, weight = 1) {
+      if (!payload) return;
+      const w = Number(weight) || 0; if (w <= 0) return;
+      for (const name of (payload.entities || [])) {
+        const k = _cfKey(name); if (k) _cfWarm(_convField.ent, k, { label: String(name) }, w);
+      }
+      for (const s of (payload.sentences || [])) {
+        if (!s || s.idx == null) continue;
+        const k = (s.docId || '') + ':' + (s.idx | 0);
+        _cfWarm(_convField.sent, k, { docId: s.docId || null, idx: s.idx | 0 }, w);
+      }
+      for (const e of (payload.edges || [])) {
+        if (!Array.isArray(e) || e.length < 2) continue;
+        const a = _cfKey(e[0]), b = _cfKey(e[1]); if (!a || !b) continue;
+        const k = a < b ? a + '|' + b : b + '|' + a;
+        _cfWarm(_convField.edge, k, { a, b }, w);
+      }
+    },
+    // One tick of conversational time: decay all heat by γ, GC the cold dust.
+    decayTurn() {
+      const g = (typeof GAMMA === 'number' && GAMMA > 0) ? GAMMA : 0.7;
+      _convField.turn++;
+      for (const map of [_convField.ent, _convField.sent, _convField.edge]) {
+        for (const [k, v] of map) { v.heat *= g; if (v.heat < 1e-3) map.delete(k); }
+      }
+      return _convField.turn;
+    },
+    // Serializable read view (heaviest first) — for audit, working memory, and
+    // the chat snapshot. POINTERS only (docId/idx/label), never document text.
+    snapshot() {
+      const rows = (map, extra) => [...map.entries()]
+        .map(([key, v]) => Object.assign({ key, heat: +v.heat.toFixed(4) }, extra(v)))
+        .sort((a, b) => b.heat - a.heat);
+      return {
+        turn: _convField.turn,
+        entities: rows(_convField.ent, v => ({ label: v.label || v.key })),
+        sentences: rows(_convField.sent, v => ({ docId: v.docId || null, idx: v.idx })),
+        edges: rows(_convField.edge, v => ({ a: v.a, b: v.b })),
+      };
+    },
+    // Rebuild from a snapshot (chat restore). Best-effort and defensive.
+    restore(snap) {
+      this.reset();
+      if (!snap || typeof snap !== 'object') return;
+      _convField.turn = snap.turn | 0;
+      for (const e of (snap.entities || [])) if (e && e.key) _convField.ent.set(e.key, { heat: +e.heat || 0, label: e.label || e.key });
+      for (const s of (snap.sentences || [])) if (s && s.key) _convField.sent.set(s.key, { heat: +s.heat || 0, docId: s.docId || null, idx: s.idx | 0 });
+      for (const e of (snap.edges || [])) if (e && e.key) _convField.edge.set(e.key, { heat: +e.heat || 0, a: e.a, b: e.b });
+    },
+    reset() { _convField.turn = 0; _convField.ent.clear(); _convField.sent.clear(); _convField.edge.clear(); },
+  };
+
+  /* ---------- Working memory: the conversation field as a hot subgraph ----------
+     buildWorkingMemory reads the conversation field through the turn's budget and
+     resolves it into three bands the prompt assembler ranks by heat:
+       • hot  — entities above the budget's heat floor, with their verbatim sentences
+       • warm — one graph-hop from a hot entity (reuse projectGraph edges), a portrait line
+       • cold — touched-but-cooled: a rewarmable POINTER (label + sentence range), no text
+     The field holds pointers only; the docs resolve them to text HERE, so the field
+     stays light and chat-scoped. At the dial's floor the budget's heat floor is ∞,
+     so every band is empty and the assembler takes today's path — parity holds.
+     Embedding-near warm spans are a later phase; this degrades to graph-hop only,
+     which needs no embedder. */
+  function buildWorkingMemory(scope, field, budget, query) {
+    const empty = { hot: [], warm: [], cold: [], recalled: [] };
+    if (!field || !budget || !isFinite(budget.wmHeatFloor)) return empty;
+    const ds = scopeDocs(scope).filter(d => d && d.kind !== 'table');
+    if (!ds.length) return empty;
+    const snap = (typeof field.snapshot === 'function') ? field.snapshot() : field;
+    const floor = budget.wmHeatFloor;
+    // Index every scope entity once: key → { name, docId, sents:[{i,t}], mass }.
+    const entIndex = new Map();
+    for (const d of ds) {
+      let proj; try { proj = projectEntities(d); } catch (e) { continue; }
+      for (const e of (proj.entities || [])) {
+        const key = normSurface(e.name);
+        if (!entIndex.has(key)) entIndex.set(key, { name: e.name, docId: d.id, mass: e.mass, sents: (e.sents || []).map(i => ({ i, t: d.sentenceTexts[i] })) });
+      }
+    }
+    // One-hop neighbors of an entity key, from the projected graph edges.
+    const neighborsOf = (key) => {
+      const out = [];
+      for (const d of ds) {
+        if (!d._events) continue;
+        let g; try { g = projectGraph(d._events); } catch (e) { continue; }
+        for (const ed of (g.edges || [])) {
+          if (ed.a === key) out.push({ key: ed.b, name: ed.bName, verb: ed.verb });
+          else if (ed.b === key) out.push({ key: ed.a, name: ed.aName, verb: ed.verb });
+        }
+      }
+      return out;
+    };
+    const hot = [], cold = [], hotKeys = new Set();
+    for (const e of (snap.entities || [])) {
+      const idx = entIndex.get(e.key);
+      if (e.heat >= floor) {
+        hot.push({ entity: e.label || e.key, heat: e.heat, docId: idx ? idx.docId : null, mass: idx ? idx.mass : null, sents: idx ? idx.sents.slice(0, 3) : [] });
+        hotKeys.add(e.key);
+      } else {
+        const sids = idx ? idx.sents.map(s => s.i) : [];
+        cold.push({ label: e.label || e.key, heat: e.heat, docId: idx ? idx.docId : null, sentRange: sids.length ? [Math.min(...sids), Math.max(...sids)] : null });
+      }
+    }
+    // warm: one graph-hop out from a hot entity (dedup, never re-list a hot one).
+    const warm = [], warmKeys = new Set();
+    for (const h of hot) {
+      for (const nb of neighborsOf(normSurface(h.entity))) {
+        if (!nb.key || hotKeys.has(nb.key) || warmKeys.has(nb.key)) continue;
+        warmKeys.add(nb.key);
+        const idx = entIndex.get(nb.key);
+        const line = (idx && idx.sents.length) ? idx.sents[0].t : (nb.verb ? `${h.entity} ${nb.verb} ${nb.name}` : nb.name);
+        warm.push({ entity: nb.name || nb.key, oneHopFrom: h.entity, portraitLine: line });
+      }
+    }
+    // recall by heat: cold material that overlaps THIS query reconstructs to full
+    // fidelity (old-but-relevant turns come back into the hot zone).
+    const recalled = query ? recallByHeat(ds, field, query) : [];
+    return { hot, warm: warm.slice(0, 6), cold, recalled };
+  }
+
+  // When cooled material overlaps the current retrieval, rewarm it to full text.
+  // Operates on the field's carried SENTENCE pointers; recallSpan (in llm.js) stays
+  // the by-index primitive for the chat history. Lexical overlap, so no embedder.
+  function recallByHeat(scope, field, query) {
+    if (!field || !query) return [];
+    const ds = scopeDocs(scope).filter(d => d && d.kind !== 'table');
+    const snap = (typeof field.snapshot === 'function') ? field.snapshot() : field;
+    const qt = new Set(tok(query));
+    if (!qt.size) return [];
+    const byId = new Map(ds.map(d => [d.id, d]));
+    const out = [];
+    for (const s of (snap.sentences || [])) {
+      const d = byId.get(s.docId); if (!d || !d.sentenceTexts) continue;
+      const t = d.sentenceTexts[s.idx]; if (!t) continue;
+      const st = new Set(tok(t));
+      let overlap = 0; for (const x of qt) if (st.has(x)) overlap++;
+      if (overlap >= 1) out.push({ docId: s.docId, i: s.idx, t, heat: s.heat, overlap });
+    }
+    out.sort((a, b) => b.overlap - a.overlap || b.heat - a.heat);
+    return out.slice(0, 4);
+  }
+
   window.EOEngine = {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
@@ -4483,6 +4716,9 @@ function projectGraph(events, frame = {}) {
     contextScope, bindCitationsScope,
     // cost-ordered routing (existence → structure → significance) + embedding recall
     routeTurn, retrieveHybrid, contextFromHits,
+    // thinking depth: the effort dial's per-turn budget + the conversation field
+    // (working memory) it spends across. Inert at depth 1 (parity floor).
+    thinkingBudget, conversationField, buildWorkingMemory, recallByHeat,
     // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
     // and the transmuting-DEF classifier (the significance-layer "weak" law)
     layerLadder, isTransmutingDef,

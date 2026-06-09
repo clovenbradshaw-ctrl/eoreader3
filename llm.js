@@ -75,6 +75,7 @@
   //    verbatim with recallSpan() when an answer needs the precise earlier wording.
   const RECENT_TURNS = 8;         // most recent turns kept word-for-word
   const SUMMARY_LINE_CHARS = 160; // per-turn cap inside the condensed recap
+  const WM_RECENT_TURNS = 3;      // verbatim window shrinks when working memory carries continuity
 
   function condense(s, cap = SUMMARY_LINE_CHARS) {
     const t = String(s || '').replace(/\s+/g, ' ').trim();
@@ -109,25 +110,63 @@
     return out;
   }
 
+  // Render the heat-ranked working memory (depth > 1) into a compact block: the
+  // conversation's hot subgraph, condensed warm one-hop, and a cold index of
+  // rewarmable pointers. Folded into the system message (never its own message),
+  // so the single-system-message-first invariant holds. Empty ⇒ '' ⇒ today's path.
+  function renderWorkingMemory(wm) {
+    if (!wm) return '';
+    const hot = wm.hot || [], warm = wm.warm || [], cold = wm.cold || [], recalled = wm.recalled || [];
+    if (!hot.length && !warm.length && !cold.length && !recalled.length) return '';
+    const out = ['Working memory — what this conversation is actively holding. Treat it as already in focus; the user may refer to it without naming it again.'];
+    if (hot.length) {
+      out.push('In focus:');
+      for (const h of hot.slice(0, 5)) {
+        const s = (h.sents || []).map(x => x && x.t).filter(Boolean).slice(0, 2).join(' ');
+        out.push(`- ${h.entity}${s ? ' — ' + condense(s, 220) : ''}`);
+      }
+    }
+    if (warm.length) {
+      out.push('One step away:');
+      for (const w of warm.slice(0, 4)) out.push(`- ${w.entity} (via ${w.oneHopFrom})${w.portraitLine ? ': ' + condense(w.portraitLine, 160) : ''}`);
+    }
+    if (recalled.length) {
+      out.push('Recalled (earlier material relevant again):');
+      for (const r of recalled.slice(0, 3)) if (r && r.t) out.push(`- ${condense(r.t, 200)}`);
+    }
+    if (cold.length) {
+      const rng = (c) => c.sentRange ? ` [s${c.sentRange[0]}${c.sentRange[1] !== c.sentRange[0] ? '–s' + c.sentRange[1] : ''}]` : '';
+      out.push('Cooled (rewarmable — ask to expand): ' + cold.slice(0, 8).map(c => c.label + rng(c)).join(', '));
+    }
+    return out.join('\n');
+  }
+
   // Assemble the chat messages: system + a condensed recap of older turns + as
   // many recent turns verbatim as fit the budget + this turn. Exposed for
   // testing. `est` is a coarse chars/4 token estimate — good enough to keep us
   // off the context ceiling. Past RECENT_TURNS, older turns are summarized rather
   // than dropped, and any recent turn that won't fit verbatim is folded into the
   // recap too, so nothing silently vanishes from the model's view.
-  function assembleMessages({ sys, history, contextText, question, grounded, budget = 7000, recentTurns = RECENT_TURNS }) {
+  // `workingMemory` (depth > 1) is the heat-ranked hot/warm/cold subgraph: it
+  // folds into the system message and shrinks the verbatim recency window, since
+  // heat now carries the continuity. Absent/empty ⇒ byte-identical to before.
+  function assembleMessages({ sys, history, contextText, question, grounded, budget = 7000, recentTurns = RECENT_TURNS, workingMemory = null }) {
     const est = (m) => Math.ceil(((m && m.content) || '').length / 4);
     const userContent = (grounded && contextText)
       ? `Passages from the document:\n${contextText}\n\nUsing only the passages above, answer: ${question}`
       : (contextText ? `Passages:\n${contextText}\n\n${question}` : question);
-    const head = { role: 'system', content: sys };
+    const wmBlock = renderWorkingMemory(workingMemory);
+    const sysFull = wmBlock ? `${sys}\n\n${wmBlock}` : sys;
+    const head = { role: 'system', content: sysFull };
     const tail = { role: 'user', content: userContent };
     let used = est(head) + est(tail);
 
     const hist = (Array.isArray(history) ? history : []).filter(m => m && m.content);
-    // The most recent `recentTurns` turns are the verbatim window; the rest are
-    // candidates for condensing.
-    const splitAt = Math.max(0, hist.length - recentTurns);
+    // The most recent turns are the verbatim window; the rest are candidates for
+    // condensing. Heat-ranked working memory carries continuity, so when it is
+    // present the verbatim window shrinks to reclaim that prompt bandwidth.
+    const rt = wmBlock ? Math.min(recentTurns, WM_RECENT_TURNS) : recentTurns;
+    const splitAt = Math.max(0, hist.length - rt);
     const recent = hist.slice(splitAt);
 
     // Keep as many recent turns verbatim as the budget allows, newest first; any
@@ -160,16 +199,16 @@
     // grounded turn onto the mechanical fallback. The condensed recap is
     // system-level context, so fold it into the head prompt rather than emitting
     // it as its own system message.
-    const head2 = summary ? { role: 'system', content: `${sys}\n\n${summary.content}` } : head;
+    const head2 = summary ? { role: 'system', content: `${sysFull}\n\n${summary.content}` } : head;
     return [head2, ...kept, tail];
   }
 
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
   // pass retrieved passages. onToken(deltaText).
-  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget }) {
+  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory }) {
     const eng = await load(mlcKey);
     const sys = systemFor(mode, task, grounded);
-    const messages = assembleMessages({ sys, history, contextText, question, grounded, budget });
+    const messages = assembleMessages({ sys, history, contextText, question, grounded, budget, workingMemory });
     const temperature = mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4);
     const max_tokens = mode === 'creative' ? 320 : (grounded ? (task === 'summary' ? 260 : 180) : 360);
     // Audit hook (no-op unless window.EOAudit is present): record the EXACT prompt
@@ -206,5 +245,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, summarizeTurns, recallSpan, RECENT_TURNS };
+  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS };
 })();

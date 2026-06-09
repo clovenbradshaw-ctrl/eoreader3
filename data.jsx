@@ -72,6 +72,33 @@ const RULESETS = [
     layer: 'significance', mass: 4, src: 'add-on', installed: false, enabled: false, locked: false,
     desc: 'When a table and a prose source are tagged together, a third pass compares them and flags disagreements instead of silently picking one.' },
 
+  // ── Thinking depth (chat) — what the effort dial spends ──
+  // Each rule's `value` is its CEILING (the value at the deepest setting); the
+  // dial scales each knob from an inert floor up to it. At the lowest depth every
+  // knob is inert, so the dial's floor is byte-identical to today. Tunable and
+  // exportable like any rule (export the set as a "deep reading" profile).
+  { id: 'max-seek-rounds', group: 'Thinking depth', phase: 'chat', name: 'Max Seek Rounds', glyph: '↻',
+    layer: 'structure', value: 4, mass: 6, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'Ceiling on iterative retrieval cycles a turn may run at the deepest setting. 1 = today’s single-pass reflex; higher lets a turn keep seeking on the parts of the question it hasn’t covered yet. The dial scales between 1 and this.' },
+  { id: 'seek-novelty-floor', group: 'Thinking depth', phase: 'chat', name: 'Seek Novelty Floor', glyph: 'δⁿ',
+    layer: 'significance', value: 0.15, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'A further seeking round must add at least this fraction of newly-covered query terms to justify itself; below it, stop. δ by another name — keep going only while the pull is real.' },
+  { id: 'assoc-delta', group: 'Thinking depth', phase: 'chat', name: 'Association δ', glyph: '≈δ',
+    layer: 'structure', value: 1.6, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'Dominance ratio an embedding connection must clear to survive into working memory. Higher ⇒ only strong associative leaps; lower ⇒ more wandering. Floor depth ⇒ no wander.' },
+  { id: 'assoc-coupling', group: 'Thinking depth', phase: 'chat', name: 'Association Coupling', glyph: '⇝',
+    layer: 'significance', value: 0.6, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'How hard the wandering embedder-reader presses on the page (its reader coupling). Turning depth up raises it; the wanderer leans harder. Floor depth ⇒ it does not press.' },
+  { id: 'wm-heat-floor', group: 'Thinking depth', phase: 'chat', name: 'Working-Memory Heat Floor', glyph: '♨',
+    layer: 'significance', value: 0.25, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'Heat threshold for what counts as “hot” in working memory. Depth widens the warm band (more carried-forward context) at the cost of prompt budget. Floor depth ⇒ nothing is carried hot.' },
+  { id: 'infer-bind-floor', group: 'Thinking depth', phase: 'chat', name: 'Inference Bind Floor', glyph: '⊢',
+    layer: 'significance', value: 0.62, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'How close an association must be before the system will phrase an inference across two spans and badge it “inferred”. Floor depth ⇒ never infer.' },
+  { id: 'replan-enabled', group: 'Thinking depth', phase: 'chat', name: 'Reconsideration', glyph: '⟲',
+    layer: 'structure', value: 1, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'Whether a turn may reconsider its own plan (re-route / re-intent) after drafting. Only active at the deepest setting; off at low depth.' },
+
   // ── Medium constants (locked physics) ──
   { id: 'two-sighting', group: 'Medium constants', phase: 'medium', name: 'Two-Sighting Admission', glyph: '2×',
     layer: 'existence', value: 2, mass: '∞', src: 'medium constant', installed: true, enabled: true, locked: true, live: true,
@@ -90,7 +117,23 @@ const RULESETS = [
     desc: 'Energy each reading act carries. A reader’s attention deposit distributes exactly this much across a stall’s candidates — a flat (torn) read is physically inert.' },
 ];
 
-const RULE_GROUPS = ['Languages', 'Parsing', 'Chatting & grounding', 'Medium constants'];
+const RULE_GROUPS = ['Languages', 'Parsing', 'Chatting & grounding', 'Thinking depth', 'Medium constants'];
+
+/* ---------------- the thinking-depth dial ----------------
+   One user-facing effort control. Each stop sets a thinking budget for the turn
+   (EOEngine.thinkingBudget(level)); the depth-governed rules above read from it.
+   Level 1 is today's reflex — the parity floor — so turning the dial down is
+   byte-identical to current Cleon. */
+const THINKING_DEPTHS = [
+  { level: 1, id: 'reflex',  label: 'Reflex',  glyph: '·',
+    desc: 'One pass. Today’s behavior — fast and literal: retrieve once, phrase, done.' },
+  { level: 2, id: 'deeper',  label: 'Deeper',  glyph: ':',
+    desc: 'Carries the conversation’s hot context forward and keeps seeking the parts of the question it hasn’t covered.' },
+  { level: 3, id: 'deepest', label: 'Deepest', glyph: '∴',
+    desc: 'Adds associative wandering and lets a turn reconsider its own plan. The most effort, the fullest trace.' },
+];
+// The depth-governed rule ids, surfaced as their own tier in the rules drawer.
+const DEPTH_IDS = ['max-seek-rounds', 'seek-novelty-floor', 'assoc-delta', 'assoc-coupling', 'wm-heat-floor', 'infer-bind-floor', 'replan-enabled'];
 
 /* ---------------- the three tiers of the rules drawer ----------------
    Laws ≠ rules. The MEDIUM is the physics — the four binding-laws and their
@@ -244,4 +287,4 @@ D-1055,Rhee,East,2026-03-31,44000,lost`,
 ];
 
 Object.assign(window, { MODELS, RULESETS, RULE_GROUPS, RULE_PACK_SCHEMA, AUTHOR_PROMPT, EXAMPLE_PACK, EXAMPLES,
-  MEDIUM_LAWS, MEDIUM_PARAM_IDS, LANGUAGES, LANG_SHARED_PARSING, GROUNDING_IDS });
+  MEDIUM_LAWS, MEDIUM_PARAM_IDS, LANGUAGES, LANG_SHARED_PARSING, GROUNDING_IDS, THINKING_DEPTHS, DEPTH_IDS });

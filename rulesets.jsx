@@ -241,6 +241,7 @@ function RulesDrawer({ rules, langModes, learnedByLang, onToggle, onInstall, onS
   const [jsonView, setJsonView] = React.useState(false);
   const byId = Object.fromEntries(rules.map(r => [r.id, r]));
   const grounding = (window.GROUNDING_IDS || []).map(id => byId[id]).filter(Boolean);
+  const depth = (window.DEPTH_IDS || []).map(id => byId[id]).filter(Boolean);
   const enabledCount = rules.filter(r => r.installed && r.enabled).length;
   const exportObj = buildExport(rules);
   const dialogRef = window.useDialog(onClose);
@@ -301,6 +302,16 @@ function RulesDrawer({ rules, langModes, learnedByLang, onToggle, onInstall, onS
                       ? grounding.map(r => <RuleCard key={r.id} rule={r} onToggle={onToggle} onInstall={onInstall} />)
                       : <div className="empty-doc" style={{ padding: 20 }}>No grounding rules.</div>}
                   </div>
+
+                  {depth.length > 0 && (
+                    <div className="tier">
+                      <div className="tier-head">
+                        <div className="rule-group-label">Thinking depth · how hard a turn thinks</div>
+                        <p className="tier-sub">What the effort dial in the composer spends. Each knob’s value is its ceiling at the deepest setting; the dial scales between today’s reflex and it. Turn one off to cap that kind of effort — exportable as a “deep reading” profile.</p>
+                      </div>
+                      {depth.map(r => <RuleCard key={r.id} rule={r} onToggle={onToggle} onInstall={onInstall} />)}
+                    </div>
+                  )}
                 </React.Fragment>
               )}
         </div>

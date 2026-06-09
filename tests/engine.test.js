@@ -327,6 +327,94 @@ group('routing — cost-ordered bands (existence → structure → significance)
   ok(/^\[s\d+\] /.test(E.contextFromHits([voss], hyb.hits.slice(0, 1))), 'contextFromHits tags a single-doc span [sN]');
 });
 
+// The thinking-depth dial: level 1 is the parity floor (every knob inert =
+// today), and turning it up spends more. The budget is the only thing the
+// deeper-thinking paths read, so pinning the floor here pins parity above.
+group('thinking depth — the dial floor is today, deeper opens up', () => {
+  const b1 = E.thinkingBudget(1);
+  eq(b1.maxSeekRounds, 1, 'depth 1 → one seek round (today)');
+  eq(b1.seekNoveltyFloor, 1, 'depth 1 → novelty floor 1 (never continue)');
+  eq(b1.assocDelta, Infinity, 'depth 1 → no associative wander (δ=∞)');
+  eq(b1.assocCoupling, 0, 'depth 1 → wanderer does not press (coupling 0)');
+  eq(b1.wmHeatFloor, Infinity, 'depth 1 → nothing carried hot (∞ heat floor)');
+  eq(b1.inferBindFloor, Infinity, 'depth 1 → never infer');
+  eq(b1.replan, false, 'depth 1 → no reconsideration');
+  eq(E.thinkingBudget(0).maxSeekRounds, 1, 'an out-of-range depth clamps to the reflex floor');
+  const b3 = E.thinkingBudget(3);
+  ok(b3.maxSeekRounds > 1, 'deepest allows more than one seek round');
+  ok(isFinite(b3.assocDelta) && b3.assocCoupling > 0, 'deepest enables associative wander');
+  ok(isFinite(b3.wmHeatFloor), 'deepest gives working memory a finite heat floor');
+  ok(b3.replan, 'deepest allows reconsideration');
+  const r2 = E.thinkingBudget(2).maxSeekRounds;
+  ok(r2 >= b1.maxSeekRounds && r2 <= b3.maxSeekRounds, 'depth 2 sits between the floor and the deepest');
+});
+
+// The conversation field is chat-scoped working memory: deposited by settled
+// turns, decayed by the medium's own γ, holding pointers (never text), and
+// serializable so it can ride in the chat snapshot.
+group('conversation field — deposit / decay / snapshot / restore / reset', () => {
+  const F = E.conversationField;
+  F.reset();
+  eq(F.snapshot().entities.length, 0, 'field starts empty after reset');
+  eq(F.snapshot().turn, 0, 'turn counter starts at 0');
+  F.deposit({ entities: ['Edith', 'the boat'], sentences: [{ docId: 'voss', idx: 2 }] }, 1);
+  F.deposit({ entities: ['Edith'] }, 1);
+  let snap = F.snapshot();
+  eq(snap.entities[0].label, 'Edith', 'the twice-deposited entity is hottest');
+  eq(snap.entities[0].heat, 2, 'repeat deposits accumulate heat');
+  eq(snap.sentences.length, 1, 'a cited sentence is tracked as a pointer');
+  eq(snap.sentences[0].docId, 'voss', 'the sentence pointer carries its docId');
+  ok(!('t' in snap.sentences[0]) && !('text' in snap.sentences[0]), 'the field holds no document text, only pointers');
+  const before = snap.entities[0].heat;
+  F.decayTurn();
+  snap = F.snapshot();
+  eq(snap.turn, 1, 'decayTurn advances the conversational clock');
+  ok(snap.entities[0].heat < before, 'heat cools after a turn');
+  const saved = F.snapshot();
+  F.reset();
+  eq(F.snapshot().entities.length, 0, 'reset clears the field');
+  F.restore(saved);
+  eq(F.snapshot().entities.length, saved.entities.length, 'restore rebuilds the carried entities');
+  eq(F.snapshot().turn, saved.turn, 'restore rebuilds the turn counter');
+  F.reset();
+});
+
+// Working memory reads the field through the budget into a hot/warm/cold
+// subgraph. It needs NO embedder (graph-hop only), so it works in the Node
+// harness exactly as it degrades in the browser — and it is empty at the floor.
+group('working memory — hot/warm/cold subgraph (no embedder, parity at floor)', () => {
+  const F = E.conversationField; F.reset();
+  F.deposit({ entities: ['Edith'], sentences: [{ docId: 'voss', idx: 1 }] }, 1);
+  F.deposit({ entities: ['Edith', 'Sefton'] }, 1);
+  // Floor depth ⇒ empty (the prompt then takes today's exact path).
+  const wmFloor = E.buildWorkingMemory([voss], F, E.thinkingBudget(1), 'what about the boat');
+  eq(wmFloor.hot.length, 0, 'floor depth carries nothing hot');
+  eq(wmFloor.warm.length, 0, 'floor depth carries nothing warm');
+  // Deeper ⇒ the carried entities surface, each with its document sentences, and
+  // a one-hop graph neighbor warms alongside.
+  const wm = E.buildWorkingMemory([voss], F, E.thinkingBudget(3), 'what about the boat');
+  const edith = wm.hot.find(h => h.entity === 'Edith');
+  ok(edith, 'the carried entity Edith is hot at depth 3');
+  ok(edith.sents.length > 0 && edith.sents.every(s => typeof s.t === 'string'), 'a hot entity resolves to its verbatim document sentences');
+  ok(wm.warm.length > 0 && wm.warm.every(w => w.oneHopFrom), 'warm entities are one graph-hop from a hot one');
+  ok(wm.hot.every(h => h.heat >= E.thinkingBudget(3).wmHeatFloor), 'every hot entity clears the budget heat floor');
+  F.reset();
+});
+
+// recallByHeat rewarms a cooled, carried sentence to full text when it overlaps
+// the new query — old-but-relevant material reconstructs into the hot zone.
+group('recall by heat — a cooled carried sentence comes back', () => {
+  const F = E.conversationField; F.reset();
+  const boatIdx = voss.sentenceTexts.findIndex(t => /boat/i.test(t));
+  ok(boatIdx >= 0, 'the fixture has a sentence mentioning the boat');
+  F.deposit({ entities: ['Sefton'], sentences: [{ docId: 'voss', idx: boatIdx }] }, 1);
+  F.decayTurn(); F.decayTurn();                     // let it cool
+  const rec = E.recallByHeat([voss], F, 'tell me again about the boat');
+  ok(rec.some(r => r.i === boatIdx && /boat/i.test(r.t)), 'a cooled carried sentence overlapping the query is recalled with full text');
+  eq(E.recallByHeat([voss], F, 'the of a to').length, 0, 'an all-stopword query recalls nothing');
+  F.reset();
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }
