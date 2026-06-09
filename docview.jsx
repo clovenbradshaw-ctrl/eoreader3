@@ -1,6 +1,6 @@
 /* ============================================================ Document pane */
 
-const ENT_COLOR = { person: '#2a6fdb', place: '#1f8a5b', org: '#8a6a16' };
+const ENT_COLOR = { person: '#2a6fdb', place: '#1f8a5b', org: '#8a6a16', thing: '#6b7280' };
 
 /* highlight known entity names inside a sentence (explore mode) */
 function highlightEntities(text, byType, onEntity) {

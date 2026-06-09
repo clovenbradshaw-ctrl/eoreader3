@@ -37,6 +37,9 @@ const abbrDoc = await E.parseDocument('abbr.txt', 'Report\n\nWe checked No. 12 a
 const noiseDoc = await E.parseDocument('noise.txt', 'SECOND WIFE\n\nMauricio Pellegrini married again. SECOND WIFE was the chapter title. Mauricio kept the old maps. I N scanned this page. I N appears once more.', 'noise');
 // A second prose source with entities disjoint from voss, for multi-doc scope.
 const harbor = await E.parseDocument('harbor.txt', 'The Harbor Office\n\nByrne logged the tides each dawn. Tessaro reviewed the charts and frowned. Byrne said the channel had shifted overnight.', 'harbor');
+// Mixed proper nouns: a place, a non-gazetteer word, OCR section labels, and a
+// multi-word org — for the entity-typing contract (no person-coercion fallback).
+const typeDoc = await E.parseDocument('typing.txt', 'The ship sailed from Lisbon to Cádiz. Lisbon was calm but Cádiz was not. Figure 4 shows the route. Figure 4 is missing. Appendix B lists the ports. Appendix B is lost. The Ford Foundation funded it. The Ford Foundation paid again.', 'typing');
 
 group('parse — prose', () => {
   eq(voss.kind, 'prose', 'prose doc detected as prose');
@@ -180,6 +183,20 @@ group('entity extraction — header/fragment noise filtered', () => {
   ok(names.some(n => /Mauricio/.test(n)), 'a real repeated name still surfaces');
   ok(!names.some(n => /^second wife$/i.test(n)), 'an all-caps multi-word header does not surface as a person');
   ok(!names.includes('I N'), 'a spaced single-letter OCR fragment does not surface');
+});
+
+// The reader carries the type it inferred (person/place/org/thing). The old
+// projection collapsed every non-place/org entity to 'person', so places it
+// didn't gazetteer (Cádiz) and OCR labels (Figure, Note) became people.
+group('entity typing — non-persons are not coerced to person', () => {
+  const { entities, byType } = E.projectEntities(typeDoc);
+  const typeOf = new Map(entities.map(e => [e.name, e.type]));
+  ok('thing' in byType, 'byType exposes a thing bucket (not folded into person)');
+  ok(entities.some(e => e.type === 'thing'), 'an unrecognized proper noun lands in thing, not person');
+  ok(!entities.some(e => /^(figure|appendix)$/i.test(e.name)), 'bare document-apparatus labels are filtered out');
+  eq(typeOf.get('Lisbon'), 'place', 'a recognized place keeps its place type');
+  if (typeOf.has('Cádiz')) ok(typeOf.get('Cádiz') !== 'person', 'a non-gazetteer proper noun is not coerced to person');
+  ok(entities.some(e => /Ford Foundation/.test(e.name)), 'a multi-word name survives the bare-label filter');
 });
 
 // The conversation grounds against an explicit SET of sources (chips/projects),
