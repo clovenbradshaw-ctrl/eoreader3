@@ -806,7 +806,8 @@ function App() {
       // Reconsideration (Phase 5, deepest depth): a refused summary is not a
       // summary — SEG the plan and re-route to free composition rather than
       // recycling the refusal. One re-plan per turn (mirrors the echo-veto).
-      if (budget && budget.replan && task === 'summary' && ready &&
+      // (the model is necessarily ready here — phrase() above just succeeded)
+      if (budget && budget.replan && task === 'summary' &&
           window.EOEngine.looksRefused && window.EOEngine.looksRefused(full)) {
         AUD('step', 'plan-seg', { from: 'grounded-summary', to: 'creative', reason: 'the model refused the summary' });
         lastGroundedRef.current = false;
