@@ -34,6 +34,9 @@ const RULESETS = [
   { id: 'zh-narrative', group: 'Languages', phase: 'extraction', name: 'Chinese Narrative', glyph: '中',
     layer: 'surface', src: 'language pack', installed: false, enabled: false, locked: false,
     desc: 'No case, no whitespace. Names are mined as repeated 2–4 character runs; speech attributes through the colon-quote slot.' },
+  { id: 'transcript', group: 'Languages', phase: 'extraction', name: 'Transcripts & Captions', glyph: '⏱',
+    layer: 'surface', mass: 8, src: 'genre pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'Timecode lines and cue counters read as structure, never sentence content; “Speaker N:” / “NAME:” labels read as attribution through the same SIG slot quoted speech uses — a meeting reads as voices and turns, not a soup of stray capitals.' },
 
   // ── Parsing (extraction) ──
   { id: 'attribution', group: 'Parsing', phase: 'extraction', name: 'Attribution Induction', glyph: 'A→',
@@ -101,6 +104,12 @@ const RULESETS = [
   { id: 'replan-enabled', group: 'Thinking depth', phase: 'chat', name: 'Reconsideration', glyph: '⟲',
     layer: 'structure', value: 1, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
     desc: 'Whether a turn may reconsider its own plan (re-route / re-intent) after drafting. Only active at the deepest setting; off at low depth.' },
+  { id: 'graph-walk-hops', group: 'Thinking depth', phase: 'chat', name: 'Graph Walk Hops', glyph: '⬡',
+    layer: 'structure', value: 2, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'How many hops a turn may walk the document graph out from the entities the question names — the page’s assertions, its drawn relations, co-occurrence — gathering the sentences attached along the walk. Depth buys graph work, not just more retrieval. Floor depth ⇒ no walk (retrieval only).' },
+  { id: 'assertion-check', group: 'Thinking depth', phase: 'chat', name: 'Propositional Veto', glyph: '⊨',
+    layer: 'significance', value: 1, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'Whether a draft is audited against the page’s own recorded assertions (DEF events) before it is kept — a draft that denies what the page asserts (“X was not Y” against DEF X is Y) is set aside with the disagreement named. Claim against claim, not string against string. Only active at the deepest setting.' },
 
   // ── Medium constants (locked physics) ──
   { id: 'two-sighting', group: 'Medium constants', phase: 'medium', name: 'Two-Sighting Admission', glyph: '2×',

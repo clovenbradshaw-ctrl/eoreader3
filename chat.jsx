@@ -117,12 +117,26 @@ function narrateTurn(turn) {
         break;
       case 'retrieve': {
         const n = s.hits ? s.hits.length : s.k;
-        if (s.round && s.round > 1) {
+        if (s.skipped) {
+          push('The uncovered part of the question (' + quoteList(s.unseekable || []) + ') names nothing the sources contain, so I stopped seeking rather than chase it.');
+        } else if (s.round && s.round > 1) {
           const sub = (s.subquery || '').trim();
           push('Still hadn’t covered ' + (sub ? '“' + sub + '”' : 'part of the question') + ', so I sought again' + (s.newHits ? ' and found ' + s.newHits + ' more passage' + (s.newHits === 1 ? '' : 's') : '') + '.');
         } else {
           push('Pulled the ' + n + ' most relevant passage' + (n === 1 ? '' : 's') + '.');
         }
+        break;
+      }
+      case 'traverse': {
+        const defs = (s.perDoc || []).reduce((a, p) => a + ((p.assertions || []).length), 0);
+        const walkedN = (s.perDoc || []).reduce((a, p) => a + ((p.walked || []).length), 0);
+        const ev = (s.perDoc || []).reduce((a, p) => a + ((p.evidence || []).length), 0);
+        let line = 'Walked the graph out from ' + quoteList(s.entries || []) + (s.hops > 1 ? ' (' + s.hops + ' hops)' : '');
+        const found = [];
+        if (defs) found.push(defs + ' assertion' + (defs === 1 ? '' : 's') + ' the page makes');
+        if (walkedN) found.push(walkedN + ' connected referent' + (walkedN === 1 ? '' : 's'));
+        if (ev) found.push(ev + ' attached passage' + (ev === 1 ? '' : 's'));
+        push(line + (found.length ? ' — gathered ' + found.join(', ') + '.' : ' — found nothing attached.'));
         break;
       }
       case 'escalate':
@@ -146,7 +160,11 @@ function narrateTurn(turn) {
         else if (s.decision === 'reject')
           push('The draft just echoed a single passage instead of answering, so I sent it back under a stricter rule.');
         else if (s.decision === 'mechanical') {
-          if (s.invented && s.invented.length)
+          if (s.reason === 'contradicts-assertion' && s.contradictions && s.contradictions.length) {
+            const c = s.contradictions[0];
+            push('Checked the draft against the graph: it denies what the page itself asserts — the page holds “' + c.subject + ' is ' + c.is + '”' + (c.sent != null ? ' [s' + c.sent + ']' : '') + ', the draft said otherwise (“' + c.claim + '”) — so I used the exact mechanical reading instead.');
+          }
+          else if (s.invented && s.invented.length)
             push('Set the draft aside — it named ' + quoteList(s.invented) + ', not in the document — and used the exact mechanical reading instead.');
           else if (s.reason && /unbound/.test(s.reason))
             push('The draft didn’t match any passage in the document, so I used the exact mechanical reading instead.');
