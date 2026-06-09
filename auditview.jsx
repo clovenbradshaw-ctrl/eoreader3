@@ -13,12 +13,14 @@ function fmtTime(iso) {
 }
 
 // Make the engine's {{cite}}/{{void}} markup readable in the trace view:
-// citations collapse to their [sN] label, voids to ⟨term⟩.
+// citations collapse to their [sN] label, voids to ⟨term⟩, absence
+// attestations to [⊥] (the receipt lives in the chat chip's tooltip).
 function stripForView(s) {
   return String(s == null ? '' : s)
     .replace(/\{\{cite:([^}]*)\}\}/g, (m, b) => { const p = b.split(':'); return p[2] ? ' [' + p[2] + ']' : ''; })
     .replace(/\{\{infer:([^}]*)\}\}/g, (m, b) => { const p = b.split(':'); return p[2] ? ' ⟦' + p[2] + '⟧' : ''; })
     .replace(/\{\{void:([^}]*)\}\}/g, '⟨$1⟩')
+    .replace(/\{\{absent:[^}]*\}\}/g, ' [⊥]')
     .replace(/\s+([.,;:])/g, '$1')
     .trim();
 }

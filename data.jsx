@@ -64,7 +64,7 @@ const RULESETS = [
     desc: 'Accepts a reworded-but-faithful claim as grounded when its meaning matches a retrieved span closely enough. Lower it and the auditor demands near-verbatim support.' },
   { id: 'void', group: 'Chatting & grounding', phase: 'chat', name: 'Void Resolution [⊥]', glyph: '⊥',
     layer: 'significance', mass: 3, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
-    desc: 'A term your question names that appears nowhere in the sources resolves to the single void, citable as [⊥] — rather than being papered over with an invented answer.' },
+    desc: 'A term your question names that appears nowhere in the sources resolves to the single void, citable as [⊥] — rather than being papered over with an invented answer. The same move grounds true NEGATIVES: “never mentioned as a speaker” can’t cite a line (no single sentence supports a claim about the whole document), so it cites ⊥ with a scan receipt — every attribution event checked, the count in the chip.' },
   { id: 'inference-void', group: 'Chatting & grounding', phase: 'chat', name: 'Inference Void [∴]', glyph: '∴',
     layer: 'significance', mass: 3, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
     desc: 'The void inverted: marks what the READER ADDED. When a deep answer connects two cited spans the page never connects (an association that clears the inference floor), the claim is badged inferred — a third status between grounded and held — and shown as [sA+sB]. Off ⇒ such claims read as ordinary citations.' },
@@ -109,7 +109,7 @@ const RULESETS = [
     desc: 'How many hops a turn may walk the document graph out from the entities the question names — the page’s assertions, its drawn relations, co-occurrence — gathering the sentences attached along the walk. Depth buys graph work, not just more retrieval. Floor depth ⇒ no walk (retrieval only).' },
   { id: 'assertion-check', group: 'Thinking depth', phase: 'chat', name: 'Propositional Veto', glyph: '⊨',
     layer: 'significance', value: 1, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
-    desc: 'Whether a draft is audited against the page’s own recorded assertions (DEF events) before it is kept — a draft that denies what the page asserts (“X was not Y” against DEF X is Y) is set aside with the disagreement named. Claim against claim, not string against string. Only active at the deepest setting.' },
+    desc: 'Whether a draft is audited against the page’s own recorded assertions (DEF events) before it is kept — a draft that denies what the page asserts (“X was not Y” against DEF X is Y) is set aside with the disagreement named. Claim against claim, not string against string. Runs at EVERY depth: token-level checks certify a draft that recombines on-page names into a false proposition, and this is the check that catches it — the floor of what “grounded” means, not a luxury the dial buys.' },
 
   // ── Medium constants (locked physics) ──
   { id: 'two-sighting', group: 'Medium constants', phase: 'medium', name: 'Two-Sighting Admission', glyph: '2×',
