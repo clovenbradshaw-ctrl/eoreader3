@@ -634,6 +634,31 @@ function App() {
     try { return E.contextFromHits(scope, top); } catch (e) { return E.contextScope(scope, q, k); }
   };
 
+  // Phase 3: associative wandering (deepest depth, embedder-backed). From the
+  // spans the answer is built on, find embedding-near sentences the page never
+  // lexically connects, delta-gate them against the doc's own gravity, warm the
+  // survivors by association (the field, for the next turn's working memory, and
+  // this turn's context), and log each deposit as an `associate` step — legible
+  // THAT the field linked them, never the geometry of why. No embedder => no-op.
+  const augmentByAssociation = async (scope, q, ctx, budget) => {
+    const E = window.EOEngine;
+    try {
+      const prim = E.routePrimary(scope, q) || scope[0];
+      if (!prim || prim.kind !== 'prose' || !E.associativeNeighbors) return ctx;
+      const srcSpans = (E.retrieveScope([prim], q, 6) || []).map(h => h.i);
+      if (!srcSpans.length) return ctx;
+      const neigh = await E.associativeNeighbors(prim, srcSpans, budget, 5);
+      const kept = (neigh || []).filter(n => n.clearedDelta);
+      if (!kept.length) return ctx;
+      const from = srcSpans.slice(0, 3).map(i => 's' + i);
+      for (const n of kept) {
+        try { E.conversationField && E.conversationField.deposit({ sentences: [{ docId: prim.id, idx: n.i }] }, budget.assocCoupling); } catch (e) {}
+        AUD('step', 'associate', { from, to: 's' + n.i, coupling: budget.assocCoupling, sim: n.sim, clearedDelta: true });
+      }
+      return ctx + '\n' + kept.map(n => `[${prim.id}:${n.i}] ${n.t}`).join('\n');
+    } catch (e) { eoWarn('associate', e); return ctx; }
+  };
+
   const runMechanicalScope = (scope, q) => {
     // Capture the deterministic basis of the answer for the trace: intent, the
     // matter/anti-matter referents, and the scored retrieval hits.
@@ -711,11 +736,16 @@ function App() {
     // floor (maxSeekRounds 1) and for summaries/semantic recall, this is untouched.
     const budget = turnBudgetRef.current;
     const useSeek = !!(budget && budget.maxSeekRounds > 1 && !hasSemantic && intent !== 'summary');
-    const ctx = hasSemantic
+    let ctx = hasSemantic
       ? window.EOEngine.contextFromHits(scope, semanticHits)
       : (useSeek ? seekContext(scope, q, budget) : window.EOEngine.contextScope(scope, q, 6));
     const task = intent === 'summary' ? 'summary' : 'answer';
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
+    // Associative wandering (Phase 3, deepest depth + embedder): warm in spans the
+    // page never lexically connects. No embedder ⇒ ctx unchanged (graph-hop only).
+    if (budget && budget.assocCoupling > 0 && window.EOEmbed && window.EOEmbed.ready()) {
+      ctx = await augmentByAssociation(scope, q, ctx, budget);
+    }
     // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
     const wm = buildWMForTurn(scope, q);
     try {

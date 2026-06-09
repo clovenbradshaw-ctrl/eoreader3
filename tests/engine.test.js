@@ -430,6 +430,19 @@ group('coverage gaps — which query clusters are uncovered', () => {
   eq(full.uncovered.length, 0, 'a fully-covered query leaves no gaps');
 });
 
+// The embedder as a wandering reader degrades cleanly: with no window.EOEmbed in
+// the Node harness, associativeNeighbors no-ops to [] (the app then keeps to its
+// graph-hop working memory), so the no-embedder path is unchanged.
+const assocMiss = await E.associativeNeighbors(voss, [1, 2, 3], E.thinkingBudget(3), 5);
+const assocTable = await E.associativeNeighbors(deals, [0], E.thinkingBudget(3), 5);
+const assocNoSpans = await E.associativeNeighbors(voss, [], E.thinkingBudget(3), 5);
+group('associative wandering — no embedder degrades to nothing', () => {
+  ok(Array.isArray(assocMiss), 'associativeNeighbors always returns an array');
+  eq(assocMiss.length, 0, 'with no embedder, no associative neighbors are drawn (degrades to graph-hop)');
+  eq(assocTable.length, 0, 'a table source yields no associative neighbors');
+  eq(assocNoSpans.length, 0, 'no source spans ⇒ nothing to wander from');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

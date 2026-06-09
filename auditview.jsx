@@ -106,6 +106,11 @@ function AuditStep({ s }) {
       </Line>
     );
   }
+  if (s.t === 'associate') return (
+    <Line label="associate" kind="retrieve">
+      <span className="aud-dim">{(s.from || []).join('+')} ⇝ {s.to} · coupling {s.coupling}{s.sim != null ? ' · sim ' + s.sim : ''} · {s.clearedDelta ? <b>cleared δ</b> : 'inert'}</span>
+    </Line>
+  );
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }

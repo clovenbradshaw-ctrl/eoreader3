@@ -158,6 +158,10 @@ function narrateTurn(turn) {
         if (s.recalled && s.recalled.length) push('Recalled ' + s.recalled.length + ' earlier passage' + (s.recalled.length === 1 ? '' : 's') + ' that became relevant again.');
         break;
       }
+      case 'associate':
+        // Legible-that: the field linked these spans; the page never did.
+        push('Followed an association to ' + s.to + ' — near in meaning, but a connection the page never spells out.');
+        break;
       case 'error':
         push('Hit a problem' + (s.where ? ' (' + s.where + ')' : '') + ': ' + (s.message || 'unknown') + '.');
         break;
