@@ -615,7 +615,7 @@ function App() {
     // Round 1 is already recorded by the caller's model-context retrieve step.
     let matter = []; try { matter = (E.referentsScope(scope, q) || {}).matter || []; } catch (e) {}
     const support = () => [...chosen.values()].map(h => h.t).join(' ');
-    let gaps = E.coverageGaps(q, support());
+    let gaps; try { gaps = E.coverageGaps(q, support()); } catch (e) { eoWarn('seek gaps', e); gaps = { uncovered: [], n: 0, d: 1 }; }
     let prevN = gaps.n;
     for (let r = 2; r <= budget.maxSeekRounds; r++) {
       if (!gaps.uncovered.length) break;                         // fully covered — nothing left to seek
@@ -801,6 +801,7 @@ function App() {
       let full = await window.EOLLM.phrase({
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
         grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
+        depth: budget && budget.level,
       });
       full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
       // Reconsideration (Phase 5, deepest depth): a refused summary is not a
@@ -811,7 +812,7 @@ function App() {
           window.EOEngine.looksRefused && window.EOEngine.looksRefused(full)) {
         AUD('step', 'plan-seg', { from: 'grounded-summary', to: 'creative', reason: 'the model refused the summary' });
         lastGroundedRef.current = false;
-        runChat(q, history, 'creative', ctx, true);
+        runChat(q, history, 'creative', ctx, true).catch(turnFailed('chat'));
         return;
       }
       const settle = (res, decision) => {
@@ -858,6 +859,7 @@ function App() {
             retry = await window.EOLLM.phrase({
               mlcKey: model.mlc, question: q, contextText: stricter, history, mode: 'grounded', task,
               grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
+              depth: budget && budget.level,
             });
             retry = window.EOEngine.dedupeSentences(retry);
           } catch (e) { retry = ''; }
@@ -905,7 +907,35 @@ function App() {
     setBusy(false);
   };
 
+  // A streaming path (grounded / chat) runs DETACHED from runTurn — it is fired
+  // and not awaited, then resets busy itself when it settles. If its promise
+  // rejects instead, nothing else releases the composer, and a stranded `busy` is
+  // exactly what silently stops the user from sending again. Attach this to every
+  // such dispatch so a failure there still resets busy and surfaces it honestly.
+  const turnFailed = (where) => (e) => {
+    eoWarn(where, e);
+    try { AUD('step', 'error', { where, fatal: true, message: String((e && e.message) || e) }); } catch (_) {}
+    replaceLast({ role: 'assistant', text: 'Something went wrong while answering — please try again.', audit: null });
+    try { AUD('end', { engine: 'none', text: '', audit: null, reason: where + '-error' }); } catch (_) {}
+    setBusy(false);
+  };
+
+  // Outer guard around turn routing: a throw in the router itself (or in an
+  // awaited router step like the escalation retrieval) must never leave busy
+  // stuck true. runTurn dispatches to the detached streaming paths and returns;
+  // this only catches a synchronous routing fault or a rejected await within it.
   const send = async (text) => {
+    try { await runTurn(text); }
+    catch (e) {
+      eoWarn('send', e);
+      try { AUD('step', 'error', { where: 'send', fatal: true, message: String((e && e.message) || e) }); } catch (_) {}
+      replaceLast({ role: 'assistant', text: 'Something went wrong starting that turn — please try again.', audit: null });
+      try { AUD('end', { engine: 'none', text: '', audit: null, reason: 'send-error' }); } catch (_) {}
+      setBusy(false);
+    }
+  };
+
+  const runTurn = async (text) => {
     const q = (text != null ? text : input).trim();
     if (!q || busy) return;
     setInput('');
@@ -971,7 +1001,7 @@ function App() {
       const ctx = scope.length ? window.EOEngine.contextScope(scope, q, 6) : '';
       AUD('step', 'route', { path: 'creative', referencing: scope.length > 0 });
       if (scope.length) AUD('step', 'retrieve', { k: 6, engine: 'creative-context', hits: auditHits(scope, q, 6) });
-      runChat(q, history, 'creative', ctx, scope.length > 0); return;
+      runChat(q, history, 'creative', ctx, scope.length > 0).catch(turnFailed('chat')); return;
     }
 
     // CREATIVE COMPOSITION in auto mode: "write a song/poem/story about this".
@@ -987,7 +1017,7 @@ function App() {
       const ctx = scope.length ? window.EOEngine.contextScope(scope, q, 6) : '';
       AUD('step', 'route', { path: 'creative', referencing: scope.length > 0, reason: 'creative-compose' });
       if (scope.length) AUD('step', 'retrieve', { k: 6, engine: 'creative-context', hits: auditHits(scope, q, 6) });
-      runChat(q, history, 'creative', ctx, scope.length > 0); return;
+      runChat(q, history, 'creative', ctx, scope.length > 0).catch(turnFailed('chat')); return;
     }
 
     // COST-ORDERED ROUTING (existence → structure → significance). The router is
@@ -1024,13 +1054,13 @@ function App() {
       AUD('step', 'route', { referencing: true, reason: route.reason, confidence: route.confidence,
         path: useLLM ? 'grounded-llm' : 'mechanical',
         primary: primary ? { id: primary.id, name: primary.name, kind: primary.kind } : null });
-      if (useLLM) { runGroundedScope(scope, q, history, semanticHits); return; }
+      if (useLLM) { runGroundedScope(scope, q, history, semanticHits).catch(turnFailed('grounded')); return; }
       runMechanicalScope(scope, q); return;   // tables, or no model → mechanical pivot / grounded answer
     }
 
     // plain chat
     AUD('step', 'route', { referencing: false, reason: route.reason, path: ready ? 'plain-chat' : 'plain-unavailable' });
-    if (ready) { runChat(q, history, undefined, '', !!doc); return; }
+    if (ready) { runChat(q, history, undefined, '', !!doc).catch(turnFailed('chat')); return; }
     const msg = canLLM
       ? 'The local model isn’t ready yet — give it a moment. Meanwhile, upload a document and I can answer questions about it directly, with citations.'
       : 'This browser can’t run the local model (no WebGPU), so I can’t free-chat here. Upload a document or paste text and I’ll still answer questions about it, with citations.';

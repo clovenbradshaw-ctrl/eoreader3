@@ -131,9 +131,9 @@ const THINKING_DEPTHS = [
   { level: 1, id: 'reflex',  label: 'Reflex',  glyph: '·',
     desc: 'One pass. Today’s behavior — fast and literal: retrieve once, phrase, done.' },
   { level: 2, id: 'deeper',  label: 'Deeper',  glyph: ':',
-    desc: 'Carries the conversation’s hot context forward and keeps seeking the parts of the question it hasn’t covered.' },
+    desc: 'Carries the conversation’s hot context forward, keeps seeking the parts of the question it hasn’t covered, and answers in a fuller, more connected reading.' },
   { level: 3, id: 'deepest', label: 'Deepest', glyph: '∴',
-    desc: 'Adds associative wandering and lets a turn reconsider its own plan. The most effort, the fullest trace.' },
+    desc: 'Adds associative wandering and lets a turn reconsider its own plan, then writes the most thorough, synthesized answer. The most effort, the fullest trace.' },
 ];
 // The depth-governed rule ids, surfaced as their own tier in the rules drawer.
 const DEPTH_IDS = ['max-seek-rounds', 'seek-novelty-floor', 'assoc-delta', 'assoc-coupling', 'wm-heat-floor', 'infer-bind-floor', 'replan-enabled'];

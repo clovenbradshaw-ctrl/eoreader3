@@ -55,13 +55,30 @@
   //  - grounded: answer strictly from the supplied passages; citations are
   //    bound mechanically afterward, never written by the model.
   //  - creative: free composition over any supplied passages.
-  function systemFor(mode, task, grounded) {
+  function systemFor(mode, task, grounded, depth = 1) {
     if (mode === 'creative')
       return 'You are Cleon, a private assistant running locally in the user\'s browser. Use any supplied passages as raw material to compose freely. Do not add citation markers.';
-    if (grounded)
-      return task === 'summary'
-        ? 'You are Cleon. In 2 to 4 sentences, say what the passages are ABOUT in your own words — the figures, what is claimed of them, and how it moves. Synthesize across the passages; never copy or lightly reword a single line as the whole answer. Use only what they state, add nothing not present, and write no citation markers; those are added mechanically afterward.'
+    if (grounded) {
+      // Thinking depth reaches the PHRASING, not just retrieval: a deeper turn has
+      // already gathered more material (extra seek rounds, association, working
+      // memory), so it is also told to write a fuller, more synthesized reading
+      // rather than the reflex one- or two-liner. The faithfulness contract is
+      // unchanged at every level — only the passages, never invented, exact
+      // "The passages don't say." refusal, no model-written citations. depth 1
+      // returns the exact floor strings, so the parity floor stays byte-identical.
+      const lvl = depth >= 3 ? 3 : depth === 2 ? 2 : 1;
+      if (task === 'summary')
+        return lvl === 3
+          ? 'You are Cleon. Write a thorough, connected summary — a short paragraph or two — of what the passages are ABOUT in your own words: the figures, what is claimed of them, how it develops, and the connections or tensions between passages. Synthesize everything supplied into one coherent account; never copy or lightly reword a single line as the whole answer. Use only what they state, add nothing not present, and write no citation markers; those are added mechanically afterward.'
+          : lvl === 2
+          ? 'You are Cleon. In a full, connected summary of about 4 to 6 sentences, say what the passages are ABOUT in your own words — the figures, what is claimed of them, and how it moves — drawing the passages together rather than listing them. Never copy or lightly reword a single line as the whole answer. Use only what they state, add nothing not present, and write no citation markers; those are added mechanically afterward.'
+          : 'You are Cleon. In 2 to 4 sentences, say what the passages are ABOUT in your own words — the figures, what is claimed of them, and how it moves. Synthesize across the passages; never copy or lightly reword a single line as the whole answer. Use only what they state, add nothing not present, and write no citation markers; those are added mechanically afterward.';
+      return lvl === 3
+        ? 'You are Cleon. Answer using ONLY the supplied passages, as fully as they allow — a short paragraph that gathers every passage bearing on the question, follows the through-line, and notes how they fit together. Stay close to the passages\' own facts and wording, and never add anything they do not state. If they do not answer the question, reply exactly: The passages don\'t say. Do not write citation markers like [s1]; those are added mechanically afterward.'
+        : lvl === 2
+        ? 'You are Cleon. Answer using ONLY the supplied passages, in a few sentences that bring together every passage bearing on the question rather than stopping at the first. Stay close to the passages\' own facts and wording, and never add anything they do not state. If they do not answer the question, reply exactly: The passages don\'t say. Do not write citation markers like [s1]; those are added mechanically afterward.'
         : 'You are Cleon. Answer using ONLY the supplied passages. Reply in one or two sentences, staying close to the passages\' own facts and wording. Never add anything the passages do not state. If they do not answer the question, reply exactly: The passages don\'t say. Do not write citation markers like [s1]; those are added mechanically afterward.';
+    }
     return 'You are Cleon, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. Do not invent facts about real people, places, or events: if you are not sure something is true, say you are not sure rather than making something up — a confident wrong answer is worse than an honest "I\'m not certain." A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. If the user is clearly asking about an open document but you were not handed a relevant passage, say so and offer to look it up, rather than guessing at what it contains. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
   }
 
@@ -205,12 +222,19 @@
 
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
   // pass retrieved passages. onToken(deltaText).
-  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory }) {
+  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth }) {
     const eng = await load(mlcKey);
-    const sys = systemFor(mode, task, grounded);
+    // Thinking depth (1 reflex … 3 deepest) shapes the grounded phrasing and how
+    // much room the answer gets. Absent/1 ⇒ today's prompt and token caps (parity).
+    const lvl = Math.min(3, Math.max(1, (depth | 0) || 1));
+    const sys = systemFor(mode, task, grounded, lvl);
     const messages = assembleMessages({ sys, history, contextText, question, grounded, budget, workingMemory });
     const temperature = mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4);
-    const max_tokens = mode === 'creative' ? 320 : (grounded ? (task === 'summary' ? 260 : 180) : 360);
+    // Deeper reading earns more room to synthesize: the grounded caps grow with the
+    // dial (summary 260→520, answer 180→420). lvl 1 holds today's exact ceilings.
+    const max_tokens = mode === 'creative' ? 320
+      : grounded ? (task === 'summary' ? 260 + (lvl - 1) * 130 : 180 + (lvl - 1) * 120)
+      : 360;
     // Audit hook (no-op unless window.EOAudit is present): record the EXACT prompt
     // the model saw, its parameters, its raw output, and the wall time — so
     // auditing mode can show what was sent and what came back, verbatim.
@@ -221,7 +245,7 @@
       try {
         A.step('llm', Object.assign({
           mode, task: task || null, grounded: !!grounded, mlcKey,
-          params: { temperature, max_tokens, budget: budget || null },
+          params: { temperature, max_tokens, depth: lvl, budget: budget || null },
           system: sys,
           messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })),
           output,

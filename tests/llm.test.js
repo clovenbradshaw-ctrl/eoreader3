@@ -133,5 +133,38 @@ group('no working memory ⇒ byte-identical to before (parity floor)', () => {
   eq(LLM.renderWorkingMemory({ hot: [], warm: [], cold: [], recalled: [] }), '', 'an empty working memory renders empty');
 });
 
+// Thinking depth (1 reflex … 3 deepest) reaches the grounded PHRASING, not just
+// retrieval: a deeper turn is told to write a fuller, synthesized reading. depth 1
+// must return the exact floor strings (the dial's parity floor), and the
+// faithfulness contract — exact "The passages don't say." refusal, no model-written
+// citation markers — must survive at every level.
+group('thinking depth shapes the grounded prompt; depth 1 is the parity floor', () => {
+  const ans1 = LLM.systemFor('grounded', 'answer', true, 1);
+  const ans2 = LLM.systemFor('grounded', 'answer', true, 2);
+  const ans3 = LLM.systemFor('grounded', 'answer', true, 3);
+  const sum1 = LLM.systemFor('grounded', 'summary', true, 1);
+  const sum3 = LLM.systemFor('grounded', 'summary', true, 3);
+
+  // parity floor: depth 1 (and a missing depth) is byte-identical to today.
+  eq(ans1, LLM.systemFor('grounded', 'answer', true), 'answer @ depth 1 == default (no depth arg)');
+  eq(sum1, LLM.systemFor('grounded', 'summary', true), 'summary @ depth 1 == default (no depth arg)');
+  ok(/one or two sentences/.test(ans1), 'the floor answer keeps the reflex one-or-two-sentence instruction');
+  ok(/In 2 to 4 sentences/.test(sum1), 'the floor summary keeps the 2-to-4-sentence instruction');
+
+  // deeper levels ask for a fuller reading and differ from the floor and each other.
+  ok(ans3.length > ans1.length, 'the deepest answer prompt asks for more than the floor');
+  ok(ans2 !== ans1 && ans2 !== ans3, 'the middle depth is its own prompt');
+  ok(!/one or two sentences/.test(ans3), 'the deepest answer drops the one-or-two-sentence cap');
+  ok(sum3.length > sum1.length, 'the deepest summary prompt asks for more than the floor');
+
+  // faithfulness contract holds at every level.
+  for (const [name, s] of [['answer@1', ans1], ['answer@2', ans2], ['answer@3', ans3]])
+    ok(/The passages don't say/.test(s), `${name} keeps the exact refusal phrase`);
+  for (const [name, s] of [['answer@3', ans3], ['summary@3', sum3]]) {
+    ok(/citation markers/.test(s), `${name} still forbids model-written citations`);
+    ok(/only|nothing not present|do not state/i.test(s), `${name} still pins answers to the passages`);
+  }
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
