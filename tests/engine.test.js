@@ -415,6 +415,60 @@ group('recall by heat — a cooled carried sentence comes back', () => {
   F.reset();
 });
 
+// coverageGaps augments coverage: same n/d, plus WHICH query clusters the support
+// leaves uncovered — the aim point for an iterative-seeking sub-query.
+group('coverage gaps — which query clusters are uncovered', () => {
+  const support = 'Edith set the kettle down and listened.';
+  const cg = E.coverageGaps('what did Edith carry to the lantern', support);
+  const cov = E.coverage('what did Edith carry to the lantern', support);
+  eq(cg.n, cov.n, 'coverageGaps agrees with coverage on the covered count');
+  eq(cg.d, cov.d, 'coverageGaps agrees with coverage on the total count');
+  ok(cg.covered.includes('edith'), 'a covered content token is reported as covered');
+  ok(cg.uncovered.includes('lantern') && cg.uncovered.includes('carry'), 'absent content tokens are reported as uncovered');
+  eq(cg.covered.length + cg.uncovered.length, cg.d, 'covered + uncovered partition the query clusters');
+  const full = E.coverageGaps('Edith kettle', 'Edith set the kettle down');
+  eq(full.uncovered.length, 0, 'a fully-covered query leaves no gaps');
+});
+
+// The embedder as a wandering reader degrades cleanly: with no window.EOEmbed in
+// the Node harness, associativeNeighbors no-ops to [] (the app then keeps to its
+// graph-hop working memory), so the no-embedder path is unchanged.
+const assocMiss = await E.associativeNeighbors(voss, [1, 2, 3], E.thinkingBudget(3), 5);
+const assocTable = await E.associativeNeighbors(deals, [0], E.thinkingBudget(3), 5);
+const assocNoSpans = await E.associativeNeighbors(voss, [], E.thinkingBudget(3), 5);
+group('associative wandering — no embedder degrades to nothing', () => {
+  ok(Array.isArray(assocMiss), 'associativeNeighbors always returns an array');
+  eq(assocMiss.length, 0, 'with no embedder, no associative neighbors are drawn (degrades to graph-hop)');
+  eq(assocTable.length, 0, 'a table source yields no associative neighbors');
+  eq(assocNoSpans.length, 0, 'no source spans ⇒ nothing to wander from');
+});
+
+// The inference void: the {{void}} mechanism inverted. markInferred rewrites the
+// citation to the inferred-to span into {{infer}} only when BOTH ends are cited —
+// a one-ended pair is an ordinary citation, not a reader-added connection.
+group('inference void — mark what the reader added across two cited spans', () => {
+  const bound = 'Edith waited {{cite:voss:1:s1}} while the lamp burned {{cite:voss:6:s6}}.';
+  const res = E.markInferred(bound, [{ docId: 'voss', a: 1, b: 6 }]);
+  ok(/\{\{infer:voss:1\+6:s1\+s6\}\}/.test(res.text), 'the inferred-to span is rewritten as an {{infer}} marker');
+  ok(/\{\{cite:voss:1:s1\}\}/.test(res.text), 'the other end stays a plain citation');
+  eq(res.inferred.length, 1, 'one pair was marked');
+  eq(res.inferred[0].b, 6, 'the marked pair records the inferred-to span');
+  // both ends must be present
+  const oneEnd = E.markInferred('Only one span {{cite:voss:1:s1}} here.', [{ docId: 'voss', a: 1, b: 6 }]);
+  eq(oneEnd.inferred.length, 0, 'a pair with only one end cited is not an inference');
+  eq(oneEnd.text, 'Only one span {{cite:voss:1:s1}} here.', 'a non-inference leaves the text untouched');
+});
+
+// Reconsideration reads a draft for refusal so a turn can SEG its own plan
+// (a refused summary re-routes to creative rather than recycling the refusal).
+group('reconsideration — a refusal is detected (plan SEG)', () => {
+  ok(E.looksRefused('I cannot provide a summary of this document.'), 'a plain refusal is detected');
+  ok(E.looksRefused("I'm sorry, but I can't create that."), 'a softened refusal is detected');
+  ok(E.looksRefused(''), 'an empty draft counts as a refusal');
+  ok(!E.looksRefused('Edith set the kettle down and listened by the lamp.'), 'a real answer is not a refusal');
+  ok(!E.looksRefused('The keeper said no one could row to the mainland.'), 'a substantive sentence is not a refusal');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

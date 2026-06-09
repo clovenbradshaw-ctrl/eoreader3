@@ -17,6 +17,7 @@ function fmtTime(iso) {
 function stripForView(s) {
   return String(s == null ? '' : s)
     .replace(/\{\{cite:([^}]*)\}\}/g, (m, b) => { const p = b.split(':'); return p[2] ? ' [' + p[2] + ']' : ''; })
+    .replace(/\{\{infer:([^}]*)\}\}/g, (m, b) => { const p = b.split(':'); return p[2] ? ' ⟦' + p[2] + '⟧' : ''; })
     .replace(/\{\{void:([^}]*)\}\}/g, '⟨$1⟩')
     .replace(/\s+([.,;:])/g, '$1')
     .trim();
@@ -55,8 +56,9 @@ function AuditStep({ s }) {
     </Line>
   );
   if (s.t === 'retrieve') return (
-    <Line label="retrieve" kind="retrieve">
-      <div className="aud-dim">k={s.k}{s.task ? ' · ' + s.task : ''} · {(s.hits || []).length} hits{s.engine ? ' · ' + s.engine : ''}</div>
+    <Line label={s.round ? 'seek ·' + s.round : 'retrieve'} kind="retrieve">
+      <div className="aud-dim">k={s.k}{s.task ? ' · ' + s.task : ''} · {(s.hits || []).length} hits{s.engine ? ' · ' + s.engine : ''}{s.round ? ' · round ' + s.round : ''}{s.novelty != null ? ' · novelty ' + s.novelty : ''}{s.covered ? ' · covers ' + s.covered : ''}</div>
+      {s.subquery ? <div className="aud-dim">⟲ sought: {s.subquery}</div> : null}
       {(s.hits || []).map((h, i) => (
         <div key={i} className="aud-hit"><b className="aud-score">{h.score}</b><span className="aud-cite">s{h.idx}</span><span className="aud-hit-t">{h.text}</span></div>
       ))}
@@ -105,6 +107,27 @@ function AuditStep({ s }) {
       </Line>
     );
   }
+  if (s.t === 'associate') return (
+    <Line label="associate" kind="retrieve">
+      <span className="aud-dim">{(s.from || []).join('+')} ⇝ {s.to} · coupling {s.coupling}{s.sim != null ? ' · sim ' + s.sim : ''} · {s.clearedDelta ? <b>cleared δ</b> : 'inert'}</span>
+    </Line>
+  );
+  if (s.t === 'infer') return (
+    <Line label="infer" kind="referents">
+      <span className="aud-dim">floor {s.floor} · reader-added connection:</span> {(s.pairs || []).map((p, i) => <span key={i}>{i ? ', ' : ' '}<span className="aud-cite">s{p.a}</span>+<span className="aud-cite">s{p.b}</span></span>)}
+    </Line>
+  );
+  if (s.t === 'plan-seg') return (
+    <Line label="reconsider" kind="veto">
+      <b>{s.from}</b> <span className="aud-dim">→</span> <b>{s.to}</b>
+      {s.reason && <span className="aud-dim"> · {s.reason}</span>}
+    </Line>
+  );
+  if (s.t === 'opaque') return (
+    <Line label="edge of trace">
+      <span className="aud-dim">{s.note || 'phrasing crossed a gap the trace can’t show'}</span>
+    </Line>
+  );
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }

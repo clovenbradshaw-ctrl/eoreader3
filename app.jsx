@@ -103,6 +103,8 @@ function App() {
   const [depth, setDepth] = useState(1);
   const depthRef = useRef(1); depthRef.current = depth;
   const turnBudgetRef = useRef(null);
+  // This turn's associative links (Phase 3) — read by the inference void (Phase 4).
+  const turnAssocRef = useRef([]);
   const [busy, setBusy] = useState(false);
 
   const [rules, setRules] = useState(window.RULESETS.map(r => ({ ...r })));
@@ -549,7 +551,7 @@ function App() {
   const patchLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch }; return c; });
 
   // strip citation/void markup so prior turns read as plain text in history
-  const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
+  const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void|infer):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
   // the running conversation, as plain {role, content} turns for the model
   const historyFor = () => messages
     .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.typing && !m.loading && m.text)
@@ -597,6 +599,112 @@ function App() {
       });
     } catch (e) { eoWarn('working-memory step', e); }
     return wm;
+  };
+
+  // Iterative seeking (depth > 1): after the base retrieval, keep sub-querying on
+  // the query clusters the support hasn't covered yet — bounded by the budget's
+  // max seek rounds, and stopping early when a round's novelty falls below the
+  // floor (delta by another name: keep going only while the pull is real). Each
+  // extra round is its own numbered `retrieve` audit step. At the floor this is
+  // never reached (maxSeekRounds 1); the caller uses today's contextScope.
+  const seekContext = (scope, q, budget) => {
+    const E = window.EOEngine, k = 6, r4 = (x) => Math.round((x || 0) * 1e4) / 1e4;
+    const chosen = new Map();
+    const add = (hs) => { for (const h of (hs || [])) { const key = h.docId + ':' + h.i; if (!chosen.has(key)) chosen.set(key, h); } };
+    try { add(E.retrieveScope(scope, q, k)); } catch (e) { eoWarn('seek base', e); }
+    // Round 1 is already recorded by the caller's model-context retrieve step.
+    let matter = []; try { matter = (E.referentsScope(scope, q) || {}).matter || []; } catch (e) {}
+    const support = () => [...chosen.values()].map(h => h.t).join(' ');
+    let gaps = E.coverageGaps(q, support());
+    let prevN = gaps.n;
+    for (let r = 2; r <= budget.maxSeekRounds; r++) {
+      if (!gaps.uncovered.length) break;                         // fully covered — nothing left to seek
+      const subq = gaps.uncovered.concat(matter).join(' ');
+      let more = []; try { more = E.retrieveScope(scope, subq, k); } catch (e) { break; }
+      const before = chosen.size;
+      add(more);
+      const g2 = E.coverageGaps(q, support());
+      const novelty = r4((g2.n - prevN) / (gaps.d || 1));        // fraction of NEW query terms this round covered
+      AUD('step', 'retrieve', { round: r, k, engine: 'seek', subquery: subq, novelty,
+        covered: g2.n + '/' + g2.d, newHits: chosen.size - before,
+        hits: (more || []).slice(0, 6).map(h => ({ docId: h.docId, idx: h.i, score: r4(h.score), text: h.t })) });
+      prevN = g2.n; gaps = g2;
+      if (chosen.size === before) break;                         // nothing new came back
+      if (novelty < budget.seekNoveltyFloor) break;              // the pull is too weak to justify another round
+    }
+    const top = [...chosen.values()].sort((a, b) => b.score - a.score).slice(0, 10);
+    try { return E.contextFromHits(scope, top); } catch (e) { return E.contextScope(scope, q, k); }
+  };
+
+  // Phase 3: associative wandering (deepest depth, embedder-backed). From the
+  // spans the answer is built on, find embedding-near sentences the page never
+  // lexically connects, delta-gate them against the doc's own gravity, warm the
+  // survivors by association (the field, for the next turn's working memory, and
+  // this turn's context), and log each deposit as an `associate` step — legible
+  // THAT the field linked them, never the geometry of why. No embedder => no-op.
+  const augmentByAssociation = async (scope, q, ctx, budget) => {
+    const E = window.EOEngine;
+    try {
+      const prim = E.routePrimary(scope, q) || scope[0];
+      if (!prim || prim.kind !== 'prose' || !E.associativeNeighbors) return ctx;
+      const srcSpans = (E.retrieveScope([prim], q, 6) || []).map(h => h.i);
+      if (!srcSpans.length) return ctx;
+      const neigh = await E.associativeNeighbors(prim, srcSpans, budget, 5);
+      const kept = (neigh || []).filter(n => n.clearedDelta);
+      if (!kept.length) return ctx;
+      const from = srcSpans.slice(0, 3).map(i => 's' + i);
+      const links = [];
+      for (const n of kept) {
+        try { E.conversationField && E.conversationField.deposit({ sentences: [{ docId: prim.id, idx: n.i }] }, budget.assocCoupling); } catch (e) {}
+        AUD('step', 'associate', { from, to: 's' + n.i, coupling: budget.assocCoupling, sim: n.sim, clearedDelta: true });
+        links.push({ docId: prim.id, from: srcSpans.slice(0, 3), to: n.i, sim: n.sim });
+      }
+      turnAssocRef.current = links;                       // hand the links to the inference void (Phase 4)
+      return ctx + '\n' + kept.map(n => `[${prim.id}:${n.i}] ${n.t}`).join('\n');
+    } catch (e) { eoWarn('associate', e); return ctx; }
+  };
+
+  // Phase 4: the inference void. If a model answer cited BOTH ends of an
+  // associative link (Phase 3) that cleared the inference floor, the connecting
+  // claim was the reader's inference, not the page's statement — mark it
+  // {{infer:…}} and badge the answer `inferred` (a third status between grounded
+  // and held). Gated by the inference-void rule + a finite floor (deepest depth)
+  // + links present, so it never fires at the floor or without an embedder.
+  const inferRuleOn = () => rules.some(r => r.id === 'inference-void' && r.installed && r.enabled);
+  const markInferences = (res, budget) => {
+    const E = window.EOEngine;
+    if (!E || !E.markInferred || !res || !budget || !isFinite(budget.inferBindFloor) || !inferRuleOn()) return res;
+    const links = turnAssocRef.current || [];
+    if (!links.length) return res;
+    const pairs = [];
+    for (const lk of links) { if (lk.sim >= budget.inferBindFloor) for (const a of (lk.from || [])) pairs.push({ docId: lk.docId, a, b: lk.to }); }
+    if (!pairs.length) return res;
+    let marked; try { marked = E.markInferred(res.text, pairs); } catch (e) { return res; }
+    if (!marked.inferred.length) return res;
+    const label = marked.inferred.map(p => '[s' + p.a + '] and [s' + p.b + ']').join(', ');
+    AUD('step', 'infer', { pairs: marked.inferred, floor: budget.inferBindFloor });
+    return { ...res, text: marked.text, audit: { ...res.audit, status: 'inferred',
+      note: 'Inferred via association between ' + label + ' — the field linked them, the page never stated the connection.' } };
+  };
+
+  // Phase 6: the legibility boundary marker. When a kept model answer relates
+  // DISTANT cited spans into a claim and no mechanical/embedding step (an
+  // inference, an association) explains the bridge, that last step is the model's
+  // own reasoning — and the glass box can show what it drew on, not how it
+  // crossed. Emit a quiet `opaque` step: the void applied to the instrument
+  // itself. Rare and honest (gated by a thinking depth + a real span gap), never
+  // decorative; at the floor the trace is unchanged.
+  const OPAQUE_SPAN_GAP = 4;
+  const noteOpaque = (res, decision) => {
+    const budget = turnBudgetRef.current;
+    if (!budget || budget.level <= 1) return;
+    if (!decision || decision.indexOf('model') !== 0) return;
+    if (!res || !res.audit || !res.audit.grounded || res.audit.status === 'inferred') return;
+    const idxs = [...new Set((res.cites || []).map(c => c.idx))];
+    if (idxs.length < 2) return;
+    const lo = Math.min(...idxs), hi = Math.max(...idxs);
+    if (hi - lo < OPAQUE_SPAN_GAP) return;               // adjacent spans: an ordinary local synthesis
+    AUD('step', 'opaque', { spans: idxs, note: 'The phrasing related distant passages [s' + lo + '…s' + hi + '] into one claim — the trace can show what it drew on, not how it bridged them. That last step is the model\'s.' });
   };
 
   const runMechanicalScope = (scope, q) => {
@@ -670,12 +778,22 @@ function App() {
     const grounded = hasSemantic || perDocGround.some(d => d.has);
     AUD('step', 'ground', { hasGround: grounded, perDoc: perDocGround, viaSemantic: hasSemantic });
     if (!grounded) { AUD('step', 'route', { detour: 'no-ground → mechanical' }); runMechanicalScope(scope, q); return; }
-    // Context: semantically-recovered spans if we have them, else the lexical scope context.
-    const ctx = hasSemantic
+    // Context: semantically-recovered spans if we have them, else the lexical
+    // scope context — but above the dial's floor, a factual ask iteratively seeks
+    // the parts of the question its first retrieval didn't cover (Phase 2). At the
+    // floor (maxSeekRounds 1) and for summaries/semantic recall, this is untouched.
+    const budget = turnBudgetRef.current;
+    const useSeek = !!(budget && budget.maxSeekRounds > 1 && !hasSemantic && intent !== 'summary');
+    let ctx = hasSemantic
       ? window.EOEngine.contextFromHits(scope, semanticHits)
-      : window.EOEngine.contextScope(scope, q, 6);
+      : (useSeek ? seekContext(scope, q, budget) : window.EOEngine.contextScope(scope, q, 6));
     const task = intent === 'summary' ? 'summary' : 'answer';
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
+    // Associative wandering (Phase 3, deepest depth + embedder): warm in spans the
+    // page never lexically connects. No embedder ⇒ ctx unchanged (graph-hop only).
+    if (budget && budget.assocCoupling > 0 && window.EOEmbed && window.EOEmbed.ready()) {
+      ctx = await augmentByAssociation(scope, q, ctx, budget);
+    }
     // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
     const wm = buildWMForTurn(scope, q);
     try {
@@ -685,10 +803,25 @@ function App() {
         grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
       });
       full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
+      // Reconsideration (Phase 5, deepest depth): a refused summary is not a
+      // summary — SEG the plan and re-route to free composition rather than
+      // recycling the refusal. One re-plan per turn (mirrors the echo-veto).
+      // (the model is necessarily ready here — phrase() above just succeeded)
+      if (budget && budget.replan && task === 'summary' &&
+          window.EOEngine.looksRefused && window.EOEngine.looksRefused(full)) {
+        AUD('step', 'plan-seg', { from: 'grounded-summary', to: 'creative', reason: 'the model refused the summary' });
+        lastGroundedRef.current = false;
+        runChat(q, history, 'creative', ctx, true);
+        return;
+      }
       const settle = (res, decision) => {
+        // Only a model-phrased answer can carry an inference void; a mechanical
+        // fallback states only what the page does.
+        if (decision && decision.indexOf('model') === 0) res = markInferences(res, budget);
         replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
         depositSettled(scope, q, res.cites);
+        noteOpaque(res, decision);                        // edge-of-trace marker (Phase 6)
         AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
       };
       if (/passages?\s+do\s?n.?t\s+say/i.test(full) || full.trim().length < 3) {
@@ -702,8 +835,23 @@ function App() {
         // the mechanical answer. Mainly bites summaries on a small model.
         if (echoesASpan(scope, q, full)) {
           AUD('step', 'veto', { decision: 'reject', reason: 'echoes a single span — retrying under a stricter rule' });
-          const stricter = ctx + '\n\nDo NOT copy or lightly reword any single passage. Compose a fresh ' +
+          let stricter = ctx + '\n\nDo NOT copy or lightly reword any single passage. Compose a fresh ' +
             (task === 'summary' ? 'summary that synthesizes across the passages in your own words.' : 'answer in your own words.');
+          // Reconsideration (Phase 5, deepest depth): retry via the GAP, not just
+          // "stricter" — find what the question still doesn't cover and re-retrieve
+          // on it, so the second pass has new material rather than the same spans.
+          if (budget && budget.replan) {
+            try {
+              const gaps = window.EOEngine.coverageGaps(q, ctx);
+              if (gaps.uncovered.length) {
+                const more = window.EOEngine.retrieveScope(scope, gaps.uncovered.join(' '), 4) || [];
+                if (more.length) {
+                  stricter += '\n' + window.EOEngine.contextFromHits(scope, more);
+                  AUD('step', 'plan-seg', { from: 'echo-veto', to: 'gap-retrieve', reason: 'uncovered: ' + gaps.uncovered.join(', ') });
+                }
+              }
+            } catch (e) { eoWarn('veto-gap', e); }
+          }
           let retry = '';
           try {
             replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
@@ -733,6 +881,10 @@ function App() {
         const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent);
         if (!bound.audit.grounded) {
           // Unmoored: the phrasing matched no passage — use the mechanical answer.
+          // Reconsideration (Phase 5): at the deepest depth, read a factual draft
+          // that binds nothing as a question the page does not address, not a
+          // failed answer — the mechanical reading surfaces that silence/void.
+          if (budget && budget.replan) AUD('step', 'plan-seg', { from: 'factual', to: 'question-about-silence', reason: 'the draft bound to nothing on the page' });
           AUD('step', 'veto', { decision: 'mechanical', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
           settle(window.EOEngine.answerScope(scope, q), 'mechanical (veto)');
         } else if (invented.length) {
@@ -776,6 +928,7 @@ function App() {
     // this turn deposits into it — recent topics stay warm, dropped ones cool.
     const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(depth) : null;
     turnBudgetRef.current = budget;
+    turnAssocRef.current = [];
     try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.decayTurn(); }
     catch (e) { eoWarn('field decay', e); }
 

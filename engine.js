@@ -3813,6 +3813,16 @@ function projectGraph(events, frame = {}) {
     const hit = qt.filter(t => st.has(t)).length;
     return { n: hit, d: qt.length };
   }
+  // coverage, but it also says WHICH query content-clusters the support leaves
+  // uncovered — the gap an iterative-seeking round aims its next sub-query at.
+  // Same tokenization as coverage(), so n/d agree; the split is the addition.
+  function coverageGaps(query, supportText) {
+    const qt = [...new Set(tok(query))];
+    const st = new Set(tok(supportText));
+    const covered = [], uncovered = [];
+    for (const t of qt) (st.has(t) ? covered : uncovered).push(t);
+    return { n: covered.length, d: qt.length || 1, covered, uncovered };
+  }
   // ── Anti-matter referents ───────────────────────────────────────────────
   // A REFERENT is a name the query points at. It has MATTER when the page
   // carries it, and ANTI-MATTER when it doesn't: referenced, but with no
@@ -3875,6 +3885,38 @@ function projectGraph(events, frame = {}) {
       out = out.replace(re, (m, pre, hit) => pre + '{{void:' + hit + '}}');
     }
     return out;
+  }
+
+  /* Phase 4: the inference void — the {{void}} mechanism inverted. Where {{void}}
+     marks what the page LACKED, {{infer}} marks what the READER ADDED: a claim the
+     answer phrased by connecting two cited spans the page never connects (an
+     associative link from Phase 3 that cleared infer_bind_floor). Given a bound
+     answer (carrying {{cite:docId:idx:sN}} markers) and candidate pairs {docId,a,b},
+     for each pair whose BOTH ends are cited it rewrites the citation to the
+     inferred-to span `b` into {{infer:docId:a+b:sA+sB}} — the third epistemic
+     status, between grounded and held. Returns the marked text and which pairs
+     were actually marked. A pair with only one end cited is not an inference. */
+  function markInferred(text, pairs) {
+    let out = String(text == null ? '' : text);
+    const marked = [];
+    for (const p of (pairs || [])) {
+      if (!p || p.a == null || p.b == null) continue;
+      const docId = p.docId || '';
+      if (!out.includes(`{{cite:${docId}:${p.a}:`) || !out.includes(`{{cite:${docId}:${p.b}:`)) continue;
+      const reB = new RegExp('\\{\\{cite:' + escRe(docId) + ':' + p.b + ':[^}]*\\}\\}');
+      const next = out.replace(reB, `{{infer:${docId}:${p.a}+${p.b}:s${p.a}+s${p.b}}}`);
+      if (next !== out) { out = next; marked.push({ docId, a: p.a, b: p.b }); }
+    }
+    return { text: out, inferred: marked };
+  }
+
+  // Phase 5: does a draft read as a refusal / non-answer? Used by reconsideration
+  // to SEG a turn's plan after drafting — a refused summary re-routes to creative
+  // rather than recycling the refusal. Empty/near-empty counts as a refusal.
+  function looksRefused(text) {
+    const t = String(text == null ? '' : text).toLowerCase().trim();
+    if (t.length < 3) return true;
+    return /\b(i (cannot|can ?not|can'?t|am unable to|won'?t|am not able)|i'?m sorry,? but|i'?m unable|unable to (provide|summari|comply|help|do)|as an ai|i do(n'?t| not) have (enough|the|access)|cannot (provide|create|write|generate)|can'?t (provide|create|write|generate))\b/.test(t);
   }
 
   /* ============================================================ INTENT */
@@ -4497,6 +4539,57 @@ function projectGraph(events, frame = {}) {
     return v;
   }
   function _cosineNorm(a, b) { let d = 0; const n = Math.min(a.length, b.length); for (let i = 0; i < n; i++) d += a[i] * b[i]; return d; }
+
+  /* ---------- Phase 3: the embedder as a wandering reader ----------
+     Given the spans the answer is being built on (NOT the query), return
+     embedding-near sentences the page never lexically connects — the associative
+     leaps rationality wouldn't draw. Each candidate is δ-gated against the doc's
+     own centroid: a sentence near EVERYTHING (flat) has sim ≈ baseline and is
+     inert; one specifically pulled toward the source spans clears assoc_delta.
+     The mechanical decision (which links survive) stays here; the deposit is the
+     app's. Guarded by EOEmbed.ready() — no embedder ⇒ [] (degrades to graph-hop).
+     Reuses _docVecCache so the wander costs no extra embedding. */
+  const ASSOC_SIM_FLOOR = 0.35;   // below this cosine, not a real associative pull
+  const ASSOC_LEX_MAX = 0.25;     // above this lexical overlap, the link is one rationality already draws
+  async function associativeNeighbors(doc, spans, budget, k = 5) {
+    const out = [];
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return out;
+    if (!doc || doc.kind === 'table' || !Array.isArray(spans) || !spans.length) return out;
+    if (!budget || !(budget.assocCoupling > 0) || !isFinite(budget.assocDelta)) return out;
+    let vecs; try { vecs = await docSentVectors(doc); } catch (e) { vecs = null; }
+    if (!vecs || !vecs.length) return out;
+    const texts = doc.sentenceTexts || [];
+    const src = [...new Set(spans.filter(i => i >= 0 && i < vecs.length))];
+    if (!src.length) return out;
+    const dim = vecs[0].length;
+    const centroid = (idxs) => {
+      const v = new Float64Array(dim);
+      for (const i of idxs) { const r = vecs[i]; for (let d = 0; d < dim; d++) v[d] += r[d]; }
+      let n = 0; for (let d = 0; d < dim; d++) n += v[d] * v[d]; n = Math.sqrt(n) || 1;
+      for (let d = 0; d < dim; d++) v[d] /= n;
+      return v;
+    };
+    const all = []; for (let i = 0; i < vecs.length; i++) all.push(i);
+    const srcC = centroid(src), globalC = centroid(all);
+    const srcSet = new Set(src);
+    const srcTokens = new Set(); for (const i of src) for (const t of tok(texts[i] || '')) srcTokens.add(t);
+    for (let j = 0; j < vecs.length; j++) {
+      if (srcSet.has(j)) continue;
+      const sim = _cosineNorm(vecs[j], srcC);
+      if (sim < ASSOC_SIM_FLOOR) continue;
+      // low lexical overlap: a connection the page never spells out
+      const jt = tok(texts[j] || ''); let shared = 0; for (const t of jt) if (srcTokens.has(t)) shared++;
+      const lex = jt.length ? shared / jt.length : 0;
+      if (lex > ASSOC_LEX_MAX) continue;
+      // δ gate against the doc's own gravity: near everything (flat) is inert.
+      const baseline = Math.max(1e-6, _cosineNorm(vecs[j], globalC));
+      const clearedDelta = sim >= budget.assocDelta * baseline;
+      out.push({ i: j, t: texts[j], sim: +sim.toFixed(4), baseline: +baseline.toFixed(4), lexOverlap: +lex.toFixed(3), clearedDelta });
+    }
+    out.sort((a, b) => b.sim - a.sim);
+    return out.slice(0, k);
+  }
+
   async function retrieveHybrid(docs, q, k = 6) {
     const ds = scopeDocs(docs);
     const lex = retrieveScope(ds, q, k).map(h => ({ ...h }));
@@ -4719,6 +4812,14 @@ function projectGraph(events, frame = {}) {
     // thinking depth: the effort dial's per-turn budget + the conversation field
     // (working memory) it spends across. Inert at depth 1 (parity floor).
     thinkingBudget, conversationField, buildWorkingMemory, recallByHeat,
+    // iterative seeking: coverage + which query clusters a retrieval leaves uncovered
+    coverage, coverageGaps,
+    // the embedder as a wandering reader: associative, δ-gated neighbors (no-op without an embedder)
+    associativeNeighbors,
+    // the inference void: mark what the reader ADDED across two cited spans
+    markInferred,
+    // reconsideration: does a draft read as a refusal / non-answer (plan SEG)
+    looksRefused,
     // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
     // and the transmuting-DEF classifier (the significance-layer "weak" law)
     layerLadder, isTransmutingDef,

@@ -62,6 +62,9 @@ const RULESETS = [
   { id: 'void', group: 'Chatting & grounding', phase: 'chat', name: 'Void Resolution [⊥]', glyph: '⊥',
     layer: 'significance', mass: 3, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
     desc: 'A term your question names that appears nowhere in the sources resolves to the single void, citable as [⊥] — rather than being papered over with an invented answer.' },
+  { id: 'inference-void', group: 'Chatting & grounding', phase: 'chat', name: 'Inference Void [∴]', glyph: '∴',
+    layer: 'significance', mass: 3, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'The void inverted: marks what the READER ADDED. When a deep answer connects two cited spans the page never connects (an association that clears the inference floor), the claim is badged inferred — a third status between grounded and held — and shown as [sA+sB]. Off ⇒ such claims read as ordinary citations.' },
   { id: 'two-voice', group: 'Chatting & grounding', phase: 'chat', name: 'Seeker / Talker Split', glyph: '⇉',
     layer: 'structure', mass: 9, src: 'core pack', installed: true, enabled: true, locked: false,
     desc: 'Two voices share the work: a seeker navigates the index (it sees the addresses), a talker phrases the answer (it never does). Keeps phrasing and provenance separable.' },
@@ -180,7 +183,7 @@ const LANGUAGES = [
 const LANG_SHARED_PARSING = ['attribution', 'reconcile'];
 
 // Tier 3 — grounding: cross-cutting QA conventions (RULESETS ids), chat phase.
-const GROUNDING_IDS = ['auditor', 'cite-binding', 'paraphrase', 'void', 'two-voice', 'mode-policy', 'cross-check'];
+const GROUNDING_IDS = ['auditor', 'cite-binding', 'paraphrase', 'void', 'inference-void', 'two-voice', 'mode-policy', 'cross-check'];
 
 /* ---------------- rule-pack schema + LLM authoring prompt ---------------- */
 const RULE_PACK_SCHEMA = {
