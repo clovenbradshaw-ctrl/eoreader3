@@ -183,6 +183,10 @@ function narrateTurn(turn) {
           : s.to === 'question-about-silence' ? 'Reconsidered: the draft answered nothing on the page, so I read it as a question the document doesn’t address.'
           : 'Reconsidered the plan: ' + s.from + ' → ' + s.to + '.');
         break;
+      case 'opaque':
+        // The void applied to the system itself: an honest edge-of-trace line.
+        push(s.note || 'Part of this answer leaned on the model’s own reasoning, across a gap the trace can’t fully show.');
+        break;
       case 'error':
         push('Hit a problem' + (s.where ? ' (' + s.where + ')' : '') + ': ' + (s.message || 'unknown') + '.');
         break;

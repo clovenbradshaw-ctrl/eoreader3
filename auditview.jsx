@@ -123,6 +123,11 @@ function AuditStep({ s }) {
       {s.reason && <span className="aud-dim"> · {s.reason}</span>}
     </Line>
   );
+  if (s.t === 'opaque') return (
+    <Line label="edge of trace">
+      <span className="aud-dim">{s.note || 'phrasing crossed a gap the trace can’t show'}</span>
+    </Line>
+  );
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }

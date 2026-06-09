@@ -687,6 +687,26 @@ function App() {
       note: 'Inferred via association between ' + label + ' — the field linked them, the page never stated the connection.' } };
   };
 
+  // Phase 6: the legibility boundary marker. When a kept model answer relates
+  // DISTANT cited spans into a claim and no mechanical/embedding step (an
+  // inference, an association) explains the bridge, that last step is the model's
+  // own reasoning — and the glass box can show what it drew on, not how it
+  // crossed. Emit a quiet `opaque` step: the void applied to the instrument
+  // itself. Rare and honest (gated by a thinking depth + a real span gap), never
+  // decorative; at the floor the trace is unchanged.
+  const OPAQUE_SPAN_GAP = 4;
+  const noteOpaque = (res, decision) => {
+    const budget = turnBudgetRef.current;
+    if (!budget || budget.level <= 1) return;
+    if (!decision || decision.indexOf('model') !== 0) return;
+    if (!res || !res.audit || !res.audit.grounded || res.audit.status === 'inferred') return;
+    const idxs = [...new Set((res.cites || []).map(c => c.idx))];
+    if (idxs.length < 2) return;
+    const lo = Math.min(...idxs), hi = Math.max(...idxs);
+    if (hi - lo < OPAQUE_SPAN_GAP) return;               // adjacent spans: an ordinary local synthesis
+    AUD('step', 'opaque', { spans: idxs, note: 'The phrasing related distant passages [s' + lo + '…s' + hi + '] into one claim — the trace can show what it drew on, not how it bridged them. That last step is the model\'s.' });
+  };
+
   const runMechanicalScope = (scope, q) => {
     // Capture the deterministic basis of the answer for the trace: intent, the
     // matter/anti-matter referents, and the scored retrieval hits.
@@ -800,6 +820,7 @@ function App() {
         replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
         depositSettled(scope, q, res.cites);
+        noteOpaque(res, decision);                        // edge-of-trace marker (Phase 6)
         AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
       };
       if (/passages?\s+do\s?n.?t\s+say/i.test(full) || full.trim().length < 3) {
