@@ -52,6 +52,24 @@ const DISCOURSE_JUNK = new Set([
   'not','almost','because','while','since','although','though',
 ]);
 
+// Document apparatus / OCR section labels. These show up capitalized and
+// repeated in scanned or structured prose ("Figure 4", "Appendix B", "Note:",
+// "Digitization sponsored by … Foundation") and compromise hands them back as
+// proper nouns, so without a filter they surface as named entities — and, with
+// the old person-fallback, as people. They are document chrome, not referents.
+// Checked only in entity admission (proper-noun candidates already start with a
+// capital), so retrieval, segmentation and content are untouched; a multi-word
+// name like "Ford Foundation" still admits because only the bare label matches.
+const STRUCTURE_LABELS = new Set([
+  'figure','fig','plate','table','exhibit','diagram','chart',
+  'appendix','addendum','chapter','section','subsection','paragraph','page',
+  'note','notes','footnote','endnote','caption','sidebar',
+  'summary','abstract','overview','preface','foreword','afterword',
+  'prologue','epilogue','introduction','conclusion',
+  'contents','index','glossary','bibliography','references','errata','timeline',
+  'archival','digitization','digitisation','foundation','collection','collections',
+]);
+
 // ── READING_RULES: the rules of reading made auditable ───────────
 // Every rule the reader applies is a first-class object: it has mass
 // (count of confirmations), provenance (where it came from), an EO
@@ -1068,6 +1086,9 @@ function cleanEntitySurface(surf) {
   if (!s) return null;
   if (STOP.has(s.toLowerCase())) return null;
   if (DISCOURSE_JUNK.has(s.toLowerCase())) return null;
+  // Reject bare document-apparatus labels ("Figure", "Appendix", "Note") — a
+  // multi-word name ("Ford Foundation") survives because only the lone label matches.
+  if (STRUCTURE_LABELS.has(s.toLowerCase())) return null;
   if (s.length < 2) return null;
   if (!/^\p{Lu}/u.test(s)) return null;
   return s;
@@ -3738,14 +3759,18 @@ function projectGraph(events, frame = {}) {
       const mass = e.physics && e.physics.mass != null ? Math.round(e.physics.mass * 10) / 10 : (e.mentions || sents.length || 1);
       return {
         name: e.name, key: e.key,
-        type: (e.type === 'place' || e.type === 'org') ? e.type : 'person',
+        // Carry the type the reader actually inferred. Only an unknown/missing
+        // type falls back, and it falls back to 'thing' (a neutral proper noun),
+        // never 'person' — coercing every residual capital to a person is what
+        // turned places (Cádiz) and OCR section labels (Figure, Note) into people.
+        type: (e.type === 'person' || e.type === 'place' || e.type === 'org') ? e.type : 'thing',
         raw: e.mentions || sents.length || 1,
         mass, sents,
       };
     }).filter(e => e.sents.length > 0);
     entities.sort((a, b) => b.mass - a.mass || b.raw - a.raw);
-    const byType = { person: [], place: [], org: [] };
-    for (const e of entities.slice(0, 28)) (byType[e.type] || byType.person).push(e.name);
+    const byType = { person: [], place: [], org: [], thing: [] };
+    for (const e of entities.slice(0, 28)) (byType[e.type] || byType.thing).push(e.name);
 
     const view = { entities, byType };
     _projCache.set(doc, { rev: RULES_REV, view });
@@ -4044,7 +4069,12 @@ function projectGraph(events, frame = {}) {
   }
   function answerWho(doc) {
     const { entities } = projectEntities(doc);
-    const ppl = entities.filter(e => e.type === 'person');
+    // The cast is people-or-named-things, ranked by prominence. NER typing is
+    // unreliable for names that double as places (Marlow, Sefton come back as
+    // 'thing'), so exclude only genuine places/orgs rather than keeping only
+    // type:'person' — that test used to pass solely because the projection
+    // coerced every residual entity to 'person'.
+    const ppl = entities.filter(e => e.type !== 'place' && e.type !== 'org');
     const list = (ppl.length ? ppl : entities).slice(0, 8);
     if (!list.length) return { text: 'I didn’t find any named people in this document.', audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'No entities surfaced under the current rules.' } };
     const text = 'The figures who appear most often: ' + list.map(e => `${e.name} (${e.raw}) {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`).join(', ') + '.';

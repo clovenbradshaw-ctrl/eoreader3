@@ -450,6 +450,7 @@ button { font-family: inherit; cursor: pointer; }
 .explore-on .prose .ent.person { background: rgba(42,111,219,.10); border-bottom-color: rgba(42,111,219,.4); }
 .explore-on .prose .ent.place  { background: rgba(31,138,91,.10); border-bottom-color: rgba(31,138,91,.4); }
 .explore-on .prose .ent.org    { background: rgba(138,106,22,.12); border-bottom-color: rgba(138,106,22,.4); }
+.explore-on .prose .ent.thing  { background: rgba(107,114,128,.10); border-bottom-color: rgba(107,114,128,.4); }
 .explore-on .prose .ent:hover  { background: var(--accent-tint-2); }
 
 /* sentence x-ray rail (explore) */
@@ -697,6 +698,7 @@ table.grid .member td:first-child { padding-left: 30px; }
 .phase-tag.person { color: var(--accent); background: var(--accent-tint); border-color: var(--accent-tint-2); }
 .phase-tag.place  { color: var(--good-fg); background: var(--good-bg); border-color: var(--good-bd); }
 .phase-tag.org    { color: var(--warn-fg); background: var(--warn-bg); border-color: var(--warn-bd); }
+.phase-tag.thing  { color: var(--text-2); background: var(--bg-subtle); border-color: var(--border); }
 
 /* ============================================================ RULES DRAWER EXTRAS */
 .layer-tag.live { color: var(--evidence); border-color: var(--evidence-tint-2); background: var(--evidence-tint); }
@@ -938,6 +940,7 @@ table.grid .member td:first-child { padding-left: 30px; }
 .graph-tag.person { background: var(--accent-tint); color: var(--accent); }
 .graph-tag.place { background: var(--good-bg); color: var(--good-fg); }
 .graph-tag.org { background: var(--warn-bg); color: var(--warn-fg); }
+.graph-tag.thing { background: var(--bg-subtle); color: var(--text-2); }
 .graph-ent-name { font-weight: 500; }
 .graph-ent-n { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); }
 .graph-edge { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
