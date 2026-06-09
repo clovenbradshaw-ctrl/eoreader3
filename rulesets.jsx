@@ -131,13 +131,117 @@ function AuthorPanel({ onImport, onToast }) {
   );
 }
 
-function RulesDrawer({ rules, onToggle, onInstall, onImport, onClose, onToast }) {
-  const [tab, setTab] = React.useState('installed');
+/* Tier 1 — the medium: the four binding-laws (the layer ladder) and their
+   read-only constants. Physics you read, not rules you toggle. */
+function MediumLaws({ rules }) {
+  const byId = Object.fromEntries(rules.map(r => [r.id, r]));
+  const params = (window.MEDIUM_PARAM_IDS || []).map(id => byId[id]).filter(Boolean);
+  return (
+    <div className="tier">
+      <div className="tier-head">
+        <div className="rule-group-label">The medium · laws</div>
+        <p className="tier-sub">The physics of reading — four binding-laws, language-independent and always on. The same for English, Mandarin, and JavaScript. You read them; you don’t toggle them.</p>
+      </div>
+      <div className="laws">
+        {(window.MEDIUM_LAWS || []).map((law, i) => (
+          <div key={i} className="law">
+            <div className="law-glyph">{law.glyph}</div>
+            <div className="law-body">
+              <div className="law-name">{law.name}<span className={'phase-tag ' + (law.layer === 'existence' ? 'place' : law.layer === 'structure' ? 'person' : 'org')}>{law.layer}</span></div>
+              <div className="law-desc">{law.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {params.length > 0 && (
+        <details className="medium-params">
+          <summary>Constants — read live at projection, never editable as a document’s data</summary>
+          <div className="params">
+            {params.map(p => (
+              <div key={p.id} className="param">
+                <span className="param-glyph">{p.glyph}</span>
+                <span className="param-name">{p.name}</span>
+                <span className="param-val">{p.value != null ? String(p.value) : '—'}</span>
+                <span className="param-desc">{p.desc}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/* The two-state reading mode for a language: Original (frozen, shipped-only)
+   vs Self-learning (adaptive — the shipped behavior). */
+function ModeToggle({ mode, disabled, onSet }) {
+  const opt = (val, label, title) => (
+    <button type="button" className={'mode-opt' + ((mode === 'original' ? 'original' : 'learning') === val ? ' on' : '')}
+      disabled={disabled} title={title} aria-pressed={(mode === 'original' ? 'original' : 'learning') === val}
+      onClick={() => !disabled && onSet(val)}>{label}</button>
+  );
+  return (
+    <div className={'mode-toggle' + (disabled ? ' disabled' : '')} role="group" aria-label="Reading mode">
+      {opt('original', 'Original', 'Frozen: only shipped tokens, no induction. The same reading every session.')}
+      {opt('learning', 'Self-learning', 'Adaptive: induces conventions from each document and accrues confidence. The shipped behavior.')}
+    </div>
+  );
+}
+
+/* Tier 2 — one card per language ruleset: enable toggle, Original/Self-learning
+   mode, and an advanced view folding in the shared narrative parsing rules. */
+function LanguageCard({ entry, rules, mode, learnedCount, onToggle, onInstall, onSetMode }) {
+  const [open, setOpen] = React.useState(false);
+  const rule = rules.find(r => r.id === entry.ruleId);
+  if (!rule) return null;
+  const enabled = rule.installed && rule.enabled;
+  const shared = (entry.induces ? (window.LANG_SHARED_PARSING || []) : []).map(id => rules.find(r => r.id === id)).filter(Boolean);
+  return (
+    <div className={'lang-card' + (enabled ? ' on' : '') + (rule.installed ? '' : ' avail')}>
+      <div className="lang-row">
+        <div className="ric lang-glyph">{entry.glyph}</div>
+        <div className="lang-main">
+          <div className="lang-name">{entry.name}
+            {!rule.installed && <span className="layer-tag" title="Not installed yet">available</span>}
+            {entry.induces && enabled && mode === 'original' && <span className="layer-tag" title="Frozen to its shipped baseline">original</span>}
+          </div>
+          <div className="lang-conv">{entry.conventions}</div>
+        </div>
+        <div className="rule-side">
+          {rule.installed
+            ? <button className={'switch' + (rule.enabled ? ' on' : '')} disabled={rule.locked} onClick={() => onToggle(rule.id)} aria-label={'Enable ' + entry.name} />
+            : <button className="install-btn" onClick={() => onInstall(rule.id)}>Install</button>}
+        </div>
+      </div>
+      <div className="lang-mode-row">
+        {entry.induces
+          ? <ModeToggle mode={mode} disabled={!enabled} onSet={(m) => onSetMode(entry.lang, m)} />
+          : <span className="lang-det" title="No speech-verb induction on this reader — it reads the same either way">deterministic · nothing to learn</span>}
+        {entry.induces && enabled && mode !== 'original' && learnedCount > 0 &&
+          <span className="lang-learned">learned {learnedCount} verb{learnedCount === 1 ? '' : 's'} so far</span>}
+        <button className="adv-link" onClick={() => setOpen(o => !o)}>{open ? 'hide advanced' : 'advanced'}</button>
+      </div>
+      {open && (
+        <div className="lang-adv">
+          <div className="lang-adv-conv">The per-rule granularity lives in the ledger; the card is the bundle. This ruleset governs: {entry.conventions}.</div>
+          {shared.length > 0 && (
+            <div className="lang-adv-rules">
+              <div className="rule-group-label">Shared narrative parsing</div>
+              {shared.map(r => <RuleCard key={r.id} rule={r} onToggle={onToggle} onInstall={onInstall} />)}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RulesDrawer({ rules, langModes, learnedByLang, onToggle, onInstall, onSetLangMode, onImport, onClose, onToast }) {
+  const [tab, setTab] = React.useState('rules');
   const [jsonView, setJsonView] = React.useState(false);
-  const groups = window.RULE_GROUPS;
-  const visible = rules.filter(r => tab === 'installed' ? r.installed : !r.installed);
+  const byId = Object.fromEntries(rules.map(r => [r.id, r]));
+  const grounding = (window.GROUNDING_IDS || []).map(id => byId[id]).filter(Boolean);
   const enabledCount = rules.filter(r => r.installed && r.enabled).length;
-  const availCount = rules.filter(r => !r.installed).length;
   const exportObj = buildExport(rules);
   const dialogRef = window.useDialog(onClose);
 
@@ -150,15 +254,14 @@ function RulesDrawer({ rules, onToggle, onInstall, onImport, onClose, onToast })
             <h2>Rules</h2>
             <button className="x" onClick={onClose} aria-label="Close rules"><Icon name="x" size={18} /></button>
           </div>
-          <p>Every rule Cleon applies — how it finds names, attributes speech, retrieves, and checks its own answers. The model only phrases what these rules decide. Install, remove, or switch any off; the locked ones are constants of the medium. All of it is auditable and exportable as JSON.</p>
+          <p>Three layers. The <b>medium</b> is the physics — laws you read but can’t break. The <b>language rulesets</b> plug in and out: pick a language and a mode, Original or Self-learning. <b>Grounding</b> is how answers are cited and audited. The model only phrases what these decide; all of it is auditable and exportable as JSON.</p>
         </div>
 
         <div className="drawer-tabs">
-          <button className={'drawer-tab' + (tab === 'installed' ? ' on' : '')} onClick={() => setTab('installed')}>Installed · {enabledCount} on</button>
-          <button className={'drawer-tab' + (tab === 'available' ? ' on' : '')} onClick={() => setTab('available')}>Available{availCount ? ' · ' + availCount : ''}</button>
+          <button className={'drawer-tab' + (tab === 'rules' ? ' on' : '')} onClick={() => setTab('rules')}>Rules · {enabledCount} on</button>
           <button className={'drawer-tab' + (tab === 'author' ? ' on' : '')} onClick={() => setTab('author')}>Author / Import</button>
           <div style={{ flex: 1 }} />
-          {tab !== 'author' && (
+          {tab === 'rules' && (
             <div className="drawer-tools">
               <button className={'mini-btn' + (jsonView ? ' on' : '')} onClick={() => setJsonView(v => !v)} title="View as JSON"><Icon name="grid" size={13} /> JSON</button>
               <button className="mini-btn" onClick={() => { copyText(JSON.stringify(exportObj, null, 2)); onToast('Ruleset JSON copied'); }} title="Copy JSON"><Icon name="copy" size={13} /></button>
@@ -172,17 +275,34 @@ function RulesDrawer({ rules, onToggle, onInstall, onImport, onClose, onToast })
             ? <AuthorPanel onImport={onImport} onToast={onToast} />
             : jsonView
               ? <pre className="ruleset-json">{JSON.stringify(exportObj, null, 2)}</pre>
-              : groups.map(g => {
-                  const items = visible.filter(r => r.group === g);
-                  if (!items.length) return null;
-                  return (
-                    <div key={g}>
-                      <div className="rule-group-label">{g}</div>
-                      {items.map(r => <RuleCard key={r.id} rule={r} onToggle={onToggle} onInstall={onInstall} />)}
+              : (
+                <React.Fragment>
+                  <MediumLaws rules={rules} />
+
+                  <div className="tier">
+                    <div className="tier-head">
+                      <div className="rule-group-label">Language rulesets · the ruliad</div>
+                      <p className="tier-sub">Surface conventions that plug in and out. Each law above reads its labels from the active language — “same sign repels” is a law; which token is “she” is a ruleset. Pick a language and a mode.</p>
                     </div>
-                  );
-                })}
-          {tab !== 'author' && !jsonView && !visible.length && <div className="empty-doc" style={{ padding: 40 }}>Nothing here yet.</div>}
+                    {(window.LANGUAGES || []).map(entry => (
+                      <LanguageCard key={entry.lang} entry={entry} rules={rules}
+                        mode={(langModes && langModes[entry.lang]) || 'learning'}
+                        learnedCount={(learnedByLang && learnedByLang[entry.lang]) || 0}
+                        onToggle={onToggle} onInstall={onInstall} onSetMode={onSetLangMode} />
+                    ))}
+                  </div>
+
+                  <div className="tier">
+                    <div className="tier-head">
+                      <div className="rule-group-label">Grounding · how answers are checked</div>
+                      <p className="tier-sub">Cross-cutting, language-independent QA: how a claim is cited, paraphrase-checked, and audited. Not a language convention — its own layer.</p>
+                    </div>
+                    {grounding.length
+                      ? grounding.map(r => <RuleCard key={r.id} rule={r} onToggle={onToggle} onInstall={onInstall} />)
+                      : <div className="empty-doc" style={{ padding: 20 }}>No grounding rules.</div>}
+                  </div>
+                </React.Fragment>
+              )}
         </div>
       </div>
     </div>
@@ -241,4 +361,4 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
   );
 }
 
-Object.assign(window, { RulesDrawer, ModelPopover, buildExport, ruleJSON });
+Object.assign(window, { RulesDrawer, ModelPopover, buildExport, ruleJSON, MediumLaws, LanguageCard, ModeToggle });

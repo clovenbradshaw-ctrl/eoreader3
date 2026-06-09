@@ -99,6 +99,9 @@ function App() {
   const [busy, setBusy] = useState(false);
 
   const [rules, setRules] = useState(window.RULESETS.map(r => ({ ...r })));
+  // Per-language reading mode: { en:'original'|'learning', … }. Empty/missing
+  // means Self-learning (the shipped, adaptive behavior). Persisted with prefs.
+  const [langModes, setLangModes] = useState({});
   const [rulesOpen, setRulesOpen] = useState(false);
   // Auditing mode: a glass box over the chat pipeline (window.EOAudit), inspected
   // in a drawer and exportable as JSONL. Recording is on by default.
@@ -161,6 +164,10 @@ function App() {
   useEffect(() => {
     window.EO_RULES = rules;
     if (window.EOEngine && window.EOEngine.applyRules) window.EOEngine.applyRules(rules);
+    // Push per-language modes too: Original freezes a language to its shipped
+    // baseline. Like extraction rules, this is a parse-time decision, so the
+    // re-parse below makes a mode flip take effect on already-open documents.
+    if (window.EOEngine && window.EOEngine.setLanguageModes) window.EOEngine.setLanguageModes(langModes);
     if (firstRules.current) { firstRules.current = false; return; } // no docs at mount
     // Hydration restored these toggles; the restored docs already reflect them,
     // so push the rules to the engine (above) but skip the re-parse. (§3)
@@ -187,7 +194,7 @@ function App() {
       }
       if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
     })();
-  }, [rules]);
+  }, [rules, langModes]);
 
   // ---- local persistence (§3): rehydrate on load, then save on change. ----
   // Documents, the running chat, rule toggles, UI prefs, and the engine's
@@ -221,6 +228,9 @@ function App() {
         if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
         if (typeof prefs.exportIngestion === 'boolean') setExportIngestion(prefs.exportIngestion);
         if (typeof prefs.exportOutput === 'boolean') setExportOutput(prefs.exportOutput);
+        // Restored docs were parsed under the saved modes, so suppress the
+        // re-parse the same way rule toggles do (batched into one render).
+        if (prefs.langModes && typeof prefs.langModes === 'object') { suppressReparse.current = true; setLangModes(prefs.langModes); }
       }
 
       let savedDocs = [], savedChat = null, savedAudit = [];
@@ -259,8 +269,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput });
-  }, [rules, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput });
+  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -815,6 +825,7 @@ function App() {
 
   // ---- rules ----
   const toggleRule = (id) => setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
+  const setLangMode = (lang, mode) => setLangModes(m => (m[lang] === mode ? m : { ...m, [lang]: mode }));
   const installRule = (id) => {
     setRules(rs => rs.map(r => r.id === id ? { ...r, installed: !r.installed, enabled: !r.installed } : r));
     const r = rules.find(x => x.id === id); showToast(r.installed ? r.name + ' removed' : r.name + ' installed and enabled');
@@ -927,7 +938,9 @@ function App() {
         </div>
       </main>
 
-      {rulesOpen && <RulesDrawer rules={rules} onToggle={toggleRule} onInstall={installRule} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
+      {rulesOpen && <RulesDrawer rules={rules} langModes={langModes}
+        learnedByLang={window.EOEngine && window.EOEngine.learnedVerbsByLang ? window.EOEngine.learnedVerbsByLang() : {}}
+        onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
