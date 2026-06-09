@@ -17,6 +17,7 @@ function fmtTime(iso) {
 function stripForView(s) {
   return String(s == null ? '' : s)
     .replace(/\{\{cite:([^}]*)\}\}/g, (m, b) => { const p = b.split(':'); return p[2] ? ' [' + p[2] + ']' : ''; })
+    .replace(/\{\{infer:([^}]*)\}\}/g, (m, b) => { const p = b.split(':'); return p[2] ? ' ⟦' + p[2] + '⟧' : ''; })
     .replace(/\{\{void:([^}]*)\}\}/g, '⟨$1⟩')
     .replace(/\s+([.,;:])/g, '$1')
     .trim();
@@ -109,6 +110,11 @@ function AuditStep({ s }) {
   if (s.t === 'associate') return (
     <Line label="associate" kind="retrieve">
       <span className="aud-dim">{(s.from || []).join('+')} ⇝ {s.to} · coupling {s.coupling}{s.sim != null ? ' · sim ' + s.sim : ''} · {s.clearedDelta ? <b>cleared δ</b> : 'inert'}</span>
+    </Line>
+  );
+  if (s.t === 'infer') return (
+    <Line label="infer" kind="referents">
+      <span className="aud-dim">floor {s.floor} · reader-added connection:</span> {(s.pairs || []).map((p, i) => <span key={i}>{i ? ', ' : ' '}<span className="aud-cite">s{p.a}</span>+<span className="aud-cite">s{p.b}</span></span>)}
     </Line>
   );
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;

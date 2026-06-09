@@ -3887,6 +3887,29 @@ function projectGraph(events, frame = {}) {
     return out;
   }
 
+  /* Phase 4: the inference void — the {{void}} mechanism inverted. Where {{void}}
+     marks what the page LACKED, {{infer}} marks what the READER ADDED: a claim the
+     answer phrased by connecting two cited spans the page never connects (an
+     associative link from Phase 3 that cleared infer_bind_floor). Given a bound
+     answer (carrying {{cite:docId:idx:sN}} markers) and candidate pairs {docId,a,b},
+     for each pair whose BOTH ends are cited it rewrites the citation to the
+     inferred-to span `b` into {{infer:docId:a+b:sA+sB}} — the third epistemic
+     status, between grounded and held. Returns the marked text and which pairs
+     were actually marked. A pair with only one end cited is not an inference. */
+  function markInferred(text, pairs) {
+    let out = String(text == null ? '' : text);
+    const marked = [];
+    for (const p of (pairs || [])) {
+      if (!p || p.a == null || p.b == null) continue;
+      const docId = p.docId || '';
+      if (!out.includes(`{{cite:${docId}:${p.a}:`) || !out.includes(`{{cite:${docId}:${p.b}:`)) continue;
+      const reB = new RegExp('\\{\\{cite:' + escRe(docId) + ':' + p.b + ':[^}]*\\}\\}');
+      const next = out.replace(reB, `{{infer:${docId}:${p.a}+${p.b}:s${p.a}+s${p.b}}}`);
+      if (next !== out) { out = next; marked.push({ docId, a: p.a, b: p.b }); }
+    }
+    return { text: out, inferred: marked };
+  }
+
   /* ============================================================ INTENT */
   function classifyIntent(q) {
     const t = ' ' + String(q).toLowerCase().replace(/[’']/g, "'") + ' ';
@@ -4784,6 +4807,8 @@ function projectGraph(events, frame = {}) {
     coverage, coverageGaps,
     // the embedder as a wandering reader: associative, δ-gated neighbors (no-op without an embedder)
     associativeNeighbors,
+    // the inference void: mark what the reader ADDED across two cited spans
+    markInferred,
     // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
     // and the transmuting-DEF classifier (the significance-layer "weak" law)
     layerLadder, isTransmutingDef,

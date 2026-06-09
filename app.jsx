@@ -103,6 +103,8 @@ function App() {
   const [depth, setDepth] = useState(1);
   const depthRef = useRef(1); depthRef.current = depth;
   const turnBudgetRef = useRef(null);
+  // This turn's associative links (Phase 3) — read by the inference void (Phase 4).
+  const turnAssocRef = useRef([]);
   const [busy, setBusy] = useState(false);
 
   const [rules, setRules] = useState(window.RULESETS.map(r => ({ ...r })));
@@ -549,7 +551,7 @@ function App() {
   const patchLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch }; return c; });
 
   // strip citation/void markup so prior turns read as plain text in history
-  const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
+  const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void|infer):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
   // the running conversation, as plain {role, content} turns for the model
   const historyFor = () => messages
     .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.typing && !m.loading && m.text)
@@ -651,12 +653,38 @@ function App() {
       const kept = (neigh || []).filter(n => n.clearedDelta);
       if (!kept.length) return ctx;
       const from = srcSpans.slice(0, 3).map(i => 's' + i);
+      const links = [];
       for (const n of kept) {
         try { E.conversationField && E.conversationField.deposit({ sentences: [{ docId: prim.id, idx: n.i }] }, budget.assocCoupling); } catch (e) {}
         AUD('step', 'associate', { from, to: 's' + n.i, coupling: budget.assocCoupling, sim: n.sim, clearedDelta: true });
+        links.push({ docId: prim.id, from: srcSpans.slice(0, 3), to: n.i, sim: n.sim });
       }
+      turnAssocRef.current = links;                       // hand the links to the inference void (Phase 4)
       return ctx + '\n' + kept.map(n => `[${prim.id}:${n.i}] ${n.t}`).join('\n');
     } catch (e) { eoWarn('associate', e); return ctx; }
+  };
+
+  // Phase 4: the inference void. If a model answer cited BOTH ends of an
+  // associative link (Phase 3) that cleared the inference floor, the connecting
+  // claim was the reader's inference, not the page's statement — mark it
+  // {{infer:…}} and badge the answer `inferred` (a third status between grounded
+  // and held). Gated by the inference-void rule + a finite floor (deepest depth)
+  // + links present, so it never fires at the floor or without an embedder.
+  const inferRuleOn = () => rules.some(r => r.id === 'inference-void' && r.installed && r.enabled);
+  const markInferences = (res, budget) => {
+    const E = window.EOEngine;
+    if (!E || !E.markInferred || !res || !budget || !isFinite(budget.inferBindFloor) || !inferRuleOn()) return res;
+    const links = turnAssocRef.current || [];
+    if (!links.length) return res;
+    const pairs = [];
+    for (const lk of links) { if (lk.sim >= budget.inferBindFloor) for (const a of (lk.from || [])) pairs.push({ docId: lk.docId, a, b: lk.to }); }
+    if (!pairs.length) return res;
+    let marked; try { marked = E.markInferred(res.text, pairs); } catch (e) { return res; }
+    if (!marked.inferred.length) return res;
+    const label = marked.inferred.map(p => '[s' + p.a + '] and [s' + p.b + ']').join(', ');
+    AUD('step', 'infer', { pairs: marked.inferred, floor: budget.inferBindFloor });
+    return { ...res, text: marked.text, audit: { ...res.audit, status: 'inferred',
+      note: 'Inferred via association between ' + label + ' — the field linked them, the page never stated the connection.' } };
   };
 
   const runMechanicalScope = (scope, q) => {
@@ -756,6 +784,9 @@ function App() {
       });
       full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
       const settle = (res, decision) => {
+        // Only a model-phrased answer can carry an inference void; a mechanical
+        // fallback states only what the page does.
+        if (decision && decision.indexOf('model') === 0) res = markInferences(res, budget);
         replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
         depositSettled(scope, q, res.cites);
@@ -846,6 +877,7 @@ function App() {
     // this turn deposits into it — recent topics stay warm, dropped ones cool.
     const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(depth) : null;
     turnBudgetRef.current = budget;
+    turnAssocRef.current = [];
     try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.decayTurn(); }
     catch (e) { eoWarn('field decay', e); }
 

@@ -1,5 +1,5 @@
 /* ============================================================ Chat pane ==== */
-const CITE_RE = /\{\{(cite|void):([^}]*)\}\}/g;
+const CITE_RE = /\{\{(cite|void|infer):([^}]*)\}\}/g;
 
 function renderAnswer(text, onCite) {
   return String(text).split('\n\n').map((block, bi) => {
@@ -10,6 +10,14 @@ function renderAnswer(text, onCite) {
         const [docId, idx, label] = m[2].split(':');
         parts.push(<button key={m.index} type="button" className="cite" title={'Jump to ' + label + ' in the document'}
           onClick={() => onCite(docId, parseInt(idx, 10))}>{label}</button>);
+      } else if (m[1] === 'infer') {
+        // The inference void: a claim the reader phrased across two cited spans the
+        // page never connects. A third chip, between grounded and held.
+        const [docId, pair, label] = m[2].split(':');
+        const b = parseInt(String(pair || '').split('+')[1], 10);
+        parts.push(<button key={m.index} type="button" className="cite infer"
+          title="Inferred — the field linked these spans; the page never states the connection outright"
+          onClick={() => onCite(docId, b)}>{label}</button>);
       } else {
         parts.push(<span key={m.index} className="cite void" title="This term appears nowhere in the sources">{m[2]}</span>);
       }
@@ -49,10 +57,12 @@ function AuditBadge({ audit }) {
   }
   const Seg = ({ ok, children }) => <span className="seg"><span className={ok ? 'ok' : 'no'}>{ok ? '✓' : '–'}</span>{children}</span>;
   const full = audit.covers && audit.covers.split('/')[0] === audit.covers.split('/')[1];
+  const inferred = audit.status === 'inferred' || (audit.inferred && audit.inferred.length);
   return (
     <div>
       <div className="audit">
         <span className={'audit-chip ' + audit.status}>
+          {inferred && <React.Fragment><span className="seg"><span className="infer-mark">∴</span>inferred</span><span className="sep">·</span></React.Fragment>}
           <Seg ok={audit.grounded}>grounded</Seg><span className="sep">·</span>
           <Seg ok={full}>covers {audit.covers}</Seg><span className="sep">·</span>
           <Seg ok={audit.stable}>stable</Seg>
@@ -162,6 +172,10 @@ function narrateTurn(turn) {
         // Legible-that: the field linked these spans; the page never did.
         push('Followed an association to ' + s.to + ' — near in meaning, but a connection the page never spells out.');
         break;
+      case 'infer':
+        if (s.pairs && s.pairs.length)
+          push('Marked an inference: I connected ' + s.pairs.map(p => '[s' + p.a + '] and [s' + p.b + ']').join(', ') + ' — a link the field drew that the page never states. Badged inferred, not grounded.');
+        break;
       case 'error':
         push('Hit a problem' + (s.where ? ' (' + s.where + ')' : '') + ': ' + (s.message || 'unknown') + '.');
         break;
@@ -234,7 +248,7 @@ function Message({ msg, onCite }) {
           : <React.Fragment>{renderAnswer(msg.text, onCite)}<AuditBadge audit={msg.audit} /></React.Fragment>}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
-            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
+            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
             <button title="Good answer"><Icon name="thumbsup" size={15} /></button>
           </div>
         )}

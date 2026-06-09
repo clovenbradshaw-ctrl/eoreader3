@@ -443,6 +443,22 @@ group('associative wandering — no embedder degrades to nothing', () => {
   eq(assocNoSpans.length, 0, 'no source spans ⇒ nothing to wander from');
 });
 
+// The inference void: the {{void}} mechanism inverted. markInferred rewrites the
+// citation to the inferred-to span into {{infer}} only when BOTH ends are cited —
+// a one-ended pair is an ordinary citation, not a reader-added connection.
+group('inference void — mark what the reader added across two cited spans', () => {
+  const bound = 'Edith waited {{cite:voss:1:s1}} while the lamp burned {{cite:voss:6:s6}}.';
+  const res = E.markInferred(bound, [{ docId: 'voss', a: 1, b: 6 }]);
+  ok(/\{\{infer:voss:1\+6:s1\+s6\}\}/.test(res.text), 'the inferred-to span is rewritten as an {{infer}} marker');
+  ok(/\{\{cite:voss:1:s1\}\}/.test(res.text), 'the other end stays a plain citation');
+  eq(res.inferred.length, 1, 'one pair was marked');
+  eq(res.inferred[0].b, 6, 'the marked pair records the inferred-to span');
+  // both ends must be present
+  const oneEnd = E.markInferred('Only one span {{cite:voss:1:s1}} here.', [{ docId: 'voss', a: 1, b: 6 }]);
+  eq(oneEnd.inferred.length, 0, 'a pair with only one end cited is not an inference');
+  eq(oneEnd.text, 'Only one span {{cite:voss:1:s1}} here.', 'a non-inference leaves the text untouched');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

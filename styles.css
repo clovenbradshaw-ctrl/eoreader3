@@ -223,6 +223,11 @@ button { font-family: inherit; cursor: pointer; }
 .cite:focus-visible { outline: 2px solid var(--evidence); outline-offset: 1px; }
 .cite.void { color: var(--void-fg); background: var(--void-bg); }
 .cite.void:hover { border-color: var(--void-bd); }
+/* the inference void — a claim the reader added across two spans. A third chip,
+   distinct from a plain citation (the page) and a void (what the page lacked):
+   dashed, in the "thinking" violet, to read as reader-supplied. */
+.cite.infer { color: #6b4fa0; background: #f1edf8; border: 1px dashed #c7b8e6; }
+.cite.infer:hover { border-color: #6b4fa0; background: #e9e2f5; }
 
 /* audit badge */
 .audit { display: inline-flex; align-items: center; gap: 0; margin-top: 12px; }
@@ -242,6 +247,10 @@ button { font-family: inherit; cursor: pointer; }
    but explicitly NOT grounded. Amber like notes, dashed to read as "partial". */
 .audit-chip.held  { background: var(--warn-bg); border-color: var(--warn-bd); border-style: dashed; }
 .audit-chip.plain { background: var(--bg); border-color: var(--border); border-style: dashed; color: var(--text-3); }
+/* inferred: between grounded and held — the answer added a connection across two
+   cited spans the page never connects. Violet, dashed, with a ∴ lead. */
+.audit-chip.inferred { background: #f1edf8; border-color: #c7b8e6; border-style: dashed; }
+.audit-chip .infer-mark { color: #6b4fa0; font-weight: 700; }
 .audit-note { font-size: 12px; color: var(--text-3); margin-top: 7px; font-style: italic; }
 
 /* inline "thinking" disclosure — the glass box, narrated, under the answer */
