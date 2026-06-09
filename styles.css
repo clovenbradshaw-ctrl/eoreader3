@@ -358,6 +358,11 @@ button { font-family: inherit; cursor: pointer; }
 .mode-seg button.on.grounded { color: var(--evidence); }
 .mode-seg button.on.creative { color: #6b4fa0; }
 
+/* thinking-depth dial — the effort control, a second segment beside the mode.
+   Depth 1 (Reflex) is today's behavior; deeper stops tint warmer ("more effort"). */
+.depth-seg button.on.depth-deeper { color: #3a7ca5; }
+.depth-seg button.on.depth-deepest { color: #b5651d; }
+
 .composer-hint { text-align: center; font-size: 11.5px; color: var(--text-3); margin-top: 9px; }
 .composer-hint b { color: var(--text-2); font-weight: 600; }
 

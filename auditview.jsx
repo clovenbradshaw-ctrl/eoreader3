@@ -92,6 +92,17 @@ function AuditStep({ s }) {
       {s.reason && <span className="aud-dim"> · {s.reason}</span>}
     </Line>
   );
+  if (s.t === 'working-memory') return (
+    <Line label="working memory" kind="ground">
+      <span className="aud-dim">turn {s.turn} · depth {s.depth}{s.heatFloor != null ? ' · hot ≥ ' + s.heatFloor : ' · nothing hot (floor depth)'}</span>
+      <span> · <b>{s.hot}</b> hot · <b>{s.warm}</b> warm · <b>{s.cooled}</b> cooled</span>
+      {(s.carried && s.carried.length) ? (
+        <div className="aud-dim" style={{ marginTop: 2 }}>
+          {s.carried.map((c, i) => <span key={i}>{i ? ' · ' : ''}{c.label} <span className="aud-score">{c.band} {c.heat}</span></span>)}
+        </div>
+      ) : null}
+    </Line>
+  );
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }
@@ -128,6 +139,7 @@ function AuditTurn({ turn }) {
           <div className="aud-meta">
             <span>scope: {(turn.scope && turn.scope.length) ? turn.scope.map(s => s.name).join(', ') : '—'}</span>
             <span>model: {(turn.model && turn.model.name) || '—'}{turn.modelReady === false ? ' (not ready)' : ''}</span>
+            {turn.depth != null && <span>depth: {turn.depth}{turn.budget && turn.budget.maxSeekRounds > 1 ? ' · ≤' + turn.budget.maxSeekRounds + ' seek' : ''}{turn.budget && turn.budget.replan ? ' · replan' : ''}</span>}
             {turn.prevGrounded != null && <span>prevGrounded: {String(turn.prevGrounded)}</span>}
             <button className="audit-link" onClick={() => setJson(v => !v)}>{json ? 'timeline' : 'raw JSON'}</button>
           </div>

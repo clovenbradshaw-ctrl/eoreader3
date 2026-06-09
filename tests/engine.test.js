@@ -327,6 +327,58 @@ group('routing — cost-ordered bands (existence → structure → significance)
   ok(/^\[s\d+\] /.test(E.contextFromHits([voss], hyb.hits.slice(0, 1))), 'contextFromHits tags a single-doc span [sN]');
 });
 
+// The thinking-depth dial: level 1 is the parity floor (every knob inert =
+// today), and turning it up spends more. The budget is the only thing the
+// deeper-thinking paths read, so pinning the floor here pins parity above.
+group('thinking depth — the dial floor is today, deeper opens up', () => {
+  const b1 = E.thinkingBudget(1);
+  eq(b1.maxSeekRounds, 1, 'depth 1 → one seek round (today)');
+  eq(b1.seekNoveltyFloor, 1, 'depth 1 → novelty floor 1 (never continue)');
+  eq(b1.assocDelta, Infinity, 'depth 1 → no associative wander (δ=∞)');
+  eq(b1.assocCoupling, 0, 'depth 1 → wanderer does not press (coupling 0)');
+  eq(b1.wmHeatFloor, Infinity, 'depth 1 → nothing carried hot (∞ heat floor)');
+  eq(b1.inferBindFloor, Infinity, 'depth 1 → never infer');
+  eq(b1.replan, false, 'depth 1 → no reconsideration');
+  eq(E.thinkingBudget(0).maxSeekRounds, 1, 'an out-of-range depth clamps to the reflex floor');
+  const b3 = E.thinkingBudget(3);
+  ok(b3.maxSeekRounds > 1, 'deepest allows more than one seek round');
+  ok(isFinite(b3.assocDelta) && b3.assocCoupling > 0, 'deepest enables associative wander');
+  ok(isFinite(b3.wmHeatFloor), 'deepest gives working memory a finite heat floor');
+  ok(b3.replan, 'deepest allows reconsideration');
+  const r2 = E.thinkingBudget(2).maxSeekRounds;
+  ok(r2 >= b1.maxSeekRounds && r2 <= b3.maxSeekRounds, 'depth 2 sits between the floor and the deepest');
+});
+
+// The conversation field is chat-scoped working memory: deposited by settled
+// turns, decayed by the medium's own γ, holding pointers (never text), and
+// serializable so it can ride in the chat snapshot.
+group('conversation field — deposit / decay / snapshot / restore / reset', () => {
+  const F = E.conversationField;
+  F.reset();
+  eq(F.snapshot().entities.length, 0, 'field starts empty after reset');
+  eq(F.snapshot().turn, 0, 'turn counter starts at 0');
+  F.deposit({ entities: ['Edith', 'the boat'], sentences: [{ docId: 'voss', idx: 2 }] }, 1);
+  F.deposit({ entities: ['Edith'] }, 1);
+  let snap = F.snapshot();
+  eq(snap.entities[0].label, 'Edith', 'the twice-deposited entity is hottest');
+  eq(snap.entities[0].heat, 2, 'repeat deposits accumulate heat');
+  eq(snap.sentences.length, 1, 'a cited sentence is tracked as a pointer');
+  eq(snap.sentences[0].docId, 'voss', 'the sentence pointer carries its docId');
+  ok(!('t' in snap.sentences[0]) && !('text' in snap.sentences[0]), 'the field holds no document text, only pointers');
+  const before = snap.entities[0].heat;
+  F.decayTurn();
+  snap = F.snapshot();
+  eq(snap.turn, 1, 'decayTurn advances the conversational clock');
+  ok(snap.entities[0].heat < before, 'heat cools after a turn');
+  const saved = F.snapshot();
+  F.reset();
+  eq(F.snapshot().entities.length, 0, 'reset clears the field');
+  F.restore(saved);
+  eq(F.snapshot().entities.length, saved.entities.length, 'restore rebuilds the carried entities');
+  eq(F.snapshot().turn, saved.turn, 'restore rebuilds the turn counter');
+  F.reset();
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }
