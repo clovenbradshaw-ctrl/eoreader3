@@ -55,8 +55,9 @@ function AuditStep({ s }) {
     </Line>
   );
   if (s.t === 'retrieve') return (
-    <Line label="retrieve" kind="retrieve">
-      <div className="aud-dim">k={s.k}{s.task ? ' · ' + s.task : ''} · {(s.hits || []).length} hits{s.engine ? ' · ' + s.engine : ''}</div>
+    <Line label={s.round ? 'seek ·' + s.round : 'retrieve'} kind="retrieve">
+      <div className="aud-dim">k={s.k}{s.task ? ' · ' + s.task : ''} · {(s.hits || []).length} hits{s.engine ? ' · ' + s.engine : ''}{s.round ? ' · round ' + s.round : ''}{s.novelty != null ? ' · novelty ' + s.novelty : ''}{s.covered ? ' · covers ' + s.covered : ''}</div>
+      {s.subquery ? <div className="aud-dim">⟲ sought: {s.subquery}</div> : null}
       {(s.hits || []).map((h, i) => (
         <div key={i} className="aud-hit"><b className="aud-score">{h.score}</b><span className="aud-cite">s{h.idx}</span><span className="aud-hit-t">{h.text}</span></div>
       ))}

@@ -107,7 +107,12 @@ function narrateTurn(turn) {
         break;
       case 'retrieve': {
         const n = s.hits ? s.hits.length : s.k;
-        push('Pulled the ' + n + ' most relevant passage' + (n === 1 ? '' : 's') + '.');
+        if (s.round && s.round > 1) {
+          const sub = (s.subquery || '').trim();
+          push('Still hadn’t covered ' + (sub ? '“' + sub + '”' : 'part of the question') + ', so I sought again' + (s.newHits ? ' and found ' + s.newHits + ' more passage' + (s.newHits === 1 ? '' : 's') : '') + '.');
+        } else {
+          push('Pulled the ' + n + ' most relevant passage' + (n === 1 ? '' : 's') + '.');
+        }
         break;
       }
       case 'escalate':

@@ -3813,6 +3813,16 @@ function projectGraph(events, frame = {}) {
     const hit = qt.filter(t => st.has(t)).length;
     return { n: hit, d: qt.length };
   }
+  // coverage, but it also says WHICH query content-clusters the support leaves
+  // uncovered — the gap an iterative-seeking round aims its next sub-query at.
+  // Same tokenization as coverage(), so n/d agree; the split is the addition.
+  function coverageGaps(query, supportText) {
+    const qt = [...new Set(tok(query))];
+    const st = new Set(tok(supportText));
+    const covered = [], uncovered = [];
+    for (const t of qt) (st.has(t) ? covered : uncovered).push(t);
+    return { n: covered.length, d: qt.length || 1, covered, uncovered };
+  }
   // ── Anti-matter referents ───────────────────────────────────────────────
   // A REFERENT is a name the query points at. It has MATTER when the page
   // carries it, and ANTI-MATTER when it doesn't: referenced, but with no
@@ -4719,6 +4729,8 @@ function projectGraph(events, frame = {}) {
     // thinking depth: the effort dial's per-turn budget + the conversation field
     // (working memory) it spends across. Inert at depth 1 (parity floor).
     thinkingBudget, conversationField, buildWorkingMemory, recallByHeat,
+    // iterative seeking: coverage + which query clusters a retrieval leaves uncovered
+    coverage, coverageGaps,
     // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
     // and the transmuting-DEF classifier (the significance-layer "weak" law)
     layerLadder, isTransmutingDef,

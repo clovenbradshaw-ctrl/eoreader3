@@ -415,6 +415,21 @@ group('recall by heat — a cooled carried sentence comes back', () => {
   F.reset();
 });
 
+// coverageGaps augments coverage: same n/d, plus WHICH query clusters the support
+// leaves uncovered — the aim point for an iterative-seeking sub-query.
+group('coverage gaps — which query clusters are uncovered', () => {
+  const support = 'Edith set the kettle down and listened.';
+  const cg = E.coverageGaps('what did Edith carry to the lantern', support);
+  const cov = E.coverage('what did Edith carry to the lantern', support);
+  eq(cg.n, cov.n, 'coverageGaps agrees with coverage on the covered count');
+  eq(cg.d, cov.d, 'coverageGaps agrees with coverage on the total count');
+  ok(cg.covered.includes('edith'), 'a covered content token is reported as covered');
+  ok(cg.uncovered.includes('lantern') && cg.uncovered.includes('carry'), 'absent content tokens are reported as uncovered');
+  eq(cg.covered.length + cg.uncovered.length, cg.d, 'covered + uncovered partition the query clusters');
+  const full = E.coverageGaps('Edith kettle', 'Edith set the kettle down');
+  eq(full.uncovered.length, 0, 'a fully-covered query leaves no gaps');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

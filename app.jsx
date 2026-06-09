@@ -599,6 +599,41 @@ function App() {
     return wm;
   };
 
+  // Iterative seeking (depth > 1): after the base retrieval, keep sub-querying on
+  // the query clusters the support hasn't covered yet — bounded by the budget's
+  // max seek rounds, and stopping early when a round's novelty falls below the
+  // floor (delta by another name: keep going only while the pull is real). Each
+  // extra round is its own numbered `retrieve` audit step. At the floor this is
+  // never reached (maxSeekRounds 1); the caller uses today's contextScope.
+  const seekContext = (scope, q, budget) => {
+    const E = window.EOEngine, k = 6, r4 = (x) => Math.round((x || 0) * 1e4) / 1e4;
+    const chosen = new Map();
+    const add = (hs) => { for (const h of (hs || [])) { const key = h.docId + ':' + h.i; if (!chosen.has(key)) chosen.set(key, h); } };
+    try { add(E.retrieveScope(scope, q, k)); } catch (e) { eoWarn('seek base', e); }
+    // Round 1 is already recorded by the caller's model-context retrieve step.
+    let matter = []; try { matter = (E.referentsScope(scope, q) || {}).matter || []; } catch (e) {}
+    const support = () => [...chosen.values()].map(h => h.t).join(' ');
+    let gaps = E.coverageGaps(q, support());
+    let prevN = gaps.n;
+    for (let r = 2; r <= budget.maxSeekRounds; r++) {
+      if (!gaps.uncovered.length) break;                         // fully covered — nothing left to seek
+      const subq = gaps.uncovered.concat(matter).join(' ');
+      let more = []; try { more = E.retrieveScope(scope, subq, k); } catch (e) { break; }
+      const before = chosen.size;
+      add(more);
+      const g2 = E.coverageGaps(q, support());
+      const novelty = r4((g2.n - prevN) / (gaps.d || 1));        // fraction of NEW query terms this round covered
+      AUD('step', 'retrieve', { round: r, k, engine: 'seek', subquery: subq, novelty,
+        covered: g2.n + '/' + g2.d, newHits: chosen.size - before,
+        hits: (more || []).slice(0, 6).map(h => ({ docId: h.docId, idx: h.i, score: r4(h.score), text: h.t })) });
+      prevN = g2.n; gaps = g2;
+      if (chosen.size === before) break;                         // nothing new came back
+      if (novelty < budget.seekNoveltyFloor) break;              // the pull is too weak to justify another round
+    }
+    const top = [...chosen.values()].sort((a, b) => b.score - a.score).slice(0, 10);
+    try { return E.contextFromHits(scope, top); } catch (e) { return E.contextScope(scope, q, k); }
+  };
+
   const runMechanicalScope = (scope, q) => {
     // Capture the deterministic basis of the answer for the trace: intent, the
     // matter/anti-matter referents, and the scored retrieval hits.
@@ -670,10 +705,15 @@ function App() {
     const grounded = hasSemantic || perDocGround.some(d => d.has);
     AUD('step', 'ground', { hasGround: grounded, perDoc: perDocGround, viaSemantic: hasSemantic });
     if (!grounded) { AUD('step', 'route', { detour: 'no-ground → mechanical' }); runMechanicalScope(scope, q); return; }
-    // Context: semantically-recovered spans if we have them, else the lexical scope context.
+    // Context: semantically-recovered spans if we have them, else the lexical
+    // scope context — but above the dial's floor, a factual ask iteratively seeks
+    // the parts of the question its first retrieval didn't cover (Phase 2). At the
+    // floor (maxSeekRounds 1) and for summaries/semantic recall, this is untouched.
+    const budget = turnBudgetRef.current;
+    const useSeek = !!(budget && budget.maxSeekRounds > 1 && !hasSemantic && intent !== 'summary');
     const ctx = hasSemantic
       ? window.EOEngine.contextFromHits(scope, semanticHits)
-      : window.EOEngine.contextScope(scope, q, 6);
+      : (useSeek ? seekContext(scope, q, budget) : window.EOEngine.contextScope(scope, q, 6));
     const task = intent === 'summary' ? 'summary' : 'answer';
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
     // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
