@@ -52,6 +52,20 @@ const DISCOURSE_JUNK = new Set([
   'not','almost','because','while','since','although','though',
 ]);
 
+// Discourse words an ANSWER opens with ("Yes, Amos Dresser is…", "Indeed, …").
+// The veto's cap-harvest reads them as proper-noun candidates, and a correct
+// confirmation gets its "Yes" struck through as an unverified term — the badge
+// punishing the answer for a word about the answer, not a claim about the page.
+// Checked only in the draft-side veto (inventedTerms), never in entity
+// admission, so extraction physics are untouched.
+const ANSWER_DISCOURSE = new Set([
+  'yes','yeah','indeed','certainly','sure','absolutely','exactly','correct','agreed',
+  'unfortunately','additionally','finally','similarly','specifically','notably',
+  'importantly','overall','instead','otherwise','nevertheless','nonetheless',
+  'accordingly','consequently','thus','hence','besides','actually','generally',
+  'typically','usually','ultimately','alternatively','likewise','regardless',
+]);
+
 // Document apparatus / OCR section labels. These show up capitalized and
 // repeated in scanned or structured prose ("Figure 4", "Appendix B", "Note:",
 // "Digitization sponsored by … Foundation") and compromise hands them back as
@@ -3806,8 +3820,10 @@ function projectGraph(events, frame = {}) {
      here from applyRules so it stays tunable/exportable — never a magic number.
      A rule's `value` is its CEILING (the value at the deepest stop); depth scales
      each knob from an inert FLOOR up to that ceiling. The floor is today: at
-     level 1 EVERY knob resolves to its inert value, so the dial's floor is
-     byte-identical to current Cleon and parity holds there. */
+     level 1 every EFFORT knob resolves to its inert value, so the dial's floor
+     is byte-identical to current Cleon and parity holds there. One deliberate
+     exception: assertion-check is an HONESTY knob, not an effort knob, and runs
+     at every depth (see its note below). */
   const DEPTH_LEVELS = 3;
   const DEPTH_DEFAULTS = {
     'max-seek-rounds':    { value: 4 },     // ceiling on iterative retrieval cycles
@@ -3818,7 +3834,7 @@ function projectGraph(events, frame = {}) {
     'infer-bind-floor':   { value: 0.62 },  // closeness needed to phrase an inference across spans
     'replan-enabled':     { value: 1 },     // may a turn reconsider its own plan (deepest only)
     'graph-walk-hops':    { value: 2 },     // ceiling on graph-traversal hops from the question's entry nodes
-    'assertion-check':    { value: 1 },     // may a draft be audited against the page's DEF assertions (deepest only)
+    'assertion-check':    { value: 1 },     // may a draft be audited against the page's DEF assertions (every depth — the floor of "grounded")
   };
   // Current tunable state, id → { value, enabled }. Filled by applyRules; defaults
   // to the ceilings + enabled so a host that never calls applyRules (the Node test
@@ -3854,8 +3870,14 @@ function projectGraph(events, frame = {}) {
       // walk at the floor, one hop mid-dial, the full ceiling at the deepest
       graphHops: on('graph-walk-hops') ? Math.max(0, Math.round(frac * ceil('graph-walk-hops'))) : 0,
       // the propositional veto (draft vs the page's own DEF assertions):
-      // claim-against-claim audit, only at the deepest stop
-      assertionCheck: !!(on('assertion-check') && L >= max && ceil('assertion-check') > 0),
+      // claim-against-claim audit. PROMOTED out from behind the dial — checking
+      // a draft against the page's recorded assertions is not a luxury depth
+      // buys, it is the floor of what "grounded" means. A session showed why:
+      // the token-existence veto certifies a draft that recombines on-page
+      // names into a false proposition, and only this check catches it. Still
+      // a rule (disable 'assertion-check' to turn it off); depth no longer
+      // gates it — the one deliberate exception to the inert-floor contract.
+      assertionCheck: !!(st('assertion-check').enabled !== false && ceil('assertion-check') > 0),
     };
   }
 
@@ -4097,7 +4119,7 @@ function projectGraph(events, frame = {}) {
       // A capitalized discourse adverb at sentence start ("Therefore", "However")
       // is the draft's own connective tissue, never an entity the page must
       // contain — without this guard the veto strikes "Therefore" as invented.
-      if (DISCOURSE_JUNK.has(lc)) continue;
+      if (DISCOURSE_JUNK.has(lc) || ANSWER_DISCOURSE.has(lc)) continue;
       if (bare.length > 2 && !QA_STOP.has(lc) && !body.includes(lc) && !out.includes(bare)) out.push(bare);
     }
     return out;
@@ -4166,7 +4188,37 @@ function projectGraph(events, frame = {}) {
     // the interrogative overviews above use.
     if (/\b(write|draft|compose|put together|give me|make me|prepare|generate|create)\b[^?!.]*\b(report|essay|summary|overview|synopsis|recap|rundown|write[\s-]?up|breakdown)\b/.test(t)) return 'summary';
     if (/\b(write|report|essay|tell me|talk to me)\b[^?!.]*\babout\s+(this|the\s+(document|text|story|file|piece|passage|reading|script|screenplay|book))\b/.test(t)) return 'summary';
+    // CONFIRM/DENY — the turn proposes a proposition and asks the reading to
+    // check it ("Is Amos Dresser the white minister…?", "he's not a speaker",
+    // "you said he was a speaker"). The operator-void, made an intent: these
+    // used to misfile as content questions, and the grounded-QA frame mangles
+    // an assertion presented as a question — the model resolves the confusion
+    // by quoting the user back as if THEY were the passage. Mechanically
+    // answerable against the graph (DEF assertions, SIG attribution slots).
+    if (/\byou\s+(said|told|claimed|mentioned|wrote|implied)\b/.test(t)) return 'confirm';
+    if (/^\s*(so|but|and|no|yes)?,?\s*(it\s+)?(sounds?|seems?|looks?)\s+like\b/.test(t)) return 'confirm';
+    if (/[,;—–-]\s*(right|correct|true|no|yes)\s*\?+\s*$/.test(t)) return 'confirm';
+    if (/\b(is|was|are|were)\s+that\s+(who|what|right|correct|true)\b/.test(t)) return 'confirm';
+    if (/^\s*(is|was|are|were|isn'?t|wasn'?t|aren'?t|weren'?t)\b[^?]*\?/.test(t)) return 'confirm';
+    if (declarativeProposition(q)) return 'confirm';
     return 'factual';
+  }
+  // A bare copular declarative offered for checking ("He is dead. He was not a
+  // speaker."): every sentence leads with a pronoun or a Name and a copula, and
+  // none is a question or names a wh-word. The shape of a proposition, not of
+  // a request — case matters ("The keeper was…" is prose, "Edith was…" is a
+  // claim about Edith), so this reads the original, unlowered turn.
+  function declarativeProposition(q) {
+    const s = String(q == null ? '' : q).trim();
+    if (!s || /\?/.test(s)) return false;
+    const parts = splitDraft(s).map(p => p.trim()).filter(Boolean);
+    if (!parts.length) return false;
+    // a pronoun + 's is the copula ("he's not a speaker"); a Name + 's is a
+    // possessive ("Edith's kettle…") and must NOT read as a proposition. The
+    // Name run admits digit words ("Speaker 4 was…"), like _CAP_RUN.
+    return parts.every(p =>
+      /^(?:(?:[Hh]e|[Ss]he|[Ii]t|[Tt]hey)(?:\s+(?:is|was|are|were)\b|['’]s\s)|\p{Lu}[\p{L}’'\-]*(?:\s+(?:\p{Lu}[\p{L}’'\-]*|\d+))*\s+(?:is|was|are|were)\b)/u.test(p)
+      && !/^(?:What|Which|Whose|Where|When|Why|How|Who|That|This|There)\b/.test(p));
   }
   // A generative ask for an artistic form — "write a song/poem/story about
   // this". Distinct from "write a report/essay/summary" (those are overviews,
@@ -4226,6 +4278,18 @@ function projectGraph(events, frame = {}) {
      with the running history and no forced grounding. Kept deliberately
      light — false positives drag chit-chat into the page, false negatives
      just mean the user re-asks more explicitly. */
+  // Generic voice-label heads ("Speaker 2", "Interviewer", "Female Voice"). The
+  // label is a real voice — it speaks, it holds SIG slots, it earns mass — but
+  // its HEAD is a role word, not a name. Without this guard the word "speaker"
+  // in a user's message ("but it sounds like he's not a speaker") part-matches
+  // the entity "Speaker 2" and hijacks a meta-conversational turn onto the
+  // page: one phantom referent corrupting the ROUTER, not just the answer.
+  // Only the full label ("speaker 2") matches; part-matching skips these heads.
+  const GENERIC_VOICE_HEADS = new Set([
+    'speaker','voice','interviewer','interviewee','moderator','participant',
+    'panelist','operator','announcer','narrator','caller','host','guest',
+    'male','female','unknown','unidentified','audience','translator','interpreter',
+  ]);
   function namesEntity(doc, q) {
     if (!doc || doc.kind !== 'prose') return false;
     // Strip possessive 's first ("edith's" → "edith") so an entity named in a
@@ -4236,7 +4300,7 @@ function projectGraph(events, frame = {}) {
       const n = String(e.name).toLowerCase();
       if (n.length >= 3 && ql.includes(' ' + n + ' ')) return true;
       const parts = n.split(/\s+/);
-      if (parts.length > 1 && parts.some(p => p.length >= 4 && ql.includes(' ' + p + ' '))) return true;
+      if (parts.length > 1 && parts.some(p => p.length >= 4 && !GENERIC_VOICE_HEADS.has(p) && ql.includes(' ' + p + ' '))) return true;
     }
     return false;
   }
@@ -4504,12 +4568,163 @@ function projectGraph(events, frame = {}) {
       tableSpec: spec, openSelf: true,
     };
   }
+  /* ---------- CONFIRM/DENY: a proposition checked against the graph ----------
+     "Is X the Y?", "he's not a speaker", "you said he was a speaker" are not
+     content questions — they propose a proposition and ask the reading to
+     check it. The grounded-QA frame mangles these (an assertion presented as
+     a question reads as text to report on), but the graph answers them
+     mechanically: parse the proposition, check it against the page's DEF
+     assertions and SIG attribution slots, and return confirmed-with-cite /
+     contradicted-with-cite / absence-attested ⊥. No model required. This is
+     the first real consumer of traversal-grade structure at answer time. */
+  const _CONFIRM_META_RE = /^\s*(?:so|but|and|well|also|again|no|yes|ok(?:ay)?)[,—–\s]+/i;
+  const _CONFIRM_FRAME_RE = /^\s*(?:you\s+(?:said|told\s+me|claimed|mentioned|wrote|implied)(?:\s+(?:that|earlier|before))*[,:\s]+|(?:it\s+)?(?:sounds?|seems?|looks?)\s+like\s+|i\s+thought\s+(?:that\s+)?)/i;
+  // a Name run may carry digit words ("Speaker 4", "Apollo 11") — the digits
+  // are part of the label, and a transcript's voices are named exactly this way
+  const _CAP_RUN = '\\p{Lu}[\\p{L}’\'\\-]*(?:\\s+(?:\\p{Lu}[\\p{L}’\'\\-]*|\\d+))*';
+  function parseProposition(sent) {
+    let s = String(sent == null ? '' : sent).trim().replace(/[.?!]+\s*$/, '');
+    let m = _CONFIRM_META_RE.exec(s); if (m) s = s.slice(m[0].length).trim();
+    for (let i = 0; i < 3; i++) { m = _CONFIRM_FRAME_RE.exec(s); if (m && m[0].length) s = s.slice(m[0].length).trim(); else break; }
+    s = s.replace(/[,;]?\s*(?:right|correct|true|no|yes)\s*$/i, '').trim();
+    let subject = null, negated = false, predicate = null;
+    // interrogative: "Is SUBJ (not) PRED" — the copula leads
+    m = new RegExp('^(?:[Ii]s|[Ww]as|[Aa]re|[Ww]ere)\\s+((?:' + _CAP_RUN + ')|[Hh]e|[Ss]he|[Ii]t|[Tt]hey)\\s+(not\\s+)?(.+)$', 'u').exec(s);
+    if (m) { subject = m[1]; negated = !!m[2]; predicate = m[3]; }
+    if (!subject) {
+      // declarative: "SUBJ is (not|never) PRED" / "SUBJ isn't PRED" / "he's (not) PRED"
+      m = new RegExp('^((?:' + _CAP_RUN + ')|[Hh]e|[Ss]he|[Ii]t|[Tt]hey)\\s+(?:is|was|are|were)\\s+(not\\s+|never\\s+)?(.+)$', 'u').exec(s)
+        || new RegExp('^((?:' + _CAP_RUN + ')|[Hh]e|[Ss]he|[Ii]t|[Tt]hey)\\s+(?:isn’?\'?t|wasn’?\'?t|aren’?\'?t|weren’?\'?t)\\s+()(.+)$', 'u').exec(s)
+        || new RegExp('^([Hh]e|[Ss]he|[Ii]t|[Tt]hey)[’\']s\\s+(not\\s+)?(.+)$', 'u').exec(s);
+      if (m) {
+        subject = m[1];
+        negated = m[2] === '' ? true : !!m[2];   // the n't branch captures '' and is always negated
+        predicate = m[3];
+      }
+    }
+    if (!subject) {
+      // role-verb form: "SUBJ (never|did not) (speak|spoke)" → the speaker
+      // role. A leading do-auxiliary ("Did MAYOR speak?") is dropped first.
+      const s2 = s.replace(/^(?:[Dd]id|[Dd]oes|[Dd]o)\s+/, '');
+      m = new RegExp('^((?:' + _CAP_RUN + ')|[Hh]e|[Ss]he|[Tt]hey)\\s+(never\\s+|did\\s+not\\s+|didn’?\'?t\\s+|not\\s+)?(?:spoke|speaks?)\\b', 'u').exec(s2);
+      if (m) { subject = m[1]; negated = !!m[2]; predicate = 'a speaker'; }
+    }
+    if (!subject || !predicate) return null;
+    predicate = predicate.replace(/^(?:a|an|the)\s+/i, '').trim();
+    if (!predicate) return null;
+    return { subject: subject.trim(), negated, predicate };
+  }
+  function answerConfirm(doc, query, opts = {}) {
+    if (!doc || doc.kind !== 'prose') return null;
+    const props = [];
+    for (const sent of splitDraft(query)) {
+      const p = parseProposition(sent);
+      if (p) props.push(p);
+    }
+    if (!props.length) return null;
+    const { entities } = projectEntities(doc);
+    const genre = doc._genre === 'transcript' ? 'transcript' : 'document';
+    const body = docBodyLC(doc);
+    const defs = assertionsOf(doc);
+    const checks = [], lines = [], cites = [];
+    let evidenced = 0, worst = 'clean';
+    const rank = { clean: 0, notes: 1, warn: 2 };
+    const bump = (st) => { if (rank[st] > rank[worst]) worst = st; };
+    const cite = (i) => { if (i != null) { cites.push({ docId: doc.id, idx: i }); return ` {{cite:${doc.id}:${i}:s${i}}}`; } return ''; };
+    for (const p of props) {
+      // resolve the subject: an anaphor goes to the conversation's hottest
+      // entity (the caller supplies it); a name resolves onto the projection
+      let name = p.subject;
+      if (/^(?:he|she|it|they)$/i.test(name)) {
+        if (!opts.hotEntity) return null;
+        name = String(opts.hotEntity);
+      }
+      const k = normSurface(name);
+      const ent = entities.find(e => e.key === k)
+        || (k.length >= 4 ? entities.find(e => _keyWithin(k, e.key) || _keyWithin(e.key, k)) : null);
+      if (!ent && !body.includes(name.toLowerCase())) return null;   // absent subject → the anti-matter void answers instead
+      const subject = ent ? ent.name : name;
+      const subjKey = ent ? ent.key : k;
+      const predHead = tok(p.predicate).slice(0, 2);
+      // 1) the page's own DEF assertions — claim against claim
+      const held = predHead.length ? defs.find(d =>
+        (d.key === subjKey || (subjKey.length >= 4 && (_keyWithin(subjKey, d.key) || _keyWithin(d.key, subjKey))))
+        && (() => { const isToks = new Set(tok(d.is)); return predHead.every(t => isToks.has(t)); })()) : null;
+      if (held) {
+        if (!p.negated) lines.push(`Yes — the page itself asserts ${subject} is ${held.is}.${cite(held.sent)}`);
+        else lines.push(`No — the page itself asserts ${subject} is ${held.is}${cite(held.sent)} — the denial contradicts the page.`);
+        checks.push({ ...p, subject, verdict: p.negated ? 'contradicted' : 'confirmed' });
+        evidenced++;
+        continue;
+      }
+      // 2) a speaking-role claim is checkable against the SIG attribution slots
+      if (SPEAKING_ROLE_RE.test(p.predicate)) {
+        const r = holdsSpeakerSlot(doc, subject);
+        if (r.holds) {
+          if (!p.negated) lines.push(`Yes — this ${genre} attributes ${r.turns} turn${r.turns === 1 ? '' : 's'} to ${r.label || subject}.${cite(r.sent)}`);
+          else lines.push(`No — this ${genre} does attribute speech to ${r.label || subject}.${cite(r.sent)}`);
+          checks.push({ ...p, subject, verdict: p.negated ? 'contradicted' : 'confirmed' });
+        } else {
+          const receipt = `${subject} holds no speaker slot in ${r.events} attribution events`;
+          if (p.negated) lines.push(`Confirmed — I scanned all ${r.events} attribution events in this ${genre}, and ${subject} never holds the speaker slot. {{absent:${doc.id}:${receipt}}}`);
+          else lines.push(`The page doesn’t support that: across ${r.events} attribution events in this ${genre}, ${subject} never holds the speaker slot. {{absent:${doc.id}:${receipt}}}`);
+          checks.push({ ...p, subject, verdict: p.negated ? 'confirmed-by-absence' : 'denied-by-absence' });
+        }
+        evidenced++;
+        continue;
+      }
+      // 3) nothing on the page asserts it — attest the silence (⊥ with a scan
+      // receipt), and show the closest line only as context, never as support
+      const near = ent ? ent.sents.find(i => { const st = new Set(tok(doc.sentenceTexts[i])); return predHead.length && predHead.every(t => st.has(t)); }) : null;
+      const nDefs = defs.filter(d => d.key === subjKey).length;
+      const receipt = `no recorded assertion attaches “${p.predicate}” to ${subject} (${nDefs} assertion${nDefs === 1 ? '' : 's'}, ${speakersOf(doc).events} attributions scanned)`;
+      if (near != null) {
+        lines.push(`The page never asserts that ${subject} ${p.negated ? 'is not' : 'is'} ${p.predicate} — the closest it comes is this line, which links the terms without making the claim.${cite(near)}`);
+        checks.push({ ...p, subject, verdict: 'unattested' });
+        bump('notes');
+      } else if (p.negated) {
+        lines.push(`Nothing on the page contradicts that — it never calls ${subject} ${p.predicate} anywhere. {{absent:${doc.id}:${receipt}}}`);
+        checks.push({ ...p, subject, verdict: 'confirmed-by-absence' });
+        evidenced++;
+      } else {
+        lines.push(`The page never asserts that ${subject} is ${p.predicate}. I checked its recorded assertions and attributions for ${subject}, and nothing attaches it. {{absent:${doc.id}:${receipt}}}`);
+        checks.push({ ...p, subject, verdict: 'unattested' });
+        bump('warn');
+      }
+    }
+    if (!lines.length) return null;
+    return {
+      text: lines.join(' '),
+      cites, checks,
+      audit: {
+        status: worst, grounded: true, covers: `${evidenced}/${props.length}`, stable: true,
+        note: 'A proposition checked mechanically against the graph — the page’s recorded assertions and attribution slots, with absence attested by a full scan (⊥ with a receipt). No model involved.',
+      },
+    };
+  }
+  // CONFIRM over the scope: the first source whose graph can check the
+  // proposition answers it. Null when none can — the caller keeps its path.
+  function answerConfirmScope(docs, query, opts) {
+    for (const d of scopeDocs(docs)) {
+      if (d.kind === 'table') continue;
+      let r = null; try { r = answerConfirm(d, query, opts); } catch (e) {}
+      if (r) return r;
+    }
+    return null;
+  }
+
   function answer(doc, query, opts) {
     if (!doc) return { text: 'Load a document or spreadsheet first — drop a file or paste text, and I’ll read it locally.', audit: null };
     if (doc.kind === 'table') return answerTable(doc, query);
     const intent = classifyIntent(query);
     if (intent === 'who') return answerWho(doc);
     if (intent === 'summary') return answerSummary(doc);
+    if (intent === 'confirm') {
+      // a proposition the graph can check is answered claim-against-claim;
+      // one it can't parse falls through to the ordinary grounded path
+      const checked = answerConfirm(doc, query, opts);
+      if (checked) return checked;
+    }
     return answerProse(doc, query, opts);
   }
 
@@ -4521,18 +4736,138 @@ function projectGraph(events, frame = {}) {
     if (intent === 'who') return entityContext(doc);
     return retrieve(doc, query, k).map(s => `[s${s.i}] ${s.t}`).join('\n');
   }
+  /* ---------- splitting a draft into claim-sentences ----------
+     The naive [.!?] split cuts "Mr. Steven Watts" after "Mr." — each fragment
+     then retrieves independently, scattering cite chips mid-name and inflating
+     the cited fraction that decides `grounded`. The DOCUMENT segmenter already
+     rejoins after the ruliad's sentence_abbreviations; the draft splitter never
+     did. Same set, same move: a part ending in a title abbreviation or a
+     single-letter initial is rejoined onto the next. Shared by the binders and
+     the propositional veto, so a claim is audited whole. */
+  function splitDraft(text) {
+    const s = String(text == null ? '' : text);
+    const raw = s.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [s];
+    const out = [];
+    for (const part of raw) {
+      const prev = out.length ? out[out.length - 1] : null;
+      const tail = prev && /(?:^|[\s("'“‘\[])([\p{L}]{1,7})\.\s*$/u.exec(prev);
+      if (tail && (/^\p{Lu}$/u.test(tail[1]) || (ABBREVIATIONS && ABBREVIATIONS.has(tail[1].toLowerCase()))))
+        out[out.length - 1] = prev + part;
+      else out.push(part);
+    }
+    return out.length ? out : [s];
+  }
+
+  /* ---------- does a retrieved line actually SUPPORT a claim? ----------
+     The retrieval score normalizes by the CANDIDATE's substantive length only,
+     so a two-token line ("Thank you.") scores 1/√2 ≈ 0.71 on a single shared
+     token and outranks every real sentence — junk chrome becomes the highest-
+     scoring match for ANY claim sharing one word, and a false claim wears a
+     clean cite. Support needs more than token existence: a one-token overlap
+     can only support a claim with nothing else to say, and a junk-short line
+     must be wholly consumed by the claim to count at all. */
+  function supportsClaim(cand, claim, floor) {
+    if (!cand || cand.score < floor) return false;
+    const claimSize = new Set(tok(claim)).size;
+    const candSize = new Set(tok(cand.t)).size;
+    if (cand.overlap < 2 && claimSize > 2) return false;
+    if (candSize < 3 && cand.overlap < candSize) return false;
+    return true;
+  }
+
+  /* ---------- absence attestation: citing ⊥ with a receipt ----------
+     A negative existential ("the text does not mention him as a speaker") is a
+     claim about the WHOLE document — no single line can support it, so the
+     binder used to lash it to whatever short line shared a token: a nonsense
+     cite stamped onto a true claim. Retrieval can never ground a negative;
+     only a scan can. These verify absence mechanically — every attribution
+     event checked, the body checked — and the claim cites ⊥ with the receipt:
+     the same epistemic move the anti-matter void makes for absent terms,
+     extended to absent roles and absent mentions. */
+  function speakersOf(doc) {
+    const speakers = new Map(); let events = 0;
+    if (!doc || !doc._events) return { speakers, events };
+    for (const ev of doc._events) {
+      if (ev.op !== 'SIG') continue;
+      events++;
+      const name = (ev.speakerHint && ev.speakerHint.name) || ev.speaker;
+      if (!name || name === '?') continue;
+      const k = normSurface(String(name));
+      if (!k) continue;
+      if (!speakers.has(k)) speakers.set(k, { name: String(name), first: ev.sentence_idx != null ? ev.sentence_idx : null, turns: 0 });
+      speakers.get(k).turns++;
+    }
+    return { speakers, events };
+  }
+  // Does NAME ever hold the speaker slot? Word-boundary containment both ways
+  // ("dresser" ⊂ "amos dresser"). The counts are the receipt: what was scanned.
+  function holdsSpeakerSlot(doc, name) {
+    const { speakers, events } = speakersOf(doc);
+    const k = normSurface(String(name == null ? '' : name));
+    if (!k) return { holds: false, sent: null, turns: 0, events };
+    for (const [sk, v] of speakers) {
+      if (sk === k || (k.length >= 4 && (_keyWithin(k, sk) || _keyWithin(sk, k))))
+        return { holds: true, sent: v.first, turns: v.turns, events, label: v.name };
+    }
+    return { holds: false, sent: null, turns: 0, events };
+  }
+  const ABSENCE_SHAPE_RE = /\b(?:do(?:es)?\s*not|do(?:es)?n'?t|did\s+not|didn'?t|never|no(?:where)?)\b[^.!?]*\b(?:mention(?:s|ed)?|name(?:s|d)?|identif(?:y|ies|ied)|specif(?:y|ies|ied)|state(?:s|d)?|say(?:s)?|said|describe(?:s|d)?|list(?:s|ed)?|provide(?:s|d)?|appear(?:s|ed)?|attribute(?:s|d)?|record(?:s|ed)?|credit(?:s|ed)?)\b/i;
+  const ABSENCE_PASSIVE_RE = /\b(?:is|was|are|were)\s+(?:not|never)\s+(?:mentioned|named|identified|specified|stated|described|listed|provided|attributed|recorded|credited)\b|\bno\s+mention\s+of\b/i;
+  const SPEAKING_ROLE_RE = /\b(?:speaker|speakers|spoke|speaks|speaking|speech)\b/i;
+  // A claim-sentence asserting absence. Returns the receipt string when the
+  // absence VERIFIES against the events/body — null when the sentence isn't
+  // absence-shaped, can't be resolved to a subject, or the page in fact
+  // carries what it denies (a false denial binds nothing and drags `grounded`
+  // down, which is the honest outcome).
+  function absenceClaim(doc, sent, hint) {
+    const s = String(sent == null ? '' : sent);
+    if (!(ABSENCE_SHAPE_RE.test(s) || ABSENCE_PASSIVE_RE.test(s))) return null;
+    const roleClaim = SPEAKING_ROLE_RE.test(s);
+    const { matter, antimatter } = referents(doc, s);
+    let subjects = matter.concat(antimatter);
+    // an anaphoric subject ("…does not mention HIM as a speaker") resolves to
+    // the conversation's hottest entity, supplied by the caller
+    if (!subjects.length && hint && /\b(?:he|she|him|her|they|them|his|hers|their)\b/i.test(s)) subjects = [String(hint)];
+    if (!subjects.length) return null;
+    const receipts = [];
+    for (const name of subjects) {
+      if (antimatter.includes(name)) {
+        // absent from the BODY, but a transcript voice lives in the graph with
+        // its label stripped from the prose ("Speaker 4") — structure-present,
+        // and a denial about it must be checked, not waved through as absence
+        if (holdsSpeakerSlot(doc, name).holds) return null;
+        receipts.push(`“${name}” appears nowhere in this source`);
+        continue;
+      }
+      if (roleClaim) {
+        const r = holdsSpeakerSlot(doc, name);
+        if (r.holds) return null;            // the page DOES attribute a line — the denial is false
+        receipts.push(`${name} holds no speaker slot in ${r.events} attribution events`);
+        continue;
+      }
+      return null;   // a present name and no checkable role — a scan can't verify this denial
+    }
+    return receipts.join('; ');
+  }
+
   // bind [sN] citations onto an LLM answer mechanically (model never writes them)
-  function bindCitations(doc, answerText, query, intent) {
+  function bindCitations(doc, answerText, query, intent, opts) {
     const floor = 0.34;
     const clean = answerText.replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim();
-    const parts = clean.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [clean];
+    const parts = splitDraft(clean);
     const cited = [];
+    let attested = 0;
     const out = parts.map(sent => {
+      // a negative existential can never be supported by one line — attest it
+      // against the events instead of lashing it to whatever shared a token
+      const receipt = absenceClaim(doc, sent, opts && opts.hotEntity);
+      if (receipt) { attested++; return `${sent.trim()} {{absent:${doc.id}:${receipt}}}`; }
       const cands = retrieve(doc, sent, 1);
-      if (cands.length && cands[0].score >= floor) { cited.push({ docId: doc.id, idx: cands[0].i }); return `${sent.trim()} {{cite:${doc.id}:${cands[0].i}:s${cands[0].i}}}`; }
+      if (cands.length && supportsClaim(cands[0], sent, floor)) { cited.push({ docId: doc.id, idx: cands[0].i }); return `${sent.trim()} {{cite:${doc.id}:${cands[0].i}:s${cands[0].i}}}`; }
       return sent.trim();
     }).join(' ');
-    const grounded = cited.length > 0 && cited.length >= parts.length * 0.5;
+    const supported = cited.length + attested;
+    const grounded = supported > 0 && supported >= parts.length * 0.5;
     const cov = (intent && intent !== 'factual') ? { n: 1, d: 1 } : coverage(query, parts.join(' '));
     return {
       text: out, cites: cited,
@@ -4540,6 +4875,7 @@ function projectGraph(events, frame = {}) {
         status: grounded ? (cov.n >= cov.d ? 'clean' : 'notes') : 'warn',
         grounded, covers: `${cov.n}/${cov.d}`, stable: true,
         note: grounded ? 'Phrased by the local model; every citation bound mechanically to a re-read sentence.'
+                         + (attested ? ' Absence claims attested against the event log (⊥ with a scan receipt).' : '')
                        : 'Phrased by the model but support was thin — treat with care.',
       },
     };
@@ -4610,14 +4946,14 @@ function projectGraph(events, frame = {}) {
   // Many → answer against the primary, but only flag voids that are absent from
   // EVERY source (a name living in another chip is not a void here). Cross-source
   // synthesis is the model's job (context across sources); this is the floor.
-  function answerScope(docs, query) {
+  function answerScope(docs, query, opts) {
     const ds = scopeDocs(docs);
     if (!ds.length) return answer(null, query);
-    if (ds.length === 1) return answer(ds[0], query);
+    if (ds.length === 1) return answer(ds[0], query, opts);
     const primary = routePrimary(ds, query) || ds[0];
     if (primary.kind === 'table') return answer(primary, query);
     const voidWhitelist = new Set(referentsScope(ds, query).antimatter);
-    return answer(primary, query, { voidWhitelist });
+    return answer(primary, query, { ...(opts || {}), voidWhitelist });
   }
 
   // LLM context across the scope: passages from each source, headed by its title
@@ -4647,19 +4983,27 @@ function projectGraph(events, frame = {}) {
   // sentence is re-retrieved over every source and bound to the best-matching
   // line, so a multi-source answer carries citations into whichever doc each
   // claim came from. A scope of one defers to the single-doc binder.
-  function bindCitationsScope(docs, answerText, query, intent) {
+  function bindCitationsScope(docs, answerText, query, intent, opts) {
     const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
-    if (ds.length <= 1) return bindCitations(ds[0] || scopeDocs(docs)[0], answerText, query, intent);
+    if (ds.length <= 1) return bindCitations(ds[0] || scopeDocs(docs)[0], answerText, query, intent, opts);
     const floor = 0.34;
     const clean = answerText.replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim();
-    const parts = clean.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [clean];
+    const parts = splitDraft(clean);
     const cited = [];
+    let attested = 0;
     const out = parts.map(sent => {
+      // an absence claim over a scope must verify in EVERY source to attest
+      const receipts = ds.map(d => absenceClaim(d, sent, opts && opts.hotEntity));
+      if (receipts.length && receipts.every(r => r)) {
+        attested++;
+        return `${sent.trim()} {{absent:${ds[0].id}:${receipts[0]} — checked in all ${ds.length} sources}}`;
+      }
       const cand = retrieveScope(ds, sent, 1)[0];
-      if (cand && cand.score >= floor) { cited.push({ docId: cand.docId, idx: cand.i }); return `${sent.trim()} {{cite:${cand.docId}:${cand.i}:s${cand.i}}}`; }
+      if (cand && supportsClaim(cand, sent, floor)) { cited.push({ docId: cand.docId, idx: cand.i }); return `${sent.trim()} {{cite:${cand.docId}:${cand.i}:s${cand.i}}}`; }
       return sent.trim();
     }).join(' ');
-    const grounded = cited.length > 0 && cited.length >= parts.length * 0.5;
+    const supported = cited.length + attested;
+    const grounded = supported > 0 && supported >= parts.length * 0.5;
     const cov = (intent && intent !== 'factual') ? { n: 1, d: 1 } : coverage(query, parts.join(' '));
     return {
       text: out, cites: cited,
@@ -4667,6 +5011,7 @@ function projectGraph(events, frame = {}) {
         status: grounded ? (cov.n >= cov.d ? 'clean' : 'notes') : 'warn',
         grounded, covers: `${cov.n}/${cov.d}`, stable: true,
         note: grounded ? 'Phrased by the local model; every citation bound mechanically to a re-read sentence across your sources.'
+                         + (attested ? ' Absence claims attested against the event logs (⊥ with a scan receipt).' : '')
                        : 'Phrased by the model but support was thin — treat with care.',
       },
     };
@@ -4727,8 +5072,8 @@ function projectGraph(events, frame = {}) {
     const { entities } = projectEntities(doc);
     if (!entities.length) return null;
     // Entry nodes: entities the question names (same matching namesEntity
-    // uses — full name, or a ≥4-char part of a multi-word name, possessives
-    // stripped), i.e. the matter referents resolved onto the graph.
+    // uses — full name, or a ≥4-char non-generic part of a multi-word name,
+    // possessives stripped), i.e. the matter referents resolved onto the graph.
     const ql = ' ' + String(query).toLowerCase().replace(/['’]s\b/g, '').replace(/[^\p{L}\p{N}'’\- ]+/gu, ' ').replace(/\s+/g, ' ') + ' ';
     const entries = [];
     for (const e of entities) {
@@ -4736,7 +5081,7 @@ function projectGraph(events, frame = {}) {
       let hit = n.length >= 3 && ql.includes(' ' + n + ' ');
       if (!hit) {
         const parts = n.split(/\s+/);
-        hit = parts.length > 1 && parts.some(p => p.length >= 4 && ql.includes(' ' + p + ' '));
+        hit = parts.length > 1 && parts.some(p => p.length >= 4 && !GENERIC_VOICE_HEADS.has(p) && ql.includes(' ' + p + ' '));
       }
       if (hit) entries.push(e);
     }
@@ -4857,9 +5202,10 @@ function projectGraph(events, frame = {}) {
   function checkAssertions(doc, draftText) {
     const defs = assertionsOf(doc);
     if (!defs.length) return [];
-    const parts = String(draftText == null ? '' : draftText)
-      .replace(/\{\{[^}]*\}\}/g, ' ')
-      .match(/[^.!?]+[.!?]*/g) || [];
+    // abbreviation-aware split (splitDraft), so "Mr. Amos Dresser was not…"
+    // is audited as one claim — a fragment cut after "Mr." separates the
+    // subject from its negation and the contradiction slips past
+    const parts = splitDraft(String(draftText == null ? '' : draftText).replace(/\{\{[^}]*\}\}/g, ' '));
     const out = [], seen = new Set();
     for (const sent of parts) {
       const raw = ' ' + sent.toLowerCase().replace(/[’]/g, "'") + ' ';
@@ -5292,6 +5638,10 @@ function projectGraph(events, frame = {}) {
     // propositional veto (draft claims audited against DEF assertions)
     traverseGraph, traverseScope, readingContext, assertionsOf,
     checkAssertions, checkAssertionsScope,
+    // CONFIRM/DENY: a proposition checked mechanically against the graph
+    // (DEF assertions, SIG attribution slots, absence attested with ⊥ receipts),
+    // and the abbreviation-aware draft splitter the binders/veto share
+    answerConfirm, answerConfirmScope, splitDraft, holdsSpeakerSlot,
     // the embedder as a wandering reader: associative, δ-gated neighbors (no-op without an embedder)
     associativeNeighbors,
     // the inference void: mark what the reader ADDED across two cited spans

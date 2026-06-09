@@ -551,7 +551,7 @@ function App() {
   const patchLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch }; return c; });
 
   // strip citation/void markup so prior turns read as plain text in history
-  const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void|infer):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
+  const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void|infer|absent):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
   // HISTORY HYGIENE: a prior turn that was vetoed, went out ungrounded, or
   // earned a warn badge re-enters the history WEARING that badge — never as
   // clean assistant text the model will defend. Handed its own unverified
@@ -561,6 +561,11 @@ function App() {
   const epistemicTag = (m) => {
     if (m.role !== 'assistant' || !m.text) return '';
     if (m.mode === 'creative') return '[an earlier creative composition, not a document answer] ';
+    // A RETRACTED turn outranks its badge: the claim wore a clean chip when it
+    // went out, and only a later graph-check caught it — the badge can't see
+    // a false proposition built from true tokens, so the retraction marker is
+    // the only thing standing between the model and re-defending the claim.
+    if (m.retracted) return '[an earlier reply containing a claim that was later checked against the page and RETRACTED — do not repeat or defend it] ';
     const a = m.audit;
     if (!a) return '';
     if (a.status === 'plain') return '[an earlier reply from general knowledge, not the document] ';
@@ -738,7 +743,64 @@ function App() {
     AUD('step', 'opaque', { spans: idxs, note: 'The phrasing related distant passages [s' + lo + '…s' + hi + '] into one claim — the trace can show what it drew on, not how it bridged them. That last step is the model\'s.' });
   };
 
-  const runMechanicalScope = (scope, q) => {
+  // The conversation's hottest entity — what an anaphoric proposition ("he was
+  // not a speaker") is about. A pointer into the same field working memory
+  // already reads; null on a cold field, and the engine then declines to parse
+  // the pronoun rather than guessing.
+  const hotEntity = () => {
+    try {
+      const snap = window.EOEngine.conversationField.snapshot();
+      const top = (snap.entities || [])[0];
+      return (top && (top.label || top.key)) || null;
+    } catch (e) { return null; }
+  };
+
+  // RETRACTION — a SEG against the system's own utterance. When a graph-check
+  // (CONFIRM intent) finds a proposition unsupported, and a PRIOR assistant
+  // turn asserted that same proposition affirmatively, the old turn is the
+  // thing that's wrong: flag it `retracted` (history hygiene re-tags it) and
+  // say so in the new answer. Without this, a correction the user deposits
+  // three times accrues nowhere — the false claim stands un-retracted in
+  // history while every new turn re-reads it as something that happened.
+  const maybeRetract = (scope, plan) => {
+    const E = window.EOEngine;
+    const checks = (plan && plan.checks) || [];
+    // the propositions the graph FAILED to support, in their affirmative form
+    const failed = checks.filter(c =>
+      (!c.negated && (c.verdict === 'denied-by-absence' || c.verdict === 'unattested' || c.verdict === 'contradicted')) ||
+      (c.negated && (c.verdict === 'confirmed' || c.verdict === 'confirmed-by-absence')));
+    if (!failed.length) return plan;
+    const prior = messages.filter(m => m.role === 'assistant' && m.text && !m.retracted);
+    const retractions = [];
+    for (const c of failed) {
+      const subjToks = E.tok(c.subject), predToks = E.tok(c.predicate).slice(0, 2);
+      if (!subjToks.length || !predToks.length) continue;
+      for (const m of prior) {
+        const plain = String(m.text).replace(/\{\{[^}]*\}\}/g, ' ');
+        for (const sent of (E.splitDraft ? E.splitDraft(plain) : [plain])) {
+          const ls = ' ' + sent.toLowerCase() + ' ';
+          if (!subjToks.every(t => ls.includes(t)) || !predToks.every(t => ls.includes(t))) continue;
+          if (/\b(?:not|never|no)\b|n['’]t\b/.test(ls)) continue;     // it already denied it
+          retractions.push({ msg: m, sentence: sent.trim(), subject: c.subject, predicate: c.predicate });
+          break;
+        }
+        if (retractions.some(r => r.msg === m)) break;   // one retraction per check is enough
+      }
+    }
+    if (!retractions.length) return plan;
+    for (const r of retractions) {
+      setMessages(ms => ms.map(m => m === r.msg ? { ...m, retracted: true } : m));
+      AUD('step', 'retract', { claim: r.sentence, subject: r.subject, predicate: r.predicate,
+        note: 'A prior reply asserted this; the graph-check does not support it. The old turn re-enters history flagged RETRACTED.' });
+    }
+    const said = retractions[0];
+    return { ...plan, text: plan.text +
+      `\n\nI’m also retracting an earlier claim of mine — I had said: “${said.sentence}” That isn’t supported by the page’s recorded events, and the earlier reply now carries the retraction.` };
+  };
+
+  // Mechanical turn over the scope. `givenPlan` lets a caller hand in an
+  // already-computed answer (the CONFIRM detour) without re-deriving it.
+  const runMechanicalScope = (scope, q, givenPlan) => {
     // Capture the deterministic basis of the answer for the trace: intent, the
     // matter/anti-matter referents, and the scored retrieval hits.
     let intent = null, refs = null;
@@ -747,7 +809,11 @@ function App() {
     AUD('step', 'intent', { intent });
     if (refs) AUD('step', 'referents', { matter: refs.matter, antimatter: refs.antimatter });
     AUD('step', 'retrieve', { k: 6, engine: 'mechanical', hits: auditHits(scope, q, 6) });
-    const plan = window.EOEngine.answerScope(scope, q);
+    let plan = givenPlan || window.EOEngine.answerScope(scope, q, { hotEntity: hotEntity() });
+    if (plan.checks) {
+      AUD('step', 'confirm', { checks: plan.checks.map(c => ({ subject: c.subject, predicate: c.predicate, negated: !!c.negated, verdict: c.verdict })) });
+      try { plan = maybeRetract(scope, plan); } catch (e) { eoWarn('retract', e); }
+    }
     const primary = window.EOEngine.routePrimary(scope, q) || scope[0];
     replaceLast({ role: 'assistant', text: plan.text, audit: plan.audit, mode: mode === 'creative' ? 'creative' : 'grounded' });
     if (plan.tableSpec && primary) { openTab(primary.id); setTableSpec({ ...plan.tableSpec }); }
@@ -802,6 +868,17 @@ function App() {
     const intent = window.EOEngine.classifyIntent(q);
     AUD('step', 'intent', { intent });
     if (intent === 'who') { AUD('step', 'route', { detour: 'who → mechanical' }); runMechanicalScope(scope, q); return; }
+    // CONFIRM/DENY: a proposition is checked against the graph, never phrased
+    // by the model — the grounded-QA prompt presents an assertion as a
+    // question, and a small model resolves the confusion by quoting the user
+    // back as if they were the passage. Only when the proposition parses and a
+    // source's graph can check it; otherwise the ordinary path keeps the turn.
+    if (intent === 'confirm') {
+      let checked = null;
+      try { checked = window.EOEngine.answerConfirmScope(scope, q, { hotEntity: hotEntity() }); }
+      catch (e) { eoWarn('confirm', e); }
+      if (checked) { AUD('step', 'route', { detour: 'confirm → graph-check (mechanical)' }); runMechanicalScope(scope, q, checked); return; }
+    }
     // Semantic recall already located the material → trust it for ground; else the
     // usual lexical hasGround check decides whether the page can answer.
     const hasSemantic = !!(semanticHits && semanticHits.length);
@@ -934,13 +1011,13 @@ function App() {
         // draft that won't bind to ANY source falls back to the mechanical answer.
         const perDoc = scope.map(d => new Set(window.EOEngine.inventedTerms(d, full)));
         const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
-        const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent);
-        // PROPOSITIONAL VETO (deepest depth): the string-layer checks above
-        // wave through a draft that NEGATES what the page itself asserted —
-        // "X was not Y" binds cleanly while the graph holds DEF X is Y. Audit
-        // the draft's claims against the page's recorded assertions, claim
-        // against claim; a contradiction falls back to the mechanical answer
-        // with the disagreement named in the trace.
+        const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent, { hotEntity: hotEntity() });
+        // PROPOSITIONAL VETO (every depth — promoted from behind the dial):
+        // the string-layer checks above wave through a draft that NEGATES what
+        // the page itself asserted — "X was not Y" binds cleanly while the
+        // graph holds DEF X is Y. Audit the draft's claims against the page's
+        // recorded assertions, claim against claim; a contradiction falls back
+        // to the mechanical answer with the disagreement named in the trace.
         let contradictions = [];
         if (budget && budget.assertionCheck) {
           try { contradictions = window.EOEngine.checkAssertionsScope(scope, full) || []; }

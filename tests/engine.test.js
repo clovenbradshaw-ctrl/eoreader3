@@ -589,15 +589,18 @@ group('seekable terms — meta-words from the user\'s phrasing are unseekable', 
   eq(E.seekableTerms([], ['minister']).length, 0, 'no sources ⇒ nothing seekable');
 });
 
-// ── The dial buys graph work; the floor stays inert (parity) ──
+// ── The dial buys graph work; the EFFORT floor stays inert (parity) ──
 group('thinking depth — graph knobs scale, the floor is byte-inert', () => {
   const b1 = E.thinkingBudget(1), b2 = E.thinkingBudget(2), b3 = E.thinkingBudget(3);
   eq(b1.graphHops, 0, 'floor: no walk');
   eq(b2.graphHops, 1, 'mid-dial: one hop');
   eq(b3.graphHops, 2, 'deepest: the full ceiling');
-  eq(b1.assertionCheck, false, 'floor: no propositional veto');
-  eq(b2.assertionCheck, false, 'mid-dial: still off — the check is the deepest stop\'s');
-  eq(b3.assertionCheck, true, 'deepest: the draft is audited against the page\'s assertions');
+  // assertion-check is an HONESTY knob, not an effort knob: auditing a draft
+  // against the page's recorded assertions is the floor of what "grounded"
+  // means, so it runs at EVERY depth (the one exception to the inert floor).
+  eq(b1.assertionCheck, true, 'floor: the propositional veto runs — honesty is not a luxury depth buys');
+  eq(b2.assertionCheck, true, 'mid-dial: still on');
+  eq(b3.assertionCheck, true, 'deepest: still on');
   eq(b1.maxSeekRounds, 1, 'floor seek rounds unchanged (parity)');
   eq(b1.replan, false, 'floor replan unchanged (parity)');
 });
@@ -607,6 +610,121 @@ group('invented terms — a capitalized discourse adverb is not an entity', () =
   ok(!E.inventedTerms(voss, 'Therefore, Edith waited by the lamp.').includes('Therefore'), '"Therefore" is the draft\'s own connective, never invented');
   ok(!E.inventedTerms(voss, 'However, the keeper stayed.').includes('However'), '"However" likewise');
   ok(E.inventedTerms(voss, 'Zorthax waited by the lamp.').includes('Zorthax'), 'a real off-page name still trips the veto');
+});
+
+// ── The discourse-word void guard: a correct "Yes" is not an invented term ──
+group('invented terms — an answer\'s own discourse words are never struck', () => {
+  ok(!E.inventedTerms(meeting, 'Yes, Amos Dresser was seized by the committee.').includes('Yes'), 'a confirmation\'s "Yes" is the answer\'s word, not a page term');
+  ok(!E.inventedTerms(meeting, 'Indeed, the motion passed.').includes('Indeed'), '"Indeed" likewise');
+  ok(E.inventedTerms(meeting, 'It happened in Tennessee.').includes('Tennessee'), 'a real off-page place still trips the veto — the page does not carry it');
+});
+
+// ── The draft splitter no longer fragments on "Mr." ──
+group('splitDraft — abbreviations and initials rejoin (same set as the segmenter)', () => {
+  const parts = E.splitDraft('The speakers included Mr. Steven Watts and Mr. Amos Dresser. The motion passed.');
+  eq(parts.length, 2, 'two real sentences, not four fragments');
+  ok(/Mr\. Steven Watts and Mr\. Amos Dresser/.test(parts[0]), 'the names survive whole');
+  eq(E.splitDraft('Dr. Pell signed off.').length, 1, 'a leading title does not split');
+  eq(E.splitDraft('W. E. B. Du Bois wrote it.').length, 1, 'single-letter initials rejoin');
+  eq(E.splitDraft('Edith waited. The keeper stayed.').length, 2, 'ordinary sentences still split');
+});
+
+// ── The binder: junk-short lines can no longer support a claim ──
+group('bindCitations — a two-token line ("Thank you.") is not support', () => {
+  // the trace's turn 6: gibberish that audited clean because "Thank you."
+  // (substantive set {thank}, score 1/√2 on one shared token) outranked
+  // every real sentence for any claim sharing one word
+  const junk = E.bindCitations(meeting, 'The passage states that Speaker 2 is Thank you.', 'who spoke', 'factual');
+  eq(junk.cites.length, 0, 'no citation is lashed to the formulaic line');
+  eq(junk.audit.grounded, false, 'the recombined claim audits NOT grounded — the badge stops lying');
+  // a real claim still binds — the floor rejects junk, not support
+  const real = E.bindCitations(meeting, 'Amos Dresser was seized by the committee.', 'what happened to Dresser', 'factual');
+  eq(real.cites.length, 1, 'a verbatim-supported claim still earns its cite');
+  eq(real.audit.grounded, true, 'and still audits grounded');
+  // chips no longer scatter mid-name: "Mr." fragments inflated the cited
+  // fraction and dropped chips after the title
+  const titled = E.bindCitations(meeting, 'Mr. Steven Watts recorded the event. Mr. Amos Dresser was seized by the committee.', 'who recorded it', 'factual');
+  ok(!/Mr\.\s*\{\{cite/.test(titled.text), 'no chip lands after a bare "Mr."');
+  eq(titled.cites.length, 2, 'both whole claims bind');
+});
+
+// ── Absence attestation: a true negative cites ⊥ with a scan receipt ──
+group('bindCitations — a negative existential is attested, never lashed to a line', () => {
+  // the trace's turn 5: "The text does not mention him as a speaker" — true,
+  // and bound to s3 ("Thank you."), a nonsense cite on a true claim. Retrieval
+  // can never ground a negative; only a scan can.
+  const neg = E.bindCitations(meeting, 'The text does not mention him as a speaker.', 'was he a speaker', 'factual', { hotEntity: 'Amos Dresser' });
+  ok(/\{\{absent:meet:/.test(neg.text), 'the claim cites ⊥ with a receipt instead of a junk line');
+  eq(neg.cites.length, 0, 'no sentence cite is faked for a whole-document claim');
+  eq(neg.audit.grounded, true, 'the attested negative IS grounded — absence is evidence');
+  // a FALSE denial earns nothing: the page does attribute speech to Speaker 4
+  const f = E.bindCitations(meeting, 'The record never attributes a speech to Speaker 4.', 'who spoke', 'factual');
+  ok(!/\{\{absent:/.test(f.text), 'a denial the events contradict is not attested');
+  // scope: absence must verify in EVERY source
+  const sc = E.bindCitationsScope([meeting, voss], 'Zorthax is never mentioned.', 'who is Zorthax', 'factual');
+  ok(/\{\{absent:.*checked in all 2 sources/.test(sc.text), 'a scope-wide absence carries the scope-wide receipt');
+});
+
+// ── The phantom-voice routing fix: "speaker" is a role word, not a name ──
+group('routing — a generic voice label no longer hijacks meta-conversation', () => {
+  const r = E.routeTurn([meeting], "but it sounds like he's not a speaker");
+  ok(r.reason !== 'names-entity', 'the word "speaker" does not read as naming the voice "Speaker 2"');
+  const r2 = E.routeTurn([meeting], "but it sounds like he's not a speaker", { prevGrounded: true });
+  eq(r2.decision, 'mechanical', 'with a grounded prior turn, the anaphor keeps it on the page (continuity)');
+  eq(r2.intent, 'confirm', 'and the turn is recognized as a proposition to check');
+  const r3 = E.routeTurn([meeting], 'what did Speaker 2 say');
+  eq(r3.reason, 'names-entity', 'the FULL label still names the voice');
+});
+
+// ── CONFIRM/DENY: the operator-void made an intent ──
+group('classifyIntent — a proposition offered for checking is confirm, not factual', () => {
+  eq(E.classifyIntent('Is Amos Dresser the white minister who came south?'), 'confirm', 'a copular yes/no question');
+  eq(E.classifyIntent("but it sounds like he's not a speaker"), 'confirm', 'a hedged denial');
+  eq(E.classifyIntent('He is dead. He was not a speaker.'), 'confirm', 'bare declaratives offered for checking');
+  eq(E.classifyIntent('you said he was a speaker'), 'confirm', 'a challenge to a prior claim');
+  eq(E.classifyIntent('Edith was the keeper of the lamp, right?'), 'confirm', 'a tag question');
+  eq(E.classifyIntent('what did the keeper say about the boat'), 'factual', 'a wh-question stays factual');
+  eq(E.classifyIntent('who is in this story'), 'who', 'the who intent is untouched');
+  eq(E.classifyIntent('summarize this'), 'summary', 'the summary intent is untouched');
+  eq(E.classifyIntent("Edith's kettle boiled over."), 'factual', 'a possessive is not a copula');
+});
+
+group('answerConfirm — confirmed / contradicted / absence-attested, no model involved', () => {
+  // confirmed against the page's own DEF assertion, with the cite
+  const yes = E.answerConfirm(meeting, 'Is Amos Dresser the white minister who came south?');
+  ok(yes && /Yes — the page itself asserts/.test(yes.text), 'a true proposition is confirmed in the page\'s own words');
+  ok(yes.cites.length === 1 && /\{\{cite:meet:/.test(yes.text), 'the confirmation carries the assertion\'s cite');
+  eq(yes.audit.status, 'clean', 'confirmed is a clean badge');
+  eq(yes.checks[0].verdict, 'confirmed', 'the verdict is recorded for the trace');
+  // a denial of what the page asserts is contradicted, with the cite
+  const no = E.answerConfirm(meeting, 'Amos Dresser was not a white minister.');
+  ok(no && /No — the page itself asserts/.test(no.text), 'a denial of a page assertion is contradicted');
+  eq(no.checks[0].verdict, 'contradicted', 'and recorded as such');
+  // the trace's turns 4/5: "he was not a speaker" — TRUE, provable only by
+  // scanning every attribution event; the graph attests what retrieval never could
+  const abs = E.answerConfirm(meeting, 'he was not a speaker', { hotEntity: 'Amos Dresser' });
+  ok(abs && /Confirmed — I scanned all \d+ attribution events/.test(abs.text), 'a true negative is confirmed by a full scan');
+  ok(/\{\{absent:meet:/.test(abs.text), 'and cites ⊥ with the receipt');
+  eq(abs.checks[0].verdict, 'confirmed-by-absence', 'verdict: confirmed by absence');
+  eq(abs.audit.status, 'clean', 'a complete mechanical answer wears clean');
+  eq(E.answerConfirm(meeting, 'he was not a speaker'), null, 'an unresolvable anaphor declines rather than guessing');
+  // an affirmative role claim the events do not support
+  const den = E.answerConfirm(meeting, 'Was Amos Dresser a speaker?');
+  ok(den && /never holds the speaker slot/.test(den.text), 'an unsupported role claim is denied with the scan');
+  eq(den.checks[0].verdict, 'denied-by-absence', 'verdict: denied by absence');
+  // a voice that DOES hold the slot
+  const spoke = E.answerConfirm(meeting, 'Did Speaker 4 speak?');
+  ok(spoke && /Yes — this transcript attributes \d+ turn/.test(spoke.text), 'a voice with SIG slots is confirmed with its turn count');
+  // unattested: the page asserts nothing either way → ⊥ with the receipt, warn
+  const un = E.answerConfirm(meeting, 'Amos Dresser was a council member.');
+  ok(un && /never asserts/.test(un.text) && /\{\{absent:/.test(un.text), 'an unattested claim is named as such with a receipt');
+  eq(un.audit.status, 'warn', 'unattested-affirmative wears warn, not clean');
+  eq(un.checks[0].verdict, 'unattested', 'verdict: unattested');
+  // no proposition → null, the caller keeps its ordinary path
+  eq(E.answerConfirm(meeting, 'what happened at the council meeting?'), null, 'a wh-question does not parse as a proposition');
+  // the scope fold answers from the source whose graph can check it
+  const sc = E.answerConfirmScope([voss, meeting], 'Was Amos Dresser a white minister?');
+  ok(sc && /Yes — the page itself asserts/.test(sc.text), 'the scope fold finds the source that holds the assertion');
 });
 
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

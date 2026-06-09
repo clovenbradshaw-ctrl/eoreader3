@@ -77,6 +77,31 @@ was vetoed, went out ungrounded, or carried struck (unverified) terms is
 prefixed with a note saying so, so the model never defends an earlier answer
 the system itself didn't stand behind.
 
+### Checking a claim (CONFIRM/DENY)
+
+Not every turn is a question. "Is Amos Dresser the white minister…?", "but it
+sounds like he's not a speaker", "you said he was a speaker" — these *propose a
+proposition* and ask the reading to check it. Handed to the grounded-QA prompt,
+a small model mangles them (an assertion presented as a question reads as text
+to report on, and the model ends up quoting the user back as if they were the
+passage). So they are a first-class intent, answered **mechanically against the
+graph**: the proposition is parsed and checked against the page's recorded
+assertions (DEF events) and attribution slots (SIG events), returning
+*confirmed* with the assertion's own cite, *contradicted* with the same, or
+attested against the scan — no model involved.
+
+True **negatives cite ⊥ with a receipt**. "Never mentioned as a speaker" is a
+claim about the whole document — no single line can support it, and retrieval
+used to lash it to whatever short line shared a token. Instead the events are
+scanned in full and the claim carries an `[⊥]` chip whose tooltip is the
+receipt ("holds no speaker slot in 14 attribution events"). The same move the
+anti-matter void makes for absent terms, extended to absent roles and mentions.
+
+And when a check fails a claim **the assistant itself made earlier**, the old
+reply is **retracted**: flagged in the chat, re-tagged in the model's history
+("…RETRACTED — do not repeat or defend it"), and the retraction said out loud
+in the new answer — a correction the user deposits actually lands somewhere.
+
 ### Transcripts
 
 A transcript declares itself through its own typography — timecode lines
@@ -94,11 +119,15 @@ The composer's effort dial (1–3) buys *graph* work, not just more retrieval.
 Above the floor, a factual turn **walks the document graph** out from the
 entities the question names — the page's recorded assertions (DEF events), its
 drawn relations, co-occurrence — and the prompt opens with that reading before
-the verbatim passages. At the deepest stop a **propositional veto** audits the
-draft against the page's own assertions: a draft that denies what the page
-asserts ("X was not Y" while the graph holds *X is Y*) binds cleanly at the
-string layer and is caught only here, claim against claim. Depth 1 is the
-parity floor — byte-identical to the reflex pipeline.
+the verbatim passages. Depth 1 is the parity floor — byte-identical to the
+reflex pipeline — with one deliberate exception: the **propositional veto**,
+which audits every kept draft against the page's own assertions. A draft that
+denies what the page asserts ("X was not Y" while the graph holds *X is Y*)
+binds cleanly at the string layer and is caught only here, claim against
+claim — and a token-level check also *certifies* a draft that recombines
+on-page names into a false proposition, so this check is the floor of what
+"grounded" means, not a luxury the dial buys. It runs at every depth (still a
+rule; disable *Propositional Veto* to turn it off).
 
 ### Auditing the chat
 
@@ -108,9 +137,9 @@ over them. For each turn it records, step by step:
 
 - **route** — did the turn reference a source in scope, and why; which path it
   took (grounded-LLM, mechanical, plain chat, creative);
-- **intent / ground / referents** — `who` vs `summary` vs `factual`, whether the
-  page can answer, and the matter / anti-matter (void) referents the question
-  names;
+- **intent / ground / referents** — `who` vs `summary` vs `confirm` vs
+  `factual`, whether the page can answer, and the matter / anti-matter (void)
+  referents the question names;
 - **retrieve** — the passages actually retrieved, each with its relevance score
   (deeper turns add numbered *seek* rounds, with unseekable query terms named);
 - **traverse** — the graph walk (depth > 1): entry nodes, the assertions and
@@ -119,8 +148,11 @@ over them. For each turn it records, step by step:
   passages), its parameters, and the raw text it streamed back, verbatim;
 - **veto** — the mechanical check: any invented terms, whether the phrasing
   re-bound to the page, whether the draft contradicts a recorded assertion
-  (deepest depth), and whether the model's draft or the mechanical answer
+  (every depth), and whether the model's draft or the mechanical answer
   won;
+- **confirm / retract** — for a proposition-checking turn, each claim and the
+  graph's verdict on it (confirmed / contradicted / attested-by-absence), and
+  any earlier reply of the assistant's the check caused to be retracted;
 - **answer** — the final text, citations, and the grounded / coverage / stable
   audit it ended on.
 
@@ -155,5 +187,7 @@ guards it against drift, so engine changes can be proven behaviour-preserving.
 
 ## Design notes
 
-`docs/operator-void.md` captures a planned next phase (distinguishing a missing
-*operator*/shape from missing *content*) to build on top of the current engine.
+`docs/operator-void.md` captures the operator-void idea (distinguishing a
+missing *operator*/shape from missing *content*). The CONFIRM/DENY intent is
+its first delivered shape: "verify this proposition" used to misfile as a
+content question, and now has its own operator.

@@ -228,6 +228,19 @@ button { font-family: inherit; cursor: pointer; }
    dashed, in the "thinking" violet, to read as reader-supplied. */
 .cite.infer { color: #6b4fa0; background: #f1edf8; border: 1px dashed #c7b8e6; }
 .cite.infer:hover { border-color: #6b4fa0; background: #e9e2f5; }
+/* absence attestation — ⊥ with a scan receipt. A negative claim can't cite a
+   line (no single sentence supports a claim about the whole document); it
+   cites the void itself, the receipt of what was scanned in the tooltip.
+   Solid-but-muted: this IS evidence, not a strike-through. */
+.cite.absent { color: #5b6470; background: #eef0f3; border: 1px solid #d4d8de; cursor: help; }
+.cite.absent:hover { border-color: #5b6470; }
+/* a retracted reply — a later graph-check failed a claim it made; the note
+   outranks whatever badge the answer originally earned */
+.retract-note {
+  margin-top: 10px; font-size: 12px; font-family: var(--mono);
+  color: #8a4b4b; background: #faf0f0; border: 1px solid #ecd8d8;
+  border-radius: 6px; padding: 4px 9px; display: inline-block;
+}
 
 /* audit badge */
 .audit { display: inline-flex; align-items: center; gap: 0; margin-top: 12px; }

@@ -1,5 +1,5 @@
 /* ============================================================ Chat pane ==== */
-const CITE_RE = /\{\{(cite|void|infer):([^}]*)\}\}/g;
+const CITE_RE = /\{\{(cite|void|infer|absent):([^}]*)\}\}/g;
 
 function renderAnswer(text, onCite) {
   return String(text).split('\n\n').map((block, bi) => {
@@ -18,6 +18,15 @@ function renderAnswer(text, onCite) {
         parts.push(<button key={m.index} type="button" className="cite infer"
           title="Inferred — the field linked these spans; the page never states the connection outright"
           onClick={() => onCite(docId, b)}>{label}</button>);
+      } else if (m[1] === 'absent') {
+        // Absence attestation: a negative claim ("never mentioned as a
+        // speaker") cites ⊥ with the receipt of what was scanned — no single
+        // line can support a claim about the whole document, but a full scan
+        // of the event log can. The receipt rides in the tooltip.
+        const i = m[2].indexOf(':');
+        const receipt = i >= 0 ? m[2].slice(i + 1) : m[2];
+        parts.push(<span key={m.index} className="cite absent"
+          title={'Absence attested mechanically — ' + receipt}>⊥</span>);
       } else {
         parts.push(<span key={m.index} className="cite void" title="This term appears nowhere in the sources">{m[2]}</span>);
       }
@@ -201,6 +210,22 @@ function narrateTurn(turn) {
           : s.to === 'question-about-silence' ? 'Reconsidered: the draft answered nothing on the page, so I read it as a question the document doesn’t address.'
           : 'Reconsidered the plan: ' + s.from + ' → ' + s.to + '.');
         break;
+      case 'confirm':
+        // CONFIRM/DENY: each proposition and the graph's verdict on it.
+        for (const c of (s.checks || [])) {
+          const prop = c.subject + (c.negated ? ' is not ' : ' is ') + c.predicate;
+          push(c.verdict === 'confirmed' ? 'Checked “' + prop + '” against the graph: the page itself asserts it.'
+            : c.verdict === 'contradicted' ? 'Checked “' + prop + '” against the graph: the page asserts the opposite.'
+            : c.verdict === 'confirmed-by-absence' ? 'Checked “' + prop + '” against the graph: a full scan of the events found nothing to the contrary — absence attested with a receipt.'
+            : c.verdict === 'denied-by-absence' ? 'Checked “' + prop + '” against the graph: a full scan of the events found no support for it.'
+            : 'Checked “' + prop + '” against the graph: the page never asserts it either way.');
+        }
+        break;
+      case 'retract':
+        // A SEG against the system's own utterance: an earlier reply asserted
+        // what the graph-check now fails to support.
+        push('Retracted an earlier claim of mine — I had said “' + (s.claim || '') + '”, and the graph-check doesn’t support it. The old reply re-enters history flagged as retracted.');
+        break;
       case 'opaque':
         // The void applied to the system itself: an honest edge-of-trace line.
         push(s.note || 'Part of this answer leaned on the model’s own reasoning, across a gap the trace can’t fully show.');
@@ -274,10 +299,15 @@ function Message({ msg, onCite }) {
               <div className="ml-note">First time only — the model downloads once, then runs on your GPU and is cached.</div>
             </div>
           : msg.typing ? <div className="typing"><span /><span /><span /></div>
-          : <React.Fragment>{renderAnswer(msg.text, onCite)}<AuditBadge audit={msg.audit} /></React.Fragment>}
+          : <React.Fragment>
+              {renderAnswer(msg.text, onCite)}
+              {/* a retraction outranks the badge the answer originally earned */}
+              {msg.retracted && <div className="retract-note">⊘ Retracted — a later check against the page found a claim here unsupported.</div>}
+              <AuditBadge audit={msg.audit} />
+            </React.Fragment>}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
-            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
+            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer|absent):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
             <button title="Good answer"><Icon name="thumbsup" size={15} /></button>
           </div>
         )}
