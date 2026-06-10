@@ -3,9 +3,9 @@
   "retrieve:who is in this story": [],
   "refDoc:who is in this story": true,
   "hasGround:who is in this story": true,
-  "context:who is in this story": "[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.\n[s0] The Lamp at Voss Point\n[s11] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.\n[s0] The Lamp at Voss Point\n[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing.",
+  "context:who is in this story": "[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.\n[s11] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.\n[s0] The Lamp at Voss Point\n[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing.",
   "answer:who is in this story": {
-   "text": "The figures who appear most often: Edith (12) {{cite:voss:1:s1}}, Lamp (2) {{cite:voss:0:s0}}, Marlow (2) {{cite:voss:11:s11}}, Sefton (1) {{cite:voss:3:s3}}, Harrow (1) {{cite:voss:9:s9}}.",
+   "text": "The figures who appear most often: Edith (12) {{cite:voss:1:s1}}, Marlow (2) {{cite:voss:11:s11}}, Sefton (1) {{cite:voss:3:s3}}, Harrow (1) {{cite:voss:9:s9}}.",
    "audit": {
     "status": "clean",
     "grounded": true,
@@ -17,10 +17,6 @@
     {
      "docId": "voss",
      "idx": 1
-    },
-    {
-     "docId": "voss",
-     "idx": 0
     },
     {
      "docId": "voss",
@@ -40,9 +36,9 @@
   "retrieve:summarize this": [],
   "refDoc:summarize this": true,
   "hasGround:summarize this": true,
-  "context:summarize this": "What the reading came to rest on: Edith, Lamp, Marlow, Voss Point, Sefton, Harrow.\n\n[s0] The Lamp at Voss Point\n[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.\n[s2] She set the kettle down and listened.\n[s4] \"You cannot row to the mainland tonight,\" the keeper said.\n[s6] \"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did.\n[s8] \"He will still be there in the morning,\" she said.\n[s10] By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp.\n[s11] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.",
+  "context:summarize this": "What the reading came to rest on: Edith, Marlow, Voss Point, Sefton, Harrow.\n\n[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.\n[s2] She set the kettle down and listened.\n[s4] \"You cannot row to the mainland tonight,\" the keeper said.\n[s6] \"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did.\n[s8] \"He will still be there in the morning,\" she said.\n[s10] By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp.\n[s11] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.",
   "answer:summarize this": {
-   "text": "This document turns most on Edith {{cite:voss:1:s1}}, Lamp {{cite:voss:0:s0}}, Marlow {{cite:voss:11:s11}}, Voss Point {{cite:voss:0:s0}}, Sefton {{cite:voss:3:s3}} and Harrow {{cite:voss:9:s9}}. The relations it draws: Edith thought Marlow.",
+   "text": "This document turns most on Edith {{cite:voss:1:s1}}, Marlow {{cite:voss:11:s11}}, Voss Point {{cite:voss:0:s0}}, Sefton {{cite:voss:3:s3}} and Harrow {{cite:voss:9:s9}}. The relations it draws: Edith thought Marlow.",
    "audit": {
     "status": "clean",
     "grounded": true,
@@ -54,10 +50,6 @@
     {
      "docId": "voss",
      "idx": 1
-    },
-    {
-     "docId": "voss",
-     "idx": 0
     },
     {
      "docId": "voss",
@@ -481,7 +473,7 @@
   "retrieve:summarize this": [],
   "refDoc:summarize this": true,
   "hasGround:summarize this": true,
-  "context:summarize this": "What the reading came to rest on: Edith, Delgado, Harrow, Voss Point, Long Watch.\n\n[s0] The Long Watch at Voss Point\n[s1] Edith carried the kettle near Voss Point without a word.\n[s2] Harrow repaired the shutter near the head of the stairs before the storm broke.\n[s4] Okonkwo argued about the lantern near the seaward shutter by midnight.\n[s8] Delgado remembered the storm near the mainland against the wind.\n[s13] The keeper watched the shutter near the lower room that evening.\n[s19] Voss questioned the lamp near the head of the stairs before the storm broke.\n[s22] Harrow repaired the boat near Voss Point without a word.\n[s26] Marlow abandoned the kettle near the seaward shutter by midnight.\n[s31] Sefton lit the lantern near the mainland against the wind.\n[s37] Edith carried the storm near the lower room that evening.\n[s40] Okonkwo argued about the shutter near the head of the stairs before the storm broke.\n[s44] Delgado remembered the lamp near Voss Point without a word.\n[s49] The keeper watched the boat near the seaward shutter by midnight.\n[s55] Voss questioned the kettle near the mainland against the wind.\n[s58] Harrow repaired the lantern near the lower room that evening.",
+  "context:summarize this": "What the reading came to rest on: Edith, Delgado, Harrow, Voss Point, Long Watch.\n\n[s1] Edith carried the kettle near Voss Point without a word.\n[s2] Harrow repaired the shutter near the head of the stairs before the storm broke.\n[s4] Okonkwo argued about the lantern near the seaward shutter by midnight.\n[s8] Delgado remembered the storm near the mainland against the wind.\n[s13] The keeper watched the shutter near the lower room that evening.\n[s19] Voss questioned the lamp near the head of the stairs before the storm broke.\n[s22] Harrow repaired the boat near Voss Point without a word.\n[s26] Marlow abandoned the kettle near the seaward shutter by midnight.\n[s31] Sefton lit the lantern near the mainland against the wind.\n[s37] Edith carried the storm near the lower room that evening.\n[s40] Okonkwo argued about the shutter near the head of the stairs before the storm broke.\n[s44] Delgado remembered the lamp near Voss Point without a word.\n[s49] The keeper watched the boat near the seaward shutter by midnight.\n[s55] Voss questioned the kettle near the mainland against the wind.\n[s58] Harrow repaired the lantern near the lower room that evening.\n[s62] Marlow abandoned the storm near the head of the stairs before the storm broke.",
   "answer:summarize this": {
    "text": "This document turns most on Edith {{cite:big:1:s1}}, Delgado {{cite:big:3:s3}}, Harrow {{cite:big:2:s2}}, Voss Point {{cite:big:0:s0}} and Long Watch {{cite:big:0:s0}}.",
    "audit": {

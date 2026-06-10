@@ -215,6 +215,40 @@ In priority order:
    a candidate run for long documents — real but secondary (+0.017 vs +0.031,
    and it doesn't compound with length the way noise does).
 
+## Addendum — recommendations 1–5 implemented
+
+The five mechanical recommendations above were applied (engine.js + llm.js;
+goldens recaptured — 5 intended snapshot diffs, all noise-removal; all 406
+behavioral tests pass; the fixture battery is unchanged at 0.815):
+
+1. **Admission tightened** — new evolvable rule `lowercase_evidence_disqualify`
+   (en-narrative-v1): a single-token capitalized surface whose word also stands
+   lowercase in the same document is a common noun, not a name. Plus Gutenberg
+   italic underscores (`_Mind_`) stripped in `cleanEntitySurface`.
+2. **Routing guard** — "what happens to NAME?" (capitalized target) now routes
+   factual; bare "what happens?" / "what happens in the story" still summarize.
+3. **Honest budget** — `llm.js` default assembly budget 7000 → 3300 (fits the
+   4096 window with the 520-token max reply), and the token estimator counts
+   CJK chars as ~1 token (120 JA chars → 120, was 30).
+4. **Hyphen asymmetry closed** — `tok()` also emits the parts of hyphenated
+   compounds, so `retrieve(doc, "what does Genevieve do?")` goes 0 → 5 hits.
+5. **Chrome skipped** — `salientContext` drops short, punctuation-less
+   title-page lines from its picks (with a fallback if that empties them).
+
+Skipped by design: #6 (the lighter plain-chat prompt — the report's own advice
+is to test it in the sandbox Prompt Lab first) and #7 (physics retune — a
+candidate for a future `evo:run`, not a default change).
+
+Measured after (14k battery, `results-after-fixes.json`):
+
+| | before | after |
+|---|---|---|
+| Q (baseline config) | 0.843 | **0.881** |
+| admission precision | 0.897 | **1.000** (0 noise nodes, was 13) |
+| answerability | 0.926 | **1.000** |
+| noise leaked into prompts | Darkness / Nature·Causes·Wealth·Nations / But·Well | **none** |
+| "what happens to Gregor?" | generic salient sample | 6 Gregor passages, grounded, 3 cites |
+
 ## Reproducing
 
 ```sh
