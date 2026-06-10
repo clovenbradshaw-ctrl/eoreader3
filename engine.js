@@ -3235,9 +3235,9 @@ function projectGraph(events, frame = {}) {
       if (ra !== rb) replayParent.set(ra, rb);
     };
     // Per-root physics state
-    const state = new Map();   // root → { mass, momentum, lastSentence }
+    const state = new Map();   // root → { mass, surfaceMass, momentum, lastSentence }
     const ensureState = (root, sent) => {
-      if (!state.has(root)) state.set(root, { mass: 0, momentum: 0, lastSentence: sent });
+      if (!state.has(root)) state.set(root, { mass: 0, surfaceMass: 0, momentum: 0, lastSentence: sent });
       return state.get(root);
     };
     const decayTo = (s, sent) => {
@@ -3245,13 +3245,18 @@ function projectGraph(events, frame = {}) {
       if (gap > 0) s.momentum *= Math.pow(γ, gap);
       s.lastSentence = sent;
     };
-    const touch = (key, sent, w = 1) => {
+    // surfaceW is the share of the deposit earned from the NAME appearing on
+    // the page; pronoun/inferred touches pass 0. It is a pure measurement
+    // accumulator — nothing in the replay reads it for any decision — so it
+    // never changes resolution dynamics.
+    const touch = (key, sent, w = 1, surfaceW = w) => {
       if (!key) return null;
       const root = rFind(key);
       const s = ensureState(root, sent);
       decayTo(s, sent);
       s.momentum = s.momentum * γ + w;
       s.mass += w;
+      s.surfaceMass = (s.surfaceMass || 0) + surfaceW;
       return { root, state: s };
     };
     const overlapOf = (nameA, nameB) => {
@@ -3311,12 +3316,13 @@ function projectGraph(events, frame = {}) {
         const siteKeys = ev.sites.map(k => normSurface(k));
         const roots = siteKeys.map(k => rFind(k));
         const uniqueRoots = [...new Set(roots)];
-        let totalMass = 0, totalMomentum = 0;
+        let totalMass = 0, totalMomentum = 0, totalSurfaceMass = 0;
         for (const r of uniqueRoots) {
           const s = ensureState(r, sent);
           decayTo(s, sent);
           totalMass += s.mass;
           totalMomentum += s.momentum;
+          totalSurfaceMass += (s.surfaceMass || 0);
         }
         const overlap = ev.siteNames && ev.siteNames.length >= 2
           ? overlapOf(ev.siteNames[0], ev.siteNames[1]) : 0;
@@ -3334,6 +3340,7 @@ function projectGraph(events, frame = {}) {
         const newRoot = rFind(siteKeys[0]);
         const merged = {
           mass: totalMass + 1,                   // the join itself is an observation
+          surfaceMass: totalSurfaceMass + 1,     // the join is a name-level observation
           momentum: totalMomentum * γ + 1,       // momentum carries forward, decayed and bumped
           lastSentence: sent,
         };
@@ -3352,34 +3359,37 @@ function projectGraph(events, frame = {}) {
           // so the entity panel shows honest weight (a name mentioned 3 times
           // and referred to by 20 pronouns is not mass 23).
           const w = isPronoun(rawSurf) ? ANAPHORA_W() : 1;
+          const surfaceW = isPronoun(rawSurf) ? 0 : w;   // pronouns earn no surface mass
           const redirected = hintToKey(hint);
-          if (redirected) { touch(redirected, sent, w); return; }
+          if (redirected) { touch(redirected, sent, w, surfaceW); return; }
           if (!rawSurf) return;
           const key = normSurface(rawSurf);
-          if (occ.has(key)) touch(key, sent, w);
+          if (occ.has(key)) touch(key, sent, w, surfaceW);
         };
         touchFromSurface(ev.s, ev.sHint);
         touchFromSurface(ev.o, ev.oHint);
       } else if (ev.op === 'DEF') {
         // A gender DEF born from a pronoun binding is inferred — discount it.
         const wDef = ev.src === 'pronoun-binding' ? ANAPHORA_W() : 1;
+        const surfaceWDef = ev.src === 'pronoun-binding' ? 0 : wDef;
         const redirected = hintToKey(ev.targetHint);
         if (redirected) {
-          touch(redirected, sent, wDef);
+          touch(redirected, sent, wDef, surfaceWDef);
         } else if (ev.target) {
           const key = normSurface(ev.target);
-          if (occ.has(key)) touch(key, sent, wDef);
+          if (occ.has(key)) touch(key, sent, wDef, surfaceWDef);
         }
       } else if (ev.op === 'SIG') {
         // Speech attributed via a pronoun ("he said") is inferred presence;
         // attributed via a name ("Tomas said") is an observation.
         const wSig = isPronoun(ev.speaker) ? ANAPHORA_W() : 1;
+        const surfaceWSig = isPronoun(ev.speaker) ? 0 : wSig;
         const redirected = hintToKey(ev.speakerHint);
         if (redirected) {
-          touch(redirected, sent, wSig);
+          touch(redirected, sent, wSig, surfaceWSig);
         } else if (ev.speaker) {
           const key = normSurface(ev.speaker);
-          if (occ.has(key)) touch(key, sent, wSig);
+          if (occ.has(key)) touch(key, sent, wSig, surfaceWSig);
         }
       } else if (ev.op === 'NUL' && ev.reason === 'stall' && Array.isArray(ev.competing)) {
         // Measure the stall configuration in this frame: each candidate's
@@ -3575,6 +3585,7 @@ function projectGraph(events, frame = {}) {
         const gap = Math.max(0, effectiveNow - final.lastSentence);
         cluster.physics = {
           mass: final.mass,
+          surfaceMass: final.surfaceMass != null ? final.surfaceMass : null,
           momentum: +(final.momentum * Math.pow(γf, gap)).toFixed(3),
           lastSentence: final.lastSentence,
           frame_now: effectiveNow,
@@ -3993,6 +4004,15 @@ function projectGraph(events, frame = {}) {
         type: (e.type === 'person' || e.type === 'place' || e.type === 'org') ? e.type : 'thing',
         raw: e.mentions || sents.length || 1,
         mass, sents,
+        // Additive surface for the talker-portrait composer (WI-5): these
+        // measurements decide which sentence and which connection to render,
+        // and are never shown to the talker.
+        momentum:    e.physics && e.physics.momentum != null
+                       ? Math.round(e.physics.momentum * 100) / 100 : null,
+        surfaceMass: e.physics && e.physics.surfaceMass != null
+                       ? Math.round(e.physics.surfaceMass * 10) / 10 : null,
+        gender:      e.gender || null,
+        referent_id: e.referent_id || null,
       };
     }).filter(e => e.sents.length > 0);
     entities.sort((a, b) => b.mass - a.mass || b.raw - a.raw);
@@ -4359,6 +4379,54 @@ function projectGraph(events, frame = {}) {
   // and the section spine. This takes that photo at the end position and says
   // it in words — mechanically, no model. Ported from eo-extractor.html's
   // graphPortrait(); reads Cleon's projected entities + edges + sections.
+  // ── Portrait substrate collectors (WI-2) ──────────────────────────
+  // These surface the NUL log, the signal substrate, and the full DEF set
+  // for the talker-portrait composer. They read only the event log; they
+  // never feed the talker — the composer turns them into prose.
+  function collectNullsForPortrait(doc) {
+    const out = [];
+    for (const ev of (doc._events || [])) {
+      if (ev.op !== 'NUL') continue;
+      out.push({
+        seq: ev.seq, sentence_idx: ev.sentence_idx,
+        reason: ev.reason || null, surface: ev.surface || null,
+        signal_id: ev.signal_id || null, competing: ev.competing || null,
+      });
+    }
+    return out;
+  }
+
+  function collectSignalsForPortrait(doc) {
+    const signals = new Map();
+    for (const ev of (doc._events || [])) {
+      if (ev.op === 'NUL' && ev.reason === 'signal-birth' && ev.signal_id) {
+        signals.set(ev.signal_id, {
+          id: ev.signal_id, constraints: ev.constraints || {},
+          birth_sentence: ev.sentence_idx, touched: 0,
+        });
+      }
+    }
+    for (const ev of (doc._events || [])) {
+      if (ev.signal_id && signals.has(ev.signal_id) && ev.op !== 'NUL') {
+        signals.get(ev.signal_id).touched++;
+      }
+    }
+    return [...signals.values()];
+  }
+
+  function collectDefsForPortrait(doc) {
+    const out = [];
+    for (const ev of (doc._events || [])) {
+      if (ev.op !== 'DEF') continue;
+      out.push({
+        seq: ev.seq, target: ev.target, path: ev.path, value: ev.value,
+        basis: ev.basis || null,
+        transmuting: typeof isTransmutingDef === 'function' ? !!isTransmutingDef(ev) : false,
+      });
+    }
+    return out;
+  }
+
   function graphPortrait(doc) {
     if (!doc || doc.kind !== 'prose') return null;
     const { entities } = projectEntities(doc);
@@ -4383,7 +4451,16 @@ function projectGraph(events, frame = {}) {
       .map(e => ({ name: e.name, is: defByTarget.get(e.key) }))
       .filter(a => a.is);
     const spine = (doc._sections || []).map(s => s.label).filter(Boolean).slice(0, 8);
-    return { heavy, heavyEdges, assertions, spine };
+    return {
+      heavy, heavyEdges, assertions, spine,                        // existing
+      tail:    entities.slice(6, 20).map(e => ({
+                 name: e.name, mass: e.mass, momentum: e.momentum, type: e.type
+               })),
+      nulls:   collectNullsForPortrait(doc),
+      signals: collectSignalsForPortrait(doc),
+      frame:   (() => { try { return projectGraph(doc._events).frame; } catch (e) { return null; } })(),
+      defs:    collectDefsForPortrait(doc),
+    };
   }
 
   // ── The graph, made portable ──────────────────────────────────────
@@ -4410,6 +4487,10 @@ function projectGraph(events, frame = {}) {
       spine: p.spine || [],
       frame: clone(frame),
       events: clone(doc._events) || [],
+      tail:    p.tail || [],
+      nulls:   p.nulls || [],
+      signals: p.signals || [],
+      defs:    p.defs || [],
     };
   }
 
@@ -5622,6 +5703,10 @@ function projectGraph(events, frame = {}) {
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
     applyRules, voidInvented, isCreativeCompose, dedupeSentences,
     // the extracted graph: a portrait, and a portable per-doc snapshot (explorer + export)
+    // graphPortrait / graphSnapshot / projectEntities now surface NUL log,
+    // signal substrate, frame, full DEF set, and long-tail entities.
+    // Talker-facing prose composer: see talkerPortrait (WI-5) and
+    // the mechanical grounder groundTalkerOutput (WI-6).
     graphPortrait, graphSnapshot,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
