@@ -19,7 +19,7 @@ function ok(cond, msg) {
   if (cond) { pass++; } else { fail++; fails.push(msg); console.error('  ✗ ' + msg); }
 }
 function eq(a, b, msg) { ok(a === b, `${msg} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`); }
-function group(name, fn) { console.log('• ' + name); fn(); }
+function group(name, fn) { console.log('• ' + name); return fn(); }
 
 // A table with a money column (revenue) AND a plain count column (units),
 // plus low-cardinality category columns, for the currency/pivot tests.
@@ -725,6 +725,78 @@ group('answerConfirm — confirmed / contradicted / absence-attested, no model i
   // the scope fold answers from the source whose graph can check it
   const sc = E.answerConfirmScope([voss, meeting], 'Was Amos Dresser a white minister?');
   ok(sc && /Yes — the page itself asserts/.test(sc.text), 'the scope fold finds the source that holds the assertion');
+});
+
+// ── widened graph-portrait surface (WI-1..4) ──────────────────────────
+const MACHINERY_RE = /\{\{|\[s\d+\]|\bs\d+\b|\b(mass|momentum|gravity|coupling|frame|rules_rev|NUL|SIG|INS|SEG|CON|SYN|DEF|EVA|REC|cite|void|infer|absent)\b/i;
+await group('graph portrait — widened surface stays additive', async () => {
+  const { entities } = E.projectEntities(voss);
+  const e = entities[0];
+  ok('momentum' in e && 'surfaceMass' in e && 'gender' in e && 'referent_id' in e,
+     'projectEntities carries momentum/surfaceMass/gender/referent_id');
+  ok(e.surfaceMass == null || e.surfaceMass <= e.mass, 'surfaceMass never exceeds mass (name-only weight)');
+  const p = E.graphPortrait(voss);
+  ok(['heavy', 'heavyEdges', 'assertions', 'spine'].every(k => k in p), 'four existing portrait keys preserved');
+  ok(['tail', 'nulls', 'signals', 'frame', 'defs'].every(k => k in p), 'five new portrait keys present');
+  eq(p.nulls.length, voss._events.filter(ev => ev.op === 'NUL').length, 'nulls mirrors the NUL log exactly');
+  ok(p.frame && p.frame.gamma != null && p.frame.delta != null && !!p.frame.couplings, 'frame carries gamma/delta/couplings');
+  const snap = E.graphSnapshot(voss);
+  ok(['tail', 'nulls', 'signals', 'defs'].every(k => k in snap), 'graphSnapshot surfaces tail/nulls/signals/defs');
+  eq(snap.schema, 'cleon-graph/1', 'snapshot schema unchanged');
+});
+
+// ── talker portrait + the one LLM step + mechanical EVA (WI-5) ────────
+await group('talker portrait — three prose blocks, no machinery', async () => {
+  const tp = await E.talkerPortrait(voss);                 // no opts.llm → fallback, 0 LLM calls
+  ok(tp && ['existence', 'structure', 'significance', 'spans'].every(k => k in tp), 'returns four fields');
+  ok(/^The page carries these passages\./.test(tp.existence), 'EXISTENCE leads with the page framing');
+  ok(/^The notes the reader took\./.test(tp.structure), 'STRUCTURE leads with the reader-notes framing');
+  ok(/^What the reading came to\./.test(tp.significance), 'SIGNIFICANCE leads with the epistemic framing');
+  ok(/\b(the reading|the piece|the document carries)\b/i.test(tp.significance), 'SIGNIFICANCE carries an epistemic phrase');
+  for (const block of [tp.existence, tp.structure, tp.significance])
+    ok(!MACHINERY_RE.test(block), 'no machinery leaked into a prose block');
+  // EXISTENCE sentences are all represented in spans
+  const spanIdx = new Set(tp.spans.map(s => s.sentenceIndex));
+  const heavy = E.graphPortrait(voss).heavy.slice(0, 6);
+  ok(heavy.every(h => spanIdx.has(h.sents[0])), 'spans cover every EXISTENCE sentence');
+
+  // evaDraft — each rejection reason fires, a clean draft passes
+  const p = E.graphPortrait(voss);
+  ok(!E.evaDraft('The mass of Edith grows. It moves. It rests.', p, voss.sentenceTexts).ok, 'evaDraft rejects machinery');
+  ok(!E.evaDraft('Edith waits in s14 now. She stays. The end.', p, voss.sentenceTexts).ok, 'evaDraft rejects index leaks');
+  ok(!E.evaDraft('The text says Edith left. She stays. The end.', p, voss.sentenceTexts).ok, 'evaDraft rejects ontological framing');
+  ok(!E.evaDraft('The reading follows Zaphod here. He stays. The end.', p, voss.sentenceTexts).ok, 'evaDraft rejects invented names');
+  ok(!E.evaDraft('The reading is brief.', p, voss.sentenceTexts).ok, 'evaDraft rejects out-of-range length');
+  ok(E.evaDraft('The reading follows Edith closely. She stays near the lamp. The keeper waits.', p, voss.sentenceTexts).ok, 'evaDraft accepts a clean epistemic draft');
+
+  // exactly one LLM call when the first draft passes EVA
+  let calls = 0;
+  const goodLlm = async () => { calls++; return 'The reading follows Edith closely. She stays near the lamp. The keeper waits by the boat.'; };
+  const tpA = await E.talkerPortrait(voss, { llm: goodLlm });
+  eq(calls, 1, 'exactly one LLM call when the draft is accepted');
+  ok(tpA.significance.includes('follows Edith closely'), 'the accepted draft becomes the SIGNIFICANCE body');
+
+  // a persistently bad draft retries once then falls back deterministically
+  let bad = 0;
+  const badLlm = async () => { bad++; return 'The text says everything about mass now.'; };
+  const tpB = await E.talkerPortrait(voss, { llm: badLlm });
+  eq(bad, 2, 'one retry on a rejected draft, then stop');
+  ok(!MACHINERY_RE.test(tpB.significance), 'the deterministic fallback is clean of machinery');
+});
+
+// ── mechanical talker grounder (WI-6) ────────────────────────────────
+await group('talker grounder — mechanical, deterministic', async () => {
+  const tp = await E.talkerPortrait(voss);
+  const prose = tp.existence + ' ' + tp.structure + ' ' + tp.significance;
+  const g1 = E.groundTalkerOutput(voss, prose, tp.spans);
+  const g2 = E.groundTalkerOutput(voss, prose, tp.spans);
+  ok(g1.text === g2.text && JSON.stringify(g1.cites) === JSON.stringify(g2.cites), 'two invocations are byte-identical (no LLM, no nondeterminism)');
+  ok(g1.audit.stable === true, 'audit reports stable');
+  ok(g1.cites.length > 0 && /\{\{cite:voss:/.test(g1.text), 'EXISTENCE sentences bind cites mechanically');
+  ok(/^\d+\/\d+$/.test(g1.audit.covers), 'covers is a fraction of cited sentences');
+  // bindCitations parity floor unchanged by the hoisted constant
+  const bc = E.bindCitations(voss, 'Edith set the kettle down and listened.', 'q', 'factual');
+  ok(/\{\{cite:voss:/.test(bc.text), 'bindCitations still binds against the shared floor');
 });
 
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

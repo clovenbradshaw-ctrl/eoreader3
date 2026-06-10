@@ -4494,6 +4494,329 @@ function projectGraph(events, frame = {}) {
     };
   }
 
+  /* ============================================================ TALKER PORTRAIT
+     The talker reads what a reader would read — words on a page, nothing else.
+     This composes the three EO triads as three labeled prose blocks
+     (EXISTENCE / STRUCTURE / SIGNIFICANCE), runs the single LLM step that
+     writes SIGNIFICANCE, checks that draft mechanically (evaDraft), and binds
+     citations back to source sentences mechanically (groundTalkerOutput).
+
+     Machinery never reaches the talker: no mass/momentum/frame, no operator
+     names, no sentence indices, no citation tokens. The ontological (what the
+     page contains) and the epistemic (what the reading concluded) live in
+     separate, differently-labeled blocks and never blend. */
+
+  // The citation floor — the same threshold bindCitations grounds against.
+  // Hoisted so the talker grounder reuses it rather than inventing a new one.
+  const CITE_FLOOR = 0.34;
+
+  // English ordinal words for the small counts the prose needs.
+  const ORDINAL_WORDS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+  function ordinalWord(n) { return ORDINAL_WORDS[n - 1] || `${n}th`; }
+
+  // Which paragraph (1-based, counting only p-blocks) a sentence falls in.
+  // Used by STRUCTURE to say "since the third paragraph" mechanically.
+  function paragraphOrdinalOf(doc, sentIdx) {
+    if (sentIdx == null || !doc || !Array.isArray(doc.blocks)) return null;
+    let pNum = 0;
+    for (const b of doc.blocks) {
+      if (b.type !== 'p' || !Array.isArray(b.sentences)) continue;
+      pNum++;
+      if (b.sentences.some(s => s.i === sentIdx)) return pNum;
+    }
+    return null;
+  }
+
+  function genderWord(raw) {
+    const g = String(raw == null ? '' : raw).toLowerCase();
+    if (g === 'f' || g === 'female' || g === 'woman') return 'female';
+    if (g === 'm' || g === 'male' || g === 'man') return 'male';
+    return null;
+  }
+
+  // The mechanical EVA. Accepts or rejects a SIGNIFICANCE draft with no LLM —
+  // checks for machinery leaks, index/citation leaks, ontological framing,
+  // invented names, and length. Returns { ok, reasons }.
+  function evaDraft(draft, p, sentenceTexts) {
+    const reasons = [];
+    const text = String(draft == null ? '' : draft);
+
+    // Check 1: no machinery vocabulary leaked in.
+    const banned = /\b(mass|momentum|gravity|coupling|frame|rules_rev|NUL|SIG|INS|SEG|CON|SYN|DEF|EVA|REC)\b/i;
+    if (banned.test(text)) reasons.push('machinery-leak');
+
+    // Check 2: no citation tokens or sentence indices.
+    if (/\{\{|\[s\d+\]|\bs\d+\b/.test(text)) reasons.push('index-leak');
+
+    // Check 3: ontological framing absent (epistemic framing required).
+    const ontologicalFraming = /\b(the text says|the page asserts|according to the document|the document states)\b/i;
+    if (ontologicalFraming.test(text)) reasons.push('ontological-slip');
+
+    // Check 4: every capitalized proper noun must be known or on the page.
+    const knownNames = new Set([
+      ...p.heavy.map(e => e.name),
+      ...(p.tail || []).map(e => e.name),
+    ]);
+    const properNouns = (text.match(/\b[A-Z][a-zA-Z]+\b/g) || [])
+      .filter(w => !/^(The|A|An|It|This|That|These|Those|What|When|Where|Who|Why|How|And|But|Or|So|Yet|If|Because|While|Though|Although|Since)$/.test(w));
+    for (const noun of properNouns) {
+      if (!knownNames.has(noun) && !sentenceTexts.some(s => s.includes(noun))) {
+        reasons.push('invented-name:' + noun);
+      }
+    }
+
+    // Check 5: length — 3 to 8 sentences.
+    const sentCount = (text.match(/[.!?]+\s/g) || []).length + 1;
+    if (sentCount < 3 || sentCount > 8) reasons.push('length:' + sentCount);
+
+    return { ok: reasons.length === 0, reasons };
+  }
+
+  // Build the deterministic NUL + signal closing sentences. These never go
+  // through the LLM and are guaranteed clean of machinery and framing slips.
+  // Also pushes the supporting sentence indices into `spans`.
+  function closureSentences(doc, p, spans) {
+    const out = [];
+    const heavyKeys = new Set(p.heavy.map(e => e.key));
+    const seqToSent = doc._seqToSent || new Map();
+    const pushSpan = (idx) => {
+      if (idx != null && doc.sentenceTexts[idx] != null)
+        spans.push({ key: '_significance', sentenceIndex: idx, text: doc.sentenceTexts[idx] });
+    };
+
+    // NULs whose competing set touches a heavy figure → an undecided pronoun.
+    for (const nl of (p.nulls || [])) {
+      const comp = Array.isArray(nl.competing) ? nl.competing : [];
+      if (!comp.some(c => heavyKeys.has(c.site))) continue;
+      const named = comp.map(c => c.siteName || c.name).filter(Boolean);
+      if (named.length < 2) continue;
+      out.push(`The reading did not commit when a pronoun could have been either ${named[0]} or ${named[1]}.`);
+      if (nl.sentence_idx != null) pushSpan(nl.sentence_idx);
+    }
+
+    // Signals carried far without ever being named.
+    const total = (doc.sentenceTexts || []).length || 1;
+    for (const sig of (p.signals || [])) {
+      if (!(sig.touched >= 3 && sig.birth_sentence != null && sig.birth_sentence < total / 4)) continue;
+      const g = genderWord(sig.constraints && sig.constraints.gender);
+      out.push(g
+        ? `An unnamed ${g} figure has carried part of the piece without ever being named.`
+        : `An unnamed figure has carried part of the piece without ever being named.`);
+      pushSpan(sig.birth_sentence);
+    }
+    return out;
+  }
+
+  // The deterministic SIGNIFICANCE body — dry but never wrong about the
+  // ontological/epistemic boundary. Used when the LLM is unavailable or both
+  // drafts fail EVA.
+  function fallbackSignificance(p) {
+    const parts = [];
+    const a = p.heavy[0], b = p.heavy[1];
+    if (a && b) parts.push(`The piece returns most often to ${a.name} and ${b.name}; their paths through the document carry most of the weight.`);
+    else if (a) parts.push(`The piece returns most often to ${a.name}.`);
+    for (const as of (p.assertions || []).slice(0, 2)) {
+      if (as && as.name && as.is) parts.push(`The reading takes ${as.name} to be ${as.is}.`);
+    }
+    return parts.join(' ');
+  }
+
+  // talkerPortrait(doc, opts) — the three prose blocks + spans for the grounder.
+  // opts.llm, when supplied, is the ONE LLM step: an (system, user) => string
+  // (sync or async) that writes the SIGNIFICANCE paragraph. With no opts.llm
+  // the composer is fully deterministic (zero LLM calls) via the fallback.
+  async function talkerPortrait(doc, opts = {}) {
+    const p = graphPortrait(doc);
+    if (!p || !p.heavy.length) return null;
+    const sentenceTexts = doc.sentenceTexts || [];
+    const spans = [];
+
+    // ── Block 1 — EXISTENCE (ontological): one sentence per heavy figure ──
+    const seenExist = new Set();
+    const existParts = [];
+    for (const e of p.heavy.slice(0, 6)) {
+      const idx = e.sents[0];
+      const text = sentenceTexts[idx];
+      if (text == null || seenExist.has(idx)) continue;
+      seenExist.add(idx);
+      existParts.push(String(text).trim());
+      spans.push({ key: e.key, sentenceIndex: idx, text });
+    }
+    const existence = 'The page carries these passages. ' + existParts.join(' ');
+
+    // ── Block 2 — STRUCTURE (ontological): a reader's notes ──
+    const total = sentenceTexts.length || 1;
+    const third = total / 3, lastThirdStart = (2 * total) / 3;
+    const seqToSent = doc._seqToSent || new Map();
+    const heavyByKey = new Map(p.heavy.map(e => [e.key, e]));
+    const seqSents = (eventSeqs) => [...new Set((eventSeqs || [])
+      .map(sq => seqToSent.get(sq)).filter(i => i != null))].sort((x, y) => x - y);
+    const pushStructSpans = (idxs) => {
+      for (const i of idxs) if (sentenceTexts[i] != null)
+        spans.push({ key: '_structure', sentenceIndex: i, text: sentenceTexts[i] });
+    };
+    const notes = [];
+
+    // Co-occurrence: one clause for the strongest early-sharing heavy pair.
+    for (const ed of (p.heavyEdges || [])) {
+      if ((ed.weight || 0) < 2) continue;
+      const A = heavyByKey.get(ed.a), B = heavyByKey.get(ed.b);
+      if (!A || !B) continue;
+      if (!(A.sents[0] < third && B.sents[0] < third)) continue;
+      notes.push(`${A.name} and ${B.name} share the early scenes.`);
+      pushStructSpans(seqSents(ed.eventSeqs));
+      break;
+    }
+    // Reappearance: one clause for the strongest edge spanning first→last third.
+    for (const ed of (p.heavyEdges || [])) {
+      if ((ed.weight || 0) < 3) continue;
+      const idxs = seqSents(ed.eventSeqs);
+      if (!idxs.length) continue;
+      const A = heavyByKey.get(ed.a), B = heavyByKey.get(ed.b);
+      if (!A || !B) continue;
+      if (idxs[0] < third && idxs[idxs.length - 1] >= lastThirdStart) {
+        notes.push(`${A.name} reappears whenever ${B.name} does.`);
+        pushStructSpans(idxs);
+        break;
+      }
+    }
+    // Naming asymmetry from signals carried unnamed since early on.
+    for (const sig of (p.signals || [])) {
+      if (!(sig.touched >= 3 && sig.birth_sentence != null && sig.birth_sentence < total / 4)) continue;
+      const para = paragraphOrdinalOf(doc, sig.birth_sentence);
+      const where = para != null ? `the ${ordinalWord(para)} paragraph` : 'early on';
+      notes.push(`Someone has been in the room without a name since ${where}.`);
+      if (sentenceTexts[sig.birth_sentence] != null)
+        spans.push({ key: '_structure', sentenceIndex: sig.birth_sentence, text: sentenceTexts[sig.birth_sentence] });
+      break;
+    }
+    // Tail figures.
+    if ((p.tail || []).length >= 3) notes.push('Several others pass through but never carry a scene.');
+    // Section spine.
+    if ((p.spine || []).length >= 2) {
+      notes.push(`The piece moves through ${p.spine.length} named sections, ${p.spine.join(', ')}.`);
+    }
+    const structure = 'The notes the reader took.' + (notes.length ? ' ' + notes.join(' ') : '');
+
+    // ── Block 3 — SIGNIFICANCE (epistemic): the one LLM call, then EVA ──
+    const system = 'You are reading a portrait of a document. Write one paragraph '
+      + 'in plain prose describing what the reading came to. Use phrasing like '
+      + '"the reading", "the piece", "the document carries" — never "the text '
+      + 'says" or "according to the document". Do not invent connections, names, '
+      + 'or details that do not appear in the passages or the notes below. Four '
+      + 'to six sentences. No headers, no bullets, no quotation marks around '
+      + 'proper nouns.';
+    const user = existence + '\n\n' + structure;
+
+    let body = null;
+    const llm = typeof opts.llm === 'function' ? opts.llm : null;
+    if (llm) {
+      let sys = system;
+      for (let attempt = 0; attempt < 2 && body == null; attempt++) {
+        let draft = '';
+        try { draft = String((await llm(sys, user)) || '').trim(); } catch (e) { draft = ''; }
+        if (!draft) break;
+        const eva = evaDraft(draft, p, sentenceTexts);
+        if (eva.ok) { body = draft; break; }
+        // Sharpen the system prompt with the rejection reasons and retry once.
+        sys = system + ' Your previous draft was rejected (' + eva.reasons.join(', ')
+          + '); this time use only epistemic framing, no machinery words, no '
+          + 'sentence numbers, and only names that appear in the passages above.';
+      }
+    }
+    if (body == null) body = fallbackSignificance(p);
+
+    // Append NUL + signal closures (deterministic, never via the LLM).
+    const closures = closureSentences(doc, p, spans);
+    const sigParts = [body, ...closures].filter(s => s && s.trim());
+    const significance = 'What the reading came to.' + (sigParts.length ? ' ' + sigParts.join(' ') : '');
+
+    // ── Final guard — the last line of defense before the talker sees it ──
+    const guardRE = /\{\{|\[s\d+\]|\bs\d+\b|\b(mass|momentum|gravity|coupling|frame|rules_rev|NUL|SIG|INS|SEG|CON|SYN|DEF|EVA|REC|cite|void|infer|absent)\b/i;
+    for (const block of [existence, structure, significance]) {
+      if (guardRE.test(block)) throw new Error('talker portrait composer leaked machinery');
+    }
+
+    return { existence, structure, significance, spans };
+  }
+
+  /* ===================================================== TALKER GROUNDER (WI-6)
+     Fully mechanical citation binding for talker prose. No LLM: token overlap
+     against the span candidate set with a doc-wide backstop, the same scoring
+     bindCitations grounds against. LLM generates meaning; code generates form. */
+  function groundTalkerOutput(doc, talkerProse, spans, opts = {}) {
+    const sentenceTexts = doc.sentenceTexts || [];
+    const spanIdx = new Set((spans || []).map(s => s.sentenceIndex).filter(i => i != null));
+    const bodyJoined = sentenceTexts.join(' ');
+    const parts = splitDraft(String(talkerProse == null ? '' : talkerProse)
+      .replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim());
+
+    const cites = [];
+    const seenCite = new Set();
+    let citedCount = 0, inferCount = 0, absentCount = 0, integrationCount = 0;
+
+    const out = parts.map(sentRaw => {
+      const sent = sentRaw.trim();
+      if (!sent) return sent;
+      // Rank every doc sentence by the same scoring bindCitations uses, then
+      // prefer a hit inside the span set before the doc-wide backstop.
+      const ranked = retrieve(doc, sent, sentenceTexts.length || 6);
+      const spanHit = ranked.find(h => spanIdx.has(h.i)) || null;
+      const backstop = ranked[0] || null;
+      const best = (spanHit && supportsClaim(spanHit, sent, CITE_FLOOR)) ? spanHit
+        : (backstop && supportsClaim(backstop, sent, CITE_FLOOR)) ? backstop
+        : (spanHit || backstop);
+      const bestScore = best ? best.score : 0;
+
+      if (best && supportsClaim(best, sent, CITE_FLOOR)) {
+        if (!seenCite.has(best.i)) { seenCite.add(best.i); cites.push({ docId: doc.id, idx: best.i }); }
+        citedCount++;
+        return `${sent} {{cite:${doc.id}:${best.i}:s${best.i}}}`;
+      }
+
+      // Mid-tier: a synthesis across spans — known names spread over several
+      // source sentences, none of which carries them all. Bind an inference.
+      if (bestScore >= CITE_FLOOR / 2) {
+        const names = (sent.match(/\b[A-Z][a-zA-Z]+\b/g) || [])
+          .filter(w => !/^(The|A|An|It|This|That|These|Those|What|When|Where|Who|Why|How|And|But|Or|So|Yet|If|Because|While|Though|Although|Since)$/.test(w))
+          .filter(w => bodyJoined.includes(w));
+        const supporters = ranked.filter(h => spanIdx.has(h.i)).slice(0, 2);
+        const oneCovers = names.length && supporters.some(h => names.every(n => (sentenceTexts[h.i] || '').includes(n)));
+        if (names.length && supporters.length >= 2 && !oneCovers) {
+          const a = supporters[0].i, b = supporters[1].i;
+          inferCount++;
+          return `${sent} {{infer:${doc.id}:${a}+${b}:span}}`;
+        }
+      }
+
+      // Low: an invented proper noun the grounder caught (rare post-EVA).
+      if (bestScore < CITE_FLOOR / 2) {
+        const ghost = (sent.match(/\b[A-Z][a-zA-Z]+\b/g) || [])
+          .filter(w => !/^(The|A|An|It|This|That|These|Those|What|When|Where|Who|Why|How|And|But|Or|So|Yet|If|Because|While|Though|Although|Since)$/.test(w))
+          .find(w => !bodyJoined.includes(w));
+        if (ghost) { absentCount++; return `${sent} {{absent:${ghost}}}`; }
+      }
+
+      // Otherwise an unbound integration from the reading.
+      integrationCount++;
+      return sent;
+    }).join(' ');
+
+    const totalSentences = parts.filter(s => s.trim()).length;
+    const bound = citedCount + inferCount;
+    const status = absentCount ? 'warn' : (integrationCount ? 'notes' : 'clean');
+    const grounded = absentCount === 0 && citedCount > 0;
+    const note = `${bound}/${totalSentences} sentences cited`
+      + (integrationCount ? `; ${integrationCount} are integrations from the reading.` : '.')
+      + (absentCount ? ` ${absentCount} flagged absent (invented).` : '');
+
+    return {
+      text: out,
+      cites,
+      audit: { status, grounded, covers: `${bound}/${totalSentences}`, stable: true, note },
+    };
+  }
+
   function answerSummary(doc) {
     const p = graphPortrait(doc);
     if (!p || !p.heavy.length) {
@@ -4933,7 +5256,7 @@ function projectGraph(events, frame = {}) {
 
   // bind [sN] citations onto an LLM answer mechanically (model never writes them)
   function bindCitations(doc, answerText, query, intent, opts) {
-    const floor = 0.34;
+    const floor = CITE_FLOOR;
     const clean = answerText.replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim();
     const parts = splitDraft(clean);
     const cited = [];
@@ -5707,7 +6030,7 @@ function projectGraph(events, frame = {}) {
     // signal substrate, frame, full DEF set, and long-tail entities.
     // Talker-facing prose composer: see talkerPortrait (WI-5) and
     // the mechanical grounder groundTalkerOutput (WI-6).
-    graphPortrait, graphSnapshot,
+    graphPortrait, graphSnapshot, talkerPortrait, groundTalkerOutput, evaDraft,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
     contextScope, bindCitationsScope,
