@@ -25,8 +25,8 @@ function SandboxDrawer({ onClose, onToast }) {
   const [candidate, setCandidate] = useState(null); // current manual candidate result
   const [edited, setEdited] = useState({});       // ruleName -> new value (manual)
   const [apiKey, setApiKey] = useState('');       // kept only in this tab's memory
-  const [live, setLive] = useState({ busy: false, log: [], tokens: 0, error: null, best: null, capped: false });
-  const [liveCfg, setLiveCfg] = useState({ model: 'claude-opus-4-8', generations: 6, tokenMax: 150000, thinking: false });
+  const [live, setLive] = useState({ busy: false, log: [], tokens: 0, error: null, best: null, capped: false, sampled: [] });
+  const [liveCfg, setLiveCfg] = useState({ model: 'claude-opus-4-8', generations: 6, tokenMax: 150000, thinking: false, rangeSize: 6 });
   const [baseEngine, setBaseEngine] = useState(null); // the loaded baseline EOEngine, for the inspector + chat
   const [inspectId, setInspectId] = useState(null);
   const [graph, setGraph] = useState(null);
@@ -115,11 +115,13 @@ function SandboxDrawer({ onClose, onToast }) {
   // iterate, bounded by a token budget.
   const runLive = useCallback(async () => {
     if (!apiKey) { onToast && onToast('Enter your Anthropic API key first'); return; }
-    setLive({ busy: true, log: [], tokens: 0, error: null, best: null, capped: false });
+    const excerpts = SB.sampleExcerpts(DATA, liveCfg.rangeSize || 6);
+    setLive({ busy: true, log: [], tokens: 0, error: null, best: null, capped: false, sampled: excerpts.map(e => e.src) });
     try {
       const E0 = SB.loadCandidate(src.pivot, src.engine, nlp);
       const battery = await SB.traceBattery(E0, DATA);
-      const agent = SB.liveAgent({ key: apiKey, model: liveCfg.model, thinking: liveCfg.thinking, tokenMax: liveCfg.tokenMax });
+      const baseRange = await SB.scoreRange(E0, excerpts);
+      const agent = SB.liveAgent({ key: apiKey, model: liveCfg.model, thinking: liveCfg.thinking, tokenMax: liveCfg.tokenMax, rules });
       const history = []; let best = null, capped = false;
       for (let g = 0; g < liveCfg.generations; g++) {
         if (agent.exhausted()) { capped = true; break; }
@@ -127,17 +129,17 @@ function SandboxDrawer({ onClose, onToast }) {
         try { hyp = await agent.hypothesize({ battery, baseline: baseline.quality, history }); }
         catch (e) { setLive(s => ({ ...s, error: String(e.message || e), busy: false })); return; }
         if (!hyp) break;
-        const r = await evalEdits(hyp.edits);
+        const r = await SB.evaluateFast({ pivotSrc: src.pivot, engineSrc: src.engine, edits: hyp.edits, nlp, data: DATA, excerpts, baseline: baseline.quality, baseRange, cfg });
         const entry = { hyp, result: r };
         history.push(entry);
         if (r.surface && (!best || r.qualityDelta > best.result.qualityDelta)) best = entry;
-        setLive({ busy: true, log: [...history], tokens: agent.tokensUsed(), error: null, best, capped: false });
+        setLive(s => ({ ...s, busy: true, log: [...history], tokens: agent.tokensUsed(), error: null, best }));
         await new Promise(res => setTimeout(res, 0));
       }
       setLive(s => ({ ...s, busy: false, capped }));
       onToast && onToast('Live run complete · ' + agent.tokensUsed() + ' tokens');
     } catch (e) { setLive(s => ({ ...s, busy: false, error: String(e.message || e) })); }
-  }, [apiKey, src, baseline, liveCfg, evalEdits, onToast]);
+  }, [apiKey, src, baseline, liveCfg, rules, onToast]);
 
   // Manual: test the currently-edited rule values as one candidate.
   const testManual = useCallback(async () => {
@@ -153,29 +155,80 @@ function SandboxDrawer({ onClose, onToast }) {
     onToast && onToast('Exported evo-candidate.diff');
   };
 
-  const STATE_TAG = { 'clean-win': ['✓ clean win', 'win'], 'justified-break': ['⚑ justified break', 'just'], 'regression': ['✗ regression', 'bad'], 'null': ['· null', 'null'], 'rejected-by-allowlist': ['⊘ rejected by constitution', 'bad'] };
+  // The artifact you hand back to update the app: every proposal + verdict,
+  // the wins, and the recommended edits to apply (best clean win).
+  const buildRunJSON = (log, provider, tokens) => {
+    const r3 = (x) => (x == null ? null : Math.round(x * 10000) / 10000);
+    const wins = log.filter(g => g.result.surface).sort((a, b) => b.result.qualityDelta - a.result.qualityDelta);
+    return {
+      app: 'cleon-evo-sandbox', schema: 'evo-run/1', generatedAt: new Date().toISOString(),
+      provider, model: provider === 'live' ? liveCfg.model : 'offline', tokensUsed: tokens || 0,
+      baseline: { composite: r3(baseline.quality.composite), components: baseline.quality.components },
+      results: log.map(g => ({
+        target: g.hyp.target, statement: g.hyp.statement || null, rationale: g.hyp.rationale || null,
+        edits: g.hyp.edits, state: g.result.state, qualityDelta: r3(g.result.qualityDelta),
+        componentDeltas: g.result.componentDeltas || null,
+        parity: g.result.parity ? { clean: g.result.parity.clean, diffs: g.result.parity.diffs } : null,
+        range: g.result.range ? { grounding: r3(g.result.range.grounding), fabrications: g.result.range.fabrications, n: g.result.range.n } : null,
+        note: g.result.note || null,
+      })),
+      wins: wins.map(g => ({ target: g.hyp.target, edits: g.hyp.edits, state: g.result.state, qualityDelta: r3(g.result.qualityDelta) })),
+      recommendedEdits: wins.length ? wins[0].hyp.edits : [],
+    };
+  };
+  const copyRun = (log, provider, tokens) => {
+    const txt = JSON.stringify(buildRunJSON(log, provider, tokens), null, 2);
+    try { navigator.clipboard.writeText(txt); onToast && onToast('Run JSON copied — paste it back to update the app'); }
+    catch (e) { onToast && onToast('copy failed; use Download'); }
+  };
+  const downloadRun = (log, provider, tokens) => {
+    const blob = new Blob([JSON.stringify(buildRunJSON(log, provider, tokens), null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'evo-run-' + provider + '.json'; a.click();
+    onToast && onToast('Downloaded evo-run-' + provider + '.json');
+  };
+  function RunSummary({ log, provider, tokens }) {
+    if (!log.length) return null;
+    const wins = log.filter(g => g.result.surface);
+    const best = wins.length ? Math.max(...wins.map(g => g.result.qualityDelta)) : 0;
+    return (
+      <div className="sbx-runsummary">
+        <span>{log.length} proposal{log.length === 1 ? '' : 's'} · {wins.length} win{wins.length === 1 ? '' : 's'}{wins.length ? ' · best Δ+' + (Math.round(best * 10000) / 10000) : ' · nothing to keep yet'}</span>
+        <button className="mini-btn" onClick={() => copyRun(log, provider, tokens)}><Icon name="copy" size={12} /> Copy run JSON</button>
+        <button className="mini-btn" onClick={() => downloadRun(log, provider, tokens)}><Icon name="upload" size={12} /> Download</button>
+      </div>
+    );
+  }
+
+  const STATE_TAG = {
+    'clean-win': ['✓ clean win', 'win'], 'improves': ['✓ improves', 'win'],
+    'justified-break': ['⚑ justified break', 'just'], 'range-flag': ['⚑ range flag', 'just'],
+    'regression': ['✗ regression', 'bad'], 'broken': ['✗ broken', 'bad'],
+    'null': ['· null', 'null'], 'rejected-by-allowlist': ['⊘ rejected by constitution', 'bad'],
+  };
 
   function Verdict({ r }) {
     if (!r) return null;
     const [label, cls] = STATE_TAG[r.state] || [r.state, ''];
+    const hasDeltas = r.componentDeltas && r.qualityDelta != null;
     return (
       <div className={'sbx-verdict ' + cls}>
         <div className="sbx-verdict-head"><span className={'sbx-badge ' + cls}>{label}</span>
           {r.note && <span className="sbx-note">{r.note}</span>}</div>
-        {r.state !== 'rejected-by-allowlist' && (
+        {hasDeltas && (
           <React.Fragment>
             <div className="sbx-deltas">
-              <span>parity <b>{r.parity.clean ? 'clean' : r.parity.diffs + '/' + r.parity.total + ' diffs'}</b></span>
+              {r.parity && <span>parity <b>{r.parity.clean ? 'clean' : r.parity.diffs + '/' + r.parity.total + ' diffs'}</b></span>}
+              {r.range && <span>range <b>{Math.round(r.range.grounding * r.range.n)}/{r.range.n} grounded{r.range.fabrications ? ', ' + r.range.fabrications + ' fab' : ''}</b></span>}
               <span>Δquality <b>{sgn(r.qualityDelta)}</b></span>
               <span>bind {sgn(r.componentDeltas.binding)}</span>
               <span>stall {sgn(r.componentDeltas.stall)}</span>
               <span>ground {sgn(r.componentDeltas.grounding)}</span>
             </div>
             {r.diff && <details className="sbx-diff"><summary>diff</summary><pre>{r.diff.trim()}</pre></details>}
-            {(r.state === 'clean-win' || r.state === 'justified-break') && (
+            {r.surface && (
               <div className="sbx-actions">
                 <button className="mini-btn primary" onClick={() => exportDiff(r.diff)}><Icon name="upload" size={13} /> Export diff</button>
-                <span className="sbx-hint">to keep it: <code>npm run evo:accept</code> in the repo{r.state === 'justified-break' ? ' (recaptures goldens)' : ''}</span>
+                <span className="sbx-hint">to keep it: <code>npm run evo:accept</code> (re-checks golden parity)</span>
               </div>
             )}
           </React.Fragment>
@@ -268,11 +321,13 @@ function SandboxDrawer({ onClose, onToast }) {
                     </select>
                   </label>
                   <label>generations<input type="number" min="1" max="12" value={liveCfg.generations} onChange={e => setLiveCfg(c => ({ ...c, generations: Number(e.target.value) || 6 }))} /></label>
+                  <label title="How many short, random corpus excerpts each candidate is also tried against (generalization check)">range texts<input type="number" min="0" max="12" value={liveCfg.rangeSize} onChange={e => setLiveCfg(c => ({ ...c, rangeSize: Number(e.target.value) }))} /></label>
                   <label>token budget<input type="number" step="10000" min="10000" value={liveCfg.tokenMax} onChange={e => setLiveCfg(c => ({ ...c, tokenMax: Number(e.target.value) || 150000 }))} /></label>
-                  <label className="sbx-check"><input type="checkbox" checked={liveCfg.thinking} onChange={e => setLiveCfg(c => ({ ...c, thinking: e.target.checked }))} /> deep thinking</label>
+                  <label className="sbx-check" title="Adaptive extended thinking — better hypotheses, but roughly 5–10× the tokens. Off is the frugal default."><input type="checkbox" checked={liveCfg.thinking} onChange={e => setLiveCfg(c => ({ ...c, thinking: e.target.checked }))} /> deep thinking (≈5–10× tokens)</label>
                 </div>
                 <button className="btn-ghost" disabled={live.busy || !apiKey} onClick={runLive}>{live.busy ? 'Experimenting…' : 'Run live experiments'}</button>
                 {live.tokens > 0 && <span className="sbx-hint" style={{ marginLeft: 10 }}>{live.tokens} tokens used</span>}
+                {live.sampled && live.sampled.length > 0 && <div className="sbx-hint" style={{ display: 'block', marginTop: 8 }}>each change tried against {live.sampled.length} random texts: {live.sampled.join(', ')}</div>}
                 {live.error && <div className="sbx-error" style={{ padding: '10px 2px' }}><b>Anthropic error.</b> {live.error}</div>}
                 {live.capped && <div className="sbx-hint" style={{ display: 'block', marginTop: 8 }}>Token budget reached — raise it above and run again to continue.</div>}
                 {live.log.map((g, i) => (
@@ -282,6 +337,7 @@ function SandboxDrawer({ onClose, onToast }) {
                     <Verdict r={g.result} />
                   </div>
                 ))}
+                <RunSummary log={live.log} provider="live" tokens={live.tokens} />
               </div>
 
               <div className="tier">
@@ -297,6 +353,7 @@ function SandboxDrawer({ onClose, onToast }) {
                     <Verdict r={g.result} />
                   </div>
                 ))}
+                <RunSummary log={log} provider="offline" tokens={0} />
               </div>
 
               <div className="tier">

@@ -34,9 +34,43 @@ function loadFixtures(kind) {
   });
 }
 
+// A pool of short, sentence-aligned excerpts sampled from the corpus, so a
+// candidate can be tried against a RANGE of real texts (fast, label-free).
+// Regenerating reshuffles the pool; the browser samples K of these per run.
+function cleanRegion(text) {
+  let t = text.replace(/\r/g, '');
+  const s = t.search(/\*\*\*\s*START OF (THE|THIS) PROJECT GUTENBERG/i);
+  if (s >= 0) { const nl = t.indexOf('\n', s); if (nl >= 0) t = t.slice(nl + 1); }
+  const e = t.search(/\*\*\*\s*END OF (THE|THIS) PROJECT GUTENBERG/i);
+  if (e >= 0) t = t.slice(0, e);
+  return t.trim();
+}
+function takeExcerpt(text, len) {
+  if (text.length < len + 200) return null;
+  let start = Math.floor(Math.random() * (text.length - len - 200)) + 100;
+  const adv = text.slice(start, start + 300).search(/[.!?。」]\s/);
+  if (adv >= 0) start += adv + 2;
+  let chunk = text.slice(start, start + len);
+  const le = Math.max(chunk.lastIndexOf('. '), chunk.lastIndexOf('。'), chunk.lastIndexOf('! '), chunk.lastIndexOf('? '));
+  if (le > 150) chunk = chunk.slice(0, le + 1);
+  chunk = chunk.replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim();
+  return chunk.length >= 140 ? chunk : null;
+}
+const corpus = [];
+const corpusDir = path.join(__dirname, 'corpus');
+for (const f of fs.readdirSync(corpusDir).filter(n => n.endsWith('.txt')).sort()) {
+  const region = cleanRegion(fs.readFileSync(path.join(corpusDir, f), 'utf8'));
+  for (let got = 0, tries = 0; got < 3 && tries < 24; tries++) {
+    const ex = takeExcerpt(region, 460);
+    if (ex) { corpus.push({ src: f.replace(/\.txt$/, ''), text: ex }); got++; }
+  }
+}
+for (let i = corpus.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = corpus[i]; corpus[i] = corpus[j]; corpus[j] = t; }
+
 const data = {
   weights: (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')).weights; } catch (e) { return undefined; } })(),
   fixtures: { binding: loadFixtures('binding'), stalls: loadFixtures('stalls'), integration: loadFixtures('integration') },
+  corpus: corpus.slice(0, 48),
   golden: JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'golden.json'), 'utf8')),
   harness: { VOSS, BIG: makeBigDoc(60), QUERIES, ANSWERS },
 };
@@ -50,4 +84,4 @@ fs.writeFileSync(out,
 const kb = (fs.statSync(out).size / 1024).toFixed(0);
 console.log('✓ wrote ' + path.relative(ROOT, out) + ' (' + kb + ' KB) — ' +
   data.fixtures.binding.length + ' binding, ' + data.fixtures.stalls.length + ' stall, ' +
-  data.fixtures.integration.length + ' integration fixtures; golden + harness baked in.');
+  data.fixtures.integration.length + ' integration fixtures; ' + data.corpus.length + ' corpus excerpts; golden + harness baked in.');
