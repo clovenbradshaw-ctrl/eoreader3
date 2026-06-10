@@ -630,6 +630,35 @@
           const cls = classify(parity.diffs, qualityDelta, cfg);
           return Object.assign({ diff: rendered.diff, quality, parity, qualityDelta, componentDeltas, touchedRegions: rendered.touchedRegions }, cls);
         }
+        async function graphOf(E, text, id) {
+          const doc = await E.parseDocument((id || "doc") + ".txt", text, id || "doc");
+          const ev = doc._events || [];
+          let entities = [];
+          try {
+            entities = (E.projectEntities(doc).entities || []).map((e) => ({ name: e.name, type: e.type, gender: e.gender, mass: e.mass }));
+          } catch (e) {
+          }
+          const speech = ev.filter((e) => e.op === "SIG" && e.speaker && e.speaker !== "?").map((e) => ({ at: e.sentence_idx, speaker: e.speaker, quote: (e.quote || "").replace(/\s+/g, " ").slice(0, 64), how: e.attributed }));
+          const defs = ev.filter((e) => e.op === "DEF").map((e) => ({ at: e.sentence_idx, target: e.target, path: e.path, value: e.value, reason: e.reason }));
+          const merges = ev.filter((e) => e.op === "SYN" && e.method === "gravity" && Array.isArray(e.sites)).map((e) => ({ sites: e.sites }));
+          const stalls = ev.filter((e) => e.op === "NUL" && e.reason && e.reason.indexOf("pronoun-stall") === 0).map((e) => ({ at: e.sentence_idx, surface: e.surface, competing: (e.competing || []).slice(0, 3).map((c) => c.siteName + " " + c.score) }));
+          const recs = ev.filter((e) => e.op === "REC").map((e) => ({ target: e.target, action: e.action, value: e.new_value != null ? e.new_value : e.value, reason: e.reason }));
+          let learned = [];
+          try {
+            learned = (E._learnedVerbs ? E._learnedVerbs() : []).slice(0, 60);
+          } catch (e) {
+          }
+          const counts = ev.reduce((m, e) => (m[e.op] = (m[e.op] || 0) + 1, m), {});
+          return { entities, speech, defs, merges, stalls, recs, learned, counts, sentenceTexts: doc.sentenceTexts || [], _doc: doc };
+        }
+        function queryGraph(E, doc, question) {
+          try {
+            const a = E.answer(doc, question);
+            return { text: a.text, audit: a.audit || null, cites: (a.cites || []).length };
+          } catch (e) {
+            return { text: null, error: String(e.message || e) };
+          }
+        }
         async function traceBattery(E, data) {
           const fx = data.fixtures || {};
           const out = [];
@@ -739,6 +768,8 @@
           traceBattery,
           liveAgent,
           callAnthropic,
+          graphOf,
+          queryGraph,
           sameName,
           normName,
           DEFAULT_WEIGHTS,
