@@ -2375,6 +2375,60 @@ async function extractEoGraph(text, onProgress) {
       });
     });
 
+    // ── DEF (Dissecting): deferred demonstrative naming ───────
+    // Journalism often introduces a role-bearing actor by description
+    // and names them a beat later: "…the same person who runs the DMC
+    // and who then hires his own firm, NDP. That person is Tom Turner."
+    // The copular reader above refuses "That person is …" — the subject
+    // is a bare demonstrative, neither a site nor proper-noun shaped — so
+    // the name lands with no role and the description, stranded on a noun
+    // phrase that was never instantiated, is lost. This bridge reconnects
+    // them: when "That/This/The <common-noun> is <ProperName>" follows a
+    // recent "<det> <same-noun> who/that/which …", the proper name
+    // inherits the whole description as its class. The assertion is cited
+    // to the ANTECEDENT sentence, where the description actually appears,
+    // so the mechanical re-read binds it cleanly.
+    {
+      const nm = sentText.match(/^\s*(?:that|this|the)\s+(\p{Ll}[\p{Ll}’'-]*)\s+(?:is|was)\s+(.+?)\.?\s*$/iu);
+      if (nm) {
+        const headNoun = nm[1].toLowerCase();
+        const name = trimNounSpan(nm[2]) || nm[2].trim();
+        const nameKey = normSurface(name);
+        // The name must be a real, just-instantiated proper referent (it is
+        // INS'd by addEnts above, which runs earlier in this sentence).
+        if (looksProper(name) && !isPronoun(name) && sites.has(nameKey)) {
+          // The antecedent: a recent definite/indefinite description headed
+          // by the SAME noun and bearing a relative clause. Stop the span at
+          // a trailing purpose/relative tail (", to …", ", which …") or
+          // clause boundary so the role — not the surrounding sentence — is
+          // what attaches.
+          const antRe = new RegExp(
+            '((?:the\\s+same|the|a|an|his|her|its|their|this|that)\\s+' +
+            headNoun + '\\s+(?:who|whom|that|which)\\b.+?)' +
+            '(?=,\\s*(?:to|so|which|where|while|in\\s+order)\\b|[.;:]|$)', 'iu');
+          let desc = null, srcSent = -1;
+          for (let back = 1; back <= 2 && i - back >= 0; back++) {
+            const m = (sentenceTexts[i - back] || '').match(antRe);
+            if (m) { desc = m[1].trim().replace(/[\s,;:]+$/, ''); srcSent = i - back; break; }
+          }
+          if (desc && desc.length <= 200 && normSurface(desc) !== nameKey) {
+            const site = sites.get(nameKey);
+            events.push({
+              id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
+              target: name, path: 'class', value: desc,
+              targetHint: { key: nameKey, name: site.name, referent_id: site.referent_id },
+              // Provenance: the synthesis spans two sentences. The role text
+              // lives at sentence_idx (the antecedent); the naming that bound
+              // it to this referent happened at naming_sentence.
+              naming_sentence: i,
+              sentence_idx: srcSent,
+              src: 'naming-bridge',
+            });
+          }
+        }
+      }
+    }
+
     // ── DEF (Dissecting): explicit relations ──────────────────
     // Two narrow, high-precision patterns. "NAME married NAME" runs on
     // NARRATION ONLY — characters saying someone "married the sea" is
