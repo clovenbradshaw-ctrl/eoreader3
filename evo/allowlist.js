@@ -286,9 +286,13 @@ function validateStructuredEdit(map, edit) {
   }
 }
 
-module.exports = {
+// UMD: the constitution is shared verbatim between the Node CLI and the
+// in-browser sandbox, so there is exactly one definition of what may evolve.
+const _exports = {
   buildRegionMap, evolvableAt, constitutionalAt,
   validateDiff, validateStructuredEdit, classifyRule,
   parseUnifiedDiff,
   NAMED_PHYSICS, GRAVITY_LAW, SEED_BUT_CONSTITUTIONAL, CONSTITUTIONAL_FNS,
 };
+if (typeof module !== 'undefined' && module.exports) module.exports = _exports;
+else if (typeof window !== 'undefined') window.EVO_ALLOWLIST = _exports;

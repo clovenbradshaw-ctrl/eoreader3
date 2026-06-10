@@ -115,6 +115,7 @@ function App() {
   // Auditing mode: a glass box over the chat pipeline (window.EOAudit), inspected
   // in a drawer and exportable as JSONL. Recording is on by default.
   const [auditOpen, setAuditOpen] = useState(false);
+  const [sandboxOpen, setSandboxOpen] = useState(false);
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
   const [auditCount, setAuditCount] = useState(0);
   // Glass-box export toggles: include the extraction half (graph + processing)
@@ -1312,6 +1313,7 @@ function App() {
             {auditEnabled && <span className="dot rec" title="Recording" />}
           </button>
           <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> {enabledRules} rules on</button>
+          {window.EVO_SANDBOX && <button className="tb-pill" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> Sandbox</button>}
         </header>
 
         <div className="body" ref={bodyRef}>
@@ -1341,6 +1343,7 @@ function App() {
       {rulesOpen && <RulesDrawer rules={rules} langModes={langModes}
         learnedByLang={window.EOEngine && window.EOEngine.learnedVerbsByLang ? window.EOEngine.learnedVerbsByLang() : {}}
         onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
+      {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}

@@ -1,6 +1,6 @@
 {
   "_comment": "Evolution-loop configuration. The quality weights live here (not in engine.js READING_RULES) so the agent — which may edit READING_RULES — can never retune its own exam. Change these by hand to tell the loop which failure mode it currently cares about.",
-  "weights": { "binding": 0.35, "stall": 0.35, "integration": 0.30 },
+  "weights": { "binding": 0.30, "stall": 0.30, "grounding": 0.20, "integration": 0.20 },
   "qualityWinThreshold": 0.01,
   "justifiedBreakThreshold": 0.03,
   "generations": 6,

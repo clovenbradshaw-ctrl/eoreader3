@@ -978,3 +978,42 @@ table.grid .member td:first-child { padding-left: 30px; }
 .glass-tog input { accent-color: var(--accent); }
 .glass-dim { color: var(--text-3); font-size: 11px; }
 .glass-foot .drawer-tools { margin-left: auto; padding-bottom: 0; }
+
+/* ============================================================ EVO SANDBOX */
+.sbx-loading, .sbx-error { padding: 24px 6px; font-size: 13px; color: var(--text-2); line-height: 1.6; }
+.sbx-error b { color: var(--text); }
+.sbx-baseline { margin-bottom: 22px; }
+.sbx-scores { display: flex; flex-wrap: wrap; gap: 8px; }
+.sbx-score { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 11px; min-width: 92px; background: var(--bg); }
+.sbx-score span { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); }
+.sbx-score b { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.sbx-score i { font-size: 10px; font-style: normal; color: var(--text-3); font-weight: 400; }
+.sbx-score.big b { font-size: 20px; color: var(--accent); }
+.sbx-gen { border: 1px solid var(--border); border-radius: var(--r-sm); padding: 11px 12px; margin-top: 10px; background: var(--bg); }
+.sbx-gen-head { font-weight: 600; font-size: 13px; font-family: 'JetBrains Mono', monospace; }
+.sbx-gen-note { font-size: 12px; color: var(--text-2); margin: 3px 0 8px; line-height: 1.5; }
+.sbx-verdict { margin-top: 8px; }
+.sbx-verdict-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sbx-badge { font-size: 11.5px; font-weight: 650; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border); }
+.sbx-badge.win { background: rgba(34,160,90,.13); color: #1f9255; border-color: rgba(34,160,90,.35); }
+.sbx-badge.just { background: rgba(214,158,46,.15); color: #b8841a; border-color: rgba(214,158,46,.38); }
+.sbx-badge.bad { background: rgba(208,72,72,.13); color: #c0392b; border-color: rgba(208,72,72,.34); }
+.sbx-badge.null { background: var(--bg-subtle); color: var(--text-2); }
+.sbx-note { font-size: 12px; color: var(--text-2); line-height: 1.45; }
+.sbx-deltas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.sbx-deltas b { color: var(--text); font-weight: 600; }
+.sbx-diff { margin-top: 8px; }
+.sbx-diff summary { font-size: 12px; color: var(--text-2); cursor: pointer; }
+.sbx-diff pre { margin: 6px 0 0; padding: 10px; background: var(--bg-subtle); border-radius: var(--r-sm); font-size: 11.5px; line-height: 1.45; overflow-x: auto; font-family: 'JetBrains Mono', monospace; }
+.sbx-actions { display: flex; align-items: center; gap: 10px; margin-top: 9px; flex-wrap: wrap; }
+.sbx-hint { font-size: 11.5px; color: var(--text-3); }
+.sbx-hint code, .sbx-actions code { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--bg-subtle); padding: 1px 5px; border-radius: 4px; }
+.sbx-rules { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 11px; }
+.sbx-rule { display: flex; flex-direction: column; gap: 3px; }
+.sbx-rule-name { font-size: 11px; color: var(--text-2); font-family: 'JetBrains Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sbx-rule input { font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); font-variant-numeric: tabular-nums; width: 100%; box-sizing: border-box; }
+.sbx-rule input:focus { border-color: var(--accent); outline: none; }
+.sbx-locked { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.sbx-lock { display: flex; gap: 10px; font-size: 12px; padding: 6px 9px; border-radius: var(--r-sm); background: var(--bg-subtle); }
+.sbx-lock span { font-family: 'JetBrains Mono', monospace; color: var(--text-2); min-width: 180px; }
+.sbx-lock i { font-style: normal; color: var(--text-3); line-height: 1.4; }
