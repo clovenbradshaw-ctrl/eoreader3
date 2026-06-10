@@ -24,6 +24,9 @@ function SandboxDrawer({ onClose, onToast }) {
   const [log, setLog] = useState([]);             // agent-run generations
   const [candidate, setCandidate] = useState(null); // current manual candidate result
   const [edited, setEdited] = useState({});       // ruleName -> new value (manual)
+  const [apiKey, setApiKey] = useState('');       // kept only in this tab's memory
+  const [live, setLive] = useState({ busy: false, log: [], tokens: 0, error: null, best: null, capped: false });
+  const [liveCfg, setLiveCfg] = useState({ model: 'claude-opus-4-8', generations: 6, tokenMax: 150000, thinking: false });
   const dialogRef = useRef(null);
 
   const SB = window.EVO_SANDBOX, DATA = window.EVO_SANDBOX_DATA;
@@ -79,6 +82,35 @@ function SandboxDrawer({ onClose, onToast }) {
       onToast && onToast('Agent run complete');
     } finally { setBusy(false); }
   }, [evalEdits, onToast]);
+
+  // Live: type a key, let the Anthropic agent run its own experiments —
+  // observe the traces → propose a change → the sandbox runs + scores it →
+  // iterate, bounded by a token budget.
+  const runLive = useCallback(async () => {
+    if (!apiKey) { onToast && onToast('Enter your Anthropic API key first'); return; }
+    setLive({ busy: true, log: [], tokens: 0, error: null, best: null, capped: false });
+    try {
+      const E0 = SB.loadCandidate(src.pivot, src.engine, nlp);
+      const battery = await SB.traceBattery(E0, DATA);
+      const agent = SB.liveAgent({ key: apiKey, model: liveCfg.model, thinking: liveCfg.thinking, tokenMax: liveCfg.tokenMax });
+      const history = []; let best = null, capped = false;
+      for (let g = 0; g < liveCfg.generations; g++) {
+        if (agent.exhausted()) { capped = true; break; }
+        let hyp;
+        try { hyp = await agent.hypothesize({ battery, baseline: baseline.quality, history }); }
+        catch (e) { setLive(s => ({ ...s, error: String(e.message || e), busy: false })); return; }
+        if (!hyp) break;
+        const r = await evalEdits(hyp.edits);
+        const entry = { hyp, result: r };
+        history.push(entry);
+        if (r.surface && (!best || r.qualityDelta > best.result.qualityDelta)) best = entry;
+        setLive({ busy: true, log: [...history], tokens: agent.tokensUsed(), error: null, best, capped: false });
+        await new Promise(res => setTimeout(res, 0));
+      }
+      setLive(s => ({ ...s, busy: false, capped }));
+      onToast && onToast('Live run complete · ' + agent.tokensUsed() + ' tokens');
+    } catch (e) { setLive(s => ({ ...s, busy: false, error: String(e.message || e) })); }
+  }, [apiKey, src, baseline, liveCfg, evalEdits, onToast]);
 
   // Manual: test the currently-edited rule values as one candidate.
   const testManual = useCallback(async () => {
@@ -160,8 +192,39 @@ function SandboxDrawer({ onClose, onToast }) {
 
               <div className="tier">
                 <div className="tier-head">
-                  <div className="rule-group-label">Run the agent</div>
-                  <p className="tier-sub">The offline agent proposes a short sequence: a clean-parity win, an over-correction that costs honesty, a constitution-blocked attempt to game the metric, and a regression. Each runs in its own sandbox.</p>
+                  <div className="rule-group-label">Live agent · Anthropic</div>
+                  <p className="tier-sub">Type your Anthropic API key and the agent runs its own experiments: it reads the traces, proposes a change, the sandbox runs and scores it in isolation, and it iterates — bounded by a token budget. Your key stays in this browser tab and is sent directly to Anthropic over HTTPS (it is never stored or committed).</p>
+                </div>
+                <div className="sbx-key"><input type="password" value={apiKey} placeholder="sk-ant-…" autoComplete="off" spellCheck={false} onChange={e => setApiKey(e.target.value)} /></div>
+                <div className="sbx-livecfg">
+                  <label>model
+                    <select value={liveCfg.model} onChange={e => setLiveCfg(c => ({ ...c, model: e.target.value }))}>
+                      <option value="claude-opus-4-8">opus-4-8</option>
+                      <option value="claude-sonnet-4-6">sonnet-4-6</option>
+                      <option value="claude-haiku-4-5">haiku-4-5</option>
+                    </select>
+                  </label>
+                  <label>generations<input type="number" min="1" max="12" value={liveCfg.generations} onChange={e => setLiveCfg(c => ({ ...c, generations: Number(e.target.value) || 6 }))} /></label>
+                  <label>token budget<input type="number" step="10000" min="10000" value={liveCfg.tokenMax} onChange={e => setLiveCfg(c => ({ ...c, tokenMax: Number(e.target.value) || 150000 }))} /></label>
+                  <label className="sbx-check"><input type="checkbox" checked={liveCfg.thinking} onChange={e => setLiveCfg(c => ({ ...c, thinking: e.target.checked }))} /> deep thinking</label>
+                </div>
+                <button className="btn-ghost" disabled={live.busy || !apiKey} onClick={runLive}>{live.busy ? 'Experimenting…' : 'Run live experiments'}</button>
+                {live.tokens > 0 && <span className="sbx-hint" style={{ marginLeft: 10 }}>{live.tokens} tokens used</span>}
+                {live.error && <div className="sbx-error" style={{ padding: '10px 2px' }}><b>Anthropic error.</b> {live.error}</div>}
+                {live.capped && <div className="sbx-hint" style={{ display: 'block', marginTop: 8 }}>Token budget reached — raise it above and run again to continue.</div>}
+                {live.log.map((g, i) => (
+                  <div key={i} className="sbx-gen">
+                    <div className="sbx-gen-head">{g.hyp.target}</div>
+                    <div className="sbx-gen-note">{g.hyp.statement}{g.hyp.argument ? ' — ' + g.hyp.argument : ''}</div>
+                    <Verdict r={g.result} />
+                  </div>
+                ))}
+              </div>
+
+              <div className="tier">
+                <div className="tier-head">
+                  <div className="rule-group-label">Run the agent · offline</div>
+                  <p className="tier-sub">No key needed. The offline agent proposes a short, deterministic sequence: a clean-parity win, an over-correction that costs honesty, a constitution-blocked attempt to game the metric, and a regression. Each runs in its own sandbox.</p>
                 </div>
                 <button className="btn-ghost" disabled={busy} onClick={runAgent}>{busy ? 'Running…' : 'Run agent (offline · zero-token)'}</button>
                 {log.map((g, i) => (
