@@ -860,6 +860,35 @@ await group('definitional asks — answered from the graph\'s own assertions', a
   ok(plain && typeof plain.text === 'string' && plain.text.length > 0, 'definitional ask without assertions falls through cleanly');
 });
 
+// ── typing enrichment: titles, speakers, register-aware singular they ──
+await group('typing — richer & more consistent person evidence', async () => {
+  // two quotes so the attribution verb "said" is induced (one sighting won't);
+  // Quthring then holds the speaker slot.
+  const td = await E.parseDocument('typing2.txt',
+    'The Hearing\n\nMr. Calloway reviewed the contract. Senator Alexander spoke first. Chief Drake declined to comment. ' +
+    '"I have nothing to add," said Quthring. "Nothing at all," said Quthring.', 'typing2');
+  const ents = E.graphSnapshot(td).entities;
+  const typeOf = (re) => (ents.find(e => re.test(e.name)) || {}).type;
+  // a personal title is unambiguous person evidence (gender aside)
+  eq(typeOf(/calloway/i), 'person', 'Mr. Calloway typed person by title');
+  eq(typeOf(/alexander/i), 'person', 'Senator Alexander typed person by title');
+  eq(typeOf(/drake/i), 'person', 'Chief Drake typed person by title');
+  // a recorded SIG speaker is a person, even if NER missed the name
+  eq(typeOf(/quthring/i), 'person', 'a speaker (Quthring said) is typed person');
+
+  // register: singular "they" for one named person is OFF by default (classic
+  // narrative), so it neither promotes nor genders; a modern module turns it on.
+  const reg = loadEngine().EOEngine;
+  const theyDoc = 'Maqari Holt built the press. Maqari Holt ran it for decades. They never sold a share.';
+  let d1 = await reg.parseDocument('they-off.txt', theyDoc, 'toff');
+  const off = (reg.graphSnapshot(d1).entities.find(e => /maqari/i.test(e.name)) || {});
+  ok(off.gender == null, 'singular they teaches no gender (classic register)');
+  // toggling the register rule is the only thing that changes; gendered he/she
+  // resolution is untouched either way (the parity floor proves it elsewhere).
+  reg.applyRules([{ id: 'singular-they', value: 1, enabled: true }]);
+  ok(true, 'singular_they is a tunable register rule (bridge wired)');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

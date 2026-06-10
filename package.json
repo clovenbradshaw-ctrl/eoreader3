@@ -19,7 +19,8 @@
     "evo:sandbox-build": "node evo/build-sandbox.mjs",
     "evo:experiment": "node evo/experiments/graph-queryability.js",
     "evo:prompts": "node evo/experiments/prompt-audit.js",
-    "evo:questions": "node evo/experiments/question-probe.js"
+    "evo:questions": "node evo/experiments/question-probe.js",
+    "evo:ingestion": "node evo/experiments/ingestion-quality.js"
   },
   "devDependencies": {
     "compromise": "^14.14.0",

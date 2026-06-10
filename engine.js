@@ -480,6 +480,15 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Pronouns that resolve to male-gendered sites.',
   },
+  neutral_person_pronouns: {
+    value: ['they','them','their','theirs'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Third-person pronouns that refer to a person WITHOUT marking gender. Animate like he/she (they can bind and promote a proper name to a person), but they teach no gender — a singular-they referent stays a genderless person. Whether they may be read as SINGULAR for a named individual is the register call below (singular_they).',
+  },
+  singular_they: {
+    value: false, mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'May "they/them" be read as a SINGULAR reference to one named person (and so bind/promote that person)? This is a convention of register, not a universal: contemporary journalism and prose use singular they for a known individual; 19th-century narrative (the texts this module reads — Conrad, Balzac, Tolstoy) almost always means a plural by "they", so reading it as singular would wrongly fuse a group into one character. Default OFF here; a modern-register language module turns it ON. Gendered he/she promotion is unaffected — it is unambiguously singular in every register.',
+  },
   female_titles: {
     value: ['princess','queen','countess','duchess','lady','dame','mrs','miss','ms','mademoiselle','baroness','empress'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -653,7 +662,7 @@ function getAttribVerbs() {
   return rule.value[ACTIVE_LANG];
 }
 let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
-    MALE_PRONOUNS, FEMALE_TITLES, MALE_TITLES, CLITIC_SUFFIXES, ADVERB_HEADS,
+    MALE_PRONOUNS, NEUTRAL_PERSON_PRONOUNS, FEMALE_TITLES, MALE_TITLES, TITLE_TOKENS, CLITIC_SUFFIXES, ADVERB_HEADS,
     NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS,
     ANAPHOR_PRONOUNS;
 function rebuildLangSets() {
@@ -668,8 +677,12 @@ function rebuildLangSets() {
   NONPERSON_PRONOUNS = new Set(mod_values('nonperson_pronouns'));
   FEMALE_PRONOUNS = new Set(mod_values('female_pronouns'));
   MALE_PRONOUNS = new Set(mod_values('male_pronouns'));
+  NEUTRAL_PERSON_PRONOUNS = new Set(mod_values('neutral_person_pronouns'));
   FEMALE_TITLES = new Set(mod_values('female_titles'));
   MALE_TITLES = new Set(mod_values('male_titles'));
+  // Every personal title (gendered + genderless: Mr, Mrs, Dr, Captain,
+  // Senator, President, Chief, …) — a name leading with one is a person.
+  TITLE_TOKENS = new Set([...mod_values('title_tokens'), ...mod_values('male_titles'), ...mod_values('female_titles')]);
   CLITIC_SUFFIXES = new Set(mod_values('clitic_suffixes'));
   ADVERB_HEADS = new Set(mod_values('adverb_heads'));
   NAME_CONNECTORS = new Set(mod_values('name_connectors'));
@@ -1093,7 +1106,33 @@ function genderFromName(name) {
 }
 
 function isPronoun(s) { return PRONOUNS.has(String(s).toLowerCase().trim()); }
+// Does a surface lead with a personal title ("Mr. Calloway", "Senator Alexander",
+// "Chief Drake")? A title is unambiguous person evidence, gender aside. Requires
+// a following capitalized token so a bare "Captain" / "President" (a role used as
+// a common noun) doesn't type on its own.
+function leadsWithTitle(surface) {
+  if (!TITLE_TOKENS || !TITLE_TOKENS.size) return false;
+  const words = String(surface == null ? '' : surface).trim().split(/\s+/);
+  if (words.length < 2) return false;
+  const first = words[0].toLowerCase().replace(/\.$/, '');
+  return TITLE_TOKENS.has(first) && /^\p{Lu}/u.test(words[1]);
+}
 function looksProper(s) { return /^\p{Lu}[\p{L}\p{M}\p{N}'’.-]*(\s+\p{Lu}[\p{L}\p{M}\p{N}'’.-]*)*$/u.test(String(s).trim()); }
+// Place/organization surface cues — words that mark a proper name as NOT a
+// person, so the animate-pronoun promotion below never turns a river or a firm
+// into a character.
+const _PLACE_ORG_CUE = /\b(street|st|road|rd|avenue|ave|lane|river|sea|ocean|bay|gulf|point|cape|harbou?r|island|isle|mount|mountain|valley|county|shire|city|town|village|company|corporation|commission|board|department|office|firm|llc|inc|ltd|co|university|college|school|hospital|church|park|square|hall|palace|castle|bridge|station|hotel|club|society|association|league|union|party|court|bank|press|times|gazette|journal|ministry|bureau|agency|institute|foundation)\b/i;
+// A proper-name surface that plausibly names a PERSON: capitalized, one to
+// three tokens, no digits, no place/org cue, not document chrome. Used only to
+// decide whether an animate pronoun may bind-and-promote a `thing` — never to
+// type on its own.
+function looksLikePerson(name) {
+  const t = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
+  if (!t || /\d/.test(t) || _PLACE_ORG_CUE.test(t)) return false;
+  if (!looksProper(t)) return false;
+  const words = t.split(/\s+/);
+  return words.length >= 1 && words.length <= 3;
+}
 function normSurface(s) { return String(s).toLowerCase().replace(/\s+/g, ' ').trim(); }
 
 function tokenSetOf(name) {
@@ -2047,6 +2086,10 @@ async function extractEoGraph(text, onProgress) {
     if (DEICTIC_PRONOUNS.has(lower)) return null;
     const needFemale = FEMALE_PRONOUNS.has(lower);
     const needMale = MALE_PRONOUNS.has(lower);
+    // singular "they" as a person reference is a modern-register convention
+    // (off for classic narrative); only then may it promote a proper name.
+    const neutralPerson = NEUTRAL_PERSON_PRONOUNS.has(lower)
+      && READING_RULES.singular_they && READING_RULES.singular_they.value;
     if (needFemale || needMale) {
       const targetGender = needFemale ? 'f' : 'm';
       // Is there a real referent this pronoun could bind? Confirmed
@@ -2113,6 +2156,25 @@ async function extractEoGraph(text, onProgress) {
         site.mass += ANAPHORA_W();
         site.momentum = site.momentum * GAMMA + 1;
         result.momentum = +site.momentum.toFixed(2);
+        // Singular "they" (modern register only) that binds a proper-name
+        // `thing` TEACHES personhood without gender — the reference is only
+        // coherent if the surface names a person. Recorded as a DEF so
+        // projection inherits the type and SEG can overturn a bad bind. Gendered
+        // he/she do NOT promote here (a genderless thing must not compete for
+        // "she"); a non-speaking person earns person-type from speaker/title
+        // evidence in projection instead.
+        if (neutralPerson && site.type === 'thing' && looksLikePerson(site.name)) {
+          site.type = 'person';
+          events.push({
+            id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
+            target: site.name, path: 'type', value: 'person',
+            targetHint: { key: result.key, name: site.name, referent_id: site.referent_id },
+            basis: `bound singular "${pronoun}"`,
+            reason: 'a singular-they reference is personhood evidence',
+            sentence_idx: currentSentIdx, sentence: currentSentText,
+            src: 'pronoun-binding',
+          });
+        }
         // Binding a gendered pronoun to a person of unknown gender
         // TEACHES the gender. The observation is the bind itself,
         // recorded as a DEF so projection (learnedGender) inherits it
@@ -3090,10 +3152,16 @@ function pickAbsorbCanonical(nameA, massA, nameB, massB) {
 // memory). Highest-momentum matching site absorbs the pronoun.
 function resolveByActivation(pronoun, sites) {
   const lower = String(pronoun).toLowerCase();
-  const needPerson = PERSON_PRONOUNS.has(lower);
-  const preferNonPerson = NONPERSON_PRONOUNS.has(lower);
   const needFemale = FEMALE_PRONOUNS.has(lower);
   const needMale = MALE_PRONOUNS.has(lower);
+  // "they/them" is animate-but-genderless — but reading it as a SINGULAR
+  // reference to one named person is a register convention (singular_they),
+  // off for classic narrative. When off, they/them is left to the old
+  // type-agnostic path (it may still bind a plural-ish heavy site, unchanged).
+  const neutralPerson = NEUTRAL_PERSON_PRONOUNS.has(lower)
+    && READING_RULES.singular_they && READING_RULES.singular_they.value;
+  const needPerson = PERSON_PRONOUNS.has(lower) || neutralPerson;
+  const preferNonPerson = NONPERSON_PRONOUNS.has(lower);
   // Score = mass × mass_weight + momentum. Heavy characters stay sticky;
   // freshly-touched newcomers can still outpull them if their mass-bonus is
   // small. Princess Mary (mass 16) outscores Marshal (mass 5) even when
@@ -3113,11 +3181,19 @@ function resolveByActivation(pronoun, sites) {
   // step 2 — proportion is built on the poles, not the other way round.
   const elig = [];
   for (const [k, v] of sites) {
-    if (needPerson && v.type !== 'person') continue;      // type charge
+    // type charge. A gendered/person pronoun binds only persons — UNCHANGED, so
+    // classic-prose resolution is untouched. The one exception is singular
+    // "they" under a modern-register module (neutralPerson): there it may also
+    // admit a proper-name `thing` and promote it. Gendered he/she never hijack
+    // eligibility (that would let a genderless thing compete for "she"); a
+    // non-speaking person instead earns its type from the speaker/title signals
+    // reconciled in projection.
+    if (needPerson && v.type !== 'person' && !(neutralPerson && v.type === 'thing' && looksLikePerson(v.name))) continue;
     if (needFemale && v.gender === 'm') continue;         // sign exclusion
     if (needMale && v.gender === 'f') continue;           // sign exclusion
     const surfaceMass = v.surfaceMass != null ? v.surfaceMass : v.mass;
     let score = surfaceMass * MASS_WEIGHT + v.momentum;
+    if (neutralPerson && v.type !== 'person') score -= 0.001;   // a real person wins ties
     if (preferNonPerson && v.type === 'person') score -= 0.15;
     elig.push({ key: k, v, score });
   }
@@ -3630,10 +3706,25 @@ function projectGraph(events, frame = {}) {
     if (ev.op === 'INS' && ev.entityType) {
       considerType(normSurface(ev.target), ev.entityType);
     }
+    // A name leading with a personal title is a person — independent of NER,
+    // speech, or pronouns ("Mr. Calloway" who never speaks; "Senator Alexander").
+    if (ev.op === 'INS' && ev.target && leadsWithTitle(ev.target)) {
+      considerType(normSurface(ev.target), 'person');
+    }
     // Learned types: speech-induction DEFs and any future type evidence.
     if (ev.op === 'DEF' && ev.path === 'type' && ev.value) {
       considerType(normSurface(ev.target), ev.value);
       if (ev.targetHint && ev.targetHint.key) considerType(ev.targetHint.key, ev.value);
+    }
+    // A recorded SIG speaker is a person — whatever earned the attribution
+    // (a named "X said", a pronoun, or the mass-weighted fallback). This is
+    // what types Marlow, who speaks but whose quotes were attributed by
+    // fallback rather than a clean "said Marlow", so speech-induction's
+    // named-only DEF never fired. A place/org never holds a speaker slot, so
+    // this promotes only real voices.
+    if (ev.op === 'SIG' && ev.speaker && ev.speaker !== '?') {
+      const sk = (ev.speakerHint && ev.speakerHint.key) || normSurface(ev.speaker);
+      considerType(sk, 'person');
     }
   }
   for (const cluster of clusterMap.values()) {
@@ -3953,6 +4044,7 @@ function projectGraph(events, frame = {}) {
     'inertia-delta': 'inertia_delta',
     'eva-energy': 'eva_energy_budget',
     'mass-weight': 'mass_weight',
+    'singular-they': 'singular_they',
   };
 
   /* ---------- Thinking depth: the effort dial's tunable budget ----------
