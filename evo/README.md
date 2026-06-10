@@ -72,6 +72,32 @@ npm run evo:reject <run-id>     # archive the run, keep the observations, discar
 npm run evo:score               # print the current quality baseline (deterministic)
 ```
 
+### Corpus experiments (what makes a *queryable* graph)
+
+```sh
+npm run evo:experiment          # measure graph queryability over the corpus + sweep the physics
+```
+
+`evo/experiments/graph-queryability.js` is a read-only study, not part of the
+selection loop: it builds the engine's graph over the public-domain corpus and
+scores how *queryable* it is (does speech resolve, do entities consolidate, are
+the nodes real names or capitalized noise, does "who is X" return a grounded
+answer), then sweeps the runtime-tunable physics to see what moves it. The
+finding — physics is saturated, admission precision is the lever — is written up
+in `evo/experiments/RESULTS.md`. It tunes a loaded engine in memory and never
+writes `engine.js`.
+
+```sh
+npm run evo:prompts             # audit the prompts assembled for the small local model
+```
+
+`evo/experiments/prompt-audit.js` assembles the exact prompts the WebLLM
+models are handed (system variants, retrieved context, the depth-3 graph walk,
+history folding) over the same corpus and measures them against the models'
+4096-token window. Round-2 findings — the graph noise leads the summary prompt,
+one intent-routing gap, a dishonest CJK token estimate — are in
+`evo/experiments/ROUND2.md`.
+
 `evo:run` writes:
 - `evo/proposals/<run-id>.md` — the human-facing report: **"how to improve the
   app"**, the diff, the argument, an evidence table, and what else was tried.

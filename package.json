@@ -16,7 +16,9 @@
     "evo:score": "node evo/scorer.js",
     "evo:sandbox": "node evo/build-sandbox-data.js && node evo/build-sandbox.mjs",
     "evo:sandbox-data": "node evo/build-sandbox-data.js",
-    "evo:sandbox-build": "node evo/build-sandbox.mjs"
+    "evo:sandbox-build": "node evo/build-sandbox.mjs",
+    "evo:experiment": "node evo/experiments/graph-queryability.js",
+    "evo:prompts": "node evo/experiments/prompt-audit.js"
   },
   "devDependencies": {
     "compromise": "^14.14.0",
