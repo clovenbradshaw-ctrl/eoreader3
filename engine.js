@@ -480,6 +480,21 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Pronouns that resolve to male-gendered sites.',
   },
+  role_clause_verbs: {
+    value: ['runs?','running','leads?','leading','heads?','heading','chairs?','chairing','manages?','managing','directs?','directing','oversees?','overseeing','owns?','owning','operates?','operating','founded','co-founded','controls?','controlling','commands?','commanding','supervises?','supervising'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Verb forms whose relative clause states a ROLE rather than an act ("who runs the DMC", "who heads the council"). The naming bridge distills these into role DEFs. Regex alternates, joined verbatim — holding a position, not one-off doing.',
+  },
+  role_title_heads: {
+    value: ['president','vice[- ]president','ceo','cfo','coo','cto','chief\\s+\\p{L}+(?:\\s+officer)?','chair(?:man|woman|person)?','executive\\s+director','managing\\s+(?:director|partner)','general\\s+manager','director','head','founder','co-founder','owner','commissioner','superintendent'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Title-of heads: "<head> of X" names a role ("president of the partnership"). Regex alternates, joined verbatim.',
+  },
+  role_title_prefixes: {
+    value: ['former','interim','acting','deputy'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Qualifiers that may lead a title-of head without breaking it ("former president of …").',
+  },
   neutral_person_pronouns: {
     value: ['they','them','their','theirs'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -664,7 +679,7 @@ function getAttribVerbs() {
 let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     MALE_PRONOUNS, NEUTRAL_PERSON_PRONOUNS, FEMALE_TITLES, MALE_TITLES, TITLE_TOKENS, CLITIC_SUFFIXES, ADVERB_HEADS,
     NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS,
-    ANAPHOR_PRONOUNS;
+    ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -690,6 +705,15 @@ function rebuildLangSets() {
   ARTICLES = new Set(mod_values('articles'));
   ATTRIB_VERB_LIST = getAttribVerbs().join('|');
   ABBREVIATIONS = new Set(mod_values('sentence_abbreviations'));
+  // Role-shape regexes, built from their convention inventories. Empty
+  // inventories (a language without these conventions yet) disable the shape.
+  const rcv = mod_values('role_clause_verbs');
+  ROLE_CLAUSE_VERB = rcv.length ? new RegExp('^(?:' + rcv.join('|') + ')\\b', 'i') : /$^/;
+  const heads = mod_values('role_title_heads');
+  const prefixes = mod_values('role_title_prefixes');
+  TITLE_OF_RE = heads.length
+    ? new RegExp('\\b((?:(?:' + (prefixes.length ? prefixes.join('|') : '$^') + ')\\s+)?(?:' + heads.join('|') + ')\\s+of\\s+[^,;.]+)', 'iu')
+    : /$^/;
 }
 // Apply a language pack: write its detectors into the rules with
 // provenance, register the module, rebuild the lexical sets. English
@@ -715,6 +739,136 @@ function applyLanguageModule(lang) {
   deriveSets(projectRules(RULES_LEDGER, currentFrame()));
 }
 function moduleEnabledForLang(modId) { return modId === 'core' || (LANGUAGE_MODULES[modId] && LANGUAGE_MODULES[modId].enabled); }
+
+/* ============================================================
+   THE CONVENTIONS GRAPH (conventions.jsonl) — human language as conventions.
+
+   The mechanics (gravity, momentum, two-sighting, δ-gates, the nine
+   operators) are universal; everything HUMAN-LANGUAGE-specific — pronoun
+   inventories, titles, attribution shapes, quote pairs, register calls
+   like singular-they — is a CONVENTION, and no inventory is more "real"
+   than another: you / y'all / ella / vous / 她 are equal citizens. Those
+   conventions live in conventions.jsonl at the repo root: an append-only
+   graph whose records ARE eo operations —
+
+     INS  — instantiate a module (a register of conventions) or a
+            convention (one inventory/setting), with an `affinity` text
+            describing the kinds of content it belongs to (the hook an
+            embedder scores against document content at runtime);
+     SYN  — membership: { s: "he", v: "member-of", o: "<convention id>" }
+            (seq order is list order);
+     DEF  — a property of a surface ({target:"he", path:"gender",
+            value:"m"}) or a structured value on a convention
+            ({path:"value"} — quote pairs, patterns, register booleans);
+     REC  — the register laws, recorded in the engine's own change
+            vocabulary (why singular-they is off for 19th-c narrative).
+
+   projectConventions REPLAYS that log into per-module convention values —
+   the same move projectGraph makes over a document's events — and
+   loadConventions writes them through (READING_RULES for the en module,
+   LANG_PACKS for the others) and rebuilds the lexical sets. The shipped
+   seeds in this file stay as the fallback: never loaded ⇒ byte-identical
+   behavior; the drift test (tests/conventions.test.js) proves file and
+   seeds agree. _conventionsExport is the read-only introspection the
+   generator and the test share.
+   ============================================================ */
+function projectConventions(records) {
+  const conventions = new Map();   // id -> { module, rule, value }
+  const members = new Map();       // id -> [surfaces in seq order]
+  const moduleProps = new Map();   // moduleId -> { path: value }
+  for (const ev of (records || [])) {
+    if (!ev || !ev.op) continue;
+    if (ev.op === 'INS' && ev.kind === 'convention' && ev.id) {
+      conventions.set(ev.id, { module: ev.module, rule: ev.rule || null, value: undefined });
+    } else if (ev.op === 'SYN' && ev.v === 'member-of' && ev.o != null && ev.s != null) {
+      if (!members.has(ev.o)) members.set(ev.o, []);
+      members.get(ev.o).push(ev.s);
+    } else if (ev.op === 'DEF' && ev.path === 'value' && conventions.has(ev.target)) {
+      conventions.get(ev.target).value = ev.value;
+    } else if (ev.op === 'DEF' && ev.path && ev.module && ev.kind === 'module-prop') {
+      if (!moduleProps.has(ev.module)) moduleProps.set(ev.module, {});
+      moduleProps.get(ev.module)[ev.path] = ev.value;
+    }
+    // word-property DEFs (gender/person/animacy/…) and RECs enrich the graph;
+    // projection v1 reads membership + values only.
+  }
+  for (const [id, c] of conventions) if (c.value === undefined && members.has(id)) c.value = members.get(id);
+  return { conventions, moduleProps };
+}
+
+function parseConventionsJSONL(text) {
+  const out = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    try { out.push(JSON.parse(t)); } catch (e) { /* a bad line never poisons the rest */ }
+  }
+  return out;
+}
+
+function loadConventions(input) {
+  const records = typeof input === 'string' ? parseConventionsJSONL(input) : (input || []);
+  const proj = projectConventions(records);
+  // The RULES LEDGER is the durable store — every parse re-folds it into the
+  // live rules, so a direct write would be clobbered on the next document.
+  // Conventions therefore land as ledger DELTAS against the current fold (the
+  // same append-only channel induction uses): remove-token / add-token for
+  // inventories, set-value for register laws, bucketed by module. File ≡
+  // seeds ⇒ zero deltas ⇒ byte-identical behavior.
+  compileLiteralPacks();
+  const tokenize = (id, v) => (id === 'quote_pairs') ? v.map(p => JSON.stringify(p)) : v.slice();
+  const ALL_BUCKETS = new Set(['core', 'en-narrative-v1', ...Object.values(LANG_PACKS).map(p => p.id)]);
+  const fold = projectRules(RULES_LEDGER, { packs: ALL_BUCKETS });
+  let applied = 0, packApplied = 0, deltas = 0;
+  const emit = (ev) => { ledgerAppend({ ...ev, basis: 'conventions', src: 'conventions.jsonl' }); deltas++; };
+  for (const [, c] of proj.conventions) {
+    if (c.value === undefined || !c.rule || !READING_RULES[c.rule] || c.rule === 'attribution_verbs') continue;
+    const bucket = c.module || 'core';
+    const r = fold.rules[c.rule];
+    const pb = r && r.perBucket && r.perBucket[bucket];
+    if (Array.isArray(c.value)) {
+      const want = tokenize(c.rule, c.value);
+      const have = [];
+      if (pb) for (const k of (pb.order || [])) if ((pb.tokens.get(k) || 0) > 0) have.push(k);
+      const haveSet = new Set(have), wantSet = new Set(want);
+      for (const t of have) if (!wantSet.has(t)) emit({ target: 'rule:' + c.rule, action: 'remove-token', bucket, value: t, mass: 1 });
+      for (const t of want) if (!haveSet.has(t)) emit({ target: 'rule:' + c.rule, action: 'add-token', bucket, value: t, mass: 1 });
+    } else {
+      const cur = pb ? pb.latest : undefined;
+      if (JSON.stringify(cur) !== JSON.stringify(c.value)) emit({ target: 'rule:' + c.rule, action: 'set-value', bucket, value: c.value, mass: 1 });
+    }
+    if (bucket === 'en-narrative-v1' || bucket === 'core') applied++; else packApplied++;
+  }
+  // module-level props (dash dialogue, function chars, …) live on the packs
+  for (const [modId, props] of proj.moduleProps) {
+    for (const lang of Object.keys(LANG_PACKS)) {
+      if (LANG_PACKS[lang].id !== modId) continue;
+      for (const [p, v] of Object.entries(props)) if (p in LANG_PACKS[lang]) { LANG_PACKS[lang][p] = v; packApplied++; }
+    }
+  }
+  _projMemo = null;
+  deriveSets(projectRules(RULES_LEDGER, currentFrame()));
+  return { records: records.length, applied, packApplied, deltas };
+}
+
+// Read-only introspection: every convention the semantics graph covers, with
+// its current live value — consumed by tools/gen-conventions.js (to emit the
+// file) and tests/conventions.test.js (to prove file ≡ seeds, no drift).
+function _conventionsExport() {
+  const enConventions = {};
+  for (const [id, r] of Object.entries(READING_RULES)) {
+    if (r.module === 'en-narrative-v1') enConventions[id] = r.value;
+  }
+  const modules = { 'en-narrative-v1': { language: 'en', conventions: enConventions, props: {} } };
+  for (const [lang, pack] of Object.entries(LANG_PACKS)) {
+    const props = {};
+    for (const k of ['name_prefix_lower', 'dash_dialogue', 'function_chars', 'colon_attribution']) {
+      if (k in pack) props[k] = pack[k];
+    }
+    modules[pack.id] = { language: pack.language, conventions: { ...pack.rules }, props };
+  }
+  return { modules };
+}
 
 // Set the per-language reading mode. modeMap: { en:'original'|'learning', … }.
 // 'original' freezes a language to its shipped baseline (induction is skipped
@@ -1199,8 +1353,9 @@ function tryAdmit(surface, isPropNoun, tentatives, lowerVocab) {
    Conservative verb list — actions that constitute holding a position, not
    one-off acts — so the role DEF says what the person IS, in the page's own
    words. Returns up to three distinct clauses, in page order. */
-const ROLE_CLAUSE_VERB = /^(?:runs?|running|leads?|leading|heads?|heading|chairs?|chairing|manages?|managing|directs?|directing|oversees?|overseeing|owns?|owning|operates?|operating|founded|co-founded|controls?|controlling|commands?|commanding|supervises?|supervising)\b/i;
-const TITLE_OF_RE = /\b((?:former\s+|interim\s+|acting\s+|deputy\s+)?(?:president|vice[- ]president|ceo|cfo|coo|cto|chief\s+\p{L}+(?:\s+officer)?|chair(?:man|woman|person)?|executive\s+director|managing\s+(?:director|partner)|general\s+manager|director|head|founder|co-founder|owner|commissioner|superintendent)\s+of\s+[^,;.]+)/iu;
+// ROLE_CLAUSE_VERB / TITLE_OF_RE are built from the role_clause_verbs /
+// role_title_heads / role_title_prefixes rules in rebuildLangSets — the word
+// inventories are conventions like any other and live in the semantics graph.
 function rolesFromDescription(desc) {
   const t = String(desc || '');
   const out = [];
@@ -6505,6 +6660,9 @@ function projectGraph(events, frame = {}) {
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
     // per-language reading mode: Original (shipped-only, frozen) vs Self-learning
     setLanguageModes, languageModes,
+    // the semantics graph (conventions.jsonl): human-language conventions as an
+    // eo-operation log, projected like any other event log
+    loadConventions, projectConventions, _conventionsExport,
     // read-only: the induced speech-verb class + accrued mass (learning record)
     _learnedVerbs: learnedVerbs, learnedVerbsByLang,
     // persistence: serialize/restore the learned ledger delta (host stores it)
