@@ -255,7 +255,14 @@ function App() {
       if (savedAudit.length && window.EOAudit && window.EOAudit.restore) { try { window.EOAudit.restore(savedAudit); } catch (e) {} }
 
       const docIds = new Set();
-      if (savedDocs.length) { setDocs(savedDocs); savedDocs.forEach(d => docIds.add(d.id)); bumpUid(savedDocs.map(d => d.id)); }
+      if (savedDocs.length) {
+        setDocs(savedDocs); savedDocs.forEach(d => docIds.add(d.id)); bumpUid(savedDocs.map(d => d.id));
+        // Rebuild the local span table for restored docs (h → doc/sentence),
+        // so provenance anchors stay resolvable on-device without a re-parse.
+        if (window.EOEngine && window.EOEngine._provenance) {
+          for (const d of savedDocs) { try { window.EOEngine._provenance.registerDocSpans(d); } catch (e) {} }
+        }
+      }
       if (savedChat) {
         if (Array.isArray(savedChat.messages)) setMessages(savedChat.messages);
         if (Array.isArray(savedChat.chats)) { setChats(savedChat.chats); bumpUid(savedChat.chats.map(c => c.id)); }
@@ -396,6 +403,44 @@ function App() {
     });
   };
 
+  // ---- the convention proposer (idle, budgeted, toggleable) ----
+  // After a parse leaves registered friction, and only when the local model
+  // is loaded and the chat is quiet, run one proposal turn at idle priority.
+  // The engine owns everything that matters (friction, the closed grammar,
+  // anchors, admission); this is just the scheduler. Never blocks a turn:
+  // if the chat takes the floor before the idle slot fires, stand down.
+  const busyRef = useRef(false);
+  useEffect(() => { busyRef.current = busy; }, [busy]);
+  const proposeArmed = useRef(false);
+  const maybeProposeConventions = () => {
+    const E = window.EOEngine;
+    if (!E || !E.proposerStatus || proposeArmed.current) return;
+    let st; try { st = E.proposerStatus(); } catch (e) { return; }
+    if (!st.eligible) return;
+    if (!(window.EOLLM && window.EOLLM.isLoaded(model.mlc))) return;   // model loaded…
+    proposeArmed.current = true;
+    const idle = (fn) => (typeof requestIdleCallback === 'function')
+      ? requestIdleCallback(fn, { timeout: 30000 }) : setTimeout(fn, 4000);
+    idle(async () => {
+      proposeArmed.current = false;
+      try {
+        if (busyRef.current) return;                                   // …and idle
+        const r = await E.runProposerTurn({
+          llm: (sys, user) => window.EOLLM.phrase({
+            mlcKey: model.mlc, question: user, history: [], mode: 'chat',
+            grounded: false, sysOverride: sys,
+          }),
+        });
+        const n = (r && r.accepted) ? r.accepted.length : 0;
+        if (r && r.ran && n) {
+          showToast('The reader proposed ' + n + ' reading convention' + (n > 1 ? 's' : '') + ' — review under Glass box → Proposals.');
+        }
+      } catch (e) { eoWarn('proposer', e); }
+    });
+  };
+  // a model finishing its load may unlock proposals for already-read docs
+  useEffect(() => { if (modelStatus === 'ready') maybeProposeConventions(); }, [modelStatus]);
+
   // ---- ingest ----
   // Staged so a long document can't crash the tab: existence (load → segment)
   // → structure (read) → significance (project), each phase reported and yielded
@@ -439,6 +484,9 @@ function App() {
     setTableSpec(null);
     showToast('Added “' + name + '” · ' + doc.meta);
     if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+    // the parse may have registered friction (or co-witnessed a pending
+    // proposal); give the proposer its idle slot
+    if (doc.kind === 'prose') maybeProposeConventions();
     return doc;
   };
   // Read files into memory ONE AT A TIME, then ingest. Serial on purpose: two
