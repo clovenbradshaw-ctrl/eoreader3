@@ -4608,7 +4608,33 @@ function projectGraph(events, frame = {}) {
     const assertions = heavy
       .map(e => ({ name: e.name, is: defByTarget.get(e.key) }))
       .filter(a => a.is);
-    const spine = (doc._sections || []).map(s => s.label).filter(Boolean).slice(0, 8);
+    // The spine is the document's section headings — but a section labeller
+    // also catches title-page chrome (the title itself, "By <author>",
+    // "Translated by …", a Contents line, a bare roman-numeral run). Presented
+    // as "the piece moves through N named sections", that chrome makes the
+    // longform read the byline as structure. Drop it: the title (the doc's
+    // first line, repeated), bylines, Contents, and multi-numeral TOC lines;
+    // dedup the rest.
+    const titleLC = String((doc.sentenceTexts || [])[0] || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const isSectionChrome = (label) => {
+      const t = String(label).replace(/\s+/g, ' ').trim();
+      const lc = t.toLowerCase();
+      if (titleLC && lc === titleLC) return true;
+      if (/^(by|translated by|edited by|illustrated by|with an introduction|contents|title page|frontispiece)\b/i.test(t)) return true;
+      if (/^[ivxlcdm]+(\s+[ivxlcdm]+)+\.?$/i.test(t)) return true;     // "I  II  III" — a contents listing, not one section
+      return false;
+    };
+    const spine = [];
+    const seenSpine = new Set();
+    for (const s of (doc._sections || [])) {
+      const label = s.label;
+      if (!label || isSectionChrome(label)) continue;
+      const k = String(label).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (seenSpine.has(k)) continue;
+      seenSpine.add(k);
+      spine.push(label);
+      if (spine.length >= 8) break;
+    }
     return {
       heavy, heavyEdges, assertions, spine,                        // existing
       tail:    entities.slice(6, 20).map(e => ({
@@ -4743,11 +4769,21 @@ function projectGraph(events, frame = {}) {
     };
 
     // NULs whose competing set touches a heavy figure → an undecided pronoun.
+    // Dedup by the competing PAIR (many stalls share the same two candidates,
+    // which would otherwise repeat one sentence verbatim a dozen times) and
+    // cap it — a reader notes the indecision once or twice, doesn't log it.
+    const seenPair = new Set();
+    let stallNotes = 0;
     for (const nl of (p.nulls || [])) {
+      if (stallNotes >= 2) break;
       const comp = Array.isArray(nl.competing) ? nl.competing : [];
       if (!comp.some(c => heavyKeys.has(c.site))) continue;
       const named = comp.map(c => c.siteName || c.name).filter(Boolean);
       if (named.length < 2) continue;
+      const pair = [named[0], named[1]].sort().join('|').toLowerCase();
+      if (seenPair.has(pair)) continue;
+      seenPair.add(pair);
+      stallNotes++;
       out.push(`The reading did not commit when a pronoun could have been either ${named[0]} or ${named[1]}.`);
       if (nl.sentence_idx != null) pushSpan(nl.sentence_idx);
     }
