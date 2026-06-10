@@ -26,6 +26,29 @@
 <!-- engine (plain scripts; expose window.EOEngine / window.EOLLM / window.EOStore / window.EOAudit) -->
 <script src="engine.js"></script>
 <script src="llm.js"></script>
+<!-- the conventions graph: everything human-language-specific, as an
+     eo-operation log (see the CONVENTIONS GRAPH note in engine.js). Loaded
+     opportunistically; absent/unreachable (file://) the engine's seeds apply
+     and behavior is identical — the drift test pins file == seeds. -->
+<script>
+  fetch('memory/conventions.jsonl').then(r => r.ok ? r.text() : null).then(t => {
+    if (t && window.EOEngine && window.EOEngine.loadConventions) window.EOEngine.loadConventions(t);
+  }).catch(() => {});
+  // Hydration writer: when an EVA failure ADMITS a term (two sightings — a
+  // contextual neuron, not every stumble), append its REC to the durable
+  // graph via the conventions webhook. Ships only the convention record
+  // (term + reason + register affinity) — never document content. Clear
+  // EO_CONVENTIONS_ENDPOINT to keep memory strictly local.
+  window.EO_CONVENTIONS_ENDPOINT = window.EO_CONVENTIONS_ENDPOINT
+    || 'https://n8n.intelechia.com/webhook/eoreader3/conventions/append';
+  if (window.EOEngine) window.EOEngine.onConventionsRec = (rec) => {
+    if (!rec || !rec.admitted || !window.EO_CONVENTIONS_ENDPOINT) return;
+    fetch(window.EO_CONVENTIONS_ENDPOINT, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ line: rec, message: 'hydrate: eva neuron "' + ((rec.value && rec.value.term) || rec.value.reason) + '"' }),
+    }).catch(() => {});
+  };
+</script>
 <script src="embed.js"></script>
 <script src="store.js"></script>
 <script src="audit.js"></script>

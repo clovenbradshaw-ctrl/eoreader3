@@ -53,48 +53,12 @@
   /* ============================================================
      ===============  REAL ENGINE (ported verbatim)  ============
      ============================================================ */
-const DISCOURSE_JUNK = new Set([
-  'today','yesterday','tomorrow','now','then','here','there','meanwhile',
-  'however','moreover','furthermore','therefore','also','still','yet',
-  'according','reportedly','apparently','allegedly',
-  'monday','tuesday','wednesday','thursday','friday','saturday','sunday',
-  'january','february','march','april','may','june','july','august',
-  'september','october','november','december',
-  // Stopwords that compromise sometimes mis-tags as proper nouns at sentence start
-  'not','almost','because','while','since','although','though',
-]);
+// DISCOURSE_JUNK / ANSWER_DISCOURSE / STRUCTURE_LABELS are CONVENTIONS —
+// they live in READING_RULES (discourse_junk / answer_discourse /
+// structure_labels) and in memory/conventions.jsonl, and are rebuilt into the
+// live Sets by rebuildLangSets. Assertions, contextual and revisable — not
+// constants.
 
-// Discourse words an ANSWER opens with ("Yes, Amos Dresser is…", "Indeed, …").
-// The veto's cap-harvest reads them as proper-noun candidates, and a correct
-// confirmation gets its "Yes" struck through as an unverified term — the badge
-// punishing the answer for a word about the answer, not a claim about the page.
-// Checked only in the draft-side veto (inventedTerms), never in entity
-// admission, so extraction physics are untouched.
-const ANSWER_DISCOURSE = new Set([
-  'yes','yeah','indeed','certainly','sure','absolutely','exactly','correct','agreed',
-  'unfortunately','additionally','finally','similarly','specifically','notably',
-  'importantly','overall','instead','otherwise','nevertheless','nonetheless',
-  'accordingly','consequently','thus','hence','besides','actually','generally',
-  'typically','usually','ultimately','alternatively','likewise','regardless',
-]);
-
-// Document apparatus / OCR section labels. These show up capitalized and
-// repeated in scanned or structured prose ("Figure 4", "Appendix B", "Note:",
-// "Digitization sponsored by … Foundation") and compromise hands them back as
-// proper nouns, so without a filter they surface as named entities — and, with
-// the old person-fallback, as people. They are document chrome, not referents.
-// Checked only in entity admission (proper-noun candidates already start with a
-// capital), so retrieval, segmentation and content are untouched; a multi-word
-// name like "Ford Foundation" still admits because only the bare label matches.
-const STRUCTURE_LABELS = new Set([
-  'figure','fig','plate','table','exhibit','diagram','chart',
-  'appendix','addendum','chapter','section','subsection','paragraph','page',
-  'note','notes','footnote','endnote','caption','sidebar',
-  'summary','abstract','overview','preface','foreword','afterword',
-  'prologue','epilogue','introduction','conclusion',
-  'contents','index','glossary','bibliography','references','errata','timeline',
-  'archival','digitization','digitisation','foundation','collection','collections',
-]);
 
 // ── READING_RULES: the rules of reading made auditable ───────────
 // Every rule the reader applies is a first-class object: it has mass
@@ -258,11 +222,7 @@ let TRANSCRIPT_ACTIVE = false;
 // Formulaic discourse a transcript is full of ("Thank you.", "Okay.") — these
 // open sentences capitalized, recur past the two-sighting gate, and are never
 // referents. Checked only in entity admission while a transcript is active.
-const TRANSCRIPT_FORMULA = new Set([
-  'thank', 'thanks', 'thank you', 'okay', 'ok', 'yes', 'yeah', 'no', 'well', 'good',
-  'right', 'hello', 'hi', 'sorry', 'please', 'amen', 'aye', 'nay', 'um', 'uh', 'huh',
-  'hmm', 'bye', 'goodbye', 'welcome', 'correct', 'exactly', 'absolutely', 'sure', 'alright',
-]);
+// TRANSCRIPT_FORMULA is the transcript_formula convention (see rebuildLangSets).
 // How many timecode-shaped lines the head of the text carries. Used to keep
 // the comma-mode CSV/table detectors from reading "0:00:14.240,0:00:16.560"
 // rows as a spreadsheet, and by the transcript decision itself.
@@ -480,6 +440,73 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Pronouns that resolve to male-gendered sites.',
   },
+  // ── Production guards — conventions of the reading's own hygiene ──
+  // Assertions, contextual and revisable: each is what THIS reader currently
+  // takes a class of surfaces to mean, not a fact about language.
+  discourse_junk: {
+    value: ['today','yesterday','tomorrow','now','then','here','there','meanwhile','however','moreover','furthermore','therefore','also','still','yet','according','reportedly','apparently','allegedly','monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','not','almost','because','while','since','although','though'],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Discourse and calendar words that capitalize at sentence start and read as proper nouns to NER. Never referents.',
+  },
+  answer_discourse: {
+    value: ['yes','yeah','indeed','certainly','sure','absolutely','exactly','correct','agreed','unfortunately','additionally','finally','similarly','specifically','notably','importantly','overall','instead','otherwise','nevertheless','nonetheless','accordingly','consequently','thus','hence','besides','actually','generally','typically','usually','ultimately','alternatively','likewise','regardless'],
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Words an ANSWER opens with ("Yes, Amos Dresser is…"). Checked only in the draft-side veto, never in admission — a word about the answer, not a claim about the page.',
+  },
+  structure_labels: {
+    value: ['figure','fig','plate','table','exhibit','diagram','chart','appendix','addendum','chapter','section','subsection','paragraph','page','note','notes','footnote','endnote','caption','sidebar','summary','abstract','overview','preface','foreword','afterword','prologue','epilogue','introduction','conclusion','contents','index','glossary','bibliography','references','errata','timeline','archival','digitization','digitisation','foundation','collection','collections'],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Document apparatus / OCR section labels ("Figure 4", "Appendix B"). Chrome, not referents; a multi-word name like "Ford Foundation" still admits because only the bare label matches.',
+  },
+  transcript_formula: {
+    value: ['thank','thanks','thank you','okay','ok','yes','yeah','no','well','good','right','hello','hi','sorry','please','amen','aye','nay','um','uh','huh','hmm','bye','goodbye','welcome','correct','exactly','absolutely','sure','alright'],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Formulaic transcript discourse ("Thank you.", "Okay.") that opens sentences capitalized and recurs past the two-sighting gate — politeness, not a referent. Checked only while a transcript is active.',
+  },
+  generic_voice_heads: {
+    value: ['speaker','voice','interviewer','interviewee','moderator','participant','panelist','operator','announcer','narrator','caller','host','guest','male','female','unknown','unidentified','audience','translator','interpreter'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Role-word heads of generic voice labels ("Speaker 2", "Female Voice"). The label is a real voice; its HEAD is a role word, not a name — part-matching skips these so "speaker" in a user message cannot hijack routing onto "Speaker 2".',
+  },
+  place_org_cues: {
+    value: ['street','st','road','rd','avenue','ave','lane','river','sea','ocean','bay','gulf','point','cape','harbou?r','island','isle','mount','mountain','valley','county','shire','city','town','village','company','corporation','commission','board','department','office','firm','llc','inc','ltd','co','university','college','school','hospital','church','park','square','hall','palace','castle','bridge','station','hotel','club','society','association','league','union','party','court','bank','press','times','gazette','journal','ministry','bureau','agency','institute','foundation'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Surface cues that mark a proper name as NOT a person (regex alternates). Guards person-promotion so a river or a firm never becomes a character.',
+  },
+  eva_machinery_terms: {
+    value: ['mass','momentum','gravity','coupling','frame','rules_rev','NUL','SIG','INS','SEG','CON','SYN','DEF','EVA','REC'],
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'The machinery vocabulary the talker must never speak. EVA rejects a draft that leaks any of these — the reading describes the page, never its own physics.',
+  },
+  eva_veto_lexicon: {
+    value: [],
+    mass: 0, layer: 'significance', src: 'learned', module: 'core',
+    desc: 'Terms learned from repeated EVA failures — the model\'s recurring tics (names it keeps inventing, framings it keeps slipping into), admitted on the second sighting like any induced rule. Each admission is a contextual neuron: it feeds back into the veto and the retry prompt, and its REC (with register affinity) is the hydration record appended to memory/conventions.jsonl. Starts EMPTY: the lexicon is grown, never seeded.',
+  },
+  role_clause_verbs: {
+    value: ['runs?','running','leads?','leading','heads?','heading','chairs?','chairing','manages?','managing','directs?','directing','oversees?','overseeing','owns?','owning','operates?','operating','founded','co-founded','controls?','controlling','commands?','commanding','supervises?','supervising'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Verb forms whose relative clause states a ROLE rather than an act ("who runs the DMC", "who heads the council"). The naming bridge distills these into role DEFs. Regex alternates, joined verbatim — holding a position, not one-off doing.',
+  },
+  role_title_heads: {
+    value: ['president','vice[- ]president','ceo','cfo','coo','cto','chief\\s+\\p{L}+(?:\\s+officer)?','chair(?:man|woman|person)?','executive\\s+director','managing\\s+(?:director|partner)','general\\s+manager','director','head','founder','co-founder','owner','commissioner','superintendent'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Title-of heads: "<head> of X" names a role ("president of the partnership"). Regex alternates, joined verbatim.',
+  },
+  role_title_prefixes: {
+    value: ['former','interim','acting','deputy'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Qualifiers that may lead a title-of head without breaking it ("former president of …").',
+  },
+  neutral_person_pronouns: {
+    value: ['they','them','their','theirs'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Third-person pronouns that refer to a person WITHOUT marking gender. Animate like he/she (they can bind and promote a proper name to a person), but they teach no gender — a singular-they referent stays a genderless person. Whether they may be read as SINGULAR for a named individual is the register call below (singular_they).',
+  },
+  singular_they: {
+    value: false, mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'May "they/them" be read as a SINGULAR reference to one named person (and so bind/promote that person)? This is a convention of register, not a universal: contemporary journalism and prose use singular they for a known individual; 19th-century narrative (the texts this module reads — Conrad, Balzac, Tolstoy) almost always means a plural by "they", so reading it as singular would wrongly fuse a group into one character. Default OFF here; a modern-register language module turns it ON. Gendered he/she promotion is unaffected — it is unambiguously singular in every register.',
+  },
   female_titles: {
     value: ['princess','queen','countess','duchess','lady','dame','mrs','miss','ms','mademoiselle','baroness','empress'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -653,9 +680,11 @@ function getAttribVerbs() {
   return rule.value[ACTIVE_LANG];
 }
 let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
-    MALE_PRONOUNS, FEMALE_TITLES, MALE_TITLES, CLITIC_SUFFIXES, ADVERB_HEADS,
+    MALE_PRONOUNS, NEUTRAL_PERSON_PRONOUNS, FEMALE_TITLES, MALE_TITLES, TITLE_TOKENS, CLITIC_SUFFIXES, ADVERB_HEADS,
     NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS,
-    ANAPHOR_PRONOUNS;
+    ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
+    DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
+    GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -668,8 +697,12 @@ function rebuildLangSets() {
   NONPERSON_PRONOUNS = new Set(mod_values('nonperson_pronouns'));
   FEMALE_PRONOUNS = new Set(mod_values('female_pronouns'));
   MALE_PRONOUNS = new Set(mod_values('male_pronouns'));
+  NEUTRAL_PERSON_PRONOUNS = new Set(mod_values('neutral_person_pronouns'));
   FEMALE_TITLES = new Set(mod_values('female_titles'));
   MALE_TITLES = new Set(mod_values('male_titles'));
+  // Every personal title (gendered + genderless: Mr, Mrs, Dr, Captain,
+  // Senator, President, Chief, …) — a name leading with one is a person.
+  TITLE_TOKENS = new Set([...mod_values('title_tokens'), ...mod_values('male_titles'), ...mod_values('female_titles')]);
   CLITIC_SUFFIXES = new Set(mod_values('clitic_suffixes'));
   ADVERB_HEADS = new Set(mod_values('adverb_heads'));
   NAME_CONNECTORS = new Set(mod_values('name_connectors'));
@@ -677,6 +710,26 @@ function rebuildLangSets() {
   ARTICLES = new Set(mod_values('articles'));
   ATTRIB_VERB_LIST = getAttribVerbs().join('|');
   ABBREVIATIONS = new Set(mod_values('sentence_abbreviations'));
+  // Role-shape regexes, built from their convention inventories. Empty
+  // inventories (a language without these conventions yet) disable the shape.
+  const rcv = mod_values('role_clause_verbs');
+  ROLE_CLAUSE_VERB = rcv.length ? new RegExp('^(?:' + rcv.join('|') + ')\\b', 'i') : /$^/;
+  const heads = mod_values('role_title_heads');
+  const prefixes = mod_values('role_title_prefixes');
+  TITLE_OF_RE = heads.length
+    ? new RegExp('\\b((?:(?:' + (prefixes.length ? prefixes.join('|') : '$^') + ')\\s+)?(?:' + heads.join('|') + ')\\s+of\\s+[^,;.]+)', 'iu')
+    : /$^/;
+  // production-guard conventions (assertions, contextual and revisable)
+  DISCOURSE_JUNK = new Set(mod_values('discourse_junk'));
+  ANSWER_DISCOURSE = new Set(mod_values('answer_discourse'));
+  STRUCTURE_LABELS = new Set(mod_values('structure_labels'));
+  TRANSCRIPT_FORMULA = new Set(mod_values('transcript_formula'));
+  GENERIC_VOICE_HEADS = new Set(mod_values('generic_voice_heads'));
+  const poc = mod_values('place_org_cues');
+  PLACE_ORG_CUE_RE = poc.length ? new RegExp('\\b(' + poc.join('|') + ')\\b', 'i') : /$^/;
+  const evam = mod_values('eva_machinery_terms');
+  EVA_MACHINERY_RE = evam.length ? new RegExp('\\b(' + evam.join('|') + ')\\b', 'i') : /$^/;
+  EVA_VETO_TERMS = new Set(mod_values('eva_veto_lexicon'));
 }
 // Apply a language pack: write its detectors into the rules with
 // provenance, register the module, rebuild the lexical sets. English
@@ -702,6 +755,165 @@ function applyLanguageModule(lang) {
   deriveSets(projectRules(RULES_LEDGER, currentFrame()));
 }
 function moduleEnabledForLang(modId) { return modId === 'core' || (LANGUAGE_MODULES[modId] && LANGUAGE_MODULES[modId].enabled); }
+
+/* ============================================================
+   THE CONVENTIONS GRAPH (memory/conventions.jsonl) — human language as conventions.
+
+   The mechanics (gravity, momentum, two-sighting, δ-gates, the nine
+   operators) are universal; everything HUMAN-LANGUAGE-specific — pronoun
+   inventories, titles, attribution shapes, quote pairs, register calls
+   like singular-they — is a CONVENTION, and no inventory is more "real"
+   than another: you / y'all / ella / vous / 她 are equal citizens. Those
+   conventions live in memory/conventions.jsonl: an append-only
+   graph whose records ARE eo operations —
+
+     INS  — instantiate a module (a register of conventions) or a
+            convention (one inventory/setting), with an `affinity` text
+            describing the kinds of content it belongs to (the hook an
+            embedder scores against document content at runtime);
+     SYN  — membership: { s: "he", v: "member-of", o: "<convention id>" }
+            (seq order is list order);
+     DEF  — a property of a surface ({target:"he", path:"gender",
+            value:"m"}) or a structured value on a convention
+            ({path:"value"} — quote pairs, patterns, register booleans);
+     REC  — the register laws, recorded in the engine's own change
+            vocabulary (why singular-they is off for 19th-c narrative).
+
+   projectConventions REPLAYS that log into per-module convention values —
+   the same move projectGraph makes over a document's events — and
+   loadConventions writes them through (READING_RULES for the en module,
+   LANG_PACKS for the others) and rebuilds the lexical sets. The shipped
+   seeds in this file stay as the fallback: never loaded ⇒ byte-identical
+   behavior; the drift test (tests/conventions.test.js) proves file and
+   seeds agree. _conventionsExport is the read-only introspection the
+   generator and the test share.
+   ============================================================ */
+function projectConventions(records) {
+  const conventions = new Map();   // id -> { module, rule, value }
+  const members = new Map();       // id -> [surfaces in seq order]
+  const moduleProps = new Map();   // moduleId -> { path: value }
+  const evaTally = new Map();      // lang|term -> sightings (hydration RECs)
+  const evaInduced = new Set();    // terms past the two-sighting gate
+  for (const ev of (records || [])) {
+    if (!ev || !ev.op) continue;
+    if (ev.op === 'INS' && ev.kind === 'convention' && ev.id) {
+      conventions.set(ev.id, { module: ev.module, rule: ev.rule || null, value: undefined });
+    } else if (ev.op === 'SYN' && ev.v === 'member-of' && ev.o != null && ev.s != null) {
+      if (!members.has(ev.o)) members.set(ev.o, []);
+      members.get(ev.o).push(ev.s);
+    } else if (ev.op === 'DEF' && ev.path === 'value' && conventions.has(ev.target)) {
+      conventions.get(ev.target).value = ev.value;
+    } else if (ev.op === 'DEF' && ev.path && ev.module && ev.kind === 'module-prop') {
+      if (!moduleProps.has(ev.module)) moduleProps.set(ev.module, {});
+      moduleProps.get(ev.module)[ev.path] = ev.value;
+    }
+    else if (ev.op === 'REC' && ev.action === 'eva-veto' && ev.value && ev.value.term) {
+      // hydration records: tally failure terms; two sightings = a neuron
+      const k = ((ev.affinity && ev.affinity.lang) || 'en') + '|term:' + String(ev.value.term).toLowerCase();
+      evaTally.set(k, Math.max(evaTally.get(k) || 0, ev.value.sightings || ((evaTally.get(k) || 0) + 1)));
+      if ((evaTally.get(k) || 0) >= 2) evaInduced.add(ev.value.term);
+    }
+    // other word-property DEFs (gender/person/animacy/…) and RECs enrich the
+    // graph; projection v1 reads membership + values + hydration only.
+  }
+  for (const [id, c] of conventions) if (c.value === undefined && members.has(id)) c.value = members.get(id);
+  return { conventions, moduleProps, evaInduced: [...evaInduced], evaTally };
+}
+
+function parseConventionsJSONL(text) {
+  const out = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    try { out.push(JSON.parse(t)); } catch (e) { /* a bad line never poisons the rest */ }
+  }
+  return out;
+}
+
+function loadConventions(input) {
+  const records = typeof input === 'string' ? parseConventionsJSONL(input) : (input || []);
+  const proj = projectConventions(records);
+  // The RULES LEDGER is the durable store — every parse re-folds it into the
+  // live rules, so a direct write would be clobbered on the next document.
+  // Conventions therefore land as ledger DELTAS against the current fold (the
+  // same append-only channel induction uses): remove-token / add-token for
+  // inventories, set-value for register laws, bucketed by module. File ≡
+  // seeds ⇒ zero deltas ⇒ byte-identical behavior.
+  compileLiteralPacks();
+  const tokenize = (id, v) => (id === 'quote_pairs') ? v.map(p => JSON.stringify(p)) : v.slice();
+  const ALL_BUCKETS = new Set(['core', 'en-narrative-v1', ...Object.values(LANG_PACKS).map(p => p.id)]);
+  const fold = projectRules(RULES_LEDGER, { packs: ALL_BUCKETS });
+  let applied = 0, packApplied = 0, deltas = 0;
+  const emit = (ev) => { ledgerAppend({ ...ev, basis: 'conventions', src: 'conventions.jsonl' }); deltas++; };
+  for (const [, c] of proj.conventions) {
+    if (c.value === undefined || !c.rule || !READING_RULES[c.rule] || c.rule === 'attribution_verbs') continue;
+    const bucket = c.module || 'core';
+    const r = fold.rules[c.rule];
+    const pb = r && r.perBucket && r.perBucket[bucket];
+    if (Array.isArray(c.value)) {
+      const want = tokenize(c.rule, c.value);
+      const have = [];
+      if (pb) for (const k of (pb.order || [])) if ((pb.tokens.get(k) || 0) > 0) have.push(k);
+      const haveSet = new Set(have), wantSet = new Set(want);
+      for (const t of have) if (!wantSet.has(t)) emit({ target: 'rule:' + c.rule, action: 'remove-token', bucket, value: t, mass: 1 });
+      for (const t of want) if (!haveSet.has(t)) emit({ target: 'rule:' + c.rule, action: 'add-token', bucket, value: t, mass: 1 });
+    } else {
+      const cur = pb ? pb.latest : undefined;
+      if (JSON.stringify(cur) !== JSON.stringify(c.value)) emit({ target: 'rule:' + c.rule, action: 'set-value', bucket, value: c.value, mass: 1 });
+    }
+    if (bucket === 'en-narrative-v1' || bucket === 'core') applied++; else packApplied++;
+  }
+  // hydration: terms the file's REC records have already taught (two
+  // sightings) land as ledger add-tokens; tallies restore so counting
+  // continues across sessions rather than restarting
+  {
+    const r = fold.rules['eva_veto_lexicon'];
+    const pb = r && r.perBucket && r.perBucket['core'];
+    const live = new Set();
+    if (pb) for (const k of (pb.order || [])) if ((pb.tokens.get(k) || 0) > 0) live.add(k);
+    for (const term of (proj.evaInduced || [])) {
+      if (!live.has(term)) emit({ target: 'rule:eva_veto_lexicon', action: 'add-token', bucket: 'core', value: term, mass: 2 });
+    }
+    if (proj.evaTally) for (const [k, n] of proj.evaTally) EVA_TALLY.set(k, Math.max(EVA_TALLY.get(k) || 0, n));
+  }
+  // module-level props (dash dialogue, function chars, …) live on the packs
+  for (const [modId, props] of proj.moduleProps) {
+    for (const lang of Object.keys(LANG_PACKS)) {
+      if (LANG_PACKS[lang].id !== modId) continue;
+      for (const [p, v] of Object.entries(props)) if (p in LANG_PACKS[lang]) { LANG_PACKS[lang][p] = v; packApplied++; }
+    }
+  }
+  _projMemo = null;
+  deriveSets(projectRules(RULES_LEDGER, currentFrame()));
+  return { records: records.length, applied, packApplied, deltas };
+}
+
+// Read-only introspection: every convention the semantics graph covers, with
+// its current live value — consumed by tools/gen-conventions.js (to emit the
+// file) and tests/conventions.test.js (to prove file ≡ seeds, no drift).
+function _conventionsExport() {
+  const enConventions = {};
+  for (const [id, r] of Object.entries(READING_RULES)) {
+    if (r.module === 'en-narrative-v1') enConventions[id] = r.value;
+  }
+  // core production-guard conventions — register-agnostic assertions
+  const CORE_IDS = ['discourse_junk', 'answer_discourse', 'structure_labels', 'transcript_formula',
+    'generic_voice_heads', 'place_org_cues', 'eva_machinery_terms', 'eva_veto_lexicon'];
+  const coreConventions = {};
+  for (const id of CORE_IDS) if (READING_RULES[id]) coreConventions[id] = READING_RULES[id].value;
+  const modules = {
+    core: { language: '*', conventions: coreConventions, props: {} },
+    'en-narrative-v1': { language: 'en', conventions: enConventions, props: {} },
+  };
+  for (const [lang, pack] of Object.entries(LANG_PACKS)) {
+    const props = {};
+    for (const k of ['name_prefix_lower', 'dash_dialogue', 'function_chars', 'colon_attribution']) {
+      if (k in pack) props[k] = pack[k];
+    }
+    modules[pack.id] = { language: pack.language, conventions: { ...pack.rules }, props };
+  }
+  return { modules };
+}
 
 // Set the per-language reading mode. modeMap: { en:'original'|'learning', … }.
 // 'original' freezes a language to its shipped baseline (induction is skipped
@@ -1093,7 +1305,33 @@ function genderFromName(name) {
 }
 
 function isPronoun(s) { return PRONOUNS.has(String(s).toLowerCase().trim()); }
+// Does a surface lead with a personal title ("Mr. Calloway", "Senator Alexander",
+// "Chief Drake")? A title is unambiguous person evidence, gender aside. Requires
+// a following capitalized token so a bare "Captain" / "President" (a role used as
+// a common noun) doesn't type on its own.
+function leadsWithTitle(surface) {
+  if (!TITLE_TOKENS || !TITLE_TOKENS.size) return false;
+  const words = String(surface == null ? '' : surface).trim().split(/\s+/);
+  if (words.length < 2) return false;
+  const first = words[0].toLowerCase().replace(/\.$/, '');
+  return TITLE_TOKENS.has(first) && /^\p{Lu}/u.test(words[1]);
+}
 function looksProper(s) { return /^\p{Lu}[\p{L}\p{M}\p{N}'’.-]*(\s+\p{Lu}[\p{L}\p{M}\p{N}'’.-]*)*$/u.test(String(s).trim()); }
+// Place/organization surface cues — words that mark a proper name as NOT a
+// person, so the animate-pronoun promotion below never turns a river or a firm
+// into a character.
+// PLACE_ORG_CUE_RE is built from the place_org_cues convention (see rebuildLangSets).
+// A proper-name surface that plausibly names a PERSON: capitalized, one to
+// three tokens, no digits, no place/org cue, not document chrome. Used only to
+// decide whether an animate pronoun may bind-and-promote a `thing` — never to
+// type on its own.
+function looksLikePerson(name) {
+  const t = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
+  if (!t || /\d/.test(t) || PLACE_ORG_CUE_RE.test(t)) return false;
+  if (!looksProper(t)) return false;
+  const words = t.split(/\s+/);
+  return words.length >= 1 && words.length <= 3;
+}
 function normSurface(s) { return String(s).toLowerCase().replace(/\s+/g, ' ').trim(); }
 
 function tokenSetOf(name) {
@@ -1160,8 +1398,9 @@ function tryAdmit(surface, isPropNoun, tentatives, lowerVocab) {
    Conservative verb list — actions that constitute holding a position, not
    one-off acts — so the role DEF says what the person IS, in the page's own
    words. Returns up to three distinct clauses, in page order. */
-const ROLE_CLAUSE_VERB = /^(?:runs?|running|leads?|leading|heads?|heading|chairs?|chairing|manages?|managing|directs?|directing|oversees?|overseeing|owns?|owning|operates?|operating|founded|co-founded|controls?|controlling|commands?|commanding|supervises?|supervising)\b/i;
-const TITLE_OF_RE = /\b((?:former\s+|interim\s+|acting\s+|deputy\s+)?(?:president|vice[- ]president|ceo|cfo|coo|cto|chief\s+\p{L}+(?:\s+officer)?|chair(?:man|woman|person)?|executive\s+director|managing\s+(?:director|partner)|general\s+manager|director|head|founder|co-founder|owner|commissioner|superintendent)\s+of\s+[^,;.]+)/iu;
+// ROLE_CLAUSE_VERB / TITLE_OF_RE are built from the role_clause_verbs /
+// role_title_heads / role_title_prefixes rules in rebuildLangSets — the word
+// inventories are conventions like any other and live in the semantics graph.
 function rolesFromDescription(desc) {
   const t = String(desc || '');
   const out = [];
@@ -1593,7 +1832,20 @@ async function extractEoGraph(text, onProgress) {
           if (tail && (ABBREVIATIONS.has(tail[1].toLowerCase()) || nextIsNum)) { txt += ' ' + subs[++k].text(); merged = true; }
           else break;
         }
-        paraDocs.push(merged ? nlp(txt) : subs[k]);
+        // compromise ends a sentence on `. ` + capital but not on `." ` +
+        // capital — a sentence terminal sitting INSIDE a closing quote — so
+        // consecutive quoted sentences ("…cares." David Corman … "…Zone." The
+        // council …) collapse into one. That coarsens the momentum clock and,
+        // worse, cascades quote attribution across a speaker change (the
+        // second speaker's quote inherits the first). Split on that boundary:
+        // a terminal+closing-quote, whitespace, then an optional opening quote
+        // and a capital. Lowercase after (a trailing "…," he said.) is left
+        // joined, so attributions stay with their quote. ONE exception: a bare
+        // third-person pronoun after the boundary ("…besides." He watched her…)
+        // is trailing narration whose subject ATTRIBUTES the preceding bare
+        // quote — splitting it strands the quote, so keep those joined.
+        const pieces = txt.split(/(?<=[.!?][”"’'])\s+(?=[“"‘']?(?!(?:He|She|They|It)\b)\p{Lu})/u);
+        for (const piece of pieces) if (piece.trim()) paraDocs.push((merged || pieces.length > 1) ? nlp(piece) : subs[k]);
       }
     }
     for (const s of paraDocs) { sentenceDocs.push(s); sentParaSolo.push(paraDocs.length === 1); if (TRANSCRIPT) sentTurn.push(_turnIdx); }
@@ -2034,6 +2286,10 @@ async function extractEoGraph(text, onProgress) {
     if (DEICTIC_PRONOUNS.has(lower)) return null;
     const needFemale = FEMALE_PRONOUNS.has(lower);
     const needMale = MALE_PRONOUNS.has(lower);
+    // singular "they" as a person reference is a modern-register convention
+    // (off for classic narrative); only then may it promote a proper name.
+    const neutralPerson = NEUTRAL_PERSON_PRONOUNS.has(lower)
+      && READING_RULES.singular_they && READING_RULES.singular_they.value;
     if (needFemale || needMale) {
       const targetGender = needFemale ? 'f' : 'm';
       // Is there a real referent this pronoun could bind? Confirmed
@@ -2100,6 +2356,25 @@ async function extractEoGraph(text, onProgress) {
         site.mass += ANAPHORA_W();
         site.momentum = site.momentum * GAMMA + 1;
         result.momentum = +site.momentum.toFixed(2);
+        // Singular "they" (modern register only) that binds a proper-name
+        // `thing` TEACHES personhood without gender — the reference is only
+        // coherent if the surface names a person. Recorded as a DEF so
+        // projection inherits the type and SEG can overturn a bad bind. Gendered
+        // he/she do NOT promote here (a genderless thing must not compete for
+        // "she"); a non-speaking person earns person-type from speaker/title
+        // evidence in projection instead.
+        if (neutralPerson && site.type === 'thing' && looksLikePerson(site.name)) {
+          site.type = 'person';
+          events.push({
+            id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
+            target: site.name, path: 'type', value: 'person',
+            targetHint: { key: result.key, name: site.name, referent_id: site.referent_id },
+            basis: `bound singular "${pronoun}"`,
+            reason: 'a singular-they reference is personhood evidence',
+            sentence_idx: currentSentIdx, sentence: currentSentText,
+            src: 'pronoun-binding',
+          });
+        }
         // Binding a gendered pronoun to a person of unknown gender
         // TEACHES the gender. The observation is the bind itself,
         // recorded as a DEF so projection (learnedGender) inherits it
@@ -3077,10 +3352,16 @@ function pickAbsorbCanonical(nameA, massA, nameB, massB) {
 // memory). Highest-momentum matching site absorbs the pronoun.
 function resolveByActivation(pronoun, sites) {
   const lower = String(pronoun).toLowerCase();
-  const needPerson = PERSON_PRONOUNS.has(lower);
-  const preferNonPerson = NONPERSON_PRONOUNS.has(lower);
   const needFemale = FEMALE_PRONOUNS.has(lower);
   const needMale = MALE_PRONOUNS.has(lower);
+  // "they/them" is animate-but-genderless — but reading it as a SINGULAR
+  // reference to one named person is a register convention (singular_they),
+  // off for classic narrative. When off, they/them is left to the old
+  // type-agnostic path (it may still bind a plural-ish heavy site, unchanged).
+  const neutralPerson = NEUTRAL_PERSON_PRONOUNS.has(lower)
+    && READING_RULES.singular_they && READING_RULES.singular_they.value;
+  const needPerson = PERSON_PRONOUNS.has(lower) || neutralPerson;
+  const preferNonPerson = NONPERSON_PRONOUNS.has(lower);
   // Score = mass × mass_weight + momentum. Heavy characters stay sticky;
   // freshly-touched newcomers can still outpull them if their mass-bonus is
   // small. Princess Mary (mass 16) outscores Marshal (mass 5) even when
@@ -3100,11 +3381,19 @@ function resolveByActivation(pronoun, sites) {
   // step 2 — proportion is built on the poles, not the other way round.
   const elig = [];
   for (const [k, v] of sites) {
-    if (needPerson && v.type !== 'person') continue;      // type charge
+    // type charge. A gendered/person pronoun binds only persons — UNCHANGED, so
+    // classic-prose resolution is untouched. The one exception is singular
+    // "they" under a modern-register module (neutralPerson): there it may also
+    // admit a proper-name `thing` and promote it. Gendered he/she never hijack
+    // eligibility (that would let a genderless thing compete for "she"); a
+    // non-speaking person instead earns its type from the speaker/title signals
+    // reconciled in projection.
+    if (needPerson && v.type !== 'person' && !(neutralPerson && v.type === 'thing' && looksLikePerson(v.name))) continue;
     if (needFemale && v.gender === 'm') continue;         // sign exclusion
     if (needMale && v.gender === 'f') continue;           // sign exclusion
     const surfaceMass = v.surfaceMass != null ? v.surfaceMass : v.mass;
     let score = surfaceMass * MASS_WEIGHT + v.momentum;
+    if (neutralPerson && v.type !== 'person') score -= 0.001;   // a real person wins ties
     if (preferNonPerson && v.type === 'person') score -= 0.15;
     elig.push({ key: k, v, score });
   }
@@ -3617,10 +3906,25 @@ function projectGraph(events, frame = {}) {
     if (ev.op === 'INS' && ev.entityType) {
       considerType(normSurface(ev.target), ev.entityType);
     }
+    // A name leading with a personal title is a person — independent of NER,
+    // speech, or pronouns ("Mr. Calloway" who never speaks; "Senator Alexander").
+    if (ev.op === 'INS' && ev.target && leadsWithTitle(ev.target)) {
+      considerType(normSurface(ev.target), 'person');
+    }
     // Learned types: speech-induction DEFs and any future type evidence.
     if (ev.op === 'DEF' && ev.path === 'type' && ev.value) {
       considerType(normSurface(ev.target), ev.value);
       if (ev.targetHint && ev.targetHint.key) considerType(ev.targetHint.key, ev.value);
+    }
+    // A recorded SIG speaker is a person — whatever earned the attribution
+    // (a named "X said", a pronoun, or the mass-weighted fallback). This is
+    // what types Marlow, who speaks but whose quotes were attributed by
+    // fallback rather than a clean "said Marlow", so speech-induction's
+    // named-only DEF never fired. A place/org never holds a speaker slot, so
+    // this promotes only real voices.
+    if (ev.op === 'SIG' && ev.speaker && ev.speaker !== '?') {
+      const sk = (ev.speakerHint && ev.speakerHint.key) || normSurface(ev.speaker);
+      considerType(sk, 'person');
     }
   }
   for (const cluster of clusterMap.values()) {
@@ -3940,6 +4244,7 @@ function projectGraph(events, frame = {}) {
     'inertia-delta': 'inertia_delta',
     'eva-energy': 'eva_energy_budget',
     'mass-weight': 'mass_weight',
+    'singular-they': 'singular_they',
   };
 
   /* ---------- Thinking depth: the effort dial's tunable budget ----------
@@ -4450,11 +4755,7 @@ function projectGraph(events, frame = {}) {
   // the entity "Speaker 2" and hijacks a meta-conversational turn onto the
   // page: one phantom referent corrupting the ROUTER, not just the answer.
   // Only the full label ("speaker 2") matches; part-matching skips these heads.
-  const GENERIC_VOICE_HEADS = new Set([
-    'speaker','voice','interviewer','interviewee','moderator','participant',
-    'panelist','operator','announcer','narrator','caller','host','guest',
-    'male','female','unknown','unidentified','audience','translator','interpreter',
-  ]);
+  // GENERIC_VOICE_HEADS is the generic_voice_heads convention (see rebuildLangSets).
   function namesEntity(doc, q) {
     if (!doc || doc.kind !== 'prose') return false;
     // Strip possessive 's first ("edith's" → "edith") so an entity named in a
@@ -4595,7 +4896,33 @@ function projectGraph(events, frame = {}) {
     const assertions = heavy
       .map(e => ({ name: e.name, is: defByTarget.get(e.key) }))
       .filter(a => a.is);
-    const spine = (doc._sections || []).map(s => s.label).filter(Boolean).slice(0, 8);
+    // The spine is the document's section headings — but a section labeller
+    // also catches title-page chrome (the title itself, "By <author>",
+    // "Translated by …", a Contents line, a bare roman-numeral run). Presented
+    // as "the piece moves through N named sections", that chrome makes the
+    // longform read the byline as structure. Drop it: the title (the doc's
+    // first line, repeated), bylines, Contents, and multi-numeral TOC lines;
+    // dedup the rest.
+    const titleLC = String((doc.sentenceTexts || [])[0] || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const isSectionChrome = (label) => {
+      const t = String(label).replace(/\s+/g, ' ').trim();
+      const lc = t.toLowerCase();
+      if (titleLC && lc === titleLC) return true;
+      if (/^(by|translated by|edited by|illustrated by|with an introduction|contents|title page|frontispiece)\b/i.test(t)) return true;
+      if (/^[ivxlcdm]+(\s+[ivxlcdm]+)+\.?$/i.test(t)) return true;     // "I  II  III" — a contents listing, not one section
+      return false;
+    };
+    const spine = [];
+    const seenSpine = new Set();
+    for (const s of (doc._sections || [])) {
+      const label = s.label;
+      if (!label || isSectionChrome(label)) continue;
+      const k = String(label).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (seenSpine.has(k)) continue;
+      seenSpine.add(k);
+      spine.push(label);
+      if (spine.length >= 8) break;
+    }
     return {
       heavy, heavyEdges, assertions, spine,                        // existing
       tail:    entities.slice(6, 20).map(e => ({
@@ -4682,13 +5009,63 @@ function projectGraph(events, frame = {}) {
   // The mechanical EVA. Accepts or rejects a SIGNIFICANCE draft with no LLM —
   // checks for machinery leaks, index/citation leaks, ontological framing,
   // invented names, and length. Returns { ok, reasons }.
+  /* ---------- conventions hydration: EVA failures write memory ----------
+     A vetoed draft is not just rejected — it is an OBSERVATION about how this
+     model fails in this register. Every failure becomes a REC record (the
+     hydration payload, one JSONL line shaped for memory/conventions.jsonl,
+     carrying the register affinity it was observed in); a term that fails
+     TWICE is admitted into eva_veto_lexicon through the ledger — a contextual
+     neuron: it feeds the veto (check 1b) and the retry prompt from then on.
+     The engine never touches the network; a host may set
+     EOEngine.onConventionsRec = (rec) => … to ship records out (e.g. the
+     append webhook that writes memory/conventions.jsonl). */
+  const CONVENTIONS_DELTA = [];
+  const EVA_TALLY = new Map();
+  function noteEvaFailure(reasons, ctx = {}) {
+    for (const r of (reasons || [])) {
+      if (r.startsWith('learned-veto:')) continue;        // already a neuron — don't re-learn it
+      const m = /^invented-name:(.+)$/.exec(r);
+      const term = m ? m[1] : null;
+      const key = (ctx.lang || 'en') + '|' + (term ? 'term:' + term.toLowerCase() : 'reason:' + r);
+      const n = (EVA_TALLY.get(key) || 0) + 1;
+      EVA_TALLY.set(key, n);
+      const rec = {
+        op: 'REC', target: 'core:eva_veto_lexicon', action: 'eva-veto',
+        value: { reason: m ? 'invented-name' : r, term, sightings: n },
+        affinity: { lang: ctx.lang || 'en', genre: ctx.genre || null },
+        at: Date.now(),
+      };
+      if (term && n === 2) {
+        // two sightings — the same admission law every induced rule obeys
+        ledgerCommit({ target: 'rule:eva_veto_lexicon', action: 'add-token', bucket: 'core',
+          value: term, mass: n, basis: { eva_failures: n }, src: 'eva-induction' });
+        rec.admitted = true;
+      }
+      CONVENTIONS_DELTA.push(rec);
+      try {
+        const hook = (typeof window !== 'undefined' && window.EOEngine && window.EOEngine.onConventionsRec);
+        if (typeof hook === 'function') hook(rec);
+      } catch (e) { /* a hook failure never blocks the reading */ }
+    }
+  }
+  function conventionsDelta() { return CONVENTIONS_DELTA.slice(); }
+  function serializeConventionsDelta() { return CONVENTIONS_DELTA.map(r => JSON.stringify(r)).join('\n'); }
+
   function evaDraft(draft, p, sentenceTexts) {
     const reasons = [];
     const text = String(draft == null ? '' : draft);
 
-    // Check 1: no machinery vocabulary leaked in.
-    const banned = /\b(mass|momentum|gravity|coupling|frame|rules_rev|NUL|SIG|INS|SEG|CON|SYN|DEF|EVA|REC)\b/i;
-    if (banned.test(text)) reasons.push('machinery-leak');
+    // Check 1: no machinery vocabulary leaked in (the eva_machinery_terms
+    // convention — revisable like any other).
+    if (EVA_MACHINERY_RE.test(text)) reasons.push('machinery-leak');
+    // Check 1b: the LEARNED veto — terms admitted from this model's own
+    // repeated failures (contextual neurons). Empty until failures teach it.
+    if (EVA_VETO_TERMS && EVA_VETO_TERMS.size) {
+      const lowerText = text.toLowerCase();
+      for (const t of EVA_VETO_TERMS) {
+        if (t && lowerText.includes(String(t).toLowerCase())) reasons.push('learned-veto:' + t);
+      }
+    }
 
     // Check 2: no citation tokens or sentence indices.
     if (/\{\{|\[s\d+\]|\bs\d+\b/.test(text)) reasons.push('index-leak');
@@ -4730,11 +5107,21 @@ function projectGraph(events, frame = {}) {
     };
 
     // NULs whose competing set touches a heavy figure → an undecided pronoun.
+    // Dedup by the competing PAIR (many stalls share the same two candidates,
+    // which would otherwise repeat one sentence verbatim a dozen times) and
+    // cap it — a reader notes the indecision once or twice, doesn't log it.
+    const seenPair = new Set();
+    let stallNotes = 0;
     for (const nl of (p.nulls || [])) {
+      if (stallNotes >= 2) break;
       const comp = Array.isArray(nl.competing) ? nl.competing : [];
       if (!comp.some(c => heavyKeys.has(c.site))) continue;
       const named = comp.map(c => c.siteName || c.name).filter(Boolean);
       if (named.length < 2) continue;
+      const pair = [named[0], named[1]].sort().join('|').toLowerCase();
+      if (seenPair.has(pair)) continue;
+      seenPair.add(pair);
+      stallNotes++;
       out.push(`The reading did not commit when a pronoun could have been either ${named[0]} or ${named[1]}.`);
       if (nl.sentence_idx != null) pushSpan(nl.sentence_idx);
     }
@@ -4856,15 +5243,21 @@ function projectGraph(events, frame = {}) {
     let body = null;
     const llm = typeof opts.llm === 'function' ? opts.llm : null;
     if (llm) {
-      let sys = system;
+      // Learned veto terms (contextual neurons from past failures) steer the
+      // FIRST draft, not just the retry — hydration pays forward.
+      const learned = EVA_VETO_TERMS && EVA_VETO_TERMS.size
+        ? ' Never write these words: ' + [...EVA_VETO_TERMS].slice(0, 8).join(', ') + '.' : '';
+      let sys = system + learned;
       for (let attempt = 0; attempt < 2 && body == null; attempt++) {
         let draft = '';
         try { draft = String((await llm(sys, user)) || '').trim(); } catch (e) { draft = ''; }
         if (!draft) break;
         const eva = evaDraft(draft, p, sentenceTexts);
         if (eva.ok) { body = draft; break; }
+        // a veto is an observation — it writes memory (REC + possible neuron)
+        noteEvaFailure(eva.reasons, { lang: doc._lang, genre: doc._genre });
         // Sharpen the system prompt with the rejection reasons and retry once.
-        sys = system + ' Your previous draft was rejected (' + eva.reasons.join(', ')
+        sys = system + learned + ' Your previous draft was rejected (' + eva.reasons.join(', ')
           + '); this time use only epistemic framing, no machinery words, no '
           + 'sentence numbers, and only names that appear in the passages above.';
       }
@@ -6364,6 +6757,13 @@ function projectGraph(events, frame = {}) {
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
     // per-language reading mode: Original (shipped-only, frozen) vs Self-learning
     setLanguageModes, languageModes,
+    // the semantics graph (conventions.jsonl): human-language conventions as an
+    // eo-operation log, projected like any other event log
+    loadConventions, projectConventions, _conventionsExport,
+    // EVA failures hydrate the conventions: the session's REC records,
+    // JSONL-shaped and append-ready for memory/conventions.jsonl. A host may
+    // set EOEngine.onConventionsRec = (rec) => … to ship each one out.
+    conventionsDelta, serializeConventionsDelta,
     // read-only: the induced speech-verb class + accrued mass (learning record)
     _learnedVerbs: learnedVerbs, learnedVerbsByLang,
     // persistence: serialize/restore the learned ledger delta (host stores it)
