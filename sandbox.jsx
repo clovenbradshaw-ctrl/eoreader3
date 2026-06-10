@@ -27,7 +27,14 @@ function SandboxDrawer({ onClose, onToast }) {
   const [apiKey, setApiKey] = useState('');       // kept only in this tab's memory
   const [live, setLive] = useState({ busy: false, log: [], tokens: 0, error: null, best: null, capped: false });
   const [liveCfg, setLiveCfg] = useState({ model: 'claude-opus-4-8', generations: 6, tokenMax: 150000, thinking: false });
+  const [baseEngine, setBaseEngine] = useState(null); // the loaded baseline EOEngine, for the inspector + chat
+  const [inspectId, setInspectId] = useState(null);
+  const [graph, setGraph] = useState(null);
+  const [chatQ, setChatQ] = useState('');
+  const [chatA, setChatA] = useState(null);
   const dialogRef = useRef(null);
+
+  const allFixtures = () => ['binding', 'stalls', 'integration'].flatMap(k => ((DATA && DATA.fixtures[k]) || []).map(f => ({ ...f, kind: k })));
 
   const SB = window.EVO_SANDBOX, DATA = window.EVO_SANDBOX_DATA;
   const nlp = window.nlp;
@@ -57,11 +64,31 @@ function SandboxDrawer({ onClose, onToast }) {
         setSrc({ pivot, engine });
         setBaseline({ quality, parity });
         setRules(enum_.rules);
+        setBaseEngine(E0);
+        setInspectId((((DATA.fixtures.binding || [])[0]) || ((DATA.fixtures.integration || [])[0]) || {}).id || null);
         setPhase('ready');
       } catch (e) { if (live) { setError(String(e.message || e)); setPhase('error'); } }
     })();
     return () => { live = false; };
   }, []);
+
+  // DEF/REC inspector: read the selected text into a graph on the baseline engine.
+  useEffect(() => {
+    if (!baseEngine || !inspectId) return;
+    let on = true; setGraph(null); setChatA(null);
+    const fx = allFixtures().find(f => f.id === inspectId);
+    if (!fx) return;
+    (async () => {
+      try { const g = await SB.graphOf(baseEngine, fx.doc, fx.id); if (on) { setGraph(g); setChatQ(fx.question || 'who is in this and what happens'); } }
+      catch (e) { if (on) setGraph({ error: String(e.message || e) }); }
+    })();
+    return () => { on = false; };
+  }, [baseEngine, inspectId]);
+
+  const runQuery = useCallback(() => {
+    if (!graph || !graph._doc || !baseEngine || !chatQ.trim()) return;
+    setChatA(SB.queryGraph(baseEngine, graph._doc, chatQ.trim()));
+  }, [graph, baseEngine, chatQ]);
 
   const cfg = { qualityWinThreshold: 0.01, justifiedBreakThreshold: 0.03 };
 
@@ -188,6 +215,42 @@ function SandboxDrawer({ onClose, onToast }) {
                   <div className="sbx-score"><span>2c integration</span><b>{r3(bq.components.integration)} <i>stub</i></b></div>
                   <div className="sbx-score"><span>parity</span><b>{baseline.parity.clean ? 'clean' : baseline.parity.diffs + ' diffs'} <i>{baseline.parity.total} snaps</i></b></div>
                 </div>
+              </div>
+
+              <div className="tier">
+                <div className="tier-head">
+                  <div className="rule-group-label">Watch the operators · DEF · CHAT · REC</div>
+                  <p className="tier-sub">What the engine does with a text, in its own vocabulary. <b>DEF</b>: the graph it defines — who/what, and how they relate. <b>CHAT</b>: query that graph; answers cite the source, no vector store. <b>REC</b>: what reading it taught the engine — vocabulary that accrues mass and persists (the plastic neurons). The loop's <b>EVA</b> step is the candidate scoring further down. The model only ever sees a compact summary — never this text.</p>
+                </div>
+                <select className="sbx-pick" value={inspectId || ''} onChange={e => setInspectId(e.target.value)}>
+                  {allFixtures().map(f => <option key={f.id} value={f.id}>{f.kind} · {f.id}{f.genre ? ' — ' + f.genre.split('—')[0].trim() : ''}</option>)}
+                </select>
+                {!graph && <div className="sbx-loading">reading…</div>}
+                {graph && graph.error && <div className="sbx-error">{graph.error}</div>}
+                {graph && !graph.error && (
+                  <React.Fragment>
+                    <div className="op-block">
+                      <div className="op-tag def">DEF — the graph it builds</div>
+                      <div className="op-row"><span>nodes</span><div>{graph.entities.map((e, i) => <span key={i} className="op-node">{e.name}<i> {e.type}{e.gender ? '·' + e.gender : ''}</i></span>)}</div></div>
+                      {graph.speech.length > 0 && <div className="op-row"><span>speech</span><div>{graph.speech.map((s, i) => <div key={i} className="op-edge">{s.speaker} <i>&lt;{s.how}&gt;</i> “{s.quote}”</div>)}</div></div>}
+                      {graph.defs.length > 0 && <div className="op-row"><span>defined</span><div>{graph.defs.map((d, i) => <div key={i} className="op-edge">{d.target} → {d.path}: <b>{String(d.value)}</b> <i>{d.reason}</i></div>)}</div></div>}
+                      {graph.stalls.length > 0 && <div className="op-row"><span>held (NUL)</span><div>{graph.stalls.map((n, i) => <div key={i} className="op-edge">“{n.surface}” <i>s{n.at} — honestly held: {n.competing.join(' · ')}</i></div>)}</div></div>}
+                    </div>
+                    <div className="op-block">
+                      <div className="op-tag chat">CHAT — query the graph</div>
+                      <div className="sbx-chat">
+                        <input value={chatQ} onChange={e => setChatQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') runQuery(); }} placeholder="ask the graph…" />
+                        <button className="mini-btn" onClick={runQuery}>Ask</button>
+                      </div>
+                      {chatA && <div className="sbx-answer">{chatA.text || '(no answer)'}{chatA.audit && <div className="sbx-audit">grounded: {String(chatA.audit.grounded)}{chatA.audit.status ? ' · ' + chatA.audit.status : ''} · {chatA.cites} cite{chatA.cites === 1 ? '' : 's'}</div>}</div>}
+                    </div>
+                    <div className="op-block">
+                      <div className="op-tag rec">REC — what reading it taught the engine</div>
+                      <div className="op-row"><span>from this text</span><div>{graph.recs.length ? graph.recs.map((r, i) => <div key={i} className="op-edge">{r.target} <i>{r.action}</i> <b>{String(r.value)}</b> <i>{r.reason}</i></div>) : <i>nothing new induced</i>}</div></div>
+                      {graph.learned.length > 0 && <div className="op-row"><span>vocabulary so far</span><div className="op-verbs">{graph.learned.map((v, i) => <span key={i} className="op-verb">{v.verb}<i>·{v.mass}</i></span>)}</div></div>}
+                    </div>
+                  </React.Fragment>
+                )}
               </div>
 
               <div className="tier">
