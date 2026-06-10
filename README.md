@@ -171,6 +171,27 @@ on/off, exported as JSON, and imported — parsing stores only invariants, and t
 entity/prominence views are re-projected from the current rules without a
 re-parse.
 
+### Convention proposals (provenance-anchored)
+
+The local model has one more job besides phrasing answers: **proposing reading
+conventions** from friction the engine registered mechanically — a `LABEL:`
+line bound to no speaker three times, a `* * *` separator read as a sentence,
+a pronoun stalling on the same pair. It proposes in one plain sentence citing
+engine-minted span handles; it never commits. The engine mints everything
+real: **provenance anchors** (`sha256(span)[:16]` + an optional quantized
+embedding signature — content hashes, never names or locations, resolvable
+only on the device that read the source), the candidate records, and their log
+positions. A proposal enters the conventions log as a *signal* below the
+admission threshold by construction, because admission requires independent
+spans **and at least one non-model witness** — the model can never be its own
+witness. A later document matching the proposed shape co-witnesses it
+automatically; the Glass box → **Proposals** channel offers one-tap Confirm
+(instant admission) or Reject (a SEG that decays the signal and, repeated,
+feeds the veto lexicon). Admission lands the pattern through the rules ledger
+and the next parse reads differently — `tests/conventions.test.js` proves the
+whole path, and the *Convention Proposals* rule (side panel) toggles and
+budgets it.
+
 ## Tests
 
 The app needs no build, but the engine has a Node test harness (dev-only):
