@@ -501,6 +501,12 @@ Speaker 4: He was whipped in the public square. Steven Watts recorded the event.
 Speaker 3: Thank you. The motion passes.
 `;
 const meeting = await E.parseDocument('meeting.txt', MEETING, 'meet');
+// Deferred demonstrative naming: a role-bearing actor described first, named a
+// beat later. The copular reader refuses "That person is …" (bare demonstrative
+// subject), so without the naming bridge the role is stranded on a phrase that
+// was never instantiated and the name lands empty.
+const NAMING = 'The Setup\n\nThe contract is run through a shell company created by the same person who runs the DMC and who then hires his own firm, NDP, to manage operations. That person is Tom Turner.';
+const naming = await E.parseDocument('naming.txt', NAMING, 'nm');
 group('transcript pack — the page declares the genre, the reader adapts', () => {
   eq(meeting.kind, 'prose', 'timecode commas do not misread as a CSV table');
   eq(meeting._genre, 'transcript', 'the genre is detected and recorded');
@@ -567,6 +573,20 @@ group('assertions — the page\'s own DEF claims, resolved onto entities', () =>
   ok(defs.some(d => d.subject === 'Amos Dresser' && /white minister/.test(d.is)), 'the copular assertion is held with its subject resolved');
   ok(defs.every(d => d.sent == null || meeting.sentenceTexts[d.sent]), 'every assertion points at a real sentence');
   ok(!defs.some(d => /^(he|she|they|it)$/i.test(d.subject)), 'an unresolved pronoun subject is never an assertion');
+});
+
+// ── The naming bridge: a deferred demonstrative naming carries the role ──
+group('naming bridge — "the X who … . That X is Name" attaches the role to Name', () => {
+  const defs = E.assertionsOf(naming);
+  const t = defs.find(d => d.subject === 'Tom Turner');
+  ok(t, 'the named actor surfaces as an assertion subject');
+  ok(t && /runs the DMC/.test(t.is) && /NDP/.test(t.is), 'the antecedent description (the role) attaches to the name');
+  ok(t && naming.sentenceTexts[t.sent] && naming.sentenceTexts[t.sent].includes(t.is),
+     'the assertion is cited to the sentence that actually carries the description (clean re-read)');
+  ok(!defs.some(d => /^(that|this|the)\s/i.test(d.subject)), 'the bare demonstrative never becomes an assertion subject');
+  const trav = E.traverseGraph(naming, "what is Tom Turner's role?", 2);
+  ok(trav && trav.assertions.some(a => a.subject === 'Tom Turner' && /NDP/.test(a.is)),
+     'the role is reachable by graph traversal for a who/role question');
 });
 
 group('propositional veto — a draft that denies the page\'s assertion is caught', () => {
