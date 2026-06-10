@@ -4,12 +4,27 @@
    the engine parses live, and the rule-pack schema + authoring prompt.
    ============================================================ */
 
-/* ---------------- local models (WebLLM / WebGPU) ---------------- */
+/* ---------------- local models (WebLLM / WebGPU) ----------------
+   Listed smallest-first: app.jsx defaults to the lightest entry (MODELS[0])
+   on a fresh load, so the first item must stay the most mobile-friendly one.
+   The "higher-end" tier below are full 7B–9B instruct models — far better at
+   phrasing/synthesis, but they download GBs of weights and need a discrete
+   GPU with the VRAM noted (a laptop iGPU will OOM). All `mlc` keys are exact
+   entries in @mlc-ai/web-llm@0.2.79's prebuiltAppConfig (the pinned loader);
+   bumping the version in llm.js is what unlocks newer ones.   */
 const MODELS = [
-  { id: 'qwen-05', name: 'Qwen2.5 0.5B', detail: '~350 MB · fastest', mlc: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC' },
-  { id: 'qwen-15', name: 'Qwen2.5 1.5B', detail: '~900 MB · balanced', mlc: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC' },
-  { id: 'llama-1', name: 'Llama 3.2 1B', detail: '~700 MB', mlc: 'Llama-3.2-1B-Instruct-q4f16_1-MLC' },
-  { id: 'phi-35',  name: 'Phi 3.5 mini', detail: '~2.3 GB · smartest', mlc: 'Phi-3.5-mini-instruct-q4f16_1-MLC' },
+  // light · run almost anywhere with WebGPU
+  { id: 'qwen-05',  name: 'Qwen2.5 0.5B', detail: '~350 MB · fastest',     mlc: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC' },
+  { id: 'qwen-15',  name: 'Qwen2.5 1.5B', detail: '~900 MB · balanced',    mlc: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC' },
+  { id: 'llama-1',  name: 'Llama 3.2 1B', detail: '~700 MB',               mlc: 'Llama-3.2-1B-Instruct-q4f16_1-MLC' },
+  { id: 'qwen3-17', name: 'Qwen3 1.7B',   detail: '~2.0 GB · newer-gen',   mlc: 'Qwen3-1.7B-q4f16_1-MLC' },
+  { id: 'phi-35',   name: 'Phi 3.5 mini', detail: '~2.3 GB',               mlc: 'Phi-3.5-mini-instruct-q4f16_1-MLC' },
+  // higher-end · need a discrete GPU (multi-GB download, much stronger phrasing)
+  { id: 'mistral-7', name: 'Mistral 7B',   detail: '~4.6 GB · needs 8 GB GPU',          mlc: 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC' },
+  { id: 'llama-8',   name: 'Llama 3.1 8B', detail: '~5.0 GB · needs 8 GB GPU',          mlc: 'Llama-3.1-8B-Instruct-q4f16_1-MLC' },
+  { id: 'qwen-7',    name: 'Qwen2.5 7B',   detail: '~5.1 GB · needs 8 GB GPU',          mlc: 'Qwen2.5-7B-Instruct-q4f16_1-MLC' },
+  { id: 'qwen3-8',   name: 'Qwen3 8B',     detail: '~5.7 GB · newest · needs 8 GB GPU', mlc: 'Qwen3-8B-q4f16_1-MLC' },
+  { id: 'gemma2-9',  name: 'Gemma 2 9B',   detail: '~6.4 GB · highest quality',         mlc: 'gemma-2-9b-it-q4f16_1-MLC' },
 ];
 
 /* ---------------- the rule registry ----------------
