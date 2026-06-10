@@ -90,6 +90,11 @@ const EN_WORD_PROPS = {
         emit({ op: 'REC', target: modId + ':' + rule, action: 'induced-not-seeded', value: 'Grown from EVA failures at read time: every vetoed draft appends a REC here (with register affinity); a term failing twice is admitted — a contextual neuron that feeds the veto and the retry prompt.' });
         continue;
       }
+      if (rule === 'speaker_label_patterns' || rule === 'separator_lines') {
+        emit({ op: 'INS', kind: 'convention', id: modId + ':' + rule, rule, module: modId, epistemic: 'assertion', revisable: true });
+        emit({ op: 'REC', target: modId + ':' + rule, action: 'induced-not-seeded', value: 'Grown through the proposal channel, never seeded: the local model proposes a convention from registered friction (citing engine-minted spans); the engine mints provenance anchors (content hash + embedding signature — never a name or location); admission requires independent non-model witnesses past θ_admit. Members carry their anchors; the model can never be its own witness.' });
+        continue;
+      }
       if (rule === 'attribution_verbs') {
         // induced, never seeded: the inventory is empty by design and grows by
         // REC at read time. Record the convention node and the law, no members.
@@ -168,6 +173,13 @@ const EN_WORD_PROPS = {
   // the hydration CYCLE: failures feed the lexicon; the lexicon feeds the veto
   link('mechanics:eva-veto', 'feeds', 'core:eva_veto_lexicon');
   link('core:eva_veto_lexicon', 'feeds', 'mechanics:eva-veto');
+  // the proposal channel's grown inventories: an admitted speaker-label shape
+  // feeds attribution (the LABEL: line lands on its voice) and person-
+  // promotion; an admitted separator shape is an exception to the
+  // sentence-boundary mechanism (a *** line is structure, not a sentence).
+  link('core:speaker_label_patterns', 'feeds', 'mechanics:attribution');
+  link('core:speaker_label_patterns', 'feeds', 'mechanics:person-promotion');
+  link('core:separator_lines', 'excepts', 'mechanics:sentence-boundary');
 
   fs.writeFileSync(OUT, lines.join('\n') + '\n');
   console.log('wrote ' + OUT + ' — ' + lines.length + ' records (' + seq + ' ops)');

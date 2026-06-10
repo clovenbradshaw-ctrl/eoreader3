@@ -92,6 +92,9 @@ const RULESETS = [
   { id: 'cross-check', group: 'Chatting & grounding', phase: 'chat', name: 'Source Cross-Check', glyph: '⇄',
     layer: 'significance', mass: 4, src: 'add-on', installed: false, enabled: false, locked: false,
     desc: 'When a table and a prose source are tagged together, a third pass compares them and flags disagreements instead of silently picking one.' },
+  { id: 'convention-proposals', group: 'Chatting & grounding', phase: 'chat', name: 'Convention Proposals', glyph: '✎',
+    layer: 'structure', value: 3, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
+    desc: 'Lets the local model propose reading conventions from registered friction — repeated shapes the reading hit and could not consume (a “LABEL:” line bound to no speaker, a *** line read as a sentence). It proposes in one plain sentence citing engine-minted spans; it never commits: a proposal is a signal until an independent document or your one-tap Confirm corroborates it past the admission threshold (the model can never be its own witness). The value is the per-session proposal budget; runs only at idle and never blocks a turn. Review pending proposals in the Glass box.' },
 
   // ── Thinking depth (chat) — what the effort dial spends ──
   // Each rule's `value` is its CEILING (the value at the deepest setting); the

@@ -35,21 +35,37 @@
     if (t && window.EOEngine && window.EOEngine.loadConventions) window.EOEngine.loadConventions(t);
   }).catch(() => {});
   // Hydration writer: when an EVA failure ADMITS a term (two sightings — a
-  // contextual neuron, not every stumble), append its REC to the durable
-  // graph via the conventions webhook. Ships only the convention record
-  // (term + reason + register affinity) — never document content. Clear
-  // EO_CONVENTIONS_ENDPOINT to keep memory strictly local.
+  // contextual neuron, not every stumble) or a PROPOSED convention clears
+  // admission (an independent witness past θ), append its record(s) to the
+  // durable graph via the conventions webhook. Ships only convention records
+  // — anchors carry opaque hashes, never document content or locations; set
+  // window.EO_ANCHOR_PRIVATE = 'strict' (before this script) to also strip
+  // embedding signatures from shipped anchors. Clear EO_CONVENTIONS_ENDPOINT
+  // to keep memory strictly local.
   window.EO_CONVENTIONS_ENDPOINT = window.EO_CONVENTIONS_ENDPOINT
     || 'https://n8n.intelechia.com/webhook/eoreader3/conventions/append';
   if (window.EOEngine) window.EOEngine.onConventionsRec = (rec) => {
     if (!rec || !rec.admitted || !window.EO_CONVENTIONS_ENDPOINT) return;
+    var what = (rec.value && (rec.value.term || rec.value.reason))
+      ? 'eva neuron "' + (rec.value.term || rec.value.reason) + '"'
+      : 'convention ' + (rec.id || rec.target || rec.o || rec.op);
     fetch(window.EO_CONVENTIONS_ENDPOINT, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ line: rec, message: 'hydrate: eva neuron "' + ((rec.value && rec.value.term) || rec.value.reason) + '"' }),
+      body: JSON.stringify({ line: rec, message: 'hydrate: ' + what }),
     }).catch(() => {});
   };
 </script>
 <script src="embed.js"></script>
+<script>
+  // Provenance anchors borrow the resident MiniLM for their embedding
+  // signatures — but only once it is already loaded for retrieval/recall
+  // (ready()), so a proposal never silently triggers a model download.
+  // Without sigs the anchor physics degrades to coupling-only, by design.
+  if (window.EOEngine && window.EOEngine.setAnchorEmbedder) {
+    window.EOEngine.setAnchorEmbedder((texts) =>
+      (window.EOEmbed && window.EOEmbed.ready()) ? window.EOEmbed.embedSentences(texts) : null);
+  }
+</script>
 <script src="store.js"></script>
 <script src="audit.js"></script>
 
