@@ -756,8 +756,7 @@ function App() {
       if (chosen.size === before) break;                         // nothing new came back
       if (novelty < budget.seekNoveltyFloor) break;              // the pull is too weak to justify another round
     }
-    const top = [...chosen.values()].sort((a, b) => b.score - a.score).slice(0, 10);
-    try { return E.contextFromHits(scope, top); } catch (e) { return E.contextScope(scope, q, k); }
+    return [...chosen.values()].sort((a, b) => b.score - a.score).slice(0, 10);
   };
 
   // Phase 3: associative wandering (deepest depth, embedder-backed). From the
@@ -766,16 +765,17 @@ function App() {
   // survivors by association (the field, for the next turn's working memory, and
   // this turn's context), and log each deposit as an `associate` step — legible
   // THAT the field linked them, never the geometry of why. No embedder => no-op.
-  const augmentByAssociation = async (scope, q, ctx, budget) => {
+  // Returns the kept neighbor hits; the caller folds them into the turn's spans.
+  const associateKept = async (scope, q, budget) => {
     const E = window.EOEngine;
     try {
       const prim = E.routePrimary(scope, q) || scope[0];
-      if (!prim || prim.kind !== 'prose' || !E.associativeNeighbors) return ctx;
+      if (!prim || prim.kind !== 'prose' || !E.associativeNeighbors) return [];
       const srcSpans = (E.retrieveScope([prim], q, 6) || []).map(h => h.i);
-      if (!srcSpans.length) return ctx;
+      if (!srcSpans.length) return [];
       const neigh = await E.associativeNeighbors(prim, srcSpans, budget, 5);
       const kept = (neigh || []).filter(n => n.clearedDelta);
-      if (!kept.length) return ctx;
+      if (!kept.length) return [];
       const from = srcSpans.slice(0, 3).map(i => 's' + i);
       const links = [];
       for (const n of kept) {
@@ -784,8 +784,8 @@ function App() {
         links.push({ docId: prim.id, from: srcSpans.slice(0, 3), to: n.i, sim: n.sim });
       }
       turnAssocRef.current = links;                       // hand the links to the inference void (Phase 4)
-      return ctx + '\n' + kept.map(n => `[${prim.id}:${n.i}] ${n.t}`).join('\n');
-    } catch (e) { eoWarn('associate', e); return ctx; }
+      return kept.map(n => ({ docId: prim.id, i: n.i, t: n.t }));
+    } catch (e) { eoWarn('associate', e); return []; }
   };
 
   // Phase 4: the inference void. If a model answer cited BOTH ends of an
@@ -1094,14 +1094,17 @@ function App() {
       return settleRepair(mech, 'mechanical (repair)');
     }
     const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
-    const ctx = E.contextScope(scope, probe, 6);
-    if (ready && ctx) {
+    const tier = E.contextPartsScope(scope, probe, 6);
+    const primaryDoc = E.routePrimary(scope, probe) || scope[0];
+    if (ready && (tier.spans.length || tier.notes.length)) {
       try {
         replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
         const sysOverride = window.EOLLM.systemFor('grounded', 'answer', true, 1)
-          + ' The user has said your earlier replies missed their question — do not repeat any earlier reply; answer the question afresh from the passages, and if they truly do not answer it, say exactly what they DO establish about the subject instead.';
+          + '\n\nThe user has said your earlier replies missed their question — do not repeat any earlier reply; answer the question afresh from the spans and notes, and if they truly do not answer it, say exactly what they DO establish about the subject instead.';
         let full = await window.EOLLM.phrase({
-          mlcKey: model.mlc, question: probe, contextText: ctx, history: tagged,
+          mlcKey: model.mlc, question: probe, history: tagged,
+          spans: tier.spans, notes: tier.notes.join('\n'),
+          docTitle: (primaryDoc && primaryDoc.name) || '',
           mode: 'grounded', task: 'answer', grounded: true, sysOverride,
           onToken: streamInto({ mode: 'grounded' }), depth: turnBudgetRef.current && turnBudgetRef.current.level,
         });
@@ -1164,16 +1167,25 @@ function App() {
     const grounded = hasSemantic || perDocGround.some(d => d.has);
     AUD('step', 'ground', { hasGround: grounded, perDoc: perDocGround, viaSemantic: hasSemantic });
     if (!grounded) { AUD('step', 'route', { detour: 'no-ground → mechanical' }); runMechanicalScope(scope, q); return; }
-    // Context: semantically-recovered spans if we have them, else the lexical
-    // scope context — but above the dial's floor, a factual ask iteratively seeks
-    // the parts of the question its first retrieval didn't cover (Phase 2). At the
-    // floor (maxSeekRounds 1) and for summaries/semantic recall, this is untouched.
+    // Context, tiered (spans + notes) for factual asks: semantically-recovered
+    // spans if we have them, else the lexical parts — and above the dial's
+    // floor, a factual ask iteratively seeks the parts of the question its
+    // first retrieval didn't cover (Phase 2). The summary sample stays a
+    // curated blob (the salient picks read as one piece); buildUserContent
+    // frames a blob the same way.
     const budget = turnBudgetRef.current;
     const useSeek = !!(budget && budget.maxSeekRounds > 1 && !hasSemantic && intent !== 'summary');
-    let ctx = hasSemantic
-      ? window.EOEngine.contextFromHits(scope, semanticHits)
-      : (useSeek ? seekContext(scope, q, budget) : window.EOEngine.contextScope(scope, q, 6));
     const task = intent === 'summary' ? 'summary' : 'answer';
+    let ctx = '', parts = null;
+    if (task === 'summary') {
+      ctx = window.EOEngine.contextScope(scope, q, 6);
+    } else if (hasSemantic) {
+      parts = window.EOEngine.partsFromHits(scope, semanticHits);
+    } else if (useSeek) {
+      parts = window.EOEngine.partsFromHits(scope, seekContext(scope, q, budget));
+    } else {
+      parts = window.EOEngine.contextPartsScope(scope, q, 6);
+    }
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
     // GRAPH TRAVERSAL (depth > 1): depth buys graph work, not just more
     // retrieval. Walk out from the entities the question names — the page's
@@ -1194,21 +1206,40 @@ function App() {
               evidence: p.sentences.map(s => ({ idx: s.i, via: s.via, text: s.t })),
             })),
           });
-          ctx = window.EOEngine.readingContext(scope, trav, ctx);
+          if (parts) {
+            const rn = window.EOEngine.readingNotes(scope, trav);
+            parts.notes = [...rn.notes, ...parts.notes];
+            for (const s of rn.spans)
+              if (!parts.spans.some(x => x.docId === s.docId && x.idx === s.idx)) parts.spans.push(s);
+          } else {
+            ctx = window.EOEngine.readingContext(scope, trav, ctx);
+          }
         }
       } catch (e) { eoWarn('traverse', e); }
     }
     // Associative wandering (Phase 3, deepest depth + embedder): warm in spans the
-    // page never lexically connects. No embedder ⇒ ctx unchanged (graph-hop only).
+    // page never lexically connects. No embedder ⇒ nothing kept (graph-hop only).
     if (budget && budget.assocCoupling > 0 && window.EOEmbed && window.EOEmbed.ready()) {
-      ctx = await augmentByAssociation(scope, q, ctx, budget);
+      const kept = await associateKept(scope, q, budget);
+      if (kept.length) {
+        if (parts) {
+          const add = window.EOEngine.partsFromHits(scope, kept).spans;
+          for (const s of add)
+            if (!parts.spans.some(x => x.docId === s.docId && x.idx === s.idx)) parts.spans.push(s);
+        } else {
+          ctx += '\n' + kept.map(n => `[${n.docId}:${n.i}] ${n.t}`).join('\n');
+        }
+      }
     }
     // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
     const wm = buildWMForTurn(scope, q);
+    const primaryDoc = window.EOEngine.routePrimary(scope, q) || scope[0];
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       let full = await window.EOLLM.phrase({
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
+        spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
+        docTitle: (primaryDoc && primaryDoc.name) || '',
         grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
         depth: budget && budget.level,
       });
@@ -1262,18 +1293,28 @@ function App() {
         // the mechanical answer. Mainly bites summaries on a small model.
         if (echoesASpan(scope, q, full)) {
           AUD('step', 'veto', { decision: 'reject', reason: 'echoes a single span — retrying under a stricter rule' });
-          let stricter = ctx + '\n\nDo NOT copy or lightly reword any single passage. Compose a fresh ' +
-            (task === 'summary' ? 'summary that synthesizes across the passages in your own words.' : 'answer in your own words.');
+          // The stricter rule is an instruction, so it rides the system prompt;
+          // the spans/notes tiers stay as they are.
+          const stricterSys = window.EOLLM.systemFor('grounded', task, true, (budget && budget.level) || 1)
+            + '\n\nDo NOT copy or lightly reword any single span. Compose a fresh '
+            + (task === 'summary' ? 'summary that synthesizes across the spans in your own words.' : 'answer in your own words.');
+          let stricterCtx = ctx;
           // Reconsideration (Phase 5, deepest depth): retry via the GAP, not just
           // "stricter" — find what the question still doesn't cover and re-retrieve
           // on it, so the second pass has new material rather than the same spans.
           if (budget && budget.replan) {
             try {
-              const gaps = window.EOEngine.coverageGaps(q, ctx);
+              const support = parts ? parts.spans.map(s => s.text).join(' ') : ctx;
+              const gaps = window.EOEngine.coverageGaps(q, support);
               if (gaps.uncovered.length) {
                 const more = window.EOEngine.retrieveScope(scope, gaps.uncovered.join(' '), 4) || [];
                 if (more.length) {
-                  stricter += '\n' + window.EOEngine.contextFromHits(scope, more);
+                  if (parts) {
+                    for (const s of window.EOEngine.partsFromHits(scope, more).spans)
+                      if (!parts.spans.some(x => x.docId === s.docId && x.idx === s.idx)) parts.spans.push(s);
+                  } else {
+                    stricterCtx += '\n' + window.EOEngine.contextFromHits(scope, more);
+                  }
                   AUD('step', 'plan-seg', { from: 'echo-veto', to: 'gap-retrieve', reason: 'uncovered: ' + gaps.uncovered.join(', ') });
                 }
               }
@@ -1283,7 +1324,9 @@ function App() {
           try {
             replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
             retry = await window.EOLLM.phrase({
-              mlcKey: model.mlc, question: q, contextText: stricter, history, mode: 'grounded', task,
+              mlcKey: model.mlc, question: q, contextText: stricterCtx, history, mode: 'grounded', task,
+              spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
+              docTitle: (primaryDoc && primaryDoc.name) || '', sysOverride: stricterSys,
               grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
               depth: budget && budget.level,
             });

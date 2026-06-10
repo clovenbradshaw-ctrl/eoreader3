@@ -7074,6 +7074,105 @@ function projectGraph(events, frame = {}) {
       .join('\n\n');
   }
 
+  /* ---------- tiered context: spans + notes ----------
+     The grounded prompt's two epistemic levels. SPANS are verbatim sentences
+     (trusted, citable); NOTES are the graph's own reading — assertions,
+     resolved kin records — "usually right, sometimes wrong" in the prompt's
+     voice. Same enrichment as context()/contextScope, parts-shaped, so the
+     llm layer can present them as separate tiers instead of one blob. The
+     blob builders stay untouched for the mechanical paths, the summary
+     sample, and golden parity. */
+  function contextParts(doc, query, k = 6) {
+    if (!doc || doc.kind === 'table') return { spans: [], notes: [] };
+    const spans = [], notes = [], have = new Set();
+    const texts = doc.sentenceTexts || [];
+    const push = (i, t) => {
+      const tx = t != null ? t : texts[i];
+      if (i == null || have.has(i) || tx == null) return;
+      have.add(i); spans.push({ docId: doc.id, idx: i, tag: 's' + i, text: tx });
+    };
+    for (const h of retrieve(doc, query, k)) push(h.i, h.t);
+    for (const s of entityEvidence(doc, query)) push(s.i, s.t);
+    const da = defineAssertions(doc, query);
+    if (da && da.picked.length)
+      notes.push('About ' + da.subject + ': ' + da.picked
+        .map(d => `${d.subject} ${d.path === 'role' ? '' : 'is '}${d.is}` + (d.sent != null ? ` [s${d.sent}]` : ''))
+        .join('; ') + '.');
+    const asked = kinAsked(query);
+    if (asked.length) {
+      const recs = kinRecords(doc).filter(r => asked.includes(r.kin) || asked.includes(r.kin + 's'));
+      for (const r of recs.slice(0, 2)) {
+        notes.push(`The ${r.kin} mentioned${r.sent != null ? ' at [s' + r.sent + ']' : ''} is ${r.possessor}’s.`);
+        push(r.sent); push(r.anchor);
+      }
+    }
+    return { spans, notes };
+  }
+  function contextPartsScope(docs, query, k = 6) {
+    const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
+    if (!ds.length) return { spans: [], notes: [] };
+    if (ds.length === 1) return contextParts(ds[0], query, k);
+    const spans = [], notes = [], have = new Set();
+    const push = (docId, i, t) => {
+      const key = docId + ':' + i;
+      if (i == null || have.has(key) || t == null) return;
+      have.add(key); spans.push({ docId, idx: i, tag: docId + ':' + i, text: t });
+    };
+    for (const h of retrieveScope(ds, query, k)) push(h.docId, h.i, h.t);
+    for (const d of ds) {
+      const texts = d.sentenceTexts || [];
+      for (const s of entityEvidence(d, query)) push(d.id, s.i, s.t);
+      const da = defineAssertions(d, query);
+      if (da && da.picked.length)
+        notes.push(`In ${d.name} — about ${da.subject}: ` + da.picked
+          .map(x => `${x.subject} ${x.path === 'role' ? '' : 'is '}${x.is}` + (x.sent != null ? ` [${d.id}:${x.sent}]` : ''))
+          .join('; ') + '.');
+      const asked = kinAsked(query);
+      if (asked.length) {
+        for (const r of kinRecords(d).filter(r => asked.includes(r.kin) || asked.includes(r.kin + 's')).slice(0, 2)) {
+          notes.push(`In ${d.name}: the ${r.kin} mentioned is ${r.possessor}’s.`);
+          push(d.id, r.sent, texts[r.sent]); push(d.id, r.anchor, texts[r.anchor]);
+        }
+      }
+    }
+    return { spans, notes };
+  }
+  // Spans from an already-scored hit list (semantic recall, seek rounds).
+  function partsFromHits(docs, hits) {
+    const ds = scopeDocs(docs);
+    const multi = ds.filter(d => d.kind !== 'table').length > 1;
+    const spans = [], have = new Set();
+    for (const h of (hits || [])) {
+      const docId = h.docId || (ds[0] && ds[0].id);
+      const key = docId + ':' + h.i;
+      if (h.i == null || have.has(key) || h.t == null) continue;
+      have.add(key);
+      spans.push({ docId, idx: h.i, tag: multi ? (docId + ':' + h.i) : ('s' + h.i), text: h.t });
+    }
+    return { spans, notes: [] };
+  }
+  // The graph walk (depth > 1) as notes + the walk's evidence as spans —
+  // readingContext's content, parts-shaped for the tiered prompt.
+  function readingNotes(docs, trav) {
+    const notes = [], spans = [];
+    if (!trav || !trav.perDoc || !trav.perDoc.length) return { notes, spans };
+    const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
+    const multi = ds.length > 1;
+    for (const p of trav.perDoc) {
+      const lines = [`This question turns on ${p.entries.join(', ')}.`];
+      for (const a of p.assertions.slice(0, 4))
+        lines.push(`The page asserts: ${a.subject} ${a.path === 'role' ? '' : 'is '}${a.is}` + (a.sent != null ? ` [${multi ? p.docId + ':' + a.sent : 's' + a.sent}]` : '') + '.');
+      if (p.edges.length)
+        lines.push('Relations the page draws: ' + p.edges.slice(0, 4).map(e => `${e.a} ${e.verb || '—'} ${e.b}`).join('; ') + '.');
+      if (p.walked.length)
+        lines.push('Nearby in the graph: ' + p.walked.slice(0, 4).map(w => `${w.name} (${w.via})`).join('; ') + '.');
+      notes.push((multi ? `In ${p.name}: ` : '') + lines.join(' '));
+      for (const s of p.sentences)
+        spans.push({ docId: p.docId, idx: s.i, tag: multi ? (p.docId + ':' + s.i) : ('s' + s.i), text: s.t });
+    }
+    return { notes, spans };
+  }
+
   // Bind {{cite}} markers onto a model answer across the scope: each answer
   // sentence is re-retrieved over every source and bound to the best-matching
   // line, so a multi-source answer carries citations into whichever doc each
@@ -7939,6 +8038,8 @@ function projectGraph(events, frame = {}) {
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
     contextScope, bindCitationsScope,
+    // tiered context for the notes-and-spans grounded prompt
+    contextParts, contextPartsScope, partsFromHits, readingNotes,
     // cost-ordered routing (existence → structure → significance) + embedding recall
     routeTurn, retrieveHybrid, contextFromHits,
     // thinking depth: the effort dial's per-turn budget + the conversation field
