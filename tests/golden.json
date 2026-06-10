@@ -131,7 +131,7 @@
   "hasGround:what does Marlow want": true,
   "context:what does Marlow want": "[s6] \"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did.\n[s11] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.",
   "answer:what does Marlow want": {
-   "text": "\"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did. {{cite:voss:6:s6}}",
+   "text": "\"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did. {{cite:voss:6:s6}} Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own. {{cite:voss:11:s11}}",
    "audit": {
     "status": "notes",
     "grounded": true,
@@ -143,6 +143,10 @@
     {
      "docId": "voss",
      "idx": 6
+    },
+    {
+     "docId": "voss",
+     "idx": 11
     }
    ]
   },

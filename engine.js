@@ -5034,22 +5034,27 @@ function projectGraph(events, frame = {}) {
       };
     }
     const hits = retrieve(doc, query, 4);
-    // The graph's evidence for named referents joins retrieval here too — the
-    // mechanical answer must not parrot a contentless naming line when the
-    // page's assertion about the name sits one sentence away.
-    {
-      const have = new Set(hits.map(h => h.i));
-      for (const s of entityEvidence(doc, query)) {
-        if (!have.has(s.i)) hits.push({ i: s.i, t: s.t, score: 0.5, overlap: 1 });
-      }
-    }
-    if (!hits.length) return {
+    const evidence = entityEvidence(doc, query);
+    if (!hits.length && !evidence.length) return {
       text: 'I read the document for that and didn’t find a passage that answers it cleanly, so I’d rather hold than guess. Try naming a person, place, or phrase from the text.',
       audit: { status: 'notes', grounded: true, covers: '0/1', stable: true, note: 'Held rather than invented — the page wouldn’t carry an answer.' },
     };
     const floor = 0.34;
     const used = hits.filter(h => h.score >= floor).slice(0, 3);
     const support = (used.length ? used : hits.slice(0, 1));
+    // The graph's evidence for named referents JOINS the support — it never
+    // displaces a genuine lexical hit (a synthetic score must not outrank
+    // the floor) — so the assertion sentence rides along even when it never
+    // carries the name (the naming-bridge case), and the mechanical answer
+    // stops parroting a contentless naming line.
+    {
+      const have = new Set(support.map(h => h.i));
+      for (const s of evidence) {
+        if (have.has(s.i) || support.length >= 4) continue;
+        support.push({ i: s.i, t: s.t, score: 0, overlap: 1 });
+        have.add(s.i);
+      }
+    }
     const text = support.map(s => `${s.t} {{cite:${doc.id}:${s.i}:s${s.i}}}`).join(' ');
     const cov = coverage(query, support.map(s => s.t).join(' '));
     const full = cov.n >= cov.d;
@@ -5283,6 +5288,11 @@ function projectGraph(events, frame = {}) {
       const checked = answerConfirm(doc, query, opts);
       if (checked) return checked;
     }
+    // a definitional ask about a referent the graph holds assertions for is
+    // answered from the assertions themselves — the page's own record of what
+    // the name IS, not whichever sentence shares the most tokens
+    const defined = answerDefine(doc, query, opts);
+    if (defined) return defined;
     return answerProse(doc, query, opts);
   }
 
@@ -5299,6 +5309,17 @@ function projectGraph(events, frame = {}) {
     const have = new Set(hits.map(h => h.i));
     const lines = hits.map(s => `[s${s.i}] ${s.t}`);
     for (const s of entityEvidence(doc, query)) if (!have.has(s.i)) lines.push(`[s${s.i}] ${s.t}`);
+    // A definitional ask opens with the page's assertions about the name —
+    // the graph speaks first (same format the depth>1 walk uses, so citation
+    // binding is untouched); the model only phrases over it, and its draft is
+    // vetoed against these same assertions. A signal, never a tie-breaker.
+    const da = defineAssertions(doc, query);
+    if (da && da.picked.length) {
+      const head = ['What the page asserts about ' + da.subject + ':'];
+      for (const d of da.picked)
+        head.push(`- ${d.subject} ${d.path === 'role' ? '' : 'is '}${d.is}` + (d.sent != null ? ` [s${d.sent}]` : '') + '.');
+      return head.join('\n') + '\n\nPassages:\n' + lines.join('\n');
+    }
     return lines.join('\n');
   }
   /* ---------- splitting a draft into claim-sentences ----------
@@ -5538,6 +5559,17 @@ function projectGraph(events, frame = {}) {
       if (!byDoc.has(h.docId)) byDoc.set(h.docId, []);
       byDoc.get(h.docId).push(h);
     }
+    // each source's graph evidence for named referents joins its passages,
+    // same as the single-doc path
+    for (const d of ds) {
+      const have = new Set((byDoc.get(d.id) || []).map(h => h.i));
+      for (const s of entityEvidence(d, query)) {
+        if (have.has(s.i)) continue;
+        if (!byDoc.has(d.id)) byDoc.set(d.id, []);
+        byDoc.get(d.id).push({ ...s, docId: d.id });
+        have.add(s.i);
+      }
+    }
     const nameOf = id => (ds.find(d => d.id === id) || {}).name || id;
     return [...byDoc.entries()]
       .map(([id, hs]) => `## ${nameOf(id)}\n` + hs.map(s => `[${id}:${s.i}] ${s.t}`).join('\n'))
@@ -5677,6 +5709,77 @@ function projectGraph(events, frame = {}) {
     }
     for (const e of named) for (const i of (e.sents || []).slice(0, 2)) take(i);
     return [...picks].sort((a, b) => a - b).slice(0, cap).map(i => ({ i, t: texts[i] }));
+  }
+
+  /* ---------- definitional asks answered from the graph ----------
+     "who is X" / "what is X" / "what is X's job" / "what does X do" name a
+     referent and ask what the page holds it to BE. The page's recorded
+     assertions (DEF events — class glosses, naming-bridge descriptions, role
+     clauses) are that answer, first-class and citable. Mechanics decide;
+     when a local model is present it only PHRASES over these assertions —
+     one reader's signal at its coupling, re-cited and vetoed against the
+     same assertions, never a tie-breaker. */
+  function isRoleAsk(q) {
+    const s = String(q == null ? '' : q);
+    return /\b(?:job|role|title|position|occupation|profession)\b/i.test(s)
+      || /^\s*what\s+do(?:es)?\b[\s\S]*\bdo\??\s*$/i.test(s);
+  }
+  function isDefinitionalAsk(q) {
+    const s = String(q == null ? '' : q).trim();
+    return /^(?:who|what)\s+(?:is|was|are|were)\b/i.test(s) || isRoleAsk(s);
+  }
+  /* The assertions a definitional ask reads: role DEFs first for a role ask
+     ("what is X's job"), class DEFs first for an identity ask ("who is X");
+     the other kind follows only if it adds content tokens. Null when the ask
+     isn't definitional, names nothing, or the graph holds nothing. */
+  function defineAssertions(doc, query) {
+    if (!doc || doc.kind !== 'prose' || !isDefinitionalAsk(query)) return null;
+    const named = namedEntitiesIn(doc, query);
+    if (!named.length) return null;
+    let defs = [];
+    try { defs = assertionsOf(doc); } catch (e) { return null; }
+    const keys = new Set(named.map(e => e.key));
+    const mine = defs.filter(d => keys.has(d.key)
+      || (d.key.length >= 4 && [...keys].some(k => _keyWithin(k, d.key) || _keyWithin(d.key, k))));
+    if (!mine.length) return null;
+    const roles = mine.filter(d => d.path === 'role');
+    const classes = mine.filter(d => d.path !== 'role');
+    const ordered = isRoleAsk(query) ? roles.concat(classes) : classes.concat(roles);
+    const picked = [], seenTok = new Set();
+    for (const d of ordered) {
+      const toks = tok(d.is);
+      if (picked.length && toks.length && toks.every(t => seenTok.has(t))) continue;  // adds nothing
+      for (const t of toks) seenTok.add(t);
+      picked.push(d);
+      if (picked.length >= 2) break;
+    }
+    return picked.length ? { subject: named[0].name, picked } : null;
+  }
+  /* The mechanical definitional answer: the assertions themselves, cited to
+     the sentences they sit on. Honors the audit-first contract — a named
+     referent absent from the page falls through to answerProse's void. */
+  function answerDefine(doc, query, opts = {}) {
+    const da = defineAssertions(doc, query);
+    if (!da) return null;
+    try {
+      let { antimatter } = referents(doc, query);
+      if (opts.voidWhitelist) antimatter = antimatter.filter(t => opts.voidWhitelist.has(t));
+      if (antimatter.length) return null;     // let the void speak first
+    } catch (e) {}
+    const cites = [], seenCite = new Set();
+    const cite = (i) => {
+      if (i == null) return '';
+      if (!seenCite.has(i)) { seenCite.add(i); cites.push({ docId: doc.id, idx: i }); }
+      return ` {{cite:${doc.id}:${i}:s${i}}}`;
+    };
+    const text = da.picked
+      .map(d => `${d.subject} ${d.path === 'role' ? '' : 'is '}${d.is}` + cite(d.sent) + '.')
+      .join(' ');
+    return {
+      text, cites,
+      audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
+        note: 'Read from the page’s recorded assertions (DEF events) about ' + da.subject + ' — no model involved.' },
+    };
   }
 
   function traverseGraph(doc, query, hops = 1) {
@@ -6242,6 +6345,8 @@ function projectGraph(events, frame = {}) {
     // propositional veto (draft claims audited against DEF assertions)
     traverseGraph, traverseScope, readingContext, assertionsOf,
     checkAssertions, checkAssertionsScope, entityEvidence,
+    // definitional asks answered from the graph's own assertions
+    answerDefine, defineAssertions, isDefinitionalAsk,
     // CONFIRM/DENY: a proposition checked mechanically against the graph
     // (DEF assertions, SIG attribution slots, absence attested with ⊥ receipts),
     // and the abbreviation-aware draft splitter the binders/veto share

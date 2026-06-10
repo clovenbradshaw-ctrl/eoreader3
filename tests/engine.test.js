@@ -819,6 +819,47 @@ await group('talker grounder — mechanical, deterministic', async () => {
   ok(/\{\{cite:voss:/.test(bc.text), 'bindCitations still binds against the shared floor');
 });
 
+// ── naming-bridge role DEFs + definitional answers from the graph ────
+// Journalism frames a job relationally ("the same person who runs the DMC")
+// and names the person a beat later. The bridge distills a role DEF alongside
+// the class gloss, and a definitional ask is answered from the assertions
+// themselves — lexical retrieval can't reach a sentence that never carries
+// the name. The model, when present, only phrases over these (a signal at
+// its coupling, never a tie-breaker); these tests pin the mechanical floor.
+await group('definitional asks — answered from the graph\'s own assertions', async () => {
+  const ndp = await E.parseDocument('ndp.txt',
+    'Downtown security has changed hands.\n\n' +
+    'The new contract is unusual. It is run through a recently created entity called NDMC PSO LLC — a shell company of the District Management Corporation (the DMC), created by the same person who runs the DMC and who then hires his own firm, NDP, to manage the downtown security operations through it. That person is Tom Turner.\n\n' +
+    'The council will vote next month. Business owners paying the assessment were not consulted about the arrangement.', 'ndp');
+
+  // the bridge emits BOTH the class gloss and a distilled role DEF
+  const defs = E.assertionsOf(ndp).filter(d => /turner/i.test(d.subject));
+  ok(defs.some(d => d.path === 'class' && /runs the DMC/.test(d.is)), 'naming-bridge class gloss recorded');
+  ok(defs.some(d => d.path === 'role' && d.is === 'runs the DMC'), 'role DEF distilled from the relational description');
+
+  // a role ask reads the role slot first; an identity ask reads the class
+  const job = E.answer(ndp, "what is tom turner's job?");
+  ok(/^Tom Turner runs the DMC/.test(job.text), 'role ask answers from the role DEF');
+  ok(job.audit.grounded && job.audit.status === 'clean', 'definitional answer is grounded and clean');
+  ok(job.cites.length > 0 && job.cites[0].idx === 2, 'cited to the antecedent sentence, not the naming line');
+  const who = E.answer(ndp, 'who is Tom Turner?');
+  ok(/^Tom Turner is the same person who runs the DMC/.test(who.text), 'identity ask answers from the class gloss');
+
+  // the graph's evidence reaches the depth-1 LLM context even though the
+  // assertion sentence never carries the name
+  const ctx = E.context(ndp, "what is tom turner's job?", 6);
+  ok(/^What the page asserts about Tom Turner:/.test(ctx), 'definitional context opens with the page\'s assertions');
+  ok(/\[s2\]/.test(ctx), 'the assertion sentence joins the passages');
+
+  // a definitional ask about an ABSENT name still voids (audit-first contract)
+  const ghost = E.answer(ndp, 'who is Hercule Poirot?');
+  ok(/\{\{void:/.test(ghost.text), 'absent referent voids rather than defines');
+
+  // no assertions ⇒ falls through to ordinary prose answering, not an error
+  const plain = E.answer(ndp, 'what is the council?');
+  ok(plain && typeof plain.text === 'string' && plain.text.length > 0, 'definitional ask without assertions falls through cleanly');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }
