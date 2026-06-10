@@ -1058,7 +1058,7 @@ function App() {
           onToken: streamInto({ mode: 'grounded' }), depth: turnBudgetRef.current && turnBudgetRef.current.level,
         });
         full = E.dedupeSentences(full);
-        const declined = !full || full.trim().length < 3 || /passages?\s+do\s?n.?t\s+say/i.test(full);
+        const declined = modelDeclined(full);
         if (!declined && !E.echoesPriorReply(full, priorReplies)) {
           const perDoc = scope.map(d => new Set(E.inventedTerms(d, full)));
           const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
@@ -1077,6 +1077,18 @@ function App() {
     }
     if (mech && mech.audit && mech.audit.grounded && mech.audit.status !== 'held') return settleRepair(mech, 'mechanical (repair)');
     return stuck();
+  };
+
+  // Did the model decline (or leak) instead of answering? A grounded draft
+  // that says the material doesn't cover it, or that arrives as raw
+  // chain-of-thought (reasoning preamble / think tags the llm layer's
+  // stripping couldn't tag), falls to the mechanical answer.
+  const modelDeclined = (full) => {
+    const t = String(full == null ? '' : full).trim();
+    if (!t || t.length < 3) return true;
+    if (/(passages?|spans?|notes?|document)\s+(?:do|does)\s?n.?t\s+(?:say|mention|cover|answer)/i.test(t)) return true;
+    try { if (window.EOEngine.looksLeakedReasoning && window.EOEngine.looksLeakedReasoning(t)) return true; } catch (e) {}
+    return false;
   };
 
   // Document-referencing turn: feed the model the relevant passages and bind
@@ -1191,8 +1203,8 @@ function App() {
         noteOpaque(res, decision);                        // edge-of-trace marker (Phase 6)
         AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
       };
-      if (/passages?\s+do\s?n.?t\s+say/i.test(full) || full.trim().length < 3) {
-        AUD('step', 'veto', { decision: 'mechanical', reason: 'model declined / empty' });
+      if (modelDeclined(full)) {
+        AUD('step', 'veto', { decision: 'mechanical', reason: 'model declined / empty / leaked reasoning' });
         settle(window.EOEngine.answerScope(scope, q), 'mechanical (model declined)');
       } else {
         // DEGENERACY VETO (audit-reject retry, ported from eo-extractor.html):

@@ -4718,6 +4718,21 @@ function projectGraph(events, frame = {}) {
     if (t.length < 3) return true;
     return /\b(i (cannot|can ?not|can'?t|am unable to|won'?t|am not able)|i'?m sorry,? but|i'?m unable|unable to (provide|summari|comply|help|do)|as an ai|i do(n'?t| not) have (enough|the|access)|cannot (provide|create|write|generate)|can'?t (provide|create|write|generate))\b/.test(t);
   }
+  // Leaked chain-of-thought, hard-failed at the veto. The llm layer already
+  // strips tagged `<think>` blocks from the stream and the returned text;
+  // this catches what tagging can't — an answer that IS the reasoning
+  // (truncated mid-think, or an untagged preamble like "Okay, the user
+  // wants…"). Narrow on purpose: only the signatures reasoning models
+  // actually emit, so a legitimate answer starting "Okay," never trips it.
+  function looksLeakedReasoning(text) {
+    const s = String(text == null ? '' : text);
+    if (/<\/?think/i.test(s)) return true;
+    const t = s.trim();
+    return /^(?:okay|alright)[,.!]?\s+(?:so\s+)?the user\b/i.test(t)
+      || /^let me think\b/i.test(t)
+      || /^first,?\s+i need to\b/i.test(t)
+      || /^the user (?:wants|is asking|asked)\b/i.test(t);
+  }
 
   /* ============================================================ INTENT */
   function classifyIntent(q) {
@@ -7036,8 +7051,10 @@ function projectGraph(events, frame = {}) {
     associativeNeighbors,
     // the inference void: mark what the reader ADDED across two cited spans
     markInferred,
-    // reconsideration: does a draft read as a refusal / non-answer (plan SEG)
-    looksRefused,
+    // reconsideration: does a draft read as a refusal / non-answer (plan SEG),
+    // and the leaked-reasoning hard fail (the veto's belt-and-suspenders over
+    // the llm layer's think-stripping)
+    looksRefused, looksLeakedReasoning,
     // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
     // and the transmuting-DEF classifier (the significance-layer "weak" law)
     layerLadder, isTransmutingDef,

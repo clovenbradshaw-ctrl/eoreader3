@@ -93,6 +93,9 @@ function AuditStep({ s }) {
           ))}
         </details>
         <div className="aud-out"><span className="aud-role out">output</span><pre>{s.error ? '⚠ ' + s.error : (s.output || '∅')}</pre></div>
+        {s.filtered != null && (
+          <div className="aud-out"><span className="aud-role out">shown</span><pre>{s.filtered || '∅ (entirely think content — fell to the mechanical answer)'}</pre></div>
+        )}
       </div>
       {s.ms != null && <span className="aud-dt">{s.ms}ms</span>}
     </div>

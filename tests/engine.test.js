@@ -418,6 +418,19 @@ group('repair — pushback routes to repair, not retrieval', () => {
   eq(E.repairSignal('thanks that really helps'), null, 'gratitude is not repair');
 });
 
+// Leaked chain-of-thought hard fail: think tags and reasoning preambles are
+// vetoed (→ mechanical answer); ordinary answers — even ones starting
+// "Okay," — are not.
+group('veto — leaked reasoning is hard-failed', () => {
+  ok(E.looksLeakedReasoning('<think>hmm</think>The author is X.'), 'a think tag anywhere hard-fails');
+  ok(E.looksLeakedReasoning('<think>truncated mid-reason'), 'an unclosed think tag hard-fails');
+  ok(E.looksLeakedReasoning('Okay, the user wants the author. Looking at s4…'), 'the "Okay, the user…" preamble hard-fails');
+  ok(E.looksLeakedReasoning('Let me think about what the passages say.'), '"Let me think" hard-fails');
+  ok(E.looksLeakedReasoning('First, I need to find the name.'), '"First, I need to" hard-fails');
+  ok(!E.looksLeakedReasoning('Okay — the author is Dostoyevsky.'), 'a real answer starting "Okay" is NOT flagged');
+  ok(!E.looksLeakedReasoning('The author is Dostoyevsky.'), 'a plain answer is NOT flagged');
+});
+
 // Across-turn echo guard: a reply (near-)identical to one already sent is
 // detected, markup- and punctuation-insensitively.
 group('repair — echoesPriorReply', () => {

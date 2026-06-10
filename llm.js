@@ -237,6 +237,55 @@
     return [head2, ...kept, tail];
   }
 
+  // ---- reasoning-model think gating ----
+  // Reasoning builds (Qwen3, R1 distills) emit `<think>…</think>` before the
+  // answer. Without gating, the reasoning streams to the UI as if it were the
+  // answer — and a turn that hits max_tokens mid-think ships raw chain-of-
+  // thought as the reply, which the verifier then grades. The stream filter
+  // drops think content as it arrives (with a small look-behind so a tag
+  // split across deltas is still caught); the post-strip drops any unclosed
+  // think tail (the max_tokens cutoff case). The audit record keeps the FULL
+  // text verbatim, think included — that's exactly what audit mode exists
+  // for; only the user-visible stream and the returned answer are filtered.
+  // NOTE: `</think>` is deliberately NOT a stop sequence — the answer FOLLOWS
+  // the close tag, so stopping there would truncate every reasoning turn to
+  // nothing. Stops cover only end-of-turn markers sloppy templates leak.
+  const STOP_SEQUENCES = ['<|im_end|>', '<|eot_id|>'];
+  function stripThink(text) {
+    return String(text == null ? '' : text).replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim();
+  }
+  // A stateful per-turn delta filter: feed() each chunk, emitting only
+  // outside-think text via onToken; flush() releases the held look-behind.
+  function makeThinkFilter(onToken) {
+    let inThink = false, buf = '';
+    const emit = (s) => { if (s && onToken) onToken(s); };
+    return {
+      feed(d) {
+        if (!d) return;
+        buf += d;
+        while (buf.length) {
+          if (!inThink) {
+            const open = buf.indexOf('<think>');
+            if (open === -1) {
+              // Hold the last 7 chars back in case a tag splits across deltas.
+              if (buf.length > 7) { emit(buf.slice(0, -7)); buf = buf.slice(-7); }
+              break;
+            }
+            emit(buf.slice(0, open));
+            buf = buf.slice(open + 7);
+            inThink = true;
+          } else {
+            const close = buf.indexOf('</think>');
+            if (close === -1) { buf = buf.slice(-8); break; }   // discard think, keep tail for the close tag
+            buf = buf.slice(close + 8);
+            inThink = false;
+          }
+        }
+      },
+      flush() { if (!inThink) emit(buf); buf = ''; },
+    };
+  }
+
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
   // pass retrieved passages. onToken(deltaText).
   async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride }) {
@@ -273,20 +322,24 @@
       } catch (e) {}
     };
     let full = '';
+    const gate = makeThinkFilter(onToken);
     try {
-      const res = await eng.chat.completions.create({ messages, temperature, max_tokens, stream: true });
+      const res = await eng.chat.completions.create({ messages, temperature, max_tokens, stop: STOP_SEQUENCES, stream: true });
       for await (const chunk of res) {
         const d = chunk.choices?.[0]?.delta?.content || '';
-        if (d) { full += d; if (onToken) onToken(d); }
+        if (d) { full += d; gate.feed(d); }
       }
+      gate.flush();
     } catch (e) {
       recLLM(full, { error: String((e && e.message) || e) });   // record the failed attempt, then let the caller handle it
       throw e;
     }
-    const out = full.trim();
-    recLLM(out);
+    // The audit keeps the verbatim text (think content intact); the caller
+    // gets the stripped answer. `filtered` marks the records where they differ.
+    const out = stripThink(full);
+    recLLM(full.trim(), out !== full.trim() ? { filtered: out } : undefined);
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens };
+  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, stripThink, makeThinkFilter };
 })();
