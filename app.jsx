@@ -206,6 +206,40 @@ function App() {
     })();
   }, [rules, langModes]);
 
+  // ---- the convention proposer (idle, budgeted, toggleable) ----
+  // The same local model that phrases answers gains one extra turn type:
+  // when the session has registered reading friction (the engine nominates
+  // it at parse time), an idle moment may spend one proposal turn. The
+  // engine gates everything that matters — the Convention Proposals rule,
+  // the per-session budget, the ≥2-documents-or-recurring-stall trigger —
+  // the host only guarantees idleness: a proposal turn never blocks or
+  // delays a chat turn, and it never triggers a model load of its own.
+  const busyRef = useRef(false); busyRef.current = busy;
+  const proposerBusy = useRef(false);
+  useEffect(() => {
+    if (busy || modelStatus !== 'ready') return;
+    if (!window.EOEngine || !window.EOEngine.proposerStatus || !window.EOLLM) return;
+    let cancelled = false;
+    const ric = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+    const cancelRic = window.cancelIdleCallback || clearTimeout;
+    const handle = ric(async () => {
+      if (cancelled || busyRef.current || proposerBusy.current) return;
+      let st; try { st = window.EOEngine.proposerStatus(); } catch (e) { return; }
+      if (!st || !st.eligible) return;
+      proposerBusy.current = true;
+      try {
+        const turn = await window.EOEngine.proposerTurn({
+          llm: (sys, user) => window.EOLLM.phrase({ mlcKey: model.mlc, question: user, history: [], sysOverride: sys }),
+        });
+        if (turn && turn.fired && turn.proposals && turn.proposals.length) {
+          showToast('The reading proposed ' + turn.proposals.length + ' convention' + (turn.proposals.length === 1 ? '' : 's') + ' — review in the glass box’s Proposals tab.');
+        }
+      } catch (e) { eoWarn('proposer turn', e); }
+      finally { proposerBusy.current = false; }
+    });
+    return () => { cancelled = true; try { cancelRic(handle); } catch (e) {} };
+  }, [docs, busy, modelStatus]);
+
   // ---- local persistence (§3): rehydrate on load, then save on change. ----
   // Documents, the running chat, rule toggles, UI prefs, and the engine's
   // induced learning all live on the device so a refresh doesn't wipe the

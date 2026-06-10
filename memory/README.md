@@ -31,10 +31,37 @@ The graph **hydrates from failure**: every model draft the EVA veto rejects
 appends a `REC` (with its register affinity); a term that fails twice becomes
 a **contextual neuron** — admitted into `eva_veto_lexicon` through the ledger,
 feeding the veto and the retry prompt from then on. The running app ships each
-*admitted* neuron's REC to the append webhook (one commit per neuron), so this
-file accumulates what reading taught the system. Conventions are linked, not
-flat (`qualifies` / `excepts` / `subset-of` / `feeds` edges — i before e,
-except after c), and every one is an **assertion: contextual and revisable**.
+*admitted* record to the append webhook (one commit per admission, deduped on
+op + target + anchor-hash set), so this file accumulates what reading taught
+the system. Conventions are linked, not flat (`qualifies` / `excepts` /
+`subset-of` / `feeds` edges — i before e, except after c), and every one is an
+**assertion: contextual and revisable**.
+
+Conventions also carry **provenance**: a `prov` array of anchors
+`{h, sig, r, c, t}` — a truncated content hash of the evidencing span, a
+quantized embedding signature, the reader who registered the sighting, its
+coupling frozen at registration, and the log position. Anchors are **locally
+resolvable, globally opaque**: on-device a parse-time hash table maps `h`
+back to a sentence; off-device `h` is 16 hex with no dictionary, and
+`EO_ANCHOR_PRIVATE = 'strict'` strips `sig` from everything shipped. Mass is
+a sum over anchors (coupling × independence × decay × register-fit, with a
+per-source cap); records without `prov` are legacy/seed, and seeds carry one
+synthetic `{h:"seed", c:1.0}` anchor — finite mass, outvotable, so nothing in
+the graph is unfalsifiable, including its initial conditions.
+
+The **local model proposes conventions** through this channel — and only
+proposes. The engine nominates friction at parse time (colon-label lines no
+convention consumes, separator runs read as sentences, recurring pronoun
+stalls); an idle, budgeted proposal turn shows the model a prose portrait of
+the conventions in force plus the friction's engine-minted span handles; a
+well-formed reply lands as a **signal** carrying model anchors (`r:
+"llm-proposer"`, `c: 0.6`). Admission is mechanical and the model can never
+be its own witness: θ_admit of independent anchor coupling, ≥ 2 distinct
+hashes, ≥ 1 non-model anchor — two document co-witnesses, or one plus a
+one-tap confirm in the glass box's Proposals tab. Admitted members land
+through the ledger (`colon_speaker_labels`, `separator_glyph_lines` — both
+shipped empty, grown only this way), the reading changes on the next parse,
+and a user SEG can decay any of it back to dormancy.
 
 Future residents: serialized learned-ledger deltas (the speech verbs a session
 induces), per-register convention packs, and the embedding-affinity index that
