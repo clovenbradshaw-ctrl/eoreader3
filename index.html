@@ -30,6 +30,11 @@
 <script src="store.js"></script>
 <script src="audit.js"></script>
 
+<!-- evo sandbox (dev-only): bundled constitution + in-browser evolution loop, plus the
+     baked fixtures/golden/harness. Loads one IIFE (window.EVO_SANDBOX) + one data global. -->
+<script src="evo/sandbox.bundle.js"></script>
+<script src="evo/sandbox-data.js"></script>
+
 <!-- UI (Babel/JSX) -->
 <script type="text/babel" src="data.jsx"></script>
 <script type="text/babel" src="pivot.jsx"></script>
@@ -39,6 +44,7 @@
 <script type="text/babel" src="docview.jsx"></script>
 <script type="text/babel" src="rulesets.jsx"></script>
 <script type="text/babel" src="auditview.jsx"></script>
+<script type="text/babel" src="sandbox.jsx"></script>
 <script type="text/babel" src="app.jsx"></script>
 </body>
 </html>

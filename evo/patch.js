@@ -18,7 +18,9 @@
    the diff generator is a simple synchronized line walk.
    ============================================================ */
 'use strict';
-const { buildRegionMap, validateStructuredEdit, validateDiff } = require('./allowlist');
+const _AL = (typeof require !== 'undefined') ? require('./allowlist')
+  : (typeof window !== 'undefined' ? window.EVO_ALLOWLIST : {});
+const { buildRegionMap, validateStructuredEdit, validateDiff } = _AL;
 
 function fmtValue(v) {
   if (typeof v === 'string') return "'" + v.replace(/'/g, "\\'") + "'";
@@ -142,4 +144,6 @@ function renderEdits(engineSource, edits, relPath = 'engine.js') {
   };
 }
 
-module.exports = { applyEdit, makeUnifiedDiff, renderEdits, fmtValue };
+const _exports = { applyEdit, makeUnifiedDiff, renderEdits, fmtValue };
+if (typeof module !== 'undefined' && module.exports) module.exports = _exports;
+else if (typeof window !== 'undefined') window.EVO_PATCH = _exports;

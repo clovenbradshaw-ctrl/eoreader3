@@ -13,7 +13,10 @@
     "evo:review": "node evo/runner.js --review",
     "evo:accept": "node evo/runner.js --accept",
     "evo:reject": "node evo/runner.js --reject",
-    "evo:score": "node evo/scorer.js"
+    "evo:score": "node evo/scorer.js",
+    "evo:sandbox": "node evo/build-sandbox-data.js && node evo/build-sandbox.mjs",
+    "evo:sandbox-data": "node evo/build-sandbox-data.js",
+    "evo:sandbox-build": "node evo/build-sandbox.mjs"
   },
   "devDependencies": {
     "compromise": "^14.14.0",
