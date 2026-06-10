@@ -160,6 +160,63 @@
     return { diffs, total, clean: diffs === 0, examples };
   }
 
+  /* ---- the corpus RANGE: short, random excerpts, scored label-free ----
+     Texts have no answer key, so we can't measure binding/stall accuracy on
+     them — but we CAN measure that the reading stays grounded and fabricates
+     nothing across a spread of real prose. This is the generalization test:
+     does a change hold up beyond the two labeled fixtures? Excerpts go to the
+     ENGINE only — never to the model. */
+  function sampleExcerpts(data, k) {
+    const pool = (data.corpus || []).slice();
+    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = pool[i]; pool[i] = pool[j]; pool[j] = t; }
+    return pool.slice(0, k || 6);
+  }
+  async function scoreRange(E, excerpts) {
+    const per = []; let grounded = 0, fab = 0, degen = 0;
+    for (const ex of excerpts) {
+      const doc = await E.parseDocument('ex.txt', ex.text, 'ex');
+      let g = false, f = false, ents = 0;
+      try { const a = E.answer(doc, 'what is this passage about'); g = !!(a.audit && a.audit.grounded); } catch (e) {}
+      try { f = (E.inventedTerms(doc, 'what is this passage about') || []).length > 0; } catch (e) {}
+      try { ents = (E.projectEntities(doc).entities || []).length; } catch (e) {}
+      const stalls = (doc._events || []).filter(e => e.op === 'NUL' && e.reason && e.reason.indexOf('pronoun-stall') === 0).length;
+      if (g && !f) grounded++; if (f) fab++; if (ents === 0) degen++;
+      per.push({ src: ex.src, grounded: g, fabricated: f, entities: ents, stalls });
+    }
+    const n = excerpts.length || 1;
+    return { grounding: grounded / n, fabrications: fab, degenerate: degen, n, per };
+  }
+
+  /* Fast candidate evaluation for the loop: labeled fixtures (accuracy) +
+     the corpus range (generalization). Skips the heavy golden parity — that
+     floor is re-checked by `evo:accept` when a win is actually applied. */
+  async function evaluateFast({ pivotSrc, engineSrc, edits, nlp, data, excerpts, baseline, baseRange, cfg }) {
+    cfg = cfg || {};
+    const win = cfg.qualityWinThreshold != null ? cfg.qualityWinThreshold : WIN_THRESHOLD;
+    const rendered = PATCH.renderEdits(engineSrc, edits);
+    if (!rendered.ok) return { state: 'rejected-by-allowlist', surface: false, rejected: rendered.rejected, note: rendered.rejected.map(r => r.reason).join('; ') };
+    let E;
+    try { E = loadCandidate(pivotSrc, rendered.newSource, nlp); }
+    catch (e) { return { state: 'broken', surface: false, diff: rendered.diff, note: 'candidate failed to load: ' + String(e.message || e) }; }
+    const quality = await scoreQuality(E, data);
+    const range = await scoreRange(E, excerpts);
+    const qualityDelta = quality.composite - baseline.composite;
+    const componentDeltas = {
+      binding: quality.components.binding - baseline.components.binding,
+      stall: quality.components.stall - baseline.components.stall,
+      grounding: quality.components.grounding - baseline.components.grounding,
+      integration: quality.components.integration - baseline.components.integration,
+    };
+    const fabIntroduced = range.fabrications - ((baseRange && baseRange.fabrications) || 0);
+    const groundingDelta = range.grounding - ((baseRange && baseRange.grounding) || 0);
+    let state, surface, note;
+    if (fabIntroduced > 0) { state = 'range-flag'; surface = false; note = fabIntroduced + ' new fabrication' + (fabIntroduced > 1 ? 's' : '') + ' across the ' + range.n + '-text range — rejected'; }
+    else if (qualityDelta >= win) { state = 'improves'; surface = true; note = 'quality up; grounding held on ' + Math.round(range.grounding * range.n) + '/' + range.n + ' range texts (golden parity re-checked on accept)'; }
+    else if (qualityDelta < -0.0005) { state = 'regression'; surface = false; note = 'quality down ' + qualityDelta.toFixed(4); }
+    else { state = 'null'; surface = false; note = 'no quality gain'; }
+    return { diff: rendered.diff, quality, range, baseRange, qualityDelta, componentDeltas, groundingDelta, fabIntroduced, state, surface, note };
+  }
+
   function classify(parityDiffs, qualityDelta, cfg) {
     cfg = cfg || {};
     const win = cfg.qualityWinThreshold != null ? cfg.qualityWinThreshold : WIN_THRESHOLD;
@@ -346,6 +403,7 @@
 
   return {
     loadCandidate, scoreQuality, runParity, classify, evaluate,
+    sampleExcerpts, scoreRange, evaluateFast,
     evolvableRules, renderEdits: (s, e) => PATCH.renderEdits(s, e),
     offlineHypotheses, traceBattery, liveAgent, callAnthropic,
     graphOf, queryGraph,
