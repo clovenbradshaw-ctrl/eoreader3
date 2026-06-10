@@ -272,24 +272,31 @@ function fmtTable(rows, cols) {
   }
 
   /* ---- 4. history pressure: the budget math in a long session ---- */
-  console.log('\n=== 4. HISTORY PRESSURE (synthetic 20-turn session, ~300-token turns) ===');
+  const DEF_BUDGET = L.DEFAULT_BUDGET != null ? L.DEFAULT_BUDGET : 7000;
+  const estimator = typeof L.estTokens === 'function' ? L.estTokens : (s) => est(s);
+  console.log('\n=== 4. HISTORY PRESSURE (synthetic 20-turn session, ~300-token turns; default budget ' + DEF_BUDGET + ') ===');
   const mkTurn = (i) => ({ role: i % 2 ? 'assistant' : 'user', content: ('turn ' + i + ': ') + 'the quick brown fox jumps over the lazy dog and keeps going. '.repeat(20) });
   const hist = Array.from({ length: 20 }, (_, i) => mkTurn(i));
   const sys1 = L.systemFor('grounded', 'answer', true, 1);
-  for (const budget of [7000, 3300, 2200]) {
+  for (const budget of [...new Set([7000, DEF_BUDGET, 2200])]) {
     const msgs = L.assembleMessages({ sys: sys1, history: hist, contextText: '[s1] A passage.', question: 'and then?', grounded: true, budget });
-    const total = msgs.reduce((a, m) => a + est(m.content), 0);
+    const total = msgs.reduce((a, m) => a + estimator(m.content), 0);
     const verbatim = msgs.length - 2;
     const recap = /Earlier conversation, condensed/.test(msgs[0].content);
-    console.log('  budget ' + budget + ': ' + verbatim + ' verbatim turns'
+    console.log('  budget ' + budget + (budget === DEF_BUDGET ? ' (default)' : '') + ': ' + verbatim + ' verbatim turns'
       + (recap ? ' + condensed recap folded into system' : ', no recap') + ' → ~' + total + ' est tokens'
       + '  (' + r2((total + 300) / MODEL_CTX * 100) + '% of the 4k window with a 300-token reply)');
   }
-  console.log('  The DEFAULT budget is 7000 est-tokens against a 4096-token window on every');
-  console.log('  shipped model — the assembly only sheds history once the estimate passes 7000,');
-  console.log('  i.e. ~1.7x past the real ceiling (worse on CJK, where chars/4 under-counts).');
-  console.log('  app.jsx catches the resulting failure and retries with history.slice(-2),');
-  console.log('  budget 2200 — the overflow path is load-bearing, not hypothetical.');
+  if (DEF_BUDGET + 520 > MODEL_CTX) {
+    console.log('  ⚠ the default budget (' + DEF_BUDGET + ') + max reply (520) exceeds the ' + MODEL_CTX + '-token window —');
+    console.log('    the assembly only sheds history past the real ceiling; the caller\'s catch-retry');
+    console.log('    (history.slice(-2), budget 2200) is the load-bearing recovery.');
+  } else {
+    console.log('  default budget (' + DEF_BUDGET + ') + max reply (520) fits the ' + MODEL_CTX + '-token window.');
+  }
+  const cjkProbe = 'ある日の暮方の事である。'.repeat(10);
+  console.log('  CJK estimator check: ' + cjkProbe.length + ' JA chars → est ' + estimator(cjkProbe)
+    + ' tokens (chars/4 would say ' + Math.ceil(cjkProbe.length / 4) + ')');
 
   /* ---- 5. the talker-portrait prompt (the evolvable one) ---- */
   console.log('\n=== 5. TALKER PORTRAIT PROMPT (engine.js talkerPortrait — evolvable surface) ===');

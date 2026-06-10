@@ -167,8 +167,25 @@
   // `workingMemory` (depth > 1) is the heat-ranked hot/warm/cold subgraph: it
   // folds into the system message and shrinks the verbatim recency window, since
   // heat now carries the continuity. Absent/empty ⇒ byte-identical to before.
-  function assembleMessages({ sys, history, contextText, question, grounded, budget = 7000, recentTurns = RECENT_TURNS, workingMemory = null }) {
-    const est = (m) => Math.ceil(((m && m.content) || '').length / 4);
+  // Token estimate for budget math. chars/4 is right for English but
+  // under-counts CJK ~2.4x (a CJK char is ~1 token in the shipped models'
+  // tokenizers) — a Japanese document would blow the window while the
+  // estimator believed it was at 40%. CJK chars count as 1 token each.
+  const CJK_RE = /[　-鿿豈-﫿ｦ-ﾟ]/;
+  function estTokens(s) {
+    const str = String(s || '');
+    let cjk = 0;
+    for (const ch of str) if (CJK_RE.test(ch)) cjk++;
+    return Math.ceil(cjk + (str.length - cjk) / 4);
+  }
+  // Default assembly budget. Every shipped model is a 4096-token WebLLM
+  // prebuild; the budget must leave room for the reply (max_tokens ≤ 520) and
+  // estimator error. The old default (7000) exceeded the window outright and
+  // leaned on the caller's catch-retry to recover.
+  const DEFAULT_BUDGET = 3300;
+
+  function assembleMessages({ sys, history, contextText, question, grounded, budget = DEFAULT_BUDGET, recentTurns = RECENT_TURNS, workingMemory = null }) {
+    const est = (m) => estTokens((m && m.content) || '');
     const userContent = (grounded && contextText)
       ? `Passages from the document:\n${contextText}\n\nUsing only the passages above, answer: ${question}`
       : (contextText ? `Passages:\n${contextText}\n\n${question}` : question);
@@ -271,5 +288,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS };
+  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens };
 })();

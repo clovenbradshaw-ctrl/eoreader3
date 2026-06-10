@@ -348,12 +348,16 @@ function fmtTable(rows, cols) {
     + ' (spread ' + r3(physicsSpread) + ')'
     + '  → ' + (bestGain < 0.005 ? 'SATURATED. The shipped defaults are robustly near-optimal on English.'
       : 'best: ' + ranked[0].label + '.'));
-  console.log('  admission PRECISION: mean ' + r3(base.agg.precision) + ' (' + Math.round(base.agg.noise) + ' noise nodes / battery)'
-    + '  → denoising admission would lift Q to ~' + r3(denoisedQ) + ' (+' + r3(precisionHeadroom) + '), '
-    + ratio + ' the best tunable gain.');
-  console.log('  Noise lives in capitalized common nouns / title words / sentence-initial markers ("Darkness", "Nature", "But").');
-  console.log('  That surface is the language-module disqualify lists (base_stopwords, *_lead_disqualify) — evolvable, but NOT reachable by applyRules().');
-  console.log('  → the experiment hands the evo loop a concrete target: tighten admission, not the physics.');
+  if (base.agg.noise >= 1) {
+    console.log('  admission PRECISION: mean ' + r3(base.agg.precision) + ' (' + Math.round(base.agg.noise) + ' noise nodes / battery)'
+      + '  → denoising admission would lift Q to ~' + r3(denoisedQ) + ' (+' + r3(precisionHeadroom) + '), '
+      + ratio + ' the best tunable gain.');
+    console.log('  Noise lives in capitalized common nouns / title words / sentence-initial markers ("Darkness", "Nature", "But").');
+    console.log('  That surface is the language-module disqualify lists (base_stopwords, *_lead_disqualify) — evolvable, but NOT reachable by applyRules().');
+    console.log('  → the experiment hands the evo loop a concrete target: tighten admission, not the physics.');
+  } else {
+    console.log('  admission PRECISION: mean ' + r3(base.agg.precision) + ' — no noise nodes detected; the admission lever has been pulled.');
+  }
 
   console.log('\nscored in ' + elapsed + 's. Q weights: ' + JSON.stringify(Q_WEIGHTS));
 

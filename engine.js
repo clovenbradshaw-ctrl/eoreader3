@@ -33,9 +33,21 @@
   // about "Edith's car" matches the document's "edith" token. Without this, the
   // possessive surface never equals the bare entity token and a question about
   // the document's own characters misroutes to ungrounded chat. (1a)
-  const tok = (s) => (String(s).toLowerCase().match(/[a-z0-9][a-z0-9'’-]*/g) || [])
-    .map(t => t.replace(/['’]s$/, ''))
-    .filter(t => t.length > 2 && !QA_STOP.has(t));
+  // A hyphenated compound also yields its parts ("neuve-sainte-genevieve" →
+  // + neuve, sainte, genevieve). The entity extractor admits surfaces from
+  // inside compounds, so retrieval must reach inside them too — otherwise an
+  // entity the graph ranks heavily ("Genevieve", from the street name) is
+  // unreachable by every query that names it.
+  const tok = (s) => {
+    const raw = (String(s).toLowerCase().match(/[a-z0-9][a-z0-9'’-]*/g) || [])
+      .map(t => t.replace(/['’]s$/, ''));
+    const out = [];
+    for (const t of raw) {
+      out.push(t);
+      if (t.includes('-')) for (const p of t.split('-')) out.push(p);
+    }
+    return out.filter(t => t.length > 2 && !QA_STOP.has(t));
+  };
   const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   /* ============================================================
@@ -494,6 +506,10 @@ const READING_RULES = {
     value: ['his','her','their','its','our','my','your','this','that','these','those','another','other','every','all','some','any','many','much','few','more','most','less'],
     mass: 1, layer: 'existence', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Leading words that disqualify a surface from becoming an entity. "his family", "their noses", "another two days" are references, not sites.',
+  },
+  lowercase_evidence_disqualify: {
+    value: true, mass: 1, layer: 'existence', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'A single-token capitalized surface whose word also appears lowercase in the same document is a common noun the capital dressed up — "Darkness", "Nature", "But" — not a name: a genuine proper noun almost never occurs lowercased on the same page. The text grades itself; no lexicon. Costs the rare character actually named with a common word ("Grass") in a document that also uses the word; multi-word surfaces are untouched.',
   },
 
   // ── Language-module additions: attribution, contractions, syntax ──
@@ -1111,7 +1127,7 @@ function aliasRelation(aTok, bTok) {
   return 'conflict';
 }
 
-function tryAdmit(surface, isPropNoun, tentatives) {
+function tryAdmit(surface, isPropNoun, tentatives, lowerVocab) {
   const trimmed = String(surface).trim();
   if (!trimmed) return false;
   const lower = trimmed.toLowerCase();
@@ -1124,6 +1140,11 @@ function tryAdmit(surface, isPropNoun, tentatives) {
   if (/^[$€£¥]?[\d,.]+\s*(million|billion|trillion|thousand|m|b|k)?$/i.test(trimmed)) return false;
   const tokens = trimmed.split(/\s+/);
   const multi = tokens.length > 1;
+  // Lowercase evidence (rule: lowercase_evidence_disqualify): the same word
+  // standing lowercase elsewhere on the page outweighs a capital here — this
+  // single-token surface is a common noun ("Darkness", "Nature", "But"), and
+  // neither proper-noun shape nor recurrence can rehabilitate it.
+  if (!multi && lowerVocab && lowerVocab.has(lower)) return false;
   const properLong = isPropNoun && trimmed.length >= 4;
   if (properLong || multi) return true;
   const k = normSurface(trimmed);
@@ -1145,9 +1166,9 @@ function cleanEntitySurface(surf) {
   // Strip trailing junk: whitespace, punctuation, curly quotes, ellipses,
   // footnote markers (*, †, ‡, §, ·, •). Matches runs so "Don. *" collapses
   // to "Don" in one pass.
-  s = s.replace(/[\s.,;:!?*†‡§·•'"”’“‘`\u2026]+$/gu, '').trim();
+  s = s.replace(/[\s.,;:!?*†‡§·•_'"”’“‘`\u2026]+$/gu, '').trim();
   // Same on the leading edge
-  s = s.replace(/^[\s.,;:!?*†‡§·•'"”’“‘`\u2026]+/gu, '').trim();
+  s = s.replace(/^[\s.,;:!?*†‡§·•_'"”’“‘`\u2026]+/gu, '').trim();
   // Split at internal sentence-boundary punctuation followed by whitespace
   // and a non-space character. "Princess! Go" → "Princess".
   const splitMatch = s.match(/^(.+?)[!?]\s+\S/);
@@ -1598,6 +1619,13 @@ async function extractEoGraph(text, onProgress) {
   // tokens   cached substantive token set for gravity computation
   const sites = new Map();
   const tentatives = new Map();       // for two-sighting admission gate
+  // Document-level lowercase evidence for admission (see
+  // lowercase_evidence_disqualify): every word that stands lowercase somewhere
+  // in the text. Built once per parse; consulted only for single-token
+  // candidate surfaces.
+  const lowerVocab = (READING_RULES.lowercase_evidence_disqualify && READING_RULES.lowercase_evidence_disqualify.value)
+    ? new Set((String(text).split(/[^\p{L}'’-]+/u) || []).filter(w => w && /^\p{Ll}/u.test(w) && w === w.toLowerCase()))
+    : null;
   let seq = 0;
   let nextRefId = 0;
   // Mint a new referent ID. A referent is the reader's commitment that
@@ -2157,7 +2185,7 @@ async function extractEoGraph(text, onProgress) {
           continue;
         }
         const singleInQuote = !/\s/.test(cleaned) && inQuote;
-        if (!tryAdmit(cleaned, !singleInQuote, tentatives)) continue;
+        if (!tryAdmit(cleaned, !singleInQuote, tentatives, lowerVocab)) continue;
         seen.add(key);
         admitted.push({ surface: cleaned, type, key });
 
@@ -4254,7 +4282,14 @@ function projectGraph(events, frame = {}) {
     const t = ' ' + String(q).toLowerCase().replace(/[’']/g, "'") + ' ';
     if (/\b(who(\s+all)?\s+(appears?|is in|are in|shows? up|features?)|who are the|characters?|the cast|people (in|who)|list (the )?(people|characters|names|figures)|main characters?|dramatis|everyone (in|who))\b/.test(t)) return 'who';
     if (/\b(summar|overview|tl;?dr|gist|recap|in short|main (idea|point|points|theme)|what'?s (it|this)( about)?|what is (this|it|the document|the text|the story|the file)|describe (this|the|it)|the document about|what kind of (document|text)|what am i (looking at|reading))/.test(t)) return 'summary';
-    if (/\b(what happens|what'?s going on|the plot|the story|main events|what is happening|walk me through|what'?s in (this|it))/.test(t)) return 'summary';
+    // "what happens to NAME?" names a specific referent — a factual ask about
+    // NAME, not a whole-document overview; without the guard the summary path
+    // hands the model passages sampled with no knowledge of NAME. The guard
+    // reads the ORIGINAL casing (t is lowered): a capitalized target after
+    // happens-to/with is a name. "what happens?" / "what happens in the story"
+    // still summarize.
+    if (/\b(what happens|what'?s going on|the plot|the story|main events|what is happening|walk me through|what'?s in (this|it))/.test(t)
+        && !/\bhappens?\s+(?:to|with)\s+["“]?\p{Lu}/u.test(String(q))) return 'summary';
     // Generative whole-document asks — "write a report about this", "write an
     // essay", "give me a rundown", "write it up". These name no specific passage,
     // so the factual path retrieves a single lexically-overlapping line and the
@@ -4320,10 +4355,23 @@ function projectGraph(events, frame = {}) {
     return out.join('').trim();
   }
   function salientContext(doc) {
+    // Title-page chrome — "Heart of Darkness", "by Joseph Conrad", "Contents",
+    // "I  II  III" — is short and carries no terminal punctuation. It costs
+    // passage slots the model should spend on prose; skip it in the picks.
+    // (Falls back to unfiltered picks if the filter would empty them.)
+    const isChrome = (i) => {
+      const s = String(doc.sentenceTexts[i] == null ? '' : doc.sentenceTexts[i]).trim();
+      return s.length < 60 && !/[.!?…"”'’)]$/.test(s);
+    };
     const picks = new Set();
-    for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) picks.add(b.sentences[0].i);
-    [0, 1, 2].forEach(i => doc.sentences[i] && picks.add(doc.sentences[i].i));
-    const n = doc.sentences.length; [n - 1, n - 2].forEach(i => i >= 0 && doc.sentences[i] && picks.add(doc.sentences[i].i));
+    const add = (i) => { if (!isChrome(i)) picks.add(i); };
+    for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) add(b.sentences[0].i);
+    [0, 1, 2].forEach(i => doc.sentences[i] && add(doc.sentences[i].i));
+    const n = doc.sentences.length; [n - 1, n - 2].forEach(i => i >= 0 && doc.sentences[i] && add(doc.sentences[i].i));
+    if (!picks.size) {
+      for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) picks.add(b.sentences[0].i);
+      [0, 1, 2].forEach(i => doc.sentences[i] && picks.add(doc.sentences[i].i));
+    }
     // Lead with the structural portrait in reader's voice, so the model
     // composes from what the reading noticed rather than echoing a span. The
     // raw spans follow as evidence, but the portrait sets the task.
