@@ -53,48 +53,12 @@
   /* ============================================================
      ===============  REAL ENGINE (ported verbatim)  ============
      ============================================================ */
-const DISCOURSE_JUNK = new Set([
-  'today','yesterday','tomorrow','now','then','here','there','meanwhile',
-  'however','moreover','furthermore','therefore','also','still','yet',
-  'according','reportedly','apparently','allegedly',
-  'monday','tuesday','wednesday','thursday','friday','saturday','sunday',
-  'january','february','march','april','may','june','july','august',
-  'september','october','november','december',
-  // Stopwords that compromise sometimes mis-tags as proper nouns at sentence start
-  'not','almost','because','while','since','although','though',
-]);
+// DISCOURSE_JUNK / ANSWER_DISCOURSE / STRUCTURE_LABELS are CONVENTIONS —
+// they live in READING_RULES (discourse_junk / answer_discourse /
+// structure_labels) and in memory/conventions.jsonl, and are rebuilt into the
+// live Sets by rebuildLangSets. Assertions, contextual and revisable — not
+// constants.
 
-// Discourse words an ANSWER opens with ("Yes, Amos Dresser is…", "Indeed, …").
-// The veto's cap-harvest reads them as proper-noun candidates, and a correct
-// confirmation gets its "Yes" struck through as an unverified term — the badge
-// punishing the answer for a word about the answer, not a claim about the page.
-// Checked only in the draft-side veto (inventedTerms), never in entity
-// admission, so extraction physics are untouched.
-const ANSWER_DISCOURSE = new Set([
-  'yes','yeah','indeed','certainly','sure','absolutely','exactly','correct','agreed',
-  'unfortunately','additionally','finally','similarly','specifically','notably',
-  'importantly','overall','instead','otherwise','nevertheless','nonetheless',
-  'accordingly','consequently','thus','hence','besides','actually','generally',
-  'typically','usually','ultimately','alternatively','likewise','regardless',
-]);
-
-// Document apparatus / OCR section labels. These show up capitalized and
-// repeated in scanned or structured prose ("Figure 4", "Appendix B", "Note:",
-// "Digitization sponsored by … Foundation") and compromise hands them back as
-// proper nouns, so without a filter they surface as named entities — and, with
-// the old person-fallback, as people. They are document chrome, not referents.
-// Checked only in entity admission (proper-noun candidates already start with a
-// capital), so retrieval, segmentation and content are untouched; a multi-word
-// name like "Ford Foundation" still admits because only the bare label matches.
-const STRUCTURE_LABELS = new Set([
-  'figure','fig','plate','table','exhibit','diagram','chart',
-  'appendix','addendum','chapter','section','subsection','paragraph','page',
-  'note','notes','footnote','endnote','caption','sidebar',
-  'summary','abstract','overview','preface','foreword','afterword',
-  'prologue','epilogue','introduction','conclusion',
-  'contents','index','glossary','bibliography','references','errata','timeline',
-  'archival','digitization','digitisation','foundation','collection','collections',
-]);
 
 // ── READING_RULES: the rules of reading made auditable ───────────
 // Every rule the reader applies is a first-class object: it has mass
@@ -258,11 +222,7 @@ let TRANSCRIPT_ACTIVE = false;
 // Formulaic discourse a transcript is full of ("Thank you.", "Okay.") — these
 // open sentences capitalized, recur past the two-sighting gate, and are never
 // referents. Checked only in entity admission while a transcript is active.
-const TRANSCRIPT_FORMULA = new Set([
-  'thank', 'thanks', 'thank you', 'okay', 'ok', 'yes', 'yeah', 'no', 'well', 'good',
-  'right', 'hello', 'hi', 'sorry', 'please', 'amen', 'aye', 'nay', 'um', 'uh', 'huh',
-  'hmm', 'bye', 'goodbye', 'welcome', 'correct', 'exactly', 'absolutely', 'sure', 'alright',
-]);
+// TRANSCRIPT_FORMULA is the transcript_formula convention (see rebuildLangSets).
 // How many timecode-shaped lines the head of the text carries. Used to keep
 // the comma-mode CSV/table detectors from reading "0:00:14.240,0:00:16.560"
 // rows as a spreadsheet, and by the transcript decision itself.
@@ -480,6 +440,49 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Pronouns that resolve to male-gendered sites.',
   },
+  // ── Production guards — conventions of the reading's own hygiene ──
+  // Assertions, contextual and revisable: each is what THIS reader currently
+  // takes a class of surfaces to mean, not a fact about language.
+  discourse_junk: {
+    value: ['today','yesterday','tomorrow','now','then','here','there','meanwhile','however','moreover','furthermore','therefore','also','still','yet','according','reportedly','apparently','allegedly','monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','not','almost','because','while','since','although','though'],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Discourse and calendar words that capitalize at sentence start and read as proper nouns to NER. Never referents.',
+  },
+  answer_discourse: {
+    value: ['yes','yeah','indeed','certainly','sure','absolutely','exactly','correct','agreed','unfortunately','additionally','finally','similarly','specifically','notably','importantly','overall','instead','otherwise','nevertheless','nonetheless','accordingly','consequently','thus','hence','besides','actually','generally','typically','usually','ultimately','alternatively','likewise','regardless'],
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Words an ANSWER opens with ("Yes, Amos Dresser is…"). Checked only in the draft-side veto, never in admission — a word about the answer, not a claim about the page.',
+  },
+  structure_labels: {
+    value: ['figure','fig','plate','table','exhibit','diagram','chart','appendix','addendum','chapter','section','subsection','paragraph','page','note','notes','footnote','endnote','caption','sidebar','summary','abstract','overview','preface','foreword','afterword','prologue','epilogue','introduction','conclusion','contents','index','glossary','bibliography','references','errata','timeline','archival','digitization','digitisation','foundation','collection','collections'],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Document apparatus / OCR section labels ("Figure 4", "Appendix B"). Chrome, not referents; a multi-word name like "Ford Foundation" still admits because only the bare label matches.',
+  },
+  transcript_formula: {
+    value: ['thank','thanks','thank you','okay','ok','yes','yeah','no','well','good','right','hello','hi','sorry','please','amen','aye','nay','um','uh','huh','hmm','bye','goodbye','welcome','correct','exactly','absolutely','sure','alright'],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Formulaic transcript discourse ("Thank you.", "Okay.") that opens sentences capitalized and recurs past the two-sighting gate — politeness, not a referent. Checked only while a transcript is active.',
+  },
+  generic_voice_heads: {
+    value: ['speaker','voice','interviewer','interviewee','moderator','participant','panelist','operator','announcer','narrator','caller','host','guest','male','female','unknown','unidentified','audience','translator','interpreter'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Role-word heads of generic voice labels ("Speaker 2", "Female Voice"). The label is a real voice; its HEAD is a role word, not a name — part-matching skips these so "speaker" in a user message cannot hijack routing onto "Speaker 2".',
+  },
+  place_org_cues: {
+    value: ['street','st','road','rd','avenue','ave','lane','river','sea','ocean','bay','gulf','point','cape','harbou?r','island','isle','mount','mountain','valley','county','shire','city','town','village','company','corporation','commission','board','department','office','firm','llc','inc','ltd','co','university','college','school','hospital','church','park','square','hall','palace','castle','bridge','station','hotel','club','society','association','league','union','party','court','bank','press','times','gazette','journal','ministry','bureau','agency','institute','foundation'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Surface cues that mark a proper name as NOT a person (regex alternates). Guards person-promotion so a river or a firm never becomes a character.',
+  },
+  eva_machinery_terms: {
+    value: ['mass','momentum','gravity','coupling','frame','rules_rev','NUL','SIG','INS','SEG','CON','SYN','DEF','EVA','REC'],
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'The machinery vocabulary the talker must never speak. EVA rejects a draft that leaks any of these — the reading describes the page, never its own physics.',
+  },
+  eva_veto_lexicon: {
+    value: [],
+    mass: 0, layer: 'significance', src: 'learned', module: 'core',
+    desc: 'Terms learned from repeated EVA failures — the model\'s recurring tics (names it keeps inventing, framings it keeps slipping into), admitted on the second sighting like any induced rule. Each admission is a contextual neuron: it feeds back into the veto and the retry prompt, and its REC (with register affinity) is the hydration record appended to memory/conventions.jsonl. Starts EMPTY: the lexicon is grown, never seeded.',
+  },
   role_clause_verbs: {
     value: ['runs?','running','leads?','leading','heads?','heading','chairs?','chairing','manages?','managing','directs?','directing','oversees?','overseeing','owns?','owning','operates?','operating','founded','co-founded','controls?','controlling','commands?','commanding','supervises?','supervising'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -679,7 +682,9 @@ function getAttribVerbs() {
 let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     MALE_PRONOUNS, NEUTRAL_PERSON_PRONOUNS, FEMALE_TITLES, MALE_TITLES, TITLE_TOKENS, CLITIC_SUFFIXES, ADVERB_HEADS,
     NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS,
-    ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE;
+    ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
+    DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
+    GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -714,6 +719,17 @@ function rebuildLangSets() {
   TITLE_OF_RE = heads.length
     ? new RegExp('\\b((?:(?:' + (prefixes.length ? prefixes.join('|') : '$^') + ')\\s+)?(?:' + heads.join('|') + ')\\s+of\\s+[^,;.]+)', 'iu')
     : /$^/;
+  // production-guard conventions (assertions, contextual and revisable)
+  DISCOURSE_JUNK = new Set(mod_values('discourse_junk'));
+  ANSWER_DISCOURSE = new Set(mod_values('answer_discourse'));
+  STRUCTURE_LABELS = new Set(mod_values('structure_labels'));
+  TRANSCRIPT_FORMULA = new Set(mod_values('transcript_formula'));
+  GENERIC_VOICE_HEADS = new Set(mod_values('generic_voice_heads'));
+  const poc = mod_values('place_org_cues');
+  PLACE_ORG_CUE_RE = poc.length ? new RegExp('\\b(' + poc.join('|') + ')\\b', 'i') : /$^/;
+  const evam = mod_values('eva_machinery_terms');
+  EVA_MACHINERY_RE = evam.length ? new RegExp('\\b(' + evam.join('|') + ')\\b', 'i') : /$^/;
+  EVA_VETO_TERMS = new Set(mod_values('eva_veto_lexicon'));
 }
 // Apply a language pack: write its detectors into the rules with
 // provenance, register the module, rebuild the lexical sets. English
@@ -741,14 +757,14 @@ function applyLanguageModule(lang) {
 function moduleEnabledForLang(modId) { return modId === 'core' || (LANGUAGE_MODULES[modId] && LANGUAGE_MODULES[modId].enabled); }
 
 /* ============================================================
-   THE CONVENTIONS GRAPH (conventions.jsonl) — human language as conventions.
+   THE CONVENTIONS GRAPH (memory/conventions.jsonl) — human language as conventions.
 
    The mechanics (gravity, momentum, two-sighting, δ-gates, the nine
    operators) are universal; everything HUMAN-LANGUAGE-specific — pronoun
    inventories, titles, attribution shapes, quote pairs, register calls
    like singular-they — is a CONVENTION, and no inventory is more "real"
    than another: you / y'all / ella / vous / 她 are equal citizens. Those
-   conventions live in conventions.jsonl at the repo root: an append-only
+   conventions live in memory/conventions.jsonl: an append-only
    graph whose records ARE eo operations —
 
      INS  — instantiate a module (a register of conventions) or a
@@ -776,6 +792,8 @@ function projectConventions(records) {
   const conventions = new Map();   // id -> { module, rule, value }
   const members = new Map();       // id -> [surfaces in seq order]
   const moduleProps = new Map();   // moduleId -> { path: value }
+  const evaTally = new Map();      // lang|term -> sightings (hydration RECs)
+  const evaInduced = new Set();    // terms past the two-sighting gate
   for (const ev of (records || [])) {
     if (!ev || !ev.op) continue;
     if (ev.op === 'INS' && ev.kind === 'convention' && ev.id) {
@@ -789,11 +807,17 @@ function projectConventions(records) {
       if (!moduleProps.has(ev.module)) moduleProps.set(ev.module, {});
       moduleProps.get(ev.module)[ev.path] = ev.value;
     }
-    // word-property DEFs (gender/person/animacy/…) and RECs enrich the graph;
-    // projection v1 reads membership + values only.
+    else if (ev.op === 'REC' && ev.action === 'eva-veto' && ev.value && ev.value.term) {
+      // hydration records: tally failure terms; two sightings = a neuron
+      const k = ((ev.affinity && ev.affinity.lang) || 'en') + '|term:' + String(ev.value.term).toLowerCase();
+      evaTally.set(k, Math.max(evaTally.get(k) || 0, ev.value.sightings || ((evaTally.get(k) || 0) + 1)));
+      if ((evaTally.get(k) || 0) >= 2) evaInduced.add(ev.value.term);
+    }
+    // other word-property DEFs (gender/person/animacy/…) and RECs enrich the
+    // graph; projection v1 reads membership + values + hydration only.
   }
   for (const [id, c] of conventions) if (c.value === undefined && members.has(id)) c.value = members.get(id);
-  return { conventions, moduleProps };
+  return { conventions, moduleProps, evaInduced: [...evaInduced], evaTally };
 }
 
 function parseConventionsJSONL(text) {
@@ -839,6 +863,19 @@ function loadConventions(input) {
     }
     if (bucket === 'en-narrative-v1' || bucket === 'core') applied++; else packApplied++;
   }
+  // hydration: terms the file's REC records have already taught (two
+  // sightings) land as ledger add-tokens; tallies restore so counting
+  // continues across sessions rather than restarting
+  {
+    const r = fold.rules['eva_veto_lexicon'];
+    const pb = r && r.perBucket && r.perBucket['core'];
+    const live = new Set();
+    if (pb) for (const k of (pb.order || [])) if ((pb.tokens.get(k) || 0) > 0) live.add(k);
+    for (const term of (proj.evaInduced || [])) {
+      if (!live.has(term)) emit({ target: 'rule:eva_veto_lexicon', action: 'add-token', bucket: 'core', value: term, mass: 2 });
+    }
+    if (proj.evaTally) for (const [k, n] of proj.evaTally) EVA_TALLY.set(k, Math.max(EVA_TALLY.get(k) || 0, n));
+  }
   // module-level props (dash dialogue, function chars, …) live on the packs
   for (const [modId, props] of proj.moduleProps) {
     for (const lang of Object.keys(LANG_PACKS)) {
@@ -859,7 +896,15 @@ function _conventionsExport() {
   for (const [id, r] of Object.entries(READING_RULES)) {
     if (r.module === 'en-narrative-v1') enConventions[id] = r.value;
   }
-  const modules = { 'en-narrative-v1': { language: 'en', conventions: enConventions, props: {} } };
+  // core production-guard conventions — register-agnostic assertions
+  const CORE_IDS = ['discourse_junk', 'answer_discourse', 'structure_labels', 'transcript_formula',
+    'generic_voice_heads', 'place_org_cues', 'eva_machinery_terms', 'eva_veto_lexicon'];
+  const coreConventions = {};
+  for (const id of CORE_IDS) if (READING_RULES[id]) coreConventions[id] = READING_RULES[id].value;
+  const modules = {
+    core: { language: '*', conventions: coreConventions, props: {} },
+    'en-narrative-v1': { language: 'en', conventions: enConventions, props: {} },
+  };
   for (const [lang, pack] of Object.entries(LANG_PACKS)) {
     const props = {};
     for (const k of ['name_prefix_lower', 'dash_dialogue', 'function_chars', 'colon_attribution']) {
@@ -1275,14 +1320,14 @@ function looksProper(s) { return /^\p{Lu}[\p{L}\p{M}\p{N}'’.-]*(\s+\p{Lu}[\p{L
 // Place/organization surface cues — words that mark a proper name as NOT a
 // person, so the animate-pronoun promotion below never turns a river or a firm
 // into a character.
-const _PLACE_ORG_CUE = /\b(street|st|road|rd|avenue|ave|lane|river|sea|ocean|bay|gulf|point|cape|harbou?r|island|isle|mount|mountain|valley|county|shire|city|town|village|company|corporation|commission|board|department|office|firm|llc|inc|ltd|co|university|college|school|hospital|church|park|square|hall|palace|castle|bridge|station|hotel|club|society|association|league|union|party|court|bank|press|times|gazette|journal|ministry|bureau|agency|institute|foundation)\b/i;
+// PLACE_ORG_CUE_RE is built from the place_org_cues convention (see rebuildLangSets).
 // A proper-name surface that plausibly names a PERSON: capitalized, one to
 // three tokens, no digits, no place/org cue, not document chrome. Used only to
 // decide whether an animate pronoun may bind-and-promote a `thing` — never to
 // type on its own.
 function looksLikePerson(name) {
   const t = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
-  if (!t || /\d/.test(t) || _PLACE_ORG_CUE.test(t)) return false;
+  if (!t || /\d/.test(t) || PLACE_ORG_CUE_RE.test(t)) return false;
   if (!looksProper(t)) return false;
   const words = t.split(/\s+/);
   return words.length >= 1 && words.length <= 3;
@@ -4710,11 +4755,7 @@ function projectGraph(events, frame = {}) {
   // the entity "Speaker 2" and hijacks a meta-conversational turn onto the
   // page: one phantom referent corrupting the ROUTER, not just the answer.
   // Only the full label ("speaker 2") matches; part-matching skips these heads.
-  const GENERIC_VOICE_HEADS = new Set([
-    'speaker','voice','interviewer','interviewee','moderator','participant',
-    'panelist','operator','announcer','narrator','caller','host','guest',
-    'male','female','unknown','unidentified','audience','translator','interpreter',
-  ]);
+  // GENERIC_VOICE_HEADS is the generic_voice_heads convention (see rebuildLangSets).
   function namesEntity(doc, q) {
     if (!doc || doc.kind !== 'prose') return false;
     // Strip possessive 's first ("edith's" → "edith") so an entity named in a
@@ -4968,13 +5009,63 @@ function projectGraph(events, frame = {}) {
   // The mechanical EVA. Accepts or rejects a SIGNIFICANCE draft with no LLM —
   // checks for machinery leaks, index/citation leaks, ontological framing,
   // invented names, and length. Returns { ok, reasons }.
+  /* ---------- conventions hydration: EVA failures write memory ----------
+     A vetoed draft is not just rejected — it is an OBSERVATION about how this
+     model fails in this register. Every failure becomes a REC record (the
+     hydration payload, one JSONL line shaped for memory/conventions.jsonl,
+     carrying the register affinity it was observed in); a term that fails
+     TWICE is admitted into eva_veto_lexicon through the ledger — a contextual
+     neuron: it feeds the veto (check 1b) and the retry prompt from then on.
+     The engine never touches the network; a host may set
+     EOEngine.onConventionsRec = (rec) => … to ship records out (e.g. the
+     append webhook that writes memory/conventions.jsonl). */
+  const CONVENTIONS_DELTA = [];
+  const EVA_TALLY = new Map();
+  function noteEvaFailure(reasons, ctx = {}) {
+    for (const r of (reasons || [])) {
+      if (r.startsWith('learned-veto:')) continue;        // already a neuron — don't re-learn it
+      const m = /^invented-name:(.+)$/.exec(r);
+      const term = m ? m[1] : null;
+      const key = (ctx.lang || 'en') + '|' + (term ? 'term:' + term.toLowerCase() : 'reason:' + r);
+      const n = (EVA_TALLY.get(key) || 0) + 1;
+      EVA_TALLY.set(key, n);
+      const rec = {
+        op: 'REC', target: 'core:eva_veto_lexicon', action: 'eva-veto',
+        value: { reason: m ? 'invented-name' : r, term, sightings: n },
+        affinity: { lang: ctx.lang || 'en', genre: ctx.genre || null },
+        at: Date.now(),
+      };
+      if (term && n === 2) {
+        // two sightings — the same admission law every induced rule obeys
+        ledgerCommit({ target: 'rule:eva_veto_lexicon', action: 'add-token', bucket: 'core',
+          value: term, mass: n, basis: { eva_failures: n }, src: 'eva-induction' });
+        rec.admitted = true;
+      }
+      CONVENTIONS_DELTA.push(rec);
+      try {
+        const hook = (typeof window !== 'undefined' && window.EOEngine && window.EOEngine.onConventionsRec);
+        if (typeof hook === 'function') hook(rec);
+      } catch (e) { /* a hook failure never blocks the reading */ }
+    }
+  }
+  function conventionsDelta() { return CONVENTIONS_DELTA.slice(); }
+  function serializeConventionsDelta() { return CONVENTIONS_DELTA.map(r => JSON.stringify(r)).join('\n'); }
+
   function evaDraft(draft, p, sentenceTexts) {
     const reasons = [];
     const text = String(draft == null ? '' : draft);
 
-    // Check 1: no machinery vocabulary leaked in.
-    const banned = /\b(mass|momentum|gravity|coupling|frame|rules_rev|NUL|SIG|INS|SEG|CON|SYN|DEF|EVA|REC)\b/i;
-    if (banned.test(text)) reasons.push('machinery-leak');
+    // Check 1: no machinery vocabulary leaked in (the eva_machinery_terms
+    // convention — revisable like any other).
+    if (EVA_MACHINERY_RE.test(text)) reasons.push('machinery-leak');
+    // Check 1b: the LEARNED veto — terms admitted from this model's own
+    // repeated failures (contextual neurons). Empty until failures teach it.
+    if (EVA_VETO_TERMS && EVA_VETO_TERMS.size) {
+      const lowerText = text.toLowerCase();
+      for (const t of EVA_VETO_TERMS) {
+        if (t && lowerText.includes(String(t).toLowerCase())) reasons.push('learned-veto:' + t);
+      }
+    }
 
     // Check 2: no citation tokens or sentence indices.
     if (/\{\{|\[s\d+\]|\bs\d+\b/.test(text)) reasons.push('index-leak');
@@ -5152,15 +5243,21 @@ function projectGraph(events, frame = {}) {
     let body = null;
     const llm = typeof opts.llm === 'function' ? opts.llm : null;
     if (llm) {
-      let sys = system;
+      // Learned veto terms (contextual neurons from past failures) steer the
+      // FIRST draft, not just the retry — hydration pays forward.
+      const learned = EVA_VETO_TERMS && EVA_VETO_TERMS.size
+        ? ' Never write these words: ' + [...EVA_VETO_TERMS].slice(0, 8).join(', ') + '.' : '';
+      let sys = system + learned;
       for (let attempt = 0; attempt < 2 && body == null; attempt++) {
         let draft = '';
         try { draft = String((await llm(sys, user)) || '').trim(); } catch (e) { draft = ''; }
         if (!draft) break;
         const eva = evaDraft(draft, p, sentenceTexts);
         if (eva.ok) { body = draft; break; }
+        // a veto is an observation — it writes memory (REC + possible neuron)
+        noteEvaFailure(eva.reasons, { lang: doc._lang, genre: doc._genre });
         // Sharpen the system prompt with the rejection reasons and retry once.
-        sys = system + ' Your previous draft was rejected (' + eva.reasons.join(', ')
+        sys = system + learned + ' Your previous draft was rejected (' + eva.reasons.join(', ')
           + '); this time use only epistemic framing, no machinery words, no '
           + 'sentence numbers, and only names that appear in the passages above.';
       }
@@ -6663,6 +6760,10 @@ function projectGraph(events, frame = {}) {
     // the semantics graph (conventions.jsonl): human-language conventions as an
     // eo-operation log, projected like any other event log
     loadConventions, projectConventions, _conventionsExport,
+    // EVA failures hydrate the conventions: the session's REC records,
+    // JSONL-shaped and append-ready for memory/conventions.jsonl. A host may
+    // set EOEngine.onConventionsRec = (rec) => … to ship each one out.
+    conventionsDelta, serializeConventionsDelta,
     // read-only: the induced speech-verb class + accrued mass (learning record)
     _learnedVerbs: learnedVerbs, learnedVerbsByLang,
     // persistence: serialize/restore the learned ledger delta (host stores it)

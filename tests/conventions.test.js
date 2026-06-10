@@ -1,5 +1,5 @@
 /* ============================================================
-   tests/conventions.test.js — the conventions graph (conventions.jsonl).
+   tests/conventions.test.js — the conventions graph (memory/conventions.jsonl).
 
    Three contracts:
      1. WELL-FORMED — every line parses; ops are eo vocabulary; seq is
@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { loadEngine } = require('../evo/engine-host');
 
-const FILE = path.join(__dirname, '..', 'conventions.jsonl');
+const FILE = path.join(__dirname, '..', 'memory', 'conventions.jsonl');
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -90,6 +90,44 @@ async function main() {
     const E2 = loadEngine().EOEngine;
     const junk = E2.loadConventions('not json\n{"op":"INS"\n42\n');
     ok(junk.applied === 0 && junk.packApplied === 0, 'a garbled file applies nothing and never throws (fallback to seeds)');
+  });
+
+  await group('hydration — eva failures write conventions (contextual neurons)', async () => {
+    const E = loadEngine().EOEngine;
+    const doc = await E.parseDocument('h.txt',
+      'The Inheritance\n\n"Your uncle\'s estate is smaller," said Calloway. "There are debts," said Calloway. Harriet poured the tea and considered the lawn. Harriet had expected as much.', 'h');
+    // a draft that fails ONLY on an invented name, twice (first + retry)
+    const badDraft = 'The reading returns to Blorvax most often. The piece holds its weight there. The reading stays close to the page.';
+    await E.talkerPortrait(doc, { llm: () => badDraft });
+    const delta = E.conventionsDelta();
+    ok(delta.length >= 2, 'each veto wrote a REC (' + delta.length + ' records)');
+    ok(delta.some(r => r.admitted && r.value.term === 'Blorvax'), 'second sighting admitted the term (a neuron formed)');
+    ok(delta.every(r => r.op === 'REC' && r.target === 'core:eva_veto_lexicon'), 'records are conventions-shaped RECs');
+    // the neuron has MECHANICAL impact: the veto now catches the term cold
+    const eva = E.evaDraft('A fine paragraph about Blorvax and the weather.', { heavy: [], tail: [] }, []);
+    ok(eva.reasons.some(r => r === 'learned-veto:Blorvax'), 'evaDraft now vetoes the learned term');
+    // and the hydration round-trips through the FILE: a fresh engine fed the
+    // base graph + this session\'s delta lines learns the same neuron
+    const E2 = loadEngine().EOEngine;
+    E2.loadConventions(text + '\n' + E.serializeConventionsDelta());
+    const eva2 = E2.evaDraft('More about Blorvax.', { heavy: [], tail: [] }, []);
+    ok(eva2.reasons.some(r => r === 'learned-veto:Blorvax'), 'appended REC lines hydrate a fresh engine identically');
+  });
+
+  await group('linkage — conventions are linked assertions', async () => {
+    const records = text.split(/\r?\n/).filter(Boolean).map(l => JSON.parse(l));
+    const nodeIds = new Set(records.filter(r => r.op === 'INS' && r.id).map(r => r.id));
+    const links = records.filter(r => r.op === 'SYN' && r.v !== 'member-of');
+    ok(links.length >= 20, 'the linkage layer exists (' + links.length + ' edges)');
+    const dangling = links.filter(l => !nodeIds.has(l.s) && !nodeIds.has(l.o) ? true : (!nodeIds.has(l.s) || !nodeIds.has(l.o)));
+    eq(dangling.length, 0, 'every linkage edge connects declared nodes');
+    ok(records.some(r => r.op === 'INS' && r.kind === 'mechanism'), 'universal mechanisms are nodes the conventions link to');
+    ok(records.filter(r => r.op === 'INS' && r.kind === 'convention').every(r => r.epistemic === 'assertion' && r.revisable === true),
+      'every convention is marked an assertion: contextual and revisable');
+    // the hydration cycle is drawn in the graph itself
+    ok(links.some(l => l.s === 'mechanics:eva-veto' && l.o === 'core:eva_veto_lexicon')
+      && links.some(l => l.s === 'core:eva_veto_lexicon' && l.o === 'mechanics:eva-veto'),
+      'the eva→lexicon→eva hydration cycle is in the graph');
   });
 
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

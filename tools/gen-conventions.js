@@ -8,20 +8,21 @@
    can be (re)derived from the seeds during the migration period;
    tests/conventions.test.js proves file ≡ seeds either way. Run:
 
-     node tools/gen-conventions.js          # rewrites ./conventions.jsonl
+     node tools/gen-conventions.js          # rewrites ./memory/conventions.jsonl
    ============================================================ */
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const { loadEngine } = require('../evo/engine-host');
 
-const OUT = path.join(__dirname, '..', 'conventions.jsonl');
+const OUT = path.join(__dirname, '..', 'memory', 'conventions.jsonl');
 
 // Affinity text per module: what kinds of CONTENT these conventions belong
 // to. The embedder hook — at runtime an embedding score between a document
 // and this text can pick the register, the same way the engine already
 // detects language by script.
 const MODULE_AFFINITY = {
+  core: 'Register-agnostic production guards: document apparatus, discourse formulas, machinery vocabulary. Apply to every register until a module overrides per-bucket.',
   'en-narrative-v1': '19th and early-20th century English narrative prose: novels, short fiction, literary translation. Gendered third-person pronouns; "they" is plural; titled forms of address (Mr., Princess); quoted dialogue with said-attribution.',
   'es-narrative-v1': 'Spanish narrative prose: raya (—) dialogue with mid-quote attribution, guillemets, gendered articles, don/doña as lowercase name heads.',
   'zh-narrative-v1': 'Chinese narrative prose: no case, no whitespace; names as repeated character sequences; colon-quote speech (说：「…」).',
@@ -66,7 +67,7 @@ const EN_WORD_PROPS = {
 
   emit({
     op: 'REC', target: 'semantics', action: 'charter',
-    value: 'The mechanics are universal; everything human-language-specific is a convention, and no inventory is more real than another — you, y\'all, ella, vous, 她 are equal citizens. This file is the append-only graph of those conventions, related through eo operations: INS instantiates a module or a convention, SYN member-of edges carry inventories (seq order is list order), DEF carries properties and structured values, REC records the register laws. The engine projects it like any other event log (projectSemantics) and falls back to its seeds when the file is absent.',
+    value: 'The mechanics are universal; everything human-language-specific is a convention, and no inventory is more real than another — you, y\'all, ella, vous, 她 are equal citizens. Every convention here is an ASSERTION — contextual and revisable, never a fact: what this reader currently takes a class of surfaces to mean, in the registers its affinity names. Conventions are LINKED, not flat (a rule may qualify, except, subset, or feed another — i before e, except after c), and the graph HYDRATES: a vetoed model draft appends a REC; a term that fails twice becomes a contextual neuron in eva_veto_lexicon. This file is the append-only graph of those conventions, related through eo operations: INS instantiates a module or a convention, SYN member-of edges carry inventories (seq order is list order), DEF carries properties and structured values, REC records the register laws. The engine projects it like any other event log (projectSemantics) and falls back to its seeds when the file is absent.',
   });
 
   // structured values (everything that isn't a plain membership list)
@@ -82,6 +83,13 @@ const EN_WORD_PROPS = {
       emit({ op: 'DEF', kind: 'module-prop', module: modId, target: modId, path: p, value: v });
     }
     for (const [rule, value] of Object.entries(mod.conventions)) {
+      // grown-not-seeded inventories never carry a value DEF — a seeded empty
+      // list would WIPE the learned terms on load
+      if (rule === 'eva_veto_lexicon') {
+        emit({ op: 'INS', kind: 'convention', id: modId + ':' + rule, rule, module: modId, epistemic: 'assertion', revisable: true });
+        emit({ op: 'REC', target: modId + ':' + rule, action: 'induced-not-seeded', value: 'Grown from EVA failures at read time: every vetoed draft appends a REC here (with register affinity); a term failing twice is admitted — a contextual neuron that feeds the veto and the retry prompt.' });
+        continue;
+      }
       if (rule === 'attribution_verbs') {
         // induced, never seeded: the inventory is empty by design and grows by
         // REC at read time. Record the convention node and the law, no members.
@@ -93,6 +101,7 @@ const EN_WORD_PROPS = {
       emit({
         op: 'INS', kind: 'convention', id, rule, module: modId,
         affinity: CONVENTION_AFFINITY[rule] || null,
+        epistemic: 'assertion', revisable: true,
       });
       if (STRUCTURED.has(rule) || !Array.isArray(value) || value.length === 0) {
         // structured values, booleans, and EMPTY inventories (a convention this
@@ -122,6 +131,43 @@ const EN_WORD_PROPS = {
     op: 'REC', target: 'en-narrative-v1:role_clause_verbs', action: 'register-law',
     value: 'Journalism states roles relationally ("the same person who runs the DMC") where fiction uses appositives; the naming bridge distills these clauses into role DEFs so a role question can be answered from the graph.',
   });
+
+  // ── the linkage layer: conventions are LINKED, not flat lists ──
+  // "i before e except after c": a convention may qualify, except, subset, or
+  // feed another — or a universal mechanism. The mechanisms are INS'd as
+  // nodes so the edges have somewhere to land; they are the engine's
+  // universal machinery, named but never defined here (the code defines them).
+  for (const m of ['admission', 'sentence-boundary', 'attribution', 'pronoun-resolution',
+    'person-promotion', 'naming-bridge', 'eva-veto', 'routing']) {
+    emit({ op: 'INS', kind: 'mechanism', id: 'mechanics:' + m, target: m });
+  }
+  const EN = 'en-narrative-v1:';
+  const link = (s, v, o) => emit({ op: 'SYN', s, v, o, kind: 'link' });
+  for (const sub of ['anaphor_pronouns', 'person_pronouns', 'nonperson_pronouns', 'female_pronouns', 'male_pronouns', 'neutral_person_pronouns'])
+    link(EN + sub, 'subset-of', EN + 'pronouns');
+  link(EN + 'female_titles', 'unions-into', EN + 'title_tokens');
+  link(EN + 'male_titles', 'unions-into', EN + 'title_tokens');
+  link(EN + 'singular_they', 'qualifies', EN + 'neutral_person_pronouns');
+  link(EN + 'sentence_abbreviations', 'excepts', 'mechanics:sentence-boundary');
+  link(EN + 'quote_pairs', 'feeds', 'mechanics:sentence-boundary');
+  link(EN + 'quote_pairs', 'feeds', 'mechanics:attribution');
+  link(EN + 'continuation_inheritance', 'qualifies', 'mechanics:attribution');
+  link(EN + 'attribution_patterns', 'feeds', 'mechanics:attribution');
+  link(EN + 'lowercase_evidence_disqualify', 'qualifies', 'mechanics:admission');
+  link(EN + 'pronoun_lead_disqualify', 'qualifies', 'mechanics:admission');
+  link(EN + 'prep_lead_disqualify', 'qualifies', 'mechanics:admission');
+  link(EN + 'role_clause_verbs', 'feeds', 'mechanics:naming-bridge');
+  link(EN + 'role_title_heads', 'feeds', 'mechanics:naming-bridge');
+  link(EN + 'role_title_prefixes', 'qualifies', EN + 'role_title_heads');
+  link('core:discourse_junk', 'qualifies', 'mechanics:admission');
+  link('core:structure_labels', 'qualifies', 'mechanics:admission');
+  link('core:transcript_formula', 'excepts', 'mechanics:admission');
+  link('core:place_org_cues', 'excepts', 'mechanics:person-promotion');
+  link('core:generic_voice_heads', 'excepts', 'mechanics:routing');
+  link('core:eva_machinery_terms', 'feeds', 'mechanics:eva-veto');
+  // the hydration CYCLE: failures feed the lexicon; the lexicon feeds the veto
+  link('mechanics:eva-veto', 'feeds', 'core:eva_veto_lexicon');
+  link('core:eva_veto_lexicon', 'feeds', 'mechanics:eva-veto');
 
   fs.writeFileSync(OUT, lines.join('\n') + '\n');
   console.log('wrote ' + OUT + ' — ' + lines.length + ' records (' + seq + ' ops)');
