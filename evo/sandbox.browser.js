@@ -202,7 +202,9 @@
   async function evaluate({ pivotSrc, engineSrc, edits, nlp, data, baseline, cfg }) {
     const rendered = PATCH.renderEdits(engineSrc, edits);
     if (!rendered.ok) return { state: 'rejected-by-allowlist', surface: false, rejected: rendered.rejected, note: rendered.rejected.map(r => r.reason).join('; ') };
-    const E = loadCandidate(pivotSrc, rendered.newSource, nlp);
+    let E;
+    try { E = loadCandidate(pivotSrc, rendered.newSource, nlp); }
+    catch (e) { return { state: 'broken', surface: false, diff: rendered.diff, note: 'candidate engine failed to load: ' + String(e.message || e) }; }
     const quality = await scoreQuality(E, data);
     const parity = await runParity(E, data);
     const qualityDelta = quality.composite - baseline.composite;
