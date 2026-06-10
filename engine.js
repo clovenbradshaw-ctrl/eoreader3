@@ -1154,6 +1154,27 @@ function tryAdmit(surface, isPropNoun, tentatives, lowerVocab) {
   return next >= 2;
 }
 
+/* Role clauses inside a naming-bridge description. Two shapes:
+   a title-of phrase ("president of the partnership"), and relative clauses
+   headed by a role verb ("who runs the DMC", "who heads the council").
+   Conservative verb list — actions that constitute holding a position, not
+   one-off acts — so the role DEF says what the person IS, in the page's own
+   words. Returns up to three distinct clauses, in page order. */
+const ROLE_CLAUSE_VERB = /^(?:runs?|running|leads?|leading|heads?|heading|chairs?|chairing|manages?|managing|directs?|directing|oversees?|overseeing|owns?|owning|operates?|operating|founded|co-founded|controls?|controlling|commands?|commanding|supervises?|supervising)\b/i;
+const TITLE_OF_RE = /\b((?:former\s+|interim\s+|acting\s+|deputy\s+)?(?:president|vice[- ]president|ceo|cfo|coo|cto|chief\s+\p{L}+(?:\s+officer)?|chair(?:man|woman|person)?|executive\s+director|managing\s+(?:director|partner)|general\s+manager|director|head|founder|co-founder|owner|commissioner|superintendent)\s+of\s+[^,;.]+)/iu;
+function rolesFromDescription(desc) {
+  const t = String(desc || '');
+  const out = [];
+  const tm = t.match(TITLE_OF_RE);
+  if (tm) out.push(tm[1].trim());
+  // each relative clause: who/that/which [then|also|now|still] VERB …
+  for (let c of t.split(/\s+(?:and\s+)?(?:who|whom|that|which)\s+/i).slice(1)) {
+    c = c.replace(/^(?:then|also|now|still|first|later|currently)\s+/i, '').replace(/[\s,;:]+$/, '').trim();
+    if (ROLE_CLAUSE_VERB.test(c)) out.push(c);
+  }
+  return [...new Set(out)].slice(0, 3);
+}
+
 // Strip noise off a candidate entity surface:
 //   - trailing punctuation (curly quotes, ellipses, commas)
 //   - leading adverbial heads ("When Michael" → "Michael")
@@ -2452,6 +2473,24 @@ async function extractEoGraph(text, onProgress) {
               sentence_idx: srcSent,
               src: 'naming-bridge',
             });
+            // The description often carries the person's ROLE relationally —
+            // "the same person who runs the DMC and who then hires his own
+            // firm" — rather than as a copular title ("Tom Turner is the
+            // president of NDP"). A reader gets the job from that; a query
+            // for it ("what is Tom Turner's job?") gets nothing, because no
+            // role-shaped assertion exists to retrieve against. Distill the
+            // role clauses into a second DEF alongside the class gloss.
+            const roles = rolesFromDescription(desc);
+            if (roles.length) {
+              events.push({
+                id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
+                target: name, path: 'role', value: roles.join('; '),
+                targetHint: { key: nameKey, name: site.name, referent_id: site.referent_id },
+                naming_sentence: i,
+                sentence_idx: srcSent,
+                src: 'naming-bridge',
+              });
+            }
           }
         }
       }
@@ -4391,7 +4430,11 @@ function projectGraph(events, frame = {}) {
   function hasGround(doc, q) {
     if (!doc || doc.kind !== 'prose') return true;
     if (classifyIntent(q) !== 'factual') return true;
-    return retrieve(doc, q, 6).length > 0 || !!voidTerm(doc, q);
+    if (retrieve(doc, q, 6).length > 0 || !!voidTerm(doc, q)) return true;
+    // The graph may hold evidence about a named referent that lexical
+    // retrieval can't reach (assertions on sentences that never carry the
+    // name) — that evidence IS ground.
+    try { return entityEvidence(doc, q).length > 0; } catch (e) { return false; }
   }
 
   /* Does this turn seem to be ABOUT the loaded document? This is the only
@@ -4991,6 +5034,15 @@ function projectGraph(events, frame = {}) {
       };
     }
     const hits = retrieve(doc, query, 4);
+    // The graph's evidence for named referents joins retrieval here too — the
+    // mechanical answer must not parrot a contentless naming line when the
+    // page's assertion about the name sits one sentence away.
+    {
+      const have = new Set(hits.map(h => h.i));
+      for (const s of entityEvidence(doc, query)) {
+        if (!have.has(s.i)) hits.push({ i: s.i, t: s.t, score: 0.5, overlap: 1 });
+      }
+    }
     if (!hits.length) return {
       text: 'I read the document for that and didn’t find a passage that answers it cleanly, so I’d rather hold than guess. Try naming a person, place, or phrase from the text.',
       audit: { status: 'notes', grounded: true, covers: '0/1', stable: true, note: 'Held rather than invented — the page wouldn’t carry an answer.' },
@@ -5234,13 +5286,20 @@ function projectGraph(events, frame = {}) {
     return answerProse(doc, query, opts);
   }
 
-  /* retrieval context for the optional LLM path — intent-aware */
+  /* retrieval context for the optional LLM path — intent-aware. For a
+     factual ask, the graph's own evidence for any NAMED referent joins the
+     retrieved passages (deduped), so an assertion recorded about the name in
+     a sentence that never carries the name still reaches the model. */
   function context(doc, query, k = 6) {
     if (!doc || doc.kind === 'table') return '';
     const intent = classifyIntent(query);
     if (intent === 'summary') return salientContext(doc);
     if (intent === 'who') return entityContext(doc);
-    return retrieve(doc, query, k).map(s => `[s${s.i}] ${s.t}`).join('\n');
+    const hits = retrieve(doc, query, k);
+    const have = new Set(hits.map(h => h.i));
+    const lines = hits.map(s => `[s${s.i}] ${s.t}`);
+    for (const s of entityEvidence(doc, query)) if (!have.has(s.i)) lines.push(`[s${s.i}] ${s.t}`);
+    return lines.join('\n');
   }
   /* ---------- splitting a draft into claim-sentences ----------
      The naive [.!?] split cuts "Mr. Steven Watts" after "Mr." — each fragment
@@ -5548,7 +5607,7 @@ function projectGraph(events, frame = {}) {
     const { entities } = projectEntities(doc);
     const out = [], seen = new Set();
     for (const ev of doc._events) {
-      if (ev.op !== 'DEF' || ev.path !== 'class' || !ev.value || !ev.target) continue;
+      if (ev.op !== 'DEF' || (ev.path !== 'class' && ev.path !== 'role') || !ev.value || !ev.target) continue;
       if (_TRANSMUTE_SRC.has(ev.src)) continue;
       // a pronoun subject only counts through its resolved binding — an
       // unbound "He is …" is not an assertion ABOUT anyone
@@ -5564,7 +5623,7 @@ function projectGraph(events, frame = {}) {
       const dedupe = (ent ? ent.key : k) + '|' + normSurface(String(ev.value));
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);
-      out.push({ subject, key: ent ? ent.key : k, is: String(ev.value).trim(),
+      out.push({ subject, key: ent ? ent.key : k, is: String(ev.value).trim(), path: ev.path,
                  sent: ev.sentence_idx != null ? ev.sentence_idx : null });
     }
     return out;
@@ -5573,15 +5632,16 @@ function projectGraph(events, frame = {}) {
   // Walk the graph out from the entities the question names. Returns null when
   // the question names nothing the page carries (nothing to walk — the caller
   // keeps its retrieval-only path). hops: how far the dial lets the walk go.
-  function traverseGraph(doc, query, hops = 1) {
-    if (!doc || doc.kind !== 'prose' || !doc._events || !(hops > 0)) return null;
-    const { entities } = projectEntities(doc);
-    if (!entities.length) return null;
-    // Entry nodes: entities the question names (same matching namesEntity
-    // uses — full name, or a ≥4-char non-generic part of a multi-word name,
-    // possessives stripped), i.e. the matter referents resolved onto the graph.
+  // Entities the question names (same matching namesEntity uses — full name,
+  // or a ≥4-char non-generic part of a multi-word name, possessives stripped):
+  // the matter referents resolved onto the graph. Shared by the graph walk
+  // (entry nodes) and the depth-1 evidence join (entityEvidence).
+  function namedEntitiesIn(doc, query) {
+    if (!doc || doc.kind !== 'prose' || !doc._events) return [];
+    let entities = [];
+    try { entities = projectEntities(doc).entities || []; } catch (e) { return []; }
     const ql = ' ' + String(query).toLowerCase().replace(/['’]s\b/g, '').replace(/[^\p{L}\p{N}'’\- ]+/gu, ' ').replace(/\s+/g, ' ') + ' ';
-    const entries = [];
+    const named = [];
     for (const e of entities) {
       const n = String(e.name).toLowerCase();
       let hit = n.length >= 3 && ql.includes(' ' + n + ' ');
@@ -5589,8 +5649,41 @@ function projectGraph(events, frame = {}) {
         const parts = n.split(/\s+/);
         hit = parts.length > 1 && parts.some(p => p.length >= 4 && !GENERIC_VOICE_HEADS.has(p) && ql.includes(' ' + p + ' '));
       }
-      if (hit) entries.push(e);
+      if (hit) named.push(e);
     }
+    return named;
+  }
+
+  /* The graph's own evidence for the referents a question names: the
+     sentences its DEF assertions sit on, plus each named entity's first
+     anchor sentences. The depth-1 analogue of the graph walk's entry nodes —
+     no traversal, just what the page is recorded as holding ABOUT the name.
+     Exists because lexical retrieval can't reach an assertion whose sentence
+     never carries the name (the naming-bridge case: "…created by the same
+     person who runs the DMC. That person is Tom Turner." — a question about
+     Tom Turner's job retrieves only the naming line). */
+  function entityEvidence(doc, query, cap = 4) {
+    const named = namedEntitiesIn(doc, query);
+    if (!named.length) return [];
+    const namedKeys = new Set(named.map(e => e.key));
+    let defs = [];
+    try { defs = assertionsOf(doc); } catch (e) {}
+    const texts = doc.sentenceTexts || [];
+    const picks = new Set();
+    const take = (i) => { if (i != null && i >= 0 && i < texts.length) picks.add(i); };
+    for (const d of defs) {
+      if (namedKeys.has(d.key) || (d.key.length >= 4 && [...namedKeys].some(k => _keyWithin(k, d.key) || _keyWithin(d.key, k))))
+        take(d.sent);
+    }
+    for (const e of named) for (const i of (e.sents || []).slice(0, 2)) take(i);
+    return [...picks].sort((a, b) => a - b).slice(0, cap).map(i => ({ i, t: texts[i] }));
+  }
+
+  function traverseGraph(doc, query, hops = 1) {
+    if (!doc || doc.kind !== 'prose' || !doc._events || !(hops > 0)) return null;
+    const { entities } = projectEntities(doc);
+    if (!entities.length) return null;
+    const entries = namedEntitiesIn(doc, query);
     if (!entries.length) return null;
     let edges = [];
     try { edges = projectGraph(doc._events).edges || []; } catch (e) {}
@@ -5677,7 +5770,8 @@ function projectGraph(events, frame = {}) {
     for (const p of trav.perDoc) {
       const lines = [`- It turns on ${p.entries.join(', ')}.`];
       for (const a of p.assertions.slice(0, 4))
-        lines.push(`- The page asserts: ${a.subject} is ${a.is}` + (a.sent != null ? ` [${multi ? p.docId + ':' + a.sent : 's' + a.sent}]` : '') + '.');
+        // a role assertion is a verb phrase ("runs the DMC") — no copula
+        lines.push(`- The page asserts: ${a.subject} ${a.path === 'role' ? '' : 'is '}${a.is}` + (a.sent != null ? ` [${multi ? p.docId + ':' + a.sent : 's' + a.sent}]` : '') + '.');
       if (p.edges.length)
         lines.push('- Relations the page draws: ' + p.edges.slice(0, 4).map(e => `${e.a} ${e.verb || '—'} ${e.b}`).join('; ') + '.');
       if (p.walked.length)
@@ -6147,7 +6241,7 @@ function projectGraph(events, frame = {}) {
     // assertions/edges/evidence), the prompt as the graph speaking, and the
     // propositional veto (draft claims audited against DEF assertions)
     traverseGraph, traverseScope, readingContext, assertionsOf,
-    checkAssertions, checkAssertionsScope,
+    checkAssertions, checkAssertionsScope, entityEvidence,
     // CONFIRM/DENY: a proposition checked mechanically against the graph
     // (DEF assertions, SIG attribution slots, absence attested with ⊥ receipts),
     // and the abbreviation-aware draft splitter the binders/veto share
