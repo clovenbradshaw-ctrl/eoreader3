@@ -1593,7 +1593,20 @@ async function extractEoGraph(text, onProgress) {
           if (tail && (ABBREVIATIONS.has(tail[1].toLowerCase()) || nextIsNum)) { txt += ' ' + subs[++k].text(); merged = true; }
           else break;
         }
-        paraDocs.push(merged ? nlp(txt) : subs[k]);
+        // compromise ends a sentence on `. ` + capital but not on `." ` +
+        // capital — a sentence terminal sitting INSIDE a closing quote — so
+        // consecutive quoted sentences ("…cares." David Corman … "…Zone." The
+        // council …) collapse into one. That coarsens the momentum clock and,
+        // worse, cascades quote attribution across a speaker change (the
+        // second speaker's quote inherits the first). Split on that boundary:
+        // a terminal+closing-quote, whitespace, then an optional opening quote
+        // and a capital. Lowercase after (a trailing "…," he said.) is left
+        // joined, so attributions stay with their quote. ONE exception: a bare
+        // third-person pronoun after the boundary ("…besides." He watched her…)
+        // is trailing narration whose subject ATTRIBUTES the preceding bare
+        // quote — splitting it strands the quote, so keep those joined.
+        const pieces = txt.split(/(?<=[.!?][”"’'])\s+(?=[“"‘']?(?!(?:He|She|They|It)\b)\p{Lu})/u);
+        for (const piece of pieces) if (piece.trim()) paraDocs.push((merged || pieces.length > 1) ? nlp(piece) : subs[k]);
       }
     }
     for (const s of paraDocs) { sentenceDocs.push(s); sentParaSolo.push(paraDocs.length === 1); if (TRANSCRIPT) sentTurn.push(_turnIdx); }

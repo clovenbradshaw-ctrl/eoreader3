@@ -3,9 +3,9 @@
   "retrieve:who is in this story": [],
   "refDoc:who is in this story": true,
   "hasGround:who is in this story": true,
-  "context:who is in this story": "[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.\n[s11] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.\n[s0] The Lamp at Voss Point\n[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing.",
+  "context:who is in this story": "[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.\n[s12] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.\n[s0] The Lamp at Voss Point\n[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\"",
   "answer:who is in this story": {
-   "text": "The figures who appear most often: Edith (12) {{cite:voss:1:s1}}, Marlow (2) {{cite:voss:11:s11}}, Sefton (1) {{cite:voss:3:s3}}, Harrow (1) {{cite:voss:9:s9}}.",
+   "text": "The figures who appear most often: Edith (12) {{cite:voss:1:s1}}, Marlow (2) {{cite:voss:12:s12}}, Sefton (1) {{cite:voss:3:s3}}, Harrow (1) {{cite:voss:9:s9}}.",
    "audit": {
     "status": "clean",
     "grounded": true,
@@ -20,7 +20,7 @@
     },
     {
      "docId": "voss",
-     "idx": 11
+     "idx": 12
     },
     {
      "docId": "voss",
@@ -36,9 +36,9 @@
   "retrieve:summarize this": [],
   "refDoc:summarize this": true,
   "hasGround:summarize this": true,
-  "context:summarize this": "What the reading came to rest on: Edith, Marlow, Voss Point, Sefton, Harrow.\n\n[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.\n[s2] She set the kettle down and listened.\n[s4] \"You cannot row to the mainland tonight,\" the keeper said.\n[s6] \"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did.\n[s8] \"He will still be there in the morning,\" she said.\n[s10] By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp.\n[s11] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.",
+  "context:summarize this": "What the reading came to rest on: Edith, Marlow, Voss Point, Sefton, Harrow.\n\n[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.\n[s2] She set the kettle down and listened.\n[s4] \"You cannot row to the mainland tonight,\" the keeper said.\n[s6] \"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did.\n[s8] \"He will still be there in the morning,\" she said.\n[s10] The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing.\n[s11] By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp.\n[s12] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.",
   "answer:summarize this": {
-   "text": "This document turns most on Edith {{cite:voss:1:s1}}, Marlow {{cite:voss:11:s11}}, Voss Point {{cite:voss:0:s0}}, Sefton {{cite:voss:3:s3}} and Harrow {{cite:voss:9:s9}}. The relations it draws: Edith thought Marlow.",
+   "text": "This document turns most on Edith {{cite:voss:1:s1}}, Marlow {{cite:voss:12:s12}}, Voss Point {{cite:voss:0:s0}}, Sefton {{cite:voss:3:s3}} and Harrow {{cite:voss:9:s9}}. The relations it draws: Edith thought Marlow.",
    "audit": {
     "status": "clean",
     "grounded": true,
@@ -53,7 +53,7 @@
     },
     {
      "docId": "voss",
-     "idx": 11
+     "idx": 12
     },
     {
      "docId": "voss",
@@ -77,21 +77,26 @@
     "overlap": 2
    },
    {
-    "i": 9,
-    "score": 0.458831,
-    "overlap": 2
-   },
-   {
     "i": 4,
     "score": 0.408248,
+    "overlap": 1
+   },
+   {
+    "i": 9,
+    "score": 0.333333,
+    "overlap": 1
+   },
+   {
+    "i": 10,
+    "score": 0.301511,
     "overlap": 1
    }
   ],
   "refDoc:what did the keeper say about the boat": true,
   "hasGround:what did the keeper say about the boat": true,
-  "context:what did the keeper say about the boat": "[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing.\n[s4] \"You cannot row to the mainland tonight,\" the keeper said.",
+  "context:what did the keeper say about the boat": "[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.\n[s4] \"You cannot row to the mainland tonight,\" the keeper said.\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\"\n[s10] The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing.",
   "answer:what did the keeper say about the boat": {
-   "text": "Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat. {{cite:voss:3:s3}} \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing. {{cite:voss:9:s9}} \"You cannot row to the mainland tonight,\" the keeper said. {{cite:voss:4:s4}}",
+   "text": "Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat. {{cite:voss:3:s3}} \"You cannot row to the mainland tonight,\" the keeper said. {{cite:voss:4:s4}}",
    "audit": {
     "status": "clean",
     "grounded": true,
@@ -103,10 +108,6 @@
     {
      "docId": "voss",
      "idx": 3
-    },
-    {
-     "docId": "voss",
-     "idx": 9
     },
     {
      "docId": "voss",
@@ -122,16 +123,16 @@
     "overlap": 1
    },
    {
-    "i": 11,
+    "i": 12,
     "score": 0.333333,
     "overlap": 1
    }
   ],
   "refDoc:what does Marlow want": true,
   "hasGround:what does Marlow want": true,
-  "context:what does Marlow want": "[s6] \"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did.\n[s11] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.",
+  "context:what does Marlow want": "[s6] \"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did.\n[s12] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.",
   "answer:what does Marlow want": {
-   "text": "\"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did. {{cite:voss:6:s6}} Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own. {{cite:voss:11:s11}}",
+   "text": "\"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did. {{cite:voss:6:s6}} Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own. {{cite:voss:12:s12}}",
    "audit": {
     "status": "notes",
     "grounded": true,
@@ -146,7 +147,7 @@
     },
     {
      "docId": "voss",
-     "idx": 11
+     "idx": 12
     }
    ]
   },
@@ -163,7 +164,12 @@
     "overlap": 1
    },
    {
-    "i": 11,
+    "i": 9,
+    "score": 0.333333,
+    "overlap": 1
+   },
+   {
+    "i": 12,
     "score": 0.333333,
     "overlap": 1
    },
@@ -171,16 +177,11 @@
     "i": 3,
     "score": 0.316228,
     "overlap": 1
-   },
-   {
-    "i": 9,
-    "score": 0.229416,
-    "overlap": 1
    }
   ],
   "refDoc:boat to the mainland": false,
   "hasGround:boat to the mainland": true,
-  "context:boat to the mainland": "[s4] \"You cannot row to the mainland tonight,\" the keeper said.\n[s6] \"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did.\n[s11] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.\n[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing.",
+  "context:boat to the mainland": "[s4] \"You cannot row to the mainland tonight,\" the keeper said.\n[s6] \"Marlow is on the mainland,\" Sefton answered, \"and Marlow is expecting me.\" He said it as though that settled the matter, which, to Sefton, it did.\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\"\n[s12] Edith thought about Marlow, whom she had never met, waiting on the mainland with a lantern of his own.\n[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.",
   "answer:boat to the mainland": {
    "text": "\"You cannot row to the mainland tonight,\" the keeper said. {{cite:voss:4:s4}}",
    "audit": {
@@ -200,7 +201,7 @@
   "invented:boat to the mainland": [],
   "retrieve:the storm on the seaward side": [
    {
-    "i": 10,
+    "i": 11,
     "score": 0.603023,
     "overlap": 2
    },
@@ -212,9 +213,9 @@
   ],
   "refDoc:the storm on the seaward side": true,
   "hasGround:the storm on the seaward side": true,
-  "context:the storm on the seaward side": "[s10] By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp.\n[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.",
+  "context:the storm on the seaward side": "[s11] By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp.\n[s1] The storm had been promising itself all afternoon, and by the time Edith reached the head of the stairs it had stopped pretending.",
   "answer:the storm on the seaward side": {
-   "text": "By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp. {{cite:voss:10:s10}}",
+   "text": "By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp. {{cite:voss:11:s11}}",
    "audit": {
     "status": "notes",
     "grounded": true,
@@ -225,7 +226,7 @@
    "cites": [
     {
      "docId": "voss",
-     "idx": 10
+     "idx": 11
     }
    ]
   },
@@ -288,15 +289,15 @@
    },
    {
     "i": 9,
-    "score": 0.458831,
+    "score": 0.666667,
     "overlap": 2
    }
   ],
   "refDoc:where is Voss Point": true,
   "hasGround:where is Voss Point": true,
-  "context:where is Voss Point": "[s0] The Lamp at Voss Point\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing.",
+  "context:where is Voss Point": "[s0] The Lamp at Voss Point\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\"",
   "answer:where is Voss Point": {
-   "text": "The Lamp at Voss Point {{cite:voss:0:s0}} \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing. {{cite:voss:9:s9}}",
+   "text": "The Lamp at Voss Point {{cite:voss:0:s0}} \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" {{cite:voss:9:s9}}",
    "audit": {
     "status": "clean",
     "grounded": true,
@@ -318,21 +319,21 @@
   "invented:where is Voss Point": [],
   "retrieve:who argued about the boat": [
    {
-    "i": 3,
-    "score": 0.316228,
+    "i": 9,
+    "score": 0.333333,
     "overlap": 1
    },
    {
-    "i": 9,
-    "score": 0.229416,
+    "i": 3,
+    "score": 0.316228,
     "overlap": 1
    }
   ],
   "refDoc:who argued about the boat": true,
   "hasGround:who argued about the boat": true,
-  "context:who argued about the boat": "[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.\n[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\" The keeper looked at her with something like gratitude, and Sefton, for the first time that evening, said nothing.",
+  "context:who argued about the boat": "[s9] \"Harrow has never once been kind to a small boat, and Voss Point least of all.\"\n[s3] Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat.",
   "answer:who argued about the boat": {
-   "text": "Below her, the keeper was already moving through the lower room, and she could hear Sefton arguing with him about the boat. {{cite:voss:3:s3}}",
+   "text": "\"Harrow has never once been kind to a small boat, and Voss Point least of all.\" {{cite:voss:9:s9}}",
    "audit": {
     "status": "notes",
     "grounded": true,
@@ -343,14 +344,14 @@
    "cites": [
     {
      "docId": "voss",
-     "idx": 3
+     "idx": 9
     }
    ]
   },
   "invented:who argued about the boat": [],
   "retrieve:lamp at midnight": [
    {
-    "i": 10,
+    "i": 11,
     "score": 0.603023,
     "overlap": 2
    },
@@ -362,9 +363,9 @@
   ],
   "refDoc:lamp at midnight": true,
   "hasGround:lamp at midnight": true,
-  "context:lamp at midnight": "[s10] By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp.\n[s0] The Lamp at Voss Point",
+  "context:lamp at midnight": "[s11] By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp.\n[s0] The Lamp at Voss Point",
   "answer:lamp at midnight": {
-   "text": "By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp. {{cite:voss:10:s10}} The Lamp at Voss Point {{cite:voss:0:s0}}",
+   "text": "By midnight the wind had taken the shutter on the seaward side, and the three of them sat close to the lamp. {{cite:voss:11:s11}} The Lamp at Voss Point {{cite:voss:0:s0}}",
    "audit": {
     "status": "clean",
     "grounded": true,
@@ -375,7 +376,7 @@
    "cites": [
     {
      "docId": "voss",
-     "idx": 10
+     "idx": 11
     },
     {
      "docId": "voss",
