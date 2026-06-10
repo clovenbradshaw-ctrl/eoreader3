@@ -1,0 +1,15 @@
+{
+  "id": "veranda",
+  "docFile": "veranda.txt",
+  "genre": "narrative dialogue — gender-distinct speakers (Harriet, Mr. Calloway)",
+  "note": "The easy case: one male, one female, alternating. A correct binder should get all of these; they anchor the battery so a tuning that helps the hard case can't quietly wreck the easy one.",
+  "bindings": [
+    { "sentence": "Your uncle's estate is smaller", "referent": "Calloway" },
+    { "sentence": "There are debts no one spoke of", "referent": "Calloway" },
+    { "sentence": "How much is left, when the debts are paid", "referent": "Harriet" },
+    { "sentence": "The house, and a little besides", "referent": "Calloway" },
+    { "sentence": "Most women in your position would sell", "referent": "Calloway" },
+    { "sentence": "I am not most women", "referent": "Harriet" },
+    { "sentence": "Then we shall have to find another way", "referent": "Calloway" }
+  ]
+}

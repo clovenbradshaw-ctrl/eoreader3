@@ -1,0 +1,19 @@
+{
+  "_comment": "Evolution-loop configuration. The quality weights live here (not in engine.js READING_RULES) so the agent — which may edit READING_RULES — can never retune its own exam. Change these by hand to tell the loop which failure mode it currently cares about.",
+  "weights": { "binding": 0.35, "stall": 0.35, "integration": 0.30 },
+  "qualityWinThreshold": 0.01,
+  "justifiedBreakThreshold": 0.03,
+  "generations": 6,
+  "apiCallBudget": 8,
+  "integrationStub": 0.70,
+  "provider": "auto",
+  "_frugality": "Token guards for the experimental phase. apiCallBudget is a HARD ceiling on all Anthropic calls per run (hypotheses + rubric); once hit, 2c falls back to the deterministic stub. integrationSampleSize bounds how many 2c fixtures get a live rubric call per scoring; maxRubricDocChars truncates the source sent to the judge. scoreTalkerLive is off by default (the talker LLM would double call volume). The default run is offline and spends zero tokens unless ANTHROPIC_API_KEY is set.",
+  "integrationSampleSize": 2,
+  "maxRubricDocChars": 4000,
+  "scoreTalkerLive": false,
+  "models": {
+    "agent": "claude-opus-4-8",
+    "scorer": "claude-opus-4-8",
+    "talker": "claude-opus-4-8"
+  }
+}

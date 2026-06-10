@@ -1,0 +1,7 @@
+{
+  "id": "transcript",
+  "docFile": "transcript.txt",
+  "genre": "speaker-attributed transcript — read by the engine as a structured table, not prose",
+  "question": "What is the state of the three open deals, and what does the chair want?",
+  "rubric_focus": "Does the reading recover the per-region picture (West strong, East soft, North flat) and the chair's ask (the Halloran paperwork) from a structure the engine parses as tabular?"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "steward-stalls",
+  "docFile": "../binding/steward.txt",
+  "genre": "narrative dialogue — the stall-vs-bind tension on the same scene used for binding",
+  "note": "Two clean sites. 'it' (the land they keep) has no tracked referent → honest stall. 'she said' before 'Then tell them the grain is theirs' is unmistakably Princess Mary → should bind, but the baseline δ=2.0 dominance gate over-stalls it (Mary only 1.85× the runner-up). The site 'them I give it freely' is deliberately NOT labeled: its resolution is dynamically coupled to the line before it, so its ground truth is not stable enough to grade.",
+  "sites": [
+    { "sentence": "drive them off the land and keep it", "surface": "it", "expect": "stall", "note": "it = the land; no tracked entity to bind" },
+    { "sentence": "Then tell them the grain is theirs", "surface": "she", "expect": "bind", "note": "she = Princess Mary, the only person who could give the grain — a clear bind the dominance gate is too strict to make" }
+  ]
+}

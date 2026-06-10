@@ -1,0 +1,17 @@
+{
+  "id": "steward",
+  "docFile": "steward.txt",
+  "genre": "narrative dialogue — period prose, gender-ambiguous names (Dron, Mary)",
+  "note": "Each quoted line, attributed to its human-correct speaker. The hard case: 'Dron' is male but the name carries no gender signal, so a mass-dominant binder can capture 'she said' onto the heavier, more-recent Dron. These labels are the ground truth a reader would give.",
+  "bindings": [
+    { "sentence": "The peasants will not take the grain", "referent": "Dron" },
+    { "sentence": "They say they will not leave the village", "referent": "Dron" },
+    { "sentence": "But they must go", "referent": "Mary" },
+    { "sentence": "My father left word that they be moved", "referent": "Mary" },
+    { "sentence": "They do not believe the French are coming", "referent": "Dron" },
+    { "sentence": "And you, Dron, what do you believe", "referent": "Mary" },
+    { "sentence": "I believe what the mistress tells me", "referent": "Dron" },
+    { "sentence": "Then tell them the grain is theirs", "referent": "Mary" },
+    { "sentence": "Tell them I give it freely", "referent": "Mary" }
+  ]
+}
