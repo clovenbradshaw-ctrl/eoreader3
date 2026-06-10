@@ -194,6 +194,30 @@ group('buildUserContent — tiered spans/notes, question first and last', () => 
   eq(LLM.buildUserContent({ question: 'q', grounded: true }), 'q', 'grounded with no material at all: bare question');
 });
 
+// The shape pass: a director's note, not a rubric. The system prompt is the
+// taste surface — it characterizes the move and never answers; the note
+// rides the user message between the question and the spans.
+group('shape pass — a director\'s note between question and spans', () => {
+  ok(/never answer the question yourself/.test(LLM.SHAPE_SYSTEM), 'the shape prompt forbids answering');
+  ok(/never state facts about the document/.test(LLM.SHAPE_SYSTEM), '…and forbids inventing document facts');
+  ok(/what's the point of the book\?/.test(LLM.SHAPE_SYSTEM), 'synthesis example present (the taste lives in examples)');
+  ok(/who wrote it\?/.test(LLM.SHAPE_SYSTEM) && /never "the author"/.test(LLM.SHAPE_SYSTEM), 'lookup example demands the name, not "the author"');
+  ok(/project gutenberg is a character\?/.test(LLM.SHAPE_SYSTEM) && /repair, not fresh retrieval/.test(LLM.SHAPE_SYSTEM), 'pushback example routes as repair');
+  ok(typeof LLM.shapePass === 'function', 'shapePass is exposed');
+
+  const u = LLM.buildUserContent({
+    question: 'who wrote it?', docTitle: 'crime.txt',
+    spans: [{ idx: 4, text: 'Author: Fyodor Dostoyevsky' }],
+    notesProse: '', grounded: true,
+    shapeNote: 'Bibliographic lookup. They want the name — one line.',
+  });
+  ok(/What this turn wants:\nBibliographic lookup/.test(u), 'the note has its own block');
+  ok(u.indexOf('The user just asked') < u.indexOf('What this turn wants'), 'question orients first');
+  ok(u.indexOf('What this turn wants') < u.indexOf('quoted exactly'), 'the note precedes the spans');
+  const bare = LLM.buildUserContent({ question: 'q', spans: [{ idx: 1, text: 'x' }], grounded: true, shapeNote: '' });
+  ok(!/What this turn wants/.test(bare), 'no note ⇒ no empty block (answer pass unchanged)');
+});
+
 // Reasoning-model think gating: tagged chain-of-thought never reaches the
 // user — not in the stream (the delta filter), not in the returned answer
 // (the post-strip) — including when max_tokens cuts the turn mid-think and

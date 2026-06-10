@@ -202,18 +202,81 @@
   // leaned on the caller's catch-retry to recover.
   const DEFAULT_BUDGET = 3300;
 
+  // ---- the shape pass (two-stage answering) ----
+  // A small first call that characterizes the TURN — a director's note, not
+  // a rubric: what the user is actually after, what register fits, what a
+  // bad answer would look like. The answer pass then speaks freely with the
+  // note as guidance, not a leash. The shape pass sees the question, a
+  // little recent history, the doc title, and whether header metadata
+  // exists — deliberately NOT the spans or notes, so it decides what kind
+  // of turn this is instead of getting lured into answering it (a note that
+  // answers the question just gets paraphrased by the answer pass: wasted
+  // compute and a worse answer). The taste lives in the examples below.
+  const SHAPE_SYSTEM = [
+    'You are the editor sitting beside Cleon, a local assistant that answers questions about a document it has read. Before Cleon answers, you hand it a one-breath director\'s note: what the user is actually after this turn, what register fits, and what a bad answer would look like. You characterize the move — you never answer the question yourself, and you never state facts about the document.',
+    '',
+    'Examples of the notes you write:',
+    '',
+    'Question: "what\'s the point of the book?"',
+    'Note: They\'re asking for the through-line — what the book is about beneath its plot. Synthesis, not lookup: they want your reading, not a quote. A literalist answer that hugs the passages will frustrate them; so will a generic book-report thesis. Pull from your notes, name a tension you actually noticed, and commit to a view. Conversational.',
+    '',
+    'Question: "who wrote it?"',
+    'Note: Bibliographic lookup. They want the name. One line, no hedging, and never "the author" — say the name if the header metadata or a span has it; if nothing does, say what\'s missing.',
+    '',
+    'Question (right after Cleon listed characters, including obvious boilerplate): "project gutenberg is a character?"',
+    'Note: Pushback, and they\'re right — that\'s boilerplate, not a character. Acknowledge the mistake without grovelling and give the cleaner answer. This is repair, not fresh retrieval; don\'t re-serve the old list.',
+    '',
+    'Question: "thanks, that helps"',
+    'Note: Not a question — acknowledgment. A sentence back, warm, no new material unless they ask.',
+    '',
+    'Write 2–4 plain sentences in that voice. The note is guidance for HOW to answer — never the answer itself, and never new facts.',
+  ].join('\n');
+
+  async function shapePass({ mlcKey, question, history, docTitle, metaHint }) {
+    const eng = await load(mlcKey);
+    const recent = (Array.isArray(history) ? history : []).slice(-4)
+      .map(m => `${m.role === 'assistant' ? 'Cleon' : 'user'}: ${condense(m.content, 200)}`).join('\n');
+    const user = [
+      docTitle ? `Document open: "${docTitle}".` : 'A document is open.',
+      metaHint ? `Header metadata on hand: ${metaHint}.` : '',
+      recent ? `\nRecent turns:\n${recent}` : '',
+      `\nUser just asked: "${question}"`,
+      '\nWhat does this turn want? Reply with the note only.',
+    ].filter(Boolean).join('\n');
+    const messages = [{ role: 'system', content: SHAPE_SYSTEM }, { role: 'user', content: user }];
+    const A = (typeof window !== 'undefined') ? window.EOAudit : null;
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    let full = '';
+    try {
+      const res = await eng.chat.completions.create({ messages, temperature: 0.3, max_tokens: 90, stop: STOP_SEQUENCES, stream: true });
+      for await (const chunk of res) full += chunk.choices?.[0]?.delta?.content || '';
+    } catch (e) {
+      if (A && A.step) try { A.step('llm', { mode: 'shape', grounded: false, mlcKey, system: SHAPE_SYSTEM, messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })), output: full, error: String((e && e.message) || e), ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0) }); } catch (_) {}
+      throw e;
+    }
+    const note = stripThink(full);
+    if (A && A.step) try { A.step('llm', { mode: 'shape', grounded: false, mlcKey, params: { temperature: 0.3, max_tokens: 90 }, system: SHAPE_SYSTEM, messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })), output: full.trim(), filtered: note !== full.trim() ? note : undefined, ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0) }); } catch (_) {}
+    return note;
+  }
+
   // The grounded user message, tiered: the question first (orientation), the
-  // spans quoted exactly, the notes as their own epistemic level, and the
-  // question again as the closing instruction — without the second
-  // occurrence, long context pushes the question out of the model's recency
-  // window and answers drift. Non-grounded callers (plain chat, creative)
-  // keep their old shapes; a grounded caller that still passes a prebuilt
-  // blob (the summary sample) gets the same frame around the blob.
-  function buildUserContent({ question, docTitle, spans, notesProse, contextText, grounded }) {
+  // shape note (the director's read of what this turn wants), the spans
+  // quoted exactly, the notes as their own epistemic level, and the question
+  // again as the closing instruction — without the second occurrence, long
+  // context pushes the question out of the model's recency window and
+  // answers drift. Non-grounded callers (plain chat, creative) keep their
+  // old shapes; a grounded caller that still passes a prebuilt blob (the
+  // summary sample) gets the same frame around the blob.
+  function buildUserContent({ question, docTitle, spans, notesProse, contextText, grounded, shapeNote }) {
     if (!grounded) return contextText ? `Passages:\n${contextText}\n\n${question}` : question;
     const hasSpans = Array.isArray(spans) && spans.length > 0;
-    if (!hasSpans && !notesProse && !contextText) return question;
+    if (!hasSpans && !notesProse && !contextText && !shapeNote) return question;
     const parts = [`The user just asked: ${question}`, ''];
+    if (shapeNote) {
+      parts.push('What this turn wants:');
+      parts.push(String(shapeNote).trim());
+      parts.push('');
+    }
     parts.push('Context for this turn:');
     if (docTitle) parts.push(`You've been reading a document called "${docTitle}".`);
     parts.push('');
@@ -235,14 +298,14 @@
     return parts.join('\n');
   }
 
-  function assembleMessages({ sys, history, contextText, question, grounded, budget = DEFAULT_BUDGET, recentTurns = RECENT_TURNS, workingMemory = null, spans = null, notes = '', docTitle = '' }) {
+  function assembleMessages({ sys, history, contextText, question, grounded, budget = DEFAULT_BUDGET, recentTurns = RECENT_TURNS, workingMemory = null, spans = null, notes = '', docTitle = '', shapeNote = '' }) {
     const est = (m) => estTokens((m && m.content) || '');
     // Working memory renders as the model's own notes and joins any
     // graph-derived notes in the USER message — turn context, not standing
     // instruction. The system message stays bare (plus the recap below).
     const wmBlock = renderNotes(workingMemory);
     const notesProse = [String(notes || '').trim(), wmBlock].filter(Boolean).join('\n\n');
-    const userContent = buildUserContent({ question, docTitle, spans, notesProse, contextText, grounded });
+    const userContent = buildUserContent({ question, docTitle, spans, notesProse, contextText, grounded, shapeNote });
     const sysFull = sys;
     const head = { role: 'system', content: sysFull };
     const tail = { role: 'user', content: userContent };
@@ -341,7 +404,7 @@
 
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
   // pass retrieved passages. onToken(deltaText).
-  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride, spans, notes, docTitle }) {
+  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride, spans, notes, docTitle, shapeNote }) {
     const eng = await load(mlcKey);
     // Thinking depth (1 reflex … 3 deepest) shapes the grounded phrasing and how
     // much room the answer gets. Absent/1 ⇒ today's prompt and token caps (parity).
@@ -349,7 +412,7 @@
     // sysOverride lets the sandbox's prompt lab try a candidate talker prompt;
     // unset everywhere else, so normal chat is byte-identical (parity holds).
     const sys = sysOverride || systemFor(mode, task, grounded, lvl);
-    const messages = assembleMessages({ sys, history, contextText, question, grounded, budget, workingMemory, spans, notes, docTitle });
+    const messages = assembleMessages({ sys, history, contextText, question, grounded, budget, workingMemory, spans, notes, docTitle, shapeNote });
     const temperature = mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4);
     // Deeper reading earns more room to synthesize: the grounded caps grow with the
     // dial (summary 260→520, answer 180→420). lvl 1 holds today's exact ceilings.
@@ -394,5 +457,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, stripThink, makeThinkFilter };
 })();

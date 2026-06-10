@@ -1098,13 +1098,16 @@ function App() {
     const primaryDoc = E.routePrimary(scope, probe) || scope[0];
     if (ready && (tier.spans.length || tier.notes.length)) {
       try {
+        // The shape pass sees the tagged history, so the rejected reply and
+        // the pushback are in its view — repair register comes out naturally.
+        const shapeNote = await shapeFor(scope, q, tagged, primaryDoc);
         replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
         const sysOverride = window.EOLLM.systemFor('grounded', 'answer', true, 1)
           + '\n\nThe user has said your earlier replies missed their question — do not repeat any earlier reply; answer the question afresh from the spans and notes, and if they truly do not answer it, say exactly what they DO establish about the subject instead.';
         let full = await window.EOLLM.phrase({
           mlcKey: model.mlc, question: probe, history: tagged,
           spans: tier.spans, notes: tier.notes.join('\n'),
-          docTitle: (primaryDoc && primaryDoc.name) || '',
+          docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote,
           mode: 'grounded', task: 'answer', grounded: true, sysOverride,
           onToken: streamInto({ mode: 'grounded' }), depth: turnBudgetRef.current && turnBudgetRef.current.level,
         });
@@ -1128,6 +1131,31 @@ function App() {
     }
     if (mech && mech.audit && mech.audit.grounded && mech.audit.status !== 'held') return settleRepair(mech, 'mechanical (repair)');
     return stuck();
+  };
+
+  // Run the shape pass for a grounded turn: question + recent turns + doc
+  // title + a hint that header metadata exists. Returns the director's note,
+  // or '' on any failure (the answer pass then runs unchanged). A note that
+  // arrives as leaked reasoning is dropped rather than passed along.
+  const shapeFor = async (scope, q, history, primaryDoc) => {
+    try {
+      if (!window.EOLLM || !window.EOLLM.shapePass || !window.EOLLM.isLoaded(model.mlc)) return '';
+      const meta = (window.EOEngine.docMetadata && primaryDoc) ? window.EOEngine.docMetadata(primaryDoc) : null;
+      const fieldsOn = meta && meta.fields ? Object.keys(meta.fields) : [];
+      const t0 = performance.now();
+      let note = await window.EOLLM.shapePass({
+        mlcKey: model.mlc, question: q, history,
+        docTitle: (primaryDoc && primaryDoc.name) || '',
+        metaHint: fieldsOn.length ? fieldsOn.join(', ') : '',
+      });
+      note = String(note || '').trim();
+      // A shape note SPEAKS about the user ("They're asking for…"), so the
+      // reasoning-preamble heuristics don't apply here — only raw think tags
+      // disqualify a note.
+      if (/<\/?think/i.test(note)) note = '';
+      AUD('step', 'shape', { note: note || null, ms: Math.round(performance.now() - t0) });
+      return note;
+    } catch (e) { eoWarn('shape', e); return ''; }
   };
 
   // Did the model decline (or leak) instead of answering? A grounded draft
@@ -1234,12 +1262,20 @@ function App() {
     // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
     const wm = buildWMForTurn(scope, q);
     const primaryDoc = window.EOEngine.routePrimary(scope, q) || scope[0];
+    // THE SHAPE PASS (two-stage answering): a small first call characterizes
+    // the turn — a director's note on what the user is actually after — and
+    // the answer pass speaks freely with that note as guidance, not a leash.
+    // It sees the question, recent turns, the doc title, and whether header
+    // metadata exists — never the spans or notes, so it decides what KIND of
+    // turn this is instead of trying to answer it. Any failure degrades to
+    // an empty note and the answer pass runs exactly as before.
+    const shapeNote = await shapeFor(scope, q, history, primaryDoc);
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       let full = await window.EOLLM.phrase({
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
         spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
-        docTitle: (primaryDoc && primaryDoc.name) || '',
+        docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote,
         grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
         depth: budget && budget.level,
       });
@@ -1326,7 +1362,7 @@ function App() {
             retry = await window.EOLLM.phrase({
               mlcKey: model.mlc, question: q, contextText: stricterCtx, history, mode: 'grounded', task,
               spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
-              docTitle: (primaryDoc && primaryDoc.name) || '', sysOverride: stricterSys,
+              docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote, sysOverride: stricterSys,
               grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
               depth: budget && budget.level,
             });

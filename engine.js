@@ -473,6 +473,11 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
     desc: 'Role-word heads of generic voice labels ("Speaker 2", "Female Voice"). The label is a real voice; its HEAD is a role word, not a name — part-matching skips these so "speaker" in a user message cannot hijack routing onto "Speaker 2".',
   },
+  gutenberg_boilerplate: {
+    value: ['project gutenberg','gutenberg','project gutenberg-tm','gutenberg-tm','ebook','ebooks','posting date','release date','start of','end of','public domain','foundation','project gutenberg literary archive foundation'],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Gutenberg header/license apparatus that frequency-counting surfaces as "characters" ("Project Gutenberg", "Posting Date"). Applied only when the document detects as a Gutenberg text — on any other document, a company named Foundation stays a referent.',
+  },
   place_org_cues: {
     value: ['street','st','road','rd','avenue','ave','lane','river','sea','ocean','bay','gulf','point','cape','harbou?r','island','isle','mount','mountain','valley','county','shire','city','town','village','company','corporation','commission','board','department','office','firm','llc','inc','ltd','co','university','college','school','hospital','church','park','square','hall','palace','castle','bridge','station','hotel','club','society','association','league','union','party','court','bank','press','times','gazette','journal','ministry','bureau','agency','institute','foundation'],
     mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
@@ -708,7 +713,7 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
     DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
     GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS,
-    KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES;
+    KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -755,6 +760,7 @@ function rebuildLangSets() {
   STRUCTURE_LABELS = new Set(mod_values('structure_labels'));
   TRANSCRIPT_FORMULA = new Set(mod_values('transcript_formula'));
   GENERIC_VOICE_HEADS = new Set(mod_values('generic_voice_heads'));
+  GUTENBERG_BOILERPLATE = new Set(mod_values('gutenberg_boilerplate'));
   const poc = mod_values('place_org_cues');
   PLACE_ORG_CUE_RE = poc.length ? new RegExp('\\b(' + poc.join('|') + ')\\b', 'i') : /$^/;
   const evam = mod_values('eva_machinery_terms');
@@ -5800,8 +5806,29 @@ function projectGraph(events, frame = {}) {
     const spans = [...picks].sort((a, b) => a - b).slice(0, 16).map(i => `[s${i}] ${doc.sentenceTexts[i]}`).join('\n');
     return head + spans;
   }
-  function entityContext(doc) {
+  // The cast, cleaned for presentation. On a Gutenberg text (and only
+  // there): boilerplate names drop (the gutenberg_boilerplate convention —
+  // "Project Gutenberg", "Posting Date"…, plus anything carrying
+  // "gutenberg"), and a name living ONLY in the header (first 5%) or
+  // license tail (last 10%) is apparatus, not a character. On any other
+  // document this is projectEntities unchanged — a company named
+  // Foundation stays a referent.
+  function castEntities(doc) {
     const { entities } = projectEntities(doc);
+    const meta = docMetadata(doc);
+    if (!meta.isGutenberg) return entities;
+    const nSents = (doc.sentenceTexts || []).length || 1;
+    const lo = Math.ceil(nSents * 0.05), hi = Math.floor(nSents * 0.9);
+    return entities.filter(e => {
+      const nm = String(e.name).toLowerCase().trim();
+      if (nm.includes('gutenberg') || (GUTENBERG_BOILERPLATE && GUTENBERG_BOILERPLATE.has(nm))) return false;
+      const ss = e.sents || [];
+      if (ss.length && ss.every(i => i < lo || i > hi)) return false;
+      return true;
+    });
+  }
+  function entityContext(doc) {
+    const entities = castEntities(doc);
     return entities.slice(0, 10).map(e => `[s${e.sents[0]}] ${doc.sentenceTexts[e.sents[0]]}`).join('\n');
   }
   function hasGround(doc, q) {
@@ -5879,13 +5906,19 @@ function projectGraph(events, frame = {}) {
     return continuesPrior(doc, q, ctx);                          // a follow-up to a grounded turn
   }
   function answerWho(doc) {
-    const { entities } = projectEntities(doc);
+    const entities = castEntities(doc);
     // The cast is people-or-named-things, ranked by prominence. NER typing is
     // unreliable for names that double as places (Marlow, Sefton come back as
     // 'thing'), so exclude only genuine places/orgs rather than keeping only
     // type:'person' — that test used to pass solely because the projection
-    // coerced every residual entity to 'person'.
-    const ppl = entities.filter(e => e.type !== 'place' && e.type !== 'org');
+    // coerced every residual entity to 'person'. On a Gutenberg text, where
+    // compromise's typing has the full header/license noise to misread,
+    // confirmed persons are preferred outright when enough of them exist.
+    const meta = docMetadata(doc);
+    const strictPpl = entities.filter(e => e.type === 'person');
+    const ppl = (meta.isGutenberg && strictPpl.length >= 2)
+      ? strictPpl
+      : entities.filter(e => e.type !== 'place' && e.type !== 'org');
     const list = (ppl.length ? ppl : entities).slice(0, 8);
     if (!list.length) return { text: 'I didn’t find any named people in this document.', audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'No entities surfaced under the current rules.' } };
     const text = 'The figures who appear most often: ' + list.map(e => `${e.name} (${e.raw}) {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`).join(', ') + '.';
@@ -7085,6 +7118,10 @@ function projectGraph(events, frame = {}) {
   function contextParts(doc, query, k = 6) {
     if (!doc || doc.kind === 'table') return { spans: [], notes: [] };
     const spans = [], notes = [], have = new Set();
+    // the header rides along whenever it exists — bibliographic questions
+    // ("who wrote it?") are answered from here, not passage retrieval
+    const metaLine = metadataNote(doc);
+    if (metaLine) notes.push(metaLine);
     const texts = doc.sentenceTexts || [];
     const push = (i, t) => {
       const tx = t != null ? t : texts[i];
@@ -7121,6 +7158,8 @@ function projectGraph(events, frame = {}) {
     for (const h of retrieveScope(ds, query, k)) push(h.docId, h.i, h.t);
     for (const d of ds) {
       const texts = d.sentenceTexts || [];
+      const metaLine = metadataNote(d);
+      if (metaLine) notes.push(`In ${d.name} — ` + metaLine.charAt(0).toLowerCase() + metaLine.slice(1));
       for (const s of entityEvidence(d, query)) push(d.id, s.i, s.t);
       const da = defineAssertions(d, query);
       if (da && da.picked.length)
@@ -7383,6 +7422,53 @@ function projectGraph(events, frame = {}) {
       audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
         note: 'Read from the page’s recorded assertions (DEF events) about ' + da.subject + ' — no model involved.' },
     };
+  }
+
+  /* ---------- document metadata (Gutenberg-style headers) ----------
+     Title: / Author: / Release date: / Language: lines in the pre-text
+     header (before "*** START OF"). Bibliographic questions ("who wrote
+     it?") need this block, not passage retrieval — content retrieval
+     competes and loses, and the model answers "The author wrote it."
+     Mechanical and cached on the doc; the routing determination itself
+     belongs to the shape pass ("this is a lookup"), not a regex here.
+     Header lines carry no terminal punctuation, so several often merge
+     into ONE sentence — fields are split out by their markers rather
+     than anchored per line. */
+  function docMetadata(doc) {
+    if (!doc || doc.kind !== 'prose' || !doc.sentenceTexts) return { isGutenberg: false, any: false, fields: {}, sents: {} };
+    if (doc._meta) return doc._meta;
+    const fields = {}, sents = {};
+    let isGutenberg = false;
+    const n = Math.min(doc.sentenceTexts.length, 40);
+    for (let i = 0; i < n; i++) {
+      const t = String(doc.sentenceTexts[i] || '');
+      if (/project gutenberg/i.test(t)) isGutenberg = true;
+      if (/\*{3}\s*START OF/i.test(t)) { isGutenberg = true; break; }
+      const re = /\b(Title|Author|Editor|Translator|Release date|Posting date|Language|Credits)\s*:\s*/gi;
+      let m; const marks = [];
+      while ((m = re.exec(t)) !== null) marks.push({ key: m[1].toLowerCase(), start: m.index, end: re.lastIndex });
+      for (let j = 0; j < marks.length; j++) {
+        const val = t.slice(marks[j].end, j + 1 < marks.length ? marks[j + 1].start : undefined)
+          .trim().replace(/[\s,;|]+$/, '');
+        if (val && !(marks[j].key in fields)) { fields[marks[j].key] = val; sents[marks[j].key] = i; }
+      }
+    }
+    doc._meta = { isGutenberg, any: Object.keys(fields).length > 0, fields, sents };
+    return doc._meta;
+  }
+  // The header as a note line for the grounded prompt (and the shape pass's
+  // lookup hint): "From the document's header — Title: …; Author: … [s2]."
+  function metadataNote(doc) {
+    const meta = docMetadata(doc);
+    if (!meta.any) return '';
+    const order = ['title', 'author', 'editor', 'translator', 'release date', 'posting date', 'language'];
+    const parts = [];
+    for (const k of order) {
+      if (!(k in meta.fields)) continue;
+      const label = k.charAt(0).toUpperCase() + k.slice(1);
+      parts.push(`${label}: ${meta.fields[k]}` + (meta.sents[k] != null ? ` [s${meta.sents[k]}]` : ''));
+    }
+    return parts.length ? 'From the document’s header — ' + parts.join('; ') + '.' : '';
   }
 
   /* ---------- kin asks answered from the graph ----------
@@ -8040,6 +8126,8 @@ function projectGraph(events, frame = {}) {
     contextScope, bindCitationsScope,
     // tiered context for the notes-and-spans grounded prompt
     contextParts, contextPartsScope, partsFromHits, readingNotes,
+    // document metadata (Gutenberg headers) + the presentation-cleaned cast
+    docMetadata, metadataNote, castEntities,
     // cost-ordered routing (existence → structure → significance) + embedding recall
     routeTurn, retrieveHybrid, contextFromHits,
     // thinking depth: the effort dial's per-turn budget + the conversation field

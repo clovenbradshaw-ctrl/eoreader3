@@ -418,6 +418,53 @@ group('repair — pushback routes to repair, not retrieval', () => {
   eq(E.repairSignal('thanks that really helps'), null, 'gratitude is not repair');
 });
 
+// Gutenberg texts: header metadata is parsed mechanically (even when the
+// punctuation-free header lines merge into one "sentence"), it rides the
+// notes tier so "who wrote it?" reaches the model with the name in hand,
+// and the cast is cleaned — boilerplate names and header/license-zone-only
+// names are not characters. Non-Gutenberg documents are untouched.
+const GBOOK = `The Project Gutenberg eBook of Crime and Punishment
+
+Title: Crime and Punishment
+Author: Fyodor Dostoyevsky
+Translator: Constance Garnett
+Release date: March 28, 2006
+Language: English
+
+*** START OF THE PROJECT GUTENBERG EBOOK CRIME AND PUNISHMENT ***
+
+On an exceptionally hot evening early in July a young man came out of the garret. Raskolnikov had been lying in bed thinking about the old woman. Raskolnikov went down the stairs slowly. Sonia met Raskolnikov near the bridge and they spoke quietly. Sonia worried about him. Raskolnikov told Sonia what he had done. The old woman had kept the pledges in a box. Sonia read to Raskolnikov from her book. They sat in silence afterward. Raskolnikov left the room and walked toward the river. Sonia followed him at a distance. The city felt empty that night. Raskolnikov slept badly and dreamed of the stairs. In the morning Sonia came to see Raskolnikov again. They spoke about what would come next. Raskolnikov made his decision at last. Sonia wept and embraced him. The confession came the following day. Sonia stood in the square and watched. Raskolnikov bowed to the earth as Sonia had asked.
+
+*** END OF THE PROJECT GUTENBERG EBOOK ***
+
+Updated editions will replace the previous one. Project Gutenberg is a registered trademark of the Project Gutenberg Literary Archive Foundation.`;
+const gbook = await E.parseDocument('crime.txt', GBOOK, 'gbook');
+group('gutenberg — header metadata + a cleaned cast', () => {
+  const meta = E.docMetadata(gbook);
+  ok(meta.isGutenberg, 'the document detects as a Gutenberg text');
+  eq(meta.fields['author'], 'Fyodor Dostoyevsky', 'Author: parsed from the header');
+  eq(meta.fields['title'], 'Crime and Punishment', 'Title: parsed');
+  ok(/March 28, 2006/.test(meta.fields['release date'] || ''), 'Release date: parsed');
+  ok(meta.sents['author'] != null, 'the author field knows its sentence (citable)');
+  const note = E.metadataNote(gbook);
+  ok(/Author: Fyodor Dostoyevsky/.test(note) && /\[s\d+\]/.test(note), 'metadataNote names the author with a cite tag');
+  // "who wrote it?" reaches the model with the name in the notes tier.
+  const parts = E.contextParts(gbook, 'who wrote it?');
+  ok(parts.notes.some(n => /Fyodor Dostoyevsky/.test(n)), 'contextParts carries the header note');
+  // The cast: boilerplate and header-zone names are not characters.
+  const cast = E.castEntities(gbook).map(e => e.name.toLowerCase());
+  ok(!cast.some(n => n.includes('gutenberg')), 'Project Gutenberg is not in the cast');
+  ok(!cast.includes('foundation'), 'the license Foundation is not in the cast');
+  const who = E.answer(gbook, 'who are the main characters?');
+  ok(/Raskolnikov/.test(who.text) && /Sonia/.test(who.text), 'the who-answer names the real characters');
+  ok(!/Gutenberg/i.test(who.text), '…and no boilerplate');
+  // A non-Gutenberg document is untouched by the cleanup.
+  const vossMeta = E.docMetadata(voss);
+  ok(!vossMeta.isGutenberg && !vossMeta.any, 'VOSS carries no header metadata');
+  eq(E.metadataNote(voss), '', 'no metadata ⇒ no note line');
+  eq(E.castEntities(voss).length, E.projectEntities(voss).entities.length, 'castEntities is projectEntities on ordinary prose');
+});
+
 // Leaked chain-of-thought hard fail: think tags and reasoning preambles are
 // vetoed (→ mechanical answer); ordinary answers — even ones starting
 // "Okay," — are not.
