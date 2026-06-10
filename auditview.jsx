@@ -73,6 +73,14 @@ function AuditStep({ s }) {
       {' '}{s.recovered ? <b>recovered</b> : <span className="aud-dim">→ chat</span>}
     </Line>
   );
+  if (s.t === 'repair') return (
+    <Line label="repair" kind="route">
+      <b>{s.kind}</b>
+      {s.anchor ? <span className="aud-dim"> · repairing: “{s.anchor}”</span> : <span className="aud-dim"> · nothing to re-ask</span>}
+      {(s.refinements || []).length ? <div className="aud-dim">refined by: {s.refinements.map(r => '“' + r + '”').join(' · ')}</div> : null}
+      {s.probe && <div className="aud-dim">⟲ re-read as: {s.probe}</div>}
+    </Line>
+  );
   if (s.t === 'llm') return (
     <div className="aud-step">
       <span className="aud-st llm">llm</span>

@@ -75,7 +75,50 @@ document questions stay grounded and cited.
 Prior turns re-enter the model's history with **epistemic tags**: a reply that
 was vetoed, went out ungrounded, or carried struck (unverified) terms is
 prefixed with a note saying so, so the model never defends an earlier answer
-the system itself didn't stand behind.
+the system itself didn't stand behind. A reply the user pushed back on gets
+the same treatment — tagged *"the user said this reply missed their
+question"* — so a rejected answer can't keep re-entering the prompt as
+something that simply happened.
+
+### When you push back (conversational repair)
+
+Not every turn is content. "you're not listening to what i'm saying",
+"yeah it does", "no — the son of someone involved with NDP" are about the
+**exchange**: the previous reply failed and the user is saying so. Fed to the
+ordinary pipeline these go badly two different ways — retrieval drags the
+complaint onto the page by token overlap and answers it with an unrelated
+line, or the router finds no signal and a tiny model shrugs in plain chat.
+
+So pushback is a first-class **route**, detected mechanically before any
+lexical reader can claim the turn (frustration / contradiction / refinement —
+a leading "no…" correction, or an insistence like "someone's son IS
+mentioned"). A repair turn (1) tags the rejected reply in history, (2)
+reconstructs the question actually under repair — the last user turn that
+wasn't itself a repair move, plus every refinement deposited since — and
+(3) re-reads *that*, not the complaint. And it never re-serves a rejected
+reply verbatim: a re-read that re-derives the same **substantive, cited**
+answer goes out flagged as re-confirmed ("I land in the same place — I do
+think this is what the page holds"), while a re-read that only reproduces a
+non-answer says it's stuck and asks for a hook, in different words each
+time. The same guard runs on ordinary turns: an answer (near-)identical to
+one already sent is flagged in the reply instead of repeated as if new.
+
+### Whose son? (possessive kin)
+
+"Until recently, his son served as Director of Administration…" holds WHOSE
+son only through the pronoun — and a sentence retrieval hands to a small
+model with "his" unresolved is an answer the model cannot give. The parse
+now reads possessive kin ("his/her son/mother/wife…", narration only): the
+possessor resolves under the same activation law every pronoun obeys —
+locally first (a possessive determiner is a local anaphor: persons named in
+the same or previous sentence), then page-wide, with the same δ-dominance
+stall rights — and lands as a kin DEF in the graph. "Whose son is
+mentioned?" is then answered mechanically, possessor named and cited; the
+grounded prompt opens with the resolved record; and a question that aims the
+kin at the *wrong* person ("Tom Turner's son") is corrected, not indulged —
+"The page records no son for Tom Turner; the son it mentions is David
+Corman's." Kin nouns are a language-module convention (`kin_terms` in
+`memory/conventions.jsonl`), like every other lexical inventory.
 
 ### Checking a claim (CONFIRM/DENY)
 

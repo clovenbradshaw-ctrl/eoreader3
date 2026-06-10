@@ -156,6 +156,9 @@ function App() {
   // Did the previous turn route to the document? Feeds conversation continuity so
   // an anaphoric follow-up ("tell me more about it") stays on the page.
   const lastGroundedRef = useRef(false);
+  // How many repair turns this chat has absorbed — cycles the acknowledgment
+  // phrasing so a frustrated user is never answered with the same opener twice.
+  const repairCountRef = useRef(0);
   // Local persistence: `hydrated` gates the save effects so the initial empty
   // state can't overwrite stored data before it's read back; `suppressReparse`
   // lets hydration set the restored rule toggles without re-parsing the docs we
@@ -599,6 +602,10 @@ function App() {
     // a false proposition built from true tokens, so the retraction marker is
     // the only thing standing between the model and re-defending the claim.
     if (m.retracted) return '[an earlier reply containing a claim that was later checked against the page and RETRACTED — do not repeat or defend it] ';
+    // The user pushed back on this reply (a repair turn followed it). Without
+    // the tag, the model re-reads its rejected answer as something that simply
+    // happened and serves it again — the loop the user is objecting to.
+    if (m.objected) return '[the user said this reply missed their question — do not repeat or defend it] ';
     const a = m.audit;
     if (!a) return '';
     if (a.status === 'plain') return '[an earlier reply from general knowledge, not the document] ';
@@ -894,6 +901,184 @@ function App() {
     setBusy(false);
   };
 
+  // ---- CONVERSATIONAL REPAIR ----
+  // The router decided this turn is about the EXCHANGE — the user pushing back
+  // on the previous reply ("you're not listening", "yeah it does", "no — the
+  // son of someone involved with NDP"). A conversation partner doesn't run the
+  // complaint through retrieval as if it were a fresh question; it (1) marks
+  // the rejected reply so history hygiene stops the model defending it,
+  // (2) reconstructs the question actually under repair — the last user turn
+  // that wasn't itself a repair move, plus every refinement deposited since —
+  // (3) re-reads THAT, and (4) never re-serves a reply the user already
+  // rejected: better to say it's stuck than to repeat itself a third time.
+  const REPAIR_ACKS = {
+    frustration: [
+      'You’re right to push back — let me re-read instead of repeating myself.',
+      'Fair. I keep giving you the same thing; here’s the closest the page actually comes.',
+      'I hear you — taking the question from the top.',
+    ],
+    contradiction: [
+      'Let me look again rather than insist.',
+      'You may be right — re-reading.',
+      'Checking again instead of repeating myself.',
+    ],
+    refinement: [
+      'Got it — taking that as the question.',
+      'Right, with that correction:',
+      'Re-reading with that in mind.',
+    ],
+  };
+  // Flag the most recent settled assistant reply as objected-to; epistemicTag
+  // re-tags it in every future prompt.
+  const markObjected = () => setMessages(ms => {
+    for (let i = ms.length - 1; i >= 0; i--) {
+      const m = ms[i];
+      if (m.role === 'assistant' && m.text && !m.typing && !m.loading) {
+        if (m.objected) return ms;
+        const c = ms.slice(); c[i] = { ...m, objected: true }; return c;
+      }
+    }
+    return ms;
+  });
+  // The question under repair: walk the user turns backward, collecting the
+  // content of repair-shaped turns as refinements, until the first turn that
+  // wasn't itself a repair move — that's the anchor being re-asked.
+  const repairAnchor = () => {
+    const E = window.EOEngine;
+    const users = messages.filter(m => m.role === 'user' && m.text);
+    const refinements = [];
+    let anchor = null;
+    for (let i = users.length - 1; i >= 0; i--) {
+      let rep = null;
+      try { rep = E.repairSignal(users[i].text); } catch (e) {}
+      if (rep) { if (rep.content) refinements.unshift(users[i].text); continue; }
+      anchor = users[i].text; break;
+    }
+    return { anchor, refinements };
+  };
+  const runRepairScope = async (scope, q, history, repair) => {
+    const E = window.EOEngine;
+    const { anchor, refinements } = repairAnchor();
+    const priorReplies = messages.filter(m => m.role === 'assistant' && m.text && !m.typing).map(m => m.text);
+    const lastReply = priorReplies.length ? priorReplies[priorReplies.length - 1] : '';
+    // The retry probe: the anchor question + the recent refinements + this
+    // turn's own content (when it carries any) + any kin term the disputed
+    // reply argued about (a contradiction of "no son is mentioned" re-asks
+    // about the son).
+    const parts = [anchor, ...refinements.slice(-3)];
+    if (repair.content) parts.push(q);
+    let probe = [...new Set(parts.filter(Boolean))].join(' ').trim();
+    try {
+      const kin = E.kinAsked(probe + ' ' + lastReply);
+      for (const k of kin) if (!new RegExp('\\b' + k, 'i').test(probe)) probe += ' ' + k;
+    } catch (e) {}
+    if (!probe) probe = q;
+    AUD('step', 'repair', { kind: repair.kind, anchor, refinements, probe });
+    const turnIdx = repairCountRef.current++;
+    const ackList = REPAIR_ACKS[repair.kind] || REPAIR_ACKS.refinement;
+    const ack = ackList[turnIdx % ackList.length];
+    // The rejected reply enters THIS prompt already wearing its tag (the
+    // objected flag set by the caller only reaches future historyFor calls).
+    const tagged = (() => {
+      const h = history.slice();
+      for (let i = h.length - 1; i >= 0; i--) {
+        if (h[i].role === 'assistant') {
+          if (!/^\[/.test(h[i].content)) h[i] = { ...h[i], content: '[the user said this reply missed their question — do not repeat or defend it] ' + h[i].content };
+          break;
+        }
+      }
+      return h;
+    })();
+    const stuck = () => {
+      // Even the stuck message must not repeat itself — pick the first variant
+      // the chat hasn't already heard.
+      const variants = [
+        'I’ve re-read the document for this and I keep landing on the same lines, so the page may simply not say it'
+          + (anchor ? ' — what I’m trying to answer is: “' + anchor + '”' : '') + '. '
+          + 'If you can give me a name or an exact phrase from the text, I’ll chase that instead.',
+        'Still stuck on this one — the re-read brought back nothing new. A name or exact phrase from the text would give me something to chase.',
+        'I don’t have anything new on this; I’d rather say so than repeat myself again.',
+      ];
+      let text = variants.find(v => !E.echoesPriorReply(v, priorReplies)) || variants[variants.length - 1];
+      if (repair.kind === 'frustration' && text === variants[0]) text = 'I hear you, and I don’t want to keep repeating myself. ' + text;
+      const audit = { status: 'notes', grounded: true, covers: '0/1', stable: true,
+        note: 'Held — the re-read found nothing new, and saying so beats re-serving a reply the user already rejected.' };
+      lastGroundedRef.current = true;
+      replaceLast({ role: 'assistant', text, audit, mode: 'grounded' });
+      AUD('end', { engine: 'repair-stuck', text, audit, cites: [] });
+      setBusy(false);
+    };
+    const settleRepair = (body, engine) => {
+      // The retry landed on a reply already sent. Two very different cases:
+      // a NON-answer (a hold, a "don't say") must never be re-served — that
+      // loop is what the user is objecting to. But a substantive, cited
+      // answer that the re-read independently re-derives IS the answer;
+      // withholding it would be worse. Serve it flagged as re-confirmed.
+      const echoed = E.echoesPriorReply(body.text, priorReplies);
+      if (echoed && !(body.audit && body.audit.grounded && (body.cites || []).length)) {
+        AUD('step', 'veto', { decision: 'stuck', reason: 'the retry reproduced a non-answer the user already rejected' });
+        return stuck();
+      }
+      const echoOpeners = [
+        'I re-read rather than repeat myself, and I land in the same place — I do think this is what the page holds:',
+        'Checked again: the page gives me the same line. As far as this document goes, this is the answer:',
+        'Re-read once more and it still comes back to this:',
+      ];
+      const opener = echoed ? echoOpeners[turnIdx % echoOpeners.length] : ack;
+      const audit = body.audit
+        ? { ...body.audit, note: 'Opens with a conversational acknowledgment of the pushback; the claims after it: ' + (body.audit.note || 'audited as usual.') }
+        : body.audit;
+      const text = opener + '\n\n' + body.text;
+      lastGroundedRef.current = !!(audit && audit.grounded);
+      replaceLast({ role: 'assistant', text, audit, mode: 'grounded' });
+      if (body.cites && body.cites.length) setTimeout(() => flashCitation(body.cites[0].docId, body.cites[0].idx), 380);
+      depositSettled(scope, probe, body.cites);
+      AUD('end', { engine, text, audit, cites: body.cites || [] });
+      setBusy(false);
+    };
+    // The mechanical re-read of the repaired question — the floor. A clean
+    // record-backed answer (kin/assertion/void) outranks re-phrasing: phrasing
+    // is what just failed the user.
+    let mech = null;
+    try { mech = E.answerScope(scope, probe, { hotEntity: hotEntity() }); } catch (e) { eoWarn('repair mech', e); }
+    AUD('step', 'retrieve', { k: 6, engine: 'repair-probe', hits: auditHits(scope, probe, 6) });
+    if (mech && mech.audit && (mech.audit.status === 'clean' || mech.audit.status === 'warn')) {
+      return settleRepair(mech, 'mechanical (repair)');
+    }
+    const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
+    const ctx = E.contextScope(scope, probe, 6);
+    if (ready && ctx) {
+      try {
+        replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
+        const sysOverride = window.EOLLM.systemFor('grounded', 'answer', true, 1)
+          + ' The user has said your earlier replies missed their question — do not repeat any earlier reply; answer the question afresh from the passages, and if they truly do not answer it, say exactly what they DO establish about the subject instead.';
+        let full = await window.EOLLM.phrase({
+          mlcKey: model.mlc, question: probe, contextText: ctx, history: tagged,
+          mode: 'grounded', task: 'answer', grounded: true, sysOverride,
+          onToken: streamInto({ mode: 'grounded' }), depth: turnBudgetRef.current && turnBudgetRef.current.level,
+        });
+        full = E.dedupeSentences(full);
+        const declined = !full || full.trim().length < 3 || /passages?\s+do\s?n.?t\s+say/i.test(full);
+        if (!declined && !E.echoesPriorReply(full, priorReplies)) {
+          const perDoc = scope.map(d => new Set(E.inventedTerms(d, full)));
+          const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
+          const bound = E.bindCitationsScope(scope, full, probe, 'factual', { hotEntity: hotEntity() });
+          if (bound.audit.grounded && !invented.length) {
+            AUD('step', 'veto', { decision: 'model', invented: [], boundGrounded: true, boundCovers: bound.audit.covers });
+            return settleRepair(bound, 'model + mechanical cite (repair)');
+          }
+          AUD('step', 'veto', { decision: 'mechanical', reason: !bound.audit.grounded ? 'unbound' : 'invented terms', invented, boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
+        } else {
+          AUD('step', 'veto', { decision: 'mechanical', reason: declined ? 'model declined / empty' : 'the model reproduced a rejected reply' });
+        }
+      } catch (e) {
+        AUD('step', 'error', { where: 'repair', message: String((e && e.message) || e) });
+      }
+    }
+    if (mech && mech.audit && mech.audit.grounded && mech.audit.status !== 'held') return settleRepair(mech, 'mechanical (repair)');
+    return stuck();
+  };
+
   // Document-referencing turn: feed the model the relevant passages and bind
   // citations mechanically. The seeker still decides what's there to say —
   // "who" is exact-mechanical; no ground → honest hold; the model only phrases.
@@ -983,6 +1168,23 @@ function App() {
         // Only a model-phrased answer can carry an inference void; a mechanical
         // fallback states only what the page does.
         if (decision && decision.indexOf('model') === 0) res = markInferences(res, budget);
+        // ACROSS-TURN ECHO: the reply is (near-)identical to one already sent
+        // in this chat — a different question landed on the same dead end, or
+        // the model reproduced itself. Re-serving it silently is the loop the
+        // user reads as "you're not listening"; flag it conversationally.
+        try {
+          const prior = messages.filter(m => m.role === 'assistant' && m.text && !m.typing).map(m => m.text);
+          if (window.EOEngine.echoesPriorReply(res.text, prior)) {
+            AUD('step', 'veto', { decision: 'flagged', reason: 'repeats an earlier reply — flagged in the answer' });
+            const substantive = !!(res.audit && res.audit.grounded && (res.cites || []).length);
+            res = { ...res,
+              text: (substantive
+                ? 'Same answer as before, for this one too:'
+                : 'I notice this is the same answer I gave before — if it isn’t what you’re after, point me at a name or phrase from the text and I’ll chase that instead.')
+                + '\n\n' + res.text,
+              audit: res.audit ? { ...res.audit, note: 'Repeats an earlier reply (flagged conversationally in the opening line). ' + (res.audit.note || '') } : res.audit };
+          }
+        } catch (e) { eoWarn('echo flag', e); }
         replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
         depositSettled(scope, q, res.cites);
@@ -1208,9 +1410,25 @@ function App() {
       route = { decision: 'mechanical', confidence: 'forced', reason: 'grounded-mode',
                 primary: window.EOEngine.routePrimary(scope, q) || scope[0] };
     } else if (scope.length) {
-      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current });
+      // hadReply: repair needs a conversation to repair — any settled assistant
+      // reply counts, grounded or not (the trace's "someone's son is mentioned"
+      // followed a PLAIN-chat miss, so prevGrounded alone would drop it).
+      const hadReply = messages.some(m => m.role === 'assistant' && m.text && !m.typing && !m.loading);
+      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current, hadReply });
     } else {
       route = { decision: 'chat', confidence: 'none', reason: 'no-scope' };
+    }
+
+    // REPAIR: the turn pushes back on the previous reply rather than asking
+    // fresh content. Mark the rejected reply (history hygiene), then re-read
+    // the question actually under repair instead of retrieving on the complaint.
+    if (route.decision === 'repair') {
+      const primary = route.primary || window.EOEngine.routePrimary(scope, q) || scope[0];
+      AUD('step', 'route', { referencing: true, reason: route.reason, confidence: route.confidence,
+        path: 'repair', primary: primary ? { id: primary.id, name: primary.name, kind: primary.kind } : null });
+      markObjected();
+      runRepairScope(scope, q, history, route.repair || { kind: 'frustration', content: false }).catch(turnFailed('repair'));
+      return;
     }
 
     // ESCALATE: doc-directed but lexical signal was weak/absent. Pay for embedding
@@ -1252,8 +1470,8 @@ function App() {
   // Reset the conversation field on a fresh or switched chat — working memory is
   // chat-scoped, matching newChat's reset semantics (distinct from the learned ledger).
   const resetField = () => { try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.reset(); } catch (e) { eoWarn('field reset', e); } };
-  const newChat = () => { setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; resetField(); if (mobileRef.current) setCollapsed(true); };
-  const selectChat = (id) => { setActiveChat(id); lastGroundedRef.current = false; resetField(); if (mobileRef.current) setCollapsed(true); };
+  const newChat = () => { setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
+  const selectChat = (id) => { setActiveChat(id); lastGroundedRef.current = false; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
 
   // ---- rules ----
   const toggleRule = (id) => setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
