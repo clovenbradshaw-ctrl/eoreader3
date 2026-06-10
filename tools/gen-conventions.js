@@ -58,6 +58,23 @@ const EN_WORD_PROPS = {
   these: { class: 'demonstrative' }, those: { class: 'demonstrative' },
 };
 
+// Synthetic seed provenance: every shipped convention carries ONE anchor of
+// finite mass — outvotable by real sources, so nothing in the graph is
+// unfalsifiable, including its initial conditions. (Real anchors are
+// content-hash + embedding-signature fingerprints; see the
+// PROVENANCE-ANCHORED CONVENTIONS section in engine.js.)
+const SEED_ANCHOR = { h: 'seed', r: 'seed', c: 1.0, sig: null };
+
+// Inventories grown at READ time (never seeded): the generator records the
+// convention node and its law, but no members and no value DEF — a seeded
+// empty list would wipe the learned terms on load.
+const INDUCED_LAWS = {
+  eva_veto_lexicon: 'Grown from EVA failures at read time: every vetoed draft appends a REC here (with register affinity); a term failing twice is admitted — a contextual neuron that feeds the veto and the retry prompt.',
+  attribution_verbs: 'Attribution verbs bootstrap from typography (the closing-quote slot) in any language; admission is two sightings; every confirmation adds mass.',
+  colon_speaker_labels: 'Grown through the convention-proposal channel: the local model proposes from registered friction (unbound "LABEL: statement" lines); admission requires independent non-model witnesses (θ_admit of anchor coupling, ≥2 distinct hashes). An admitted label binds a SIG attributing its colon-lines to that voice.',
+  separator_glyph_lines: 'Grown through the convention-proposal channel: separator glyph runs ("***") the reader kept treating as sentences. An admitted shape is document structure — a section break, never a passage.',
+};
+
 (async () => {
   const E = loadEngine().EOEngine;
   const exp = E._conventionsExport();
@@ -68,6 +85,10 @@ const EN_WORD_PROPS = {
   emit({
     op: 'REC', target: 'semantics', action: 'charter',
     value: 'The mechanics are universal; everything human-language-specific is a convention, and no inventory is more real than another — you, y\'all, ella, vous, 她 are equal citizens. Every convention here is an ASSERTION — contextual and revisable, never a fact: what this reader currently takes a class of surfaces to mean, in the registers its affinity names. Conventions are LINKED, not flat (a rule may qualify, except, subset, or feed another — i before e, except after c), and the graph HYDRATES: a vetoed model draft appends a REC; a term that fails twice becomes a contextual neuron in eva_veto_lexicon. This file is the append-only graph of those conventions, related through eo operations: INS instantiates a module or a convention, SYN member-of edges carry inventories (seq order is list order), DEF carries properties and structured values, REC records the register laws. The engine projects it like any other event log (projectSemantics) and falls back to its seeds when the file is absent.',
+  });
+  emit({
+    op: 'REC', target: 'semantics', action: 'provenance-charter',
+    value: 'Conventions carry PROVENANCE back to their sources, but a source is pointed to by content hash + embedding signature ({h, sig, r, c, t}), never by name or resolvable location: locally resolvable, globally opaque, tamper-evident. Mass is a sum over anchors (coupling × independence × decay × register-fit, per-source capped); admission is mechanical (θ_admit of independent coupling, ≥2 distinct hashes, ≥1 non-model witness — the model can never be its own witness). Seeds carry one synthetic anchor of finite mass, so the initial conditions are as falsifiable as everything else. The local model is a PROPOSER with reader coupling, nothing more: it reacts to registered friction in a closed grammar over engine-minted span handles; the engine mints every hash, signature, record, and seq.',
   });
 
   // structured values (everything that isn't a plain membership list)
@@ -85,16 +106,16 @@ const EN_WORD_PROPS = {
     for (const [rule, value] of Object.entries(mod.conventions)) {
       // grown-not-seeded inventories never carry a value DEF — a seeded empty
       // list would WIPE the learned terms on load
-      if (rule === 'eva_veto_lexicon') {
-        emit({ op: 'INS', kind: 'convention', id: modId + ':' + rule, rule, module: modId, epistemic: 'assertion', revisable: true });
-        emit({ op: 'REC', target: modId + ':' + rule, action: 'induced-not-seeded', value: 'Grown from EVA failures at read time: every vetoed draft appends a REC here (with register affinity); a term failing twice is admitted — a contextual neuron that feeds the veto and the retry prompt.' });
+      if (INDUCED_LAWS[rule] && rule !== 'attribution_verbs') {
+        emit({ op: 'INS', kind: 'convention', id: modId + ':' + rule, rule, module: modId, epistemic: 'assertion', revisable: true, prov: [SEED_ANCHOR] });
+        emit({ op: 'REC', target: modId + ':' + rule, action: 'induced-not-seeded', value: INDUCED_LAWS[rule] });
         continue;
       }
       if (rule === 'attribution_verbs') {
         // induced, never seeded: the inventory is empty by design and grows by
         // REC at read time. Record the convention node and the law, no members.
         emit({ op: 'INS', kind: 'convention', id: modId + ':' + rule, rule, module: modId });
-        emit({ op: 'REC', target: modId + ':' + rule, action: 'induced-not-seeded', value: 'Attribution verbs bootstrap from typography (the closing-quote slot) in any language; admission is two sightings; every confirmation adds mass.' });
+        emit({ op: 'REC', target: modId + ':' + rule, action: 'induced-not-seeded', value: INDUCED_LAWS[rule] });
         continue;
       }
       const id = modId + ':' + rule;
@@ -102,6 +123,7 @@ const EN_WORD_PROPS = {
         op: 'INS', kind: 'convention', id, rule, module: modId,
         affinity: CONVENTION_AFFINITY[rule] || null,
         epistemic: 'assertion', revisable: true,
+        prov: [SEED_ANCHOR],
       });
       if (STRUCTURED.has(rule) || !Array.isArray(value) || value.length === 0) {
         // structured values, booleans, and EMPTY inventories (a convention this
@@ -138,7 +160,7 @@ const EN_WORD_PROPS = {
   // nodes so the edges have somewhere to land; they are the engine's
   // universal machinery, named but never defined here (the code defines them).
   for (const m of ['admission', 'sentence-boundary', 'attribution', 'pronoun-resolution',
-    'person-promotion', 'naming-bridge', 'eva-veto', 'routing']) {
+    'person-promotion', 'naming-bridge', 'eva-veto', 'routing', 'proposer']) {
     emit({ op: 'INS', kind: 'mechanism', id: 'mechanics:' + m, target: m });
   }
   const EN = 'en-narrative-v1:';
@@ -168,6 +190,16 @@ const EN_WORD_PROPS = {
   // the hydration CYCLE: failures feed the lexicon; the lexicon feeds the veto
   link('mechanics:eva-veto', 'feeds', 'core:eva_veto_lexicon');
   link('core:eva_veto_lexicon', 'feeds', 'mechanics:eva-veto');
+  // the PROPOSAL channel: the proposer deposits into the induced inventories;
+  // an admitted colon-label feeds attribution and person-promotion; an
+  // admitted separator excepts the sentence boundary. The proposer's failures
+  // feed the veto lexicon — a model that babbles teaches the veto.
+  link('mechanics:proposer', 'feeds', 'core:colon_speaker_labels');
+  link('mechanics:proposer', 'feeds', 'core:separator_glyph_lines');
+  link('mechanics:proposer', 'feeds', 'core:eva_veto_lexicon');
+  link('core:colon_speaker_labels', 'feeds', 'mechanics:attribution');
+  link('core:colon_speaker_labels', 'feeds', 'mechanics:person-promotion');
+  link('core:separator_glyph_lines', 'excepts', 'mechanics:sentence-boundary');
 
   fs.writeFileSync(OUT, lines.join('\n') + '\n');
   console.log('wrote ' + OUT + ' — ' + lines.length + ' records (' + seq + ' ops)');

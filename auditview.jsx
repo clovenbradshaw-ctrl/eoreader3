@@ -360,6 +360,81 @@ function LayerLadder({ doc }) {
   );
 }
 
+// The Proposals channel: pending convention signals from the local model —
+// the convention sentence, its evidence spans (resolvable locally: the user
+// sees the actual text), current mass, distance to admission. Confirm mints
+// a user anchor (instant admission); Reject is a SEG against the model's
+// anchors (the signal decays hard and the rejection feeds the veto lexicon).
+function ProposalsView({ onToast }) {
+  const [, force] = React.useReducer(x => x + 1, 0);
+  const E = window.EOEngine;
+  const list = (E && E.pendingProposals) ? E.pendingProposals() : [];
+  if (!list.length) return (
+    <div className="empty-doc" style={{ padding: 40 }}>
+      No convention proposals yet. When the reading keeps hitting the same friction across documents
+      (a “LABEL: statement” shape no convention consumes, a separator line read as a sentence), the
+      local model may propose a reading convention here. It proposes; it never commits — admission
+      takes independent document witnesses, or your one-tap confirm.
+    </div>
+  );
+  const confirm = (pid) => {
+    try {
+      const r = E.confirmProposal(pid);
+      onToast && onToast(r && r.admitted ? 'Admitted — the reading changes from the next parse.' : 'Confirmed.');
+    } catch (e) {}
+    force();
+  };
+  const reject = (pid) => {
+    try { E.rejectProposal(pid); onToast && onToast('Rejected — the signal decays, and the rejection is remembered.'); } catch (e) {}
+    force();
+  };
+  const statusTag = (s) =>
+    s === 'admitted' ? ['place', 'admitted'] :
+    s === 'rejected' ? ['', 'rejected'] :
+    s === 'dormant' ? ['', 'dormant'] :
+    s === 'unmappable' ? ['', 'needs review'] : ['person', 'signal'];
+  return (
+    <div className="graph-view">
+      {list.map(p => {
+        const [cls, label] = statusTag(p.status);
+        return (
+          <div key={p.pid} className="graph-sec">
+            <h4>
+              <span className={'graph-tag ' + cls}>{label}</span>{' '}
+              {p.statement || '(no statement)'}
+            </h4>
+            <div className="graph-dim" style={{ marginBottom: 6 }}>
+              {p.register ? 'register: ' + p.register + ' · ' : ''}
+              {p.inventory ? 'lands in: ' + p.inventory + (p.members && p.members.length ? ' (' + p.members.join(', ') + ')' : '') + ' · ' : ''}
+              mass {p.mass} / θ {p.theta}
+              {p.status === 'signal' && (p.needsNonModel
+                ? ' · needs an independent witness (another document, or your confirm)'
+                : ' · ' + p.distance + ' from admission')}
+              {p.recurrence ? ' · proposed ' + (p.recurrence + 1) + ' times' : ''}
+            </div>
+            <div className="graph-ents">
+              {(p.evidence || []).map((ev, i) => (
+                <div key={i} className="graph-ent">
+                  <span className="graph-tag">{ev.reader}{ev.c != null ? ' · ' + ev.c : ''}</span>
+                  <span className="graph-ent-name" style={{ fontWeight: 400 }}>
+                    {ev.text != null ? ev.text : <span className="graph-dim" title={ev.h}>opaque off-device — {String(ev.h).slice(0, 8)}…</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {p.status === 'signal' && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button className="mini-btn primary" onClick={() => confirm(p.pid)} title="Mint a user anchor — instant admission">Confirm</button>
+                <button className="mini-btn" onClick={() => reject(p.pid)} title="SEG the model's anchors — the signal decays and the rejection is remembered">Reject</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Assemble the unified export: graph snapshot line(s) (schema cleon-graph/1)
 // when ingestion is on, plus the audit turn lines (schema cleon-audit/1) when
 // output is on. Every line is a self-contained, independently-parseable record.
@@ -398,6 +473,8 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
   const view = turns.slice().reverse();               // newest first
   const proseDocs = (docs || []).filter(d => d && d.kind === 'prose');
   const graphDoc = proseDocs.find(d => d.id === graphDocId) || proseDocs[proseDocs.length - 1] || null;
+  const pendingProposals = (window.EOEngine && window.EOEngine.pendingProposals)
+    ? window.EOEngine.pendingProposals().filter(p => p.status === 'signal' || p.status === 'unmappable') : [];
 
   const ts = () => new Date().toISOString().replace(/[:.]/g, '-');
   const build = () => buildUnifiedJSONL({ docs, includeIngestion: exportIngestion, includeOutput: exportOutput });
@@ -433,6 +510,10 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
           <button className={'drawer-tab' + (tab === 'trace' ? ' on' : '')} onClick={() => setTab('trace')}>Trace{turns.length ? ' · ' + turns.length : ''}</button>
           <button className={'drawer-tab' + (tab === 'graph' ? ' on' : '')} onClick={() => setTab('graph')}>Graph{proseDocs.length ? ' · ' + proseDocs.length : ''}</button>
           <button className={'drawer-tab' + (tab === 'ladder' ? ' on' : '')} onClick={() => setTab('ladder')} title="The EO layer ladder — the essay's 1-2-1 force-count test, run live on this document">Ladder</button>
+          <button className={'drawer-tab' + (tab === 'proposals' ? ' on' : '')} onClick={() => setTab('proposals')}
+                  title="Convention proposals from the local model — pending signals with their evidence, mass, and distance to admission">
+            Proposals{pendingProposals.length ? ' · ' + pendingProposals.length : ''}
+          </button>
           <div style={{ flex: 1 }} />
           {tab === 'trace' && (
             <button className={'aud-rec' + (enabled ? ' on' : '')} role="switch" aria-checked={enabled}
@@ -457,7 +538,9 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
                     : 'Recording is paused. Turn it on to capture chat turns.'}</div>)
             : tab === 'ladder'
               ? <LayerLadder doc={graphDoc} />
-              : <GraphView doc={graphDoc} />}
+              : tab === 'proposals'
+                ? <ProposalsView onToast={onToast} />
+                : <GraphView doc={graphDoc} />}
         </div>
 
         <div className="glass-foot">

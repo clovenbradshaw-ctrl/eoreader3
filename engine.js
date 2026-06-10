@@ -483,6 +483,37 @@ const READING_RULES = {
     mass: 0, layer: 'significance', src: 'learned', module: 'core',
     desc: 'Terms learned from repeated EVA failures — the model\'s recurring tics (names it keeps inventing, framings it keeps slipping into), admitted on the second sighting like any induced rule. Each admission is a contextual neuron: it feeds back into the veto and the retry prompt, and its REC (with register affinity) is the hydration record appended to memory/conventions.jsonl. Starts EMPTY: the lexicon is grown, never seeded.',
   },
+  colon_speaker_labels: {
+    value: [],
+    mass: 0, layer: 'structure', src: 'learned', module: 'core',
+    desc: 'Voice labels admitted through the convention-proposal channel: a line "LABEL: statement" whose LABEL is a member binds a SIG attributing the statement to that label as a speaking voice (an agency or organization speaking in its own name — the MNPD-colon shape). Starts EMPTY: grown by admitted proposals, never seeded, so the pass is inert at the parity floor.',
+  },
+  separator_glyph_lines: {
+    value: [],
+    mass: 0, layer: 'existence', src: 'learned', module: 'core',
+    desc: 'Typographic separator runs ("***", "---") admitted through the convention-proposal channel: a sentence that is exactly one of these glyph runs is document structure (a section break), not prose — it stops being picked as a passage or a section label. Starts EMPTY: grown by admitted proposals, never seeded.',
+  },
+  // ── Provenance-anchored conventions — the proposal channel's physics ──
+  convention_proposals: {
+    value: true, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Whether the local model may run proposal turns at all (the side-panel toggle, a first-class rule like the Propositional Veto). The model only ever PROPOSES — admission stays mechanical regardless of this switch.',
+  },
+  provenance_weighting: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When true, a convention\'s projected mass is the sum over its provenance anchors (coupling × independence × decay × register-fit) instead of flat seed authority — register weighting becomes automatic. Ships OFF: flip when the fixture battery and corpus-Q scores hold under it. The anchor machinery itself (minting, admission of proposals) runs regardless; this flag only governs whether anchor mass modulates the live reading.',
+  },
+  provenance_admit_theta: {
+    value: 2.0, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Independent-anchor coupling a candidate convention must accumulate to be admitted (θ_admit). 2.0 is conservative: two document witnesses beyond the model\'s own deposit, or one document witness plus a user confirmation. Itself a tunable rule.',
+  },
+  proposal_session_budget: {
+    value: 3, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Proposal turns the local model may run per session. The proposer reacts to registered friction at idle priority; the budget keeps it from becoming a background obsession.',
+  },
+  proposal_dup_sim: {
+    value: 0.92, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Embedding cosine at or above which two proposed conventions are the same proposal recurring (θ_dup) — their sightings merge. Recurrence raises a signal\'s visibility in the drawer; it can never self-admit (model anchors never satisfy the non-model admission clause).',
+  },
   role_clause_verbs: {
     value: ['runs?','running','leads?','leading','heads?','heading','chairs?','chairing','manages?','managing','directs?','directing','oversees?','overseeing','owns?','owning','operates?','operating','founded','co-founded','controls?','controlling','commands?','commanding','supervises?','supervising'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -684,7 +715,8 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS,
     ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
     DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
-    GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS;
+    GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS,
+    COLON_SPEAKER_LABELS, SEPARATOR_GLYPH_LINES;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -730,6 +762,10 @@ function rebuildLangSets() {
   const evam = mod_values('eva_machinery_terms');
   EVA_MACHINERY_RE = evam.length ? new RegExp('\\b(' + evam.join('|') + ')\\b', 'i') : /$^/;
   EVA_VETO_TERMS = new Set(mod_values('eva_veto_lexicon'));
+  // proposer-admitted inventories (empty until a proposed convention admits —
+  // induced, never seeded, so both sets are inert at the parity floor)
+  COLON_SPEAKER_LABELS = new Set(mod_values('colon_speaker_labels').map(s => String(s).toLowerCase()));
+  SEPARATOR_GLYPH_LINES = new Set(mod_values('separator_glyph_lines').map(s => String(s).replace(/\s+/g, '')));
 }
 // Apply a language pack: write its detectors into the rules with
 // provenance, register the module, rebuild the lexical sets. English
@@ -794,13 +830,30 @@ function projectConventions(records) {
   const moduleProps = new Map();   // moduleId -> { path: value }
   const evaTally = new Map();      // lang|term -> sightings (hydration RECs)
   const evaInduced = new Set();    // terms past the two-sighting gate
+  // ── provenance (see PROVENANCE-ANCHORED CONVENTIONS below) ──
+  const provenance = new Map();    // convention id -> [anchors]
+  const segs = [];                 // SEG records: { target, against:[h…] }
+  const proposals = [];            // REC action:'proposal-signal' (cross-session recurrence)
+  let maxSeq = -1;
+  const provAdd = (id, prov) => {
+    if (!id || !Array.isArray(prov) || !prov.length) return;
+    if (!provenance.has(id)) provenance.set(id, []);
+    const list = provenance.get(id);
+    const have = new Set(list.map(a => a.h));
+    for (const a of prov) if (a && a.h && !have.has(a.h)) { list.push({ ...a }); have.add(a.h); }
+  };
   for (const ev of (records || [])) {
     if (!ev || !ev.op) continue;
+    if (ev.seq != null && ev.seq > maxSeq) maxSeq = ev.seq;
     if (ev.op === 'INS' && ev.kind === 'convention' && ev.id) {
       conventions.set(ev.id, { module: ev.module, rule: ev.rule || null, value: undefined });
+      // absence = legacy/seed: a convention with no recorded provenance gets
+      // ONE synthetic seed anchor — finite mass, outvotable by real sources.
+      provAdd(ev.id, (Array.isArray(ev.prov) && ev.prov.length) ? ev.prov : [{ h: 'seed', r: 'seed', c: 1.0, sig: null }]);
     } else if (ev.op === 'SYN' && ev.v === 'member-of' && ev.o != null && ev.s != null) {
       if (!members.has(ev.o)) members.set(ev.o, []);
       members.get(ev.o).push(ev.s);
+      if (Array.isArray(ev.prov)) provAdd(ev.o, ev.prov);
     } else if (ev.op === 'DEF' && ev.path === 'value' && conventions.has(ev.target)) {
       conventions.get(ev.target).value = ev.value;
     } else if (ev.op === 'DEF' && ev.path && ev.module && ev.kind === 'module-prop') {
@@ -813,11 +866,19 @@ function projectConventions(records) {
       evaTally.set(k, Math.max(evaTally.get(k) || 0, ev.value.sightings || ((evaTally.get(k) || 0) + 1)));
       if ((evaTally.get(k) || 0) >= 2) evaInduced.add(ev.value.term);
     }
+    else if (ev.op === 'REC') {
+      // any REC may carry prov — a sighting deposited onto its target
+      if (ev.target && Array.isArray(ev.prov)) provAdd(ev.target, ev.prov);
+      if ((ev.action === 'proposal-signal' || ev.action === 'proposal-admitted') && ev.value) proposals.push(ev);
+    }
+    else if (ev.op === 'SEG' && Array.isArray(ev.against)) {
+      segs.push({ target: ev.target || null, against: ev.against.slice() });
+    }
     // other word-property DEFs (gender/person/animacy/…) and RECs enrich the
-    // graph; projection v1 reads membership + values + hydration only.
+    // graph; projection v1 reads membership + values + hydration + provenance.
   }
   for (const [id, c] of conventions) if (c.value === undefined && members.has(id)) c.value = members.get(id);
-  return { conventions, moduleProps, evaInduced: [...evaInduced], evaTally };
+  return { conventions, moduleProps, evaInduced: [...evaInduced], evaTally, provenance, segs, proposals, maxSeq };
 }
 
 function parseConventionsJSONL(text) {
@@ -833,6 +894,7 @@ function parseConventionsJSONL(text) {
 function loadConventions(input) {
   const records = typeof input === 'string' ? parseConventionsJSONL(input) : (input || []);
   const proj = projectConventions(records);
+  _provenanceIngest(proj);
   // The RULES LEDGER is the durable store — every parse re-folds it into the
   // live rules, so a direct write would be clobbered on the next document.
   // Conventions therefore land as ledger DELTAS against the current fold (the
@@ -845,6 +907,10 @@ function loadConventions(input) {
   const fold = projectRules(RULES_LEDGER, { packs: ALL_BUCKETS });
   let applied = 0, packApplied = 0, deltas = 0;
   const emit = (ev) => { ledgerAppend({ ...ev, basis: 'conventions', src: 'conventions.jsonl' }); deltas++; };
+  // Inventories grown at read time (proposal admissions, eva neurons): the
+  // file may ADD members a past session admitted, but never retracts what
+  // this device learned locally — add-only on load.
+  const INDUCED_ADD_ONLY = new Set(['colon_speaker_labels', 'separator_glyph_lines', 'eva_veto_lexicon']);
   for (const [, c] of proj.conventions) {
     if (c.value === undefined || !c.rule || !READING_RULES[c.rule] || c.rule === 'attribution_verbs') continue;
     const bucket = c.module || 'core';
@@ -855,7 +921,7 @@ function loadConventions(input) {
       const have = [];
       if (pb) for (const k of (pb.order || [])) if ((pb.tokens.get(k) || 0) > 0) have.push(k);
       const haveSet = new Set(have), wantSet = new Set(want);
-      for (const t of have) if (!wantSet.has(t)) emit({ target: 'rule:' + c.rule, action: 'remove-token', bucket, value: t, mass: 1 });
+      if (!INDUCED_ADD_ONLY.has(c.rule)) for (const t of have) if (!wantSet.has(t)) emit({ target: 'rule:' + c.rule, action: 'remove-token', bucket, value: t, mass: 1 });
       for (const t of want) if (!haveSet.has(t)) emit({ target: 'rule:' + c.rule, action: 'add-token', bucket, value: t, mass: 1 });
     } else {
       const cur = pb ? pb.latest : undefined;
@@ -898,7 +964,8 @@ function _conventionsExport() {
   }
   // core production-guard conventions — register-agnostic assertions
   const CORE_IDS = ['discourse_junk', 'answer_discourse', 'structure_labels', 'transcript_formula',
-    'generic_voice_heads', 'place_org_cues', 'eva_machinery_terms', 'eva_veto_lexicon'];
+    'generic_voice_heads', 'place_org_cues', 'eva_machinery_terms', 'eva_veto_lexicon',
+    'colon_speaker_labels', 'separator_glyph_lines'];
   const coreConventions = {};
   for (const id of CORE_IDS) if (READING_RULES[id]) coreConventions[id] = READING_RULES[id].value;
   const modules = {
@@ -913,6 +980,939 @@ function _conventionsExport() {
     modules[pack.id] = { language: pack.language, conventions: { ...pack.rules }, props };
   }
   return { modules };
+}
+
+/* ============================================================
+   PROVENANCE-ANCHORED CONVENTIONS — sources as fingerprints, the model as
+   convention-PROPOSER.
+
+   A convention carries provenance back to its sources, but a source is
+   pointed to by content hash + embedding signature, never by name or
+   resolvable location:
+
+     anchor := { h:   sha256(normalized_span_text)[:16],   // content hash
+                 sig: int8[384] | null,                    // quantized MiniLM
+                 r:   reader_id,                           // who saw it
+                 c:   coupling_at_registration,            // frozen at mint
+                 t:   seq }                                // log position
+
+   Locally resolvable (the parse-time hash table maps h → doc/sentence),
+   globally opaque (off-device, h is 16 hex with no dictionary). Mass is a
+   sum over anchors (coupling × independence × decay × register-fit);
+   admission is mechanical (θ_admit of independent coupling, ≥2 distinct h,
+   ≥1 non-model witness). The local model gains exactly one power: noticing
+   that REGISTERED friction has a common shape and saying so in one
+   sentence with engine-minted span citations. It proposes; it never
+   commits, cites what it wasn't shown, anchors, or witnesses itself.
+   ============================================================ */
+
+// ── sha256, synchronous and dependency-free (the VM harness has no crypto
+//    global, and span hashing happens on the parse path) ──
+function _utf8Bytes(str) {
+  const out = [];
+  for (let i = 0; i < str.length; i++) {
+    let c = str.codePointAt(i);
+    if (c > 0xffff) i++;
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return out;
+}
+const _SHA256_K = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+function _sha256Hex(str) {
+  const bytes = _utf8Bytes(String(str));
+  const H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+  const msg = bytes.concat([0x80]);
+  while (msg.length % 64 !== 56) msg.push(0);
+  const bitLen = bytes.length * 8;
+  const hi = Math.floor(bitLen / 0x100000000), lo = bitLen >>> 0;
+  for (let i = 3; i >= 0; i--) msg.push((hi >>> (i * 8)) & 0xff);
+  for (let i = 3; i >= 0; i--) msg.push((lo >>> (i * 8)) & 0xff);
+  const w = new Array(64);
+  const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let off = 0; off < msg.length; off += 64) {
+    for (let i = 0; i < 16; i++) {
+      w[i] = (msg[off + 4 * i] << 24) | (msg[off + 4 * i + 1] << 16) | (msg[off + 4 * i + 2] << 8) | msg[off + 4 * i + 3];
+    }
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    for (let i = 0; i < 64; i++) {
+      const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + S1 + ch + _SHA256_K[i] + w[i]) | 0;
+      const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0;
+    H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+  }
+  return H.map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
+}
+
+function _normalizeSpan(text) {
+  let t = String(text == null ? '' : text);
+  try { t = t.normalize('NFC'); } catch (e) {}
+  return t.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+function spanHash(text) { return _sha256Hex(_normalizeSpan(text)).slice(0, 16); }
+
+// ── embedding signatures: quantized MiniLM rows, cosine over int8 ──
+function _quantizeSig(vec) {
+  if (!vec || !vec.length) return null;
+  const out = new Array(vec.length);
+  for (let i = 0; i < vec.length; i++) out[i] = Math.max(-127, Math.min(127, Math.round(vec[i] * 127)));
+  return out;
+}
+function sigCosine(a, b) {
+  if (!a || !b || !a.length || a.length !== b.length) return null;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  if (!na || !nb) return null;
+  return dot / Math.sqrt(na * nb);
+}
+async function _sigOf(text) {
+  try {
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return null;
+    const v = await window.EOEmbed.embedSentences([String(text == null ? '' : text)]);
+    return v && v[0] ? _quantizeSig(v[0]) : null;
+  } catch (e) { return null; }
+}
+// The frame's register signature for one document: the L2-normalized centroid
+// of its sentence embeddings, quantized like an anchor sig. Null without an
+// embedder — coupling-only weighting, exactly the strict-privacy degradation.
+async function docSignature(doc) {
+  if (!doc || doc.kind !== 'prose') return null;
+  if (doc._docSig !== undefined) return doc._docSig;
+  try {
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return (doc._docSig = null);
+    const texts = (doc.sentenceTexts || []).slice(0, 64);
+    if (!texts.length) return (doc._docSig = null);
+    const vs = await window.EOEmbed.embedSentences(texts);
+    if (!vs || !vs.length) return (doc._docSig = null);
+    const dim = vs[0].length, mean = new Array(dim).fill(0);
+    for (const v of vs) for (let i = 0; i < dim; i++) mean[i] += v[i];
+    let norm = 0;
+    for (let i = 0; i < dim; i++) { mean[i] /= vs.length; norm += mean[i] * mean[i]; }
+    norm = Math.sqrt(norm) || 1;
+    for (let i = 0; i < dim; i++) mean[i] /= norm;
+    return (doc._docSig = _quantizeSig(mean));
+  } catch (e) { return (doc._docSig = null); }
+}
+
+// ── anchor registry constants ──
+// Couplings come from the reader registry at MINT time and freeze on the
+// anchor; 'seed' and 'doc-witness' press like the gravity reader, the
+// proposer presses like the llm reader, the user like the human reader.
+function _readerCoupling(r) {
+  if (r === 'llm-proposer') return READER_REGISTRY.llm ? READER_REGISTRY.llm.coupling : 0.6;
+  if (r === 'user') return READER_REGISTRY.human ? READER_REGISTRY.human.coupling : 5.0;
+  return 1.0;   // seed, doc-witness
+}
+const MODEL_ANCHOR_READERS = new Set(['llm-proposer']);
+const ANCHOR_SEG_DECAY = 0.25;   // each SEG against an anchor multiplies its coupling by this
+const ANCHOR_FLOOR = 0.05;       // effective coupling below this: the anchor is dormant
+const ANCHOR_DECAY_TAU = 4096;   // log-positions per γ decay step (gentle; recent ≈ 1.0)
+const REGISTER_FIT_FLOOR = 0.15; // an out-of-register anchor never zeroes out entirely
+const PER_SOURCE_CAP = 0.25;     // no single source carries more than this share of register weight
+
+// ── session state ──
+let CONV_SEQ = 0;                      // position in the conventions log (anchor t)
+const CONV_PROV = new Map();           // convention id -> { anchors:[…] } (_seg counts ride the anchors)
+const KNOWN_CONV_IDS = new Set();      // ids declared by the loaded conventions graph
+const ANCHOR_INDEX = new Map();        // h -> { docId, sentenceIdx, text } (LOCAL ONLY, never shipped)
+const DOC_SPAN_HASHES = new Map();     // docId -> Set(h)
+const SESSION_DOCS = new Set();        // prose docs observed this session
+const FRICTION = new Map();            // key -> friction item
+let FRICTION_N = 0;
+const SPAN_REGISTRY = new Map();       // '†k' -> { docId, sentenceIdx, text }
+let SPAN_N = 0;
+const PROPOSALS = new Map();           // pid -> proposal (signal | admitted | rejected | dormant | unmappable)
+let PROPOSER_TURNS_USED = 0;
+let _LAST_PROMPT_FRICTION = null;      // the friction numbering the last prompt used
+let _ANCHOR_PRIVACY = null;            // 'strict' | null; null defers to window.EO_ANCHOR_PRIVATE
+
+function _anchorEffC(a) { return (a && a.c || 0) * Math.pow(ANCHOR_SEG_DECAY, (a && a._seg) || 0); }
+function _anchorDecay(a, now) {
+  if (!a || a.t == null || now == null) return 1;
+  const gamma = READING_RULES.decay_gamma ? READING_RULES.decay_gamma.value : 0.7;
+  return Math.pow(gamma, Math.max(0, now - a.t) / ANCHOR_DECAY_TAU);
+}
+function _registerFit(sig, docSig) {
+  if (!sig || !docSig) return 1;       // no signature on either side: coupling-only
+  const cos = sigCosine(sig, docSig);
+  if (cos == null) return 1;
+  return Math.max(REGISTER_FIT_FLOOR, (1 + cos) / 2);
+}
+// A source is the resolving document when the anchor resolves locally, else
+// the hash itself (off-device the cap degrades to per-span, by construction).
+function _anchorSource(a) {
+  const at = ANCHOR_INDEX.get(a.h);
+  return at ? 'doc:' + at.docId : 'h:' + a.h;
+}
+
+/* mass(convention, frame) = Σ over anchors:
+     coupling_eff × independence × decay(now − t) × registerFit(sig, frame.doc_sig)
+   Independence is set arithmetic (same h = one sighting); the per-source cap
+   solves a small fixed point so no source carries more than PER_SOURCE_CAP of
+   the final register weight (degenerate-safe: with n sources the share cap is
+   max(1/n, PER_SOURCE_CAP), so one- and two-source masses stay uncapped). */
+function anchorMass(anchors, frame = {}) {
+  const now = frame.now != null ? frame.now : CONV_SEQ;
+  const docSig = frame.doc_sig || null;
+  const byH = new Map();
+  for (const a of (anchors || [])) {
+    if (!a || !a.h) continue;
+    const prev = byH.get(a.h);
+    if (!prev || _anchorEffC(a) > _anchorEffC(prev)) byH.set(a.h, a);
+  }
+  const bySource = new Map();
+  let live = 0;
+  for (const a of byH.values()) {
+    const eff = _anchorEffC(a);
+    if (eff < ANCHOR_FLOOR) continue;                       // dormant anchors project nothing
+    live++;
+    const raw = eff * _anchorDecay(a, now) * _registerFit(a.sig, docSig);
+    bySource.set(_anchorSource(a), (bySource.get(_anchorSource(a)) || 0) + raw);
+  }
+  const n = bySource.size;
+  let mass = [...bySource.values()].reduce((s, x) => s + x, 0);
+  let capped = false;
+  // The cap prevents one heavily-read source from becoming the universal
+  // register; below 4 sources a 25% share is arithmetically impossible to
+  // satisfy uniformly, so the cap waits until enough sources exist to mean
+  // something. The fixed point solves m = Σ min(vᵢ, cap·m).
+  if (n >= 4) {
+    for (let it = 0; it < 16; it++) {
+      const cap = PER_SOURCE_CAP * mass;
+      let next = 0, hit = false;
+      for (const v of bySource.values()) { if (v > cap) hit = true; next += Math.min(v, cap); }
+      capped = capped || hit;
+      if (Math.abs(next - mass) < 1e-9) { mass = next; break; }
+      mass = next;
+    }
+  }
+  return { mass, distinctH: byH.size, sources: n, capped, dormant: byH.size > 0 && live === 0 };
+}
+
+/* admit(candidate) ⇔ Σ independent-anchor coupling ≥ θ_admit
+                    ∧ anchors span ≥ 2 distinct h
+                    ∧ ≥ 1 anchor with r ∉ {model readers}
+   The model can never be its own witness — and it is ONE reader: however
+   many spans it cites, its anchors contribute one coupling to the tally
+   (model 0.6 + one document 1.0 = 1.6 stays a signal at θ 2.0; a second
+   document or a user confirmation clears it). */
+function anchorsAdmit(anchors, opts = {}) {
+  const theta = opts.theta != null ? opts.theta
+    : (READING_RULES.provenance_admit_theta ? READING_RULES.provenance_admit_theta.value : 2.0);
+  const byH = new Map();
+  for (const a of (anchors || [])) {
+    if (!a || !a.h) continue;
+    const prev = byH.get(a.h);
+    if (!prev || _anchorEffC(a) > _anchorEffC(prev)) byH.set(a.h, a);
+  }
+  let total = 0, nonModel = false, modelBest = 0;
+  for (const a of byH.values()) {
+    const eff = _anchorEffC(a);
+    if (eff < ANCHOR_FLOOR) continue;
+    if (MODEL_ANCHOR_READERS.has(a.r)) { modelBest = Math.max(modelBest, eff); continue; }
+    total += eff;
+    nonModel = true;
+  }
+  total += modelBest;
+  return { admit: total >= theta && byH.size >= 2 && nonModel, total, distinctH: byH.size, nonModel, theta };
+}
+
+function _mintAnchor(text, r, sig = null) {
+  return { h: spanHash(text), sig: sig || null, r, c: _readerCoupling(r), t: ++CONV_SEQ };
+}
+// On-device resolution; off-device (no table entry) an anchor is opaque.
+function resolveAnchor(h) {
+  const at = ANCHOR_INDEX.get(h);
+  return at ? { docId: at.docId, sentenceIdx: at.sentenceIdx, text: at.text } : null;
+}
+
+// ── privacy ──
+// Default ships {h, sig}. Strict mode strips sig from every SHIPPED record
+// (serialized delta + the onConventionsRec hook): local-only weighting,
+// coupling-only off-device. In-memory anchors keep their sigs either way.
+function setAnchorPrivacy(mode) { _ANCHOR_PRIVACY = mode === 'strict' ? 'strict' : null; }
+function _anchorPrivacyStrict() {
+  if (_ANCHOR_PRIVACY) return _ANCHOR_PRIVACY === 'strict';
+  try { return typeof window !== 'undefined' && String(window.EO_ANCHOR_PRIVATE || '').toLowerCase() === 'strict'; }
+  catch (e) { return false; }
+}
+function _shipAnchor(a) {
+  if (!a || typeof a !== 'object') return a;
+  return { h: a.h, sig: _anchorPrivacyStrict() ? null : (a.sig || null), r: a.r, c: a.c, t: a.t == null ? null : a.t };
+}
+function _shipRecord(rec) {
+  const out = { ...rec };
+  if (Array.isArray(out.prov)) out.prov = out.prov.map(_shipAnchor);
+  return out;
+}
+function _shipConventionsRec(rec) {
+  try {
+    const hook = (typeof window !== 'undefined' && window.EOEngine && window.EOEngine.onConventionsRec);
+    if (typeof hook === 'function') hook(_shipRecord(rec));
+  } catch (e) { /* a hook failure never blocks the reading */ }
+}
+
+// ── projection-side ingest: the loaded graph's provenance becomes live state ──
+function _provenanceIngest(proj) {
+  if (!proj) return;
+  if (proj.maxSeq != null && proj.maxSeq >= CONV_SEQ) CONV_SEQ = proj.maxSeq + 1;
+  for (const id of (proj.conventions ? proj.conventions.keys() : [])) KNOWN_CONV_IDS.add(id);
+  for (const [id, anchors] of (proj.provenance || new Map())) {
+    const cur = CONV_PROV.get(id);
+    if (!cur) { CONV_PROV.set(id, { anchors: anchors.map(a => ({ ...a })) }); continue; }
+    const have = new Set(cur.anchors.map(a => a.h));
+    for (const a of anchors) if (a && a.h && !have.has(a.h)) { cur.anchors.push({ ...a }); have.add(a.h); }
+  }
+  for (const sg of (proj.segs || [])) {
+    const p = sg.target ? CONV_PROV.get(sg.target) : null;
+    if (!p) continue;
+    const against = new Set(sg.against || []);
+    for (const a of p.anchors) if (against.has(a.h)) a._seg = (a._seg || 0) + 1;
+  }
+  // Cross-session recurrence: an earlier session's signals re-enter the
+  // registry (a duplicate proposal MERGES rather than re-deposits) — but
+  // model anchors never sum past the non-model admission clause, so a
+  // recurring signal earns visibility, not authority.
+  for (const ev of (proj.proposals || [])) {
+    const v = ev.value || {};
+    if (!v.pid) continue;
+    const ex = PROPOSALS.get(v.pid);
+    if (ex) {
+      const have = new Set(ex.anchors.map(a => a.h));
+      for (const a of (ev.prov || [])) if (a && a.h && !have.has(a.h)) { ex.anchors.push({ ...a }); have.add(a.h); }
+      ex.recurrence = (ex.recurrence || 0) + 1;
+      continue;
+    }
+    PROPOSALS.set(v.pid, {
+      pid: v.pid, convId: 'core:proposal:' + v.pid,
+      status: ev.action === 'proposal-admitted' ? 'admitted' : 'signal',
+      sentence: v.statement || '', register: v.register || null,
+      frictionType: v.friction || null, frictionKey: null, sig: null,
+      anchors: (ev.prov || []).filter(a => a && a.h).map(a => ({ ...a })),
+      recurrence: 0, members: (v.members || []).slice(), inventory: v.inventory || null,
+      module: 'core', links: [], probe: _probeFor(v), records: [], at: ev.at || null,
+    });
+  }
+}
+function _probeFor(v) {
+  if (!v || !v.inventory) return null;
+  if (v.inventory === 'colon_speaker_labels') return { kind: 'colon-label', labels: (v.members || []).slice() };
+  if (v.inventory === 'separator_glyph_lines') return { kind: 'separator-line', shapes: (v.members || []).slice() };
+  return null;
+}
+
+// ── read APIs over the provenance store ──
+function conventionProvenance(id) {
+  const p = CONV_PROV.get(id);
+  if (!p) return null;
+  return {
+    anchors: p.anchors.map(a => ({ ...a })),
+    dormant: p.anchors.length > 0 && p.anchors.every(a => _anchorEffC(a) < ANCHOR_FLOOR),
+  };
+}
+function conventionMass(id, frame = {}) {
+  const p = CONV_PROV.get(id);
+  return p ? anchorMass(p.anchors, frame).mass : 0;
+}
+// Revision keeps admitted conventions on the leash: a SEG against half the
+// anchors splits the projection into register variants — the surviving
+// cluster and the contested one, each with its own mass and sig centroid.
+function _sigCentroid(anchors) {
+  const sigs = anchors.map(a => a.sig).filter(s => s && s.length);
+  if (!sigs.length) return null;
+  const dim = sigs[0].length, mean = new Array(dim).fill(0);
+  for (const s of sigs) for (let i = 0; i < dim; i++) mean[i] += s[i];
+  for (let i = 0; i < dim; i++) mean[i] = Math.round(mean[i] / sigs.length);
+  return mean;
+}
+function conventionVariants(id) {
+  const p = CONV_PROV.get(id);
+  if (!p) return [];
+  const surviving = p.anchors.filter(a => !((a._seg || 0) > 0) && _anchorEffC(a) >= ANCHOR_FLOOR);
+  const contested = p.anchors.filter(a => (a._seg || 0) > 0);
+  const out = [];
+  if (surviving.length) out.push({ register: 'surviving', anchors: surviving.map(a => ({ ...a })), mass: anchorMass(surviving).mass, centroid: _sigCentroid(surviving) });
+  if (contested.length) out.push({ register: 'contested', anchors: contested.map(a => ({ ...a })), mass: anchorMass(contested).mass, centroid: _sigCentroid(contested) });
+  return out;
+}
+function segConvention(id, opts = {}) {
+  const p = CONV_PROV.get(id);
+  if (!p) return null;
+  const against = new Set((opts.against && opts.against.length) ? opts.against : p.anchors.map(a => a.h));
+  for (const a of p.anchors) if (against.has(a.h)) a._seg = (a._seg || 0) + 1;
+  const rec = { op: 'SEG', target: id, against: [...against], reason: opts.reason || 'contrary-sighting', at: Date.now() };
+  CONVENTIONS_DELTA.push(rec);
+  _shipConventionsRec(rec);
+  // An admitted proposal whose anchors all decay below floor goes DORMANT:
+  // its members leave the live inventory; the append-only log keeps the
+  // history. Nothing is deleted; everything can stop mattering.
+  const prop = [...PROPOSALS.values()].find(x => x.convId === id);
+  if (prop && prop.status === 'admitted' && p.anchors.every(a => _anchorEffC(a) < ANCHOR_FLOOR)) {
+    const fold = projectRules(RULES_LEDGER, currentFrame());
+    const fr = fold.rules[prop.inventory];
+    const pb = fr && fr.perBucket && fr.perBucket[prop.module || 'core'];
+    for (const mb of prop.members) {
+      // cancel the member's full accumulated token mass, whatever channels fed it
+      const cur = pb ? (pb.tokens.get(String(mb)) || 0) : 0;
+      if (cur > 0) ledgerCommit({ target: 'rule:' + prop.inventory, action: 'remove-token', bucket: prop.module || 'core', value: mb, mass: cur, src: 'proposal-dormant' });
+    }
+    prop.status = 'dormant';
+  }
+  return rec;
+}
+function provenanceReport(frame = {}) {
+  const out = [];
+  for (const [id, p] of CONV_PROV) {
+    const am = anchorMass(p.anchors, frame);
+    out.push({ id, mass: +am.mass.toFixed(4), anchors: p.anchors.length, distinctH: am.distinctH, sources: am.sources, capped: am.capped, dormant: am.dormant });
+  }
+  out.sort((a, b) => b.mass - a.mass);
+  return out;
+}
+
+/* ============================================================
+   FRICTION NOMINATION — the engine registers what the reading could not
+   consume; the model only ever reasons over friction the engine nominated.
+   Mechanically generated, at parse time, from this session's documents:
+   unbound colon-label lines (speaker-pattern), separator glyph runs read as
+   sentences (boundary), and repeated pronoun stalls sharing a surface
+   (stall). Pure observation: no events, no rule changes — parity holds.
+   ============================================================ */
+function _isSeparatorRun(t) {
+  const s = String(t == null ? '' : t).trim();
+  if (!s) return false;
+  const glyphs = s.replace(/\s+/g, '');
+  return glyphs.length >= 3 && /^[*\-–—_=~•·]+$/.test(glyphs) && new Set(glyphs).size <= 2;
+}
+function _truncWords(text, n) {
+  const words = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().split(' ');
+  return words.length <= n ? words.join(' ') : words.slice(0, n).join(' ') + '…';
+}
+function _frictionSight(type, key, doc, sentenceIdx, describe) {
+  let item = FRICTION.get(key);
+  if (!item) {
+    item = { id: ++FRICTION_N, type, key, describe, perDoc: new Map(), spans: [] };
+    FRICTION.set(key, item);
+  }
+  item.perDoc.set(doc.id, (item.perDoc.get(doc.id) || 0) + 1);
+  const text = (doc.sentenceTexts || [])[sentenceIdx];
+  if (text != null && item.spans.filter(sp => sp.docId === doc.id).length < 4) {
+    const sid = '†' + (++SPAN_N);
+    SPAN_REGISTRY.set(sid, { docId: doc.id, sentenceIdx, text: String(text) });
+    item.spans.push({ sid, docId: doc.id, sentenceIdx, text: String(text) });
+  }
+}
+function _nominateFriction(doc) {
+  // a re-parse of the same document replaces its prior contribution
+  for (const item of FRICTION.values()) {
+    if (!item.perDoc.has(doc.id)) continue;
+    item.perDoc.delete(doc.id);
+    item.spans = item.spans.filter(sp => sp.docId !== doc.id);
+  }
+  SESSION_DOCS.add(doc.id);
+  const texts = doc.sentenceTexts || [];
+  const events = doc._events || [];
+  const isTranscript = doc._genre === 'transcript';
+  const sigBySent = new Map();
+  for (const ev of events) {
+    if (ev.op !== 'SIG' || ev.sentence_idx == null || !ev.speaker || ev.speaker === '?') continue;
+    if (!sigBySent.has(ev.sentence_idx)) sigBySent.set(ev.sentence_idx, new Set());
+    sigBySent.get(ev.sentence_idx).add(String(ev.speaker).toLowerCase());
+  }
+  for (let i = 0; i < texts.length; i++) {
+    const s = String(texts[i] || '').trim();
+    // 1. speaker-pattern: a "LABEL: statement" line no convention consumed
+    if (!isTranscript) {
+      const m = /^([^:]{1,40}):\s+(\S.*)$/.exec(s);
+      if (m) {
+        const label = m[1].trim();
+        const lc = label.toLowerCase();
+        const ok = /^\p{Lu}/u.test(label)
+          && /^[\p{L}\p{N}][\p{L}\p{N} .&'’\-]*$/u.test(label)
+          && label.split(/\s+/).length <= 5
+          && !STRUCTURE_LABELS.has(lc) && !TRANSCRIPT_HEADER_LABELS.has(lc) && !DISCOURSE_JUNK.has(lc)
+          && !(label.split(/\s+/).length === 1 && QA_STOP.has(lc))
+          && m[2].trim().length >= 12;
+        const bound = sigBySent.get(i);
+        if (ok && !(bound && bound.has(lc))) {
+          _frictionSight('speaker-pattern', 'colon-label:' + lc, doc, i,
+            'Lines beginning "' + label + ':" are followed by statements; the reader filed ' + label + ' as a name but bound no speaking voice to those lines.');
+        }
+      }
+    }
+    // 2. boundary: a typographic separator run read as a sentence
+    if (_isSeparatorRun(s)) {
+      _frictionSight('boundary', 'separator:' + s.replace(/\s+/g, ''), doc, i,
+        'A line of "' + _truncWords(s, 4) + '" separates parts of the document; the reader treated it as a sentence.');
+    }
+  }
+  // 3. stall: pronoun stalls sharing a surface (the single-document trigger)
+  for (const ev of events) {
+    if (ev.op !== 'NUL' || !/^pronoun-stall/.test(ev.reason || '') || !ev.surface || ev.sentence_idx == null) continue;
+    const lc = String(ev.surface).toLowerCase();
+    _frictionSight('stall', 'stall:' + lc, doc, ev.sentence_idx,
+      'The reader did not commit when "' + lc + '" could have referred to more than one figure.');
+  }
+}
+// The session's registered friction, thresholded (a shape must recur — seen
+// ≥ 3 times — before it is worth a proposal turn) and numbered for the prompt.
+function frictionReport() {
+  const out = [];
+  for (const item of FRICTION.values()) {
+    let count = 0;
+    for (const n of item.perDoc.values()) count += n;
+    if (count < 3) continue;
+    if (!item.spans.length) continue;
+    out.push({
+      id: item.id, type: item.type, key: item.key, count, docs: item.perDoc.size,
+      description: item.describe,
+      spans: item.spans.slice(0, 4).map(sp => ({ sid: sp.sid, docId: sp.docId, sentenceIdx: sp.sentenceIdx, text: sp.text })),
+    });
+  }
+  out.sort((a, b) => b.count - a.count || a.id - b.id);
+  return out;
+}
+
+/* ============================================================
+   THE CONVENTION PROPOSER — the same WebLLM instance that phrases answers,
+   given one new turn type. It sees a conventionsPortrait (the conventions
+   projection rendered as prose, the same surface/machinery separation the
+   talker lives under — never the JSONL, the seq numbers, the anchors, or
+   the operator vocabulary) plus the friction evidence, and replies in a
+   closed grammar over engine-minted span handles. Everything else — span
+   resolution, hashing, signatures, record shapes, admission — is minted by
+   the machine.
+   ============================================================ */
+function conventionsPortrait() {
+  const bits = [];
+  const few = (set, n) => [...set].slice(0, n);
+  if (TITLE_TOKENS && TITLE_TOKENS.size) {
+    const t = few(TITLE_TOKENS, 3).map(w => w[0].toUpperCase() + w.slice(1));
+    bits.push('titles like ' + t.join(', ') + ' as marking a person');
+  }
+  bits.push('a recorded speaker as a person');
+  if (READING_RULES.singular_they) {
+    bits.push(READING_RULES.singular_they.value
+      ? '"they" as able to name one person in this register'
+      : '"they" as plural in this register');
+  }
+  if (ACTIVE_LANG === 'en') bits.push('a dash as punctuation, not as opening dialogue');
+  if (ABBREVIATIONS && ABBREVIATIONS.size) {
+    bits.push('a period after forms like ' + few(ABBREVIATIONS, 2).map(a => a[0].toUpperCase() + a.slice(1) + '.').join(' or ') + ' as not ending the sentence');
+  }
+  bits.push('paired quotation marks as enclosing speech, attributed through verbs beside the quotation');
+  if (COLON_SPEAKER_LABELS && COLON_SPEAKER_LABELS.size) {
+    bits.push('lines like "' + few(COLON_SPEAKER_LABELS, 1).map(l => l.toUpperCase())[0] + ': …" as that voice speaking');
+  }
+  if (SEPARATOR_GLYPH_LINES && SEPARATOR_GLYPH_LINES.size) {
+    bits.push('a line of ' + few(SEPARATOR_GLYPH_LINES, 1)[0] + ' as a section break, not a sentence');
+  }
+  // the machinery-leak check applies to this path too
+  const clean = bits.filter(b => !EVA_MACHINERY_RE.test(b));
+  return 'The reader currently treats: ' + clean.slice(0, 8).join('; ') + '.';
+}
+
+function proposerPrompt() {
+  const report = frictionReport();
+  if (!report.length) return null;
+  _LAST_PROMPT_FRICTION = report;
+  const lines = [];
+  lines.push('CONVENTIONS IN FORCE (for this register)');
+  lines.push(conventionsPortrait());
+  lines.push('');
+  lines.push('FRICTION OBSERVED (this session, across the loaded documents)');
+  report.forEach((it, k) => {
+    lines.push((k + 1) + '. ' + it.description + ' Seen ' + it.count + ' time' + (it.count === 1 ? '' : 's')
+      + (it.docs > 1 ? ' across ' + it.docs + ' documents' : '') + '.');
+    const spanBits = it.spans.map(sp => '"' + _truncWords(sp.text, 12) + '"').join(' / ');
+    const ids = it.spans.map(sp => sp.sid).join(', ');
+    lines.push('   Example spans: ' + spanBits + ' [' + ids + ']');
+  });
+  lines.push('');
+  lines.push('TASK');
+  lines.push('For any friction item where you can state a reading convention that would resolve it, propose the convention. State: (a) the convention in one plain sentence, (b) which register of text it belongs to, (c) which numbered spans evidence it. Propose nothing for friction you cannot resolve. Do not propose changes to conventions in force unless a friction item contradicts one.');
+  lines.push('');
+  lines.push('Format each proposal exactly as:');
+  lines.push('PROPOSAL');
+  lines.push('convention: <one plain sentence, at most 60 words>');
+  lines.push('register: <the kind of text this convention belongs to>');
+  lines.push('evidence: <span ids, like †1 †2>');
+  lines.push('resolves: friction <number>');
+  lines.push('');
+  lines.push('If you cannot resolve any friction item, reply with the single word NONE.');
+  return {
+    system: 'You read documents alongside a careful reader and put its reading conventions into words. Reply only with PROPOSAL blocks in the exact format requested, or the single word NONE. Never invent span ids, names, or friction items.',
+    user: lines.join('\n'),
+  };
+}
+
+// The trigger. The proposer fires only when: the rule is on, the session
+// budget holds, friction is registered, and either ≥2 documents are loaded
+// or one document carries a recurring stall shape. (Model-loaded-and-idle is
+// the host's check — the engine never blocks a chat turn.)
+function proposerStatus() {
+  const enabled = !READING_RULES.convention_proposals || READING_RULES.convention_proposals.value !== false;
+  const budget = READING_RULES.proposal_session_budget ? (READING_RULES.proposal_session_budget.value | 0) : 3;
+  const report = frictionReport();
+  const stallShape = report.some(it => it.type === 'stall' && it.count >= 3);
+  const trigger = SESSION_DOCS.size >= 2 || (SESSION_DOCS.size >= 1 && stallShape);
+  const eligible = enabled && PROPOSER_TURNS_USED < budget && report.length > 0 && trigger;
+  return {
+    enabled, budget, used: PROPOSER_TURNS_USED, friction: report.length, docs: SESSION_DOCS.size, trigger, eligible,
+    reason: !enabled ? 'disabled'
+      : PROPOSER_TURNS_USED >= budget ? 'budget-exhausted'
+      : !report.length ? 'no-friction'
+      : !trigger ? 'needs-more-documents' : null,
+  };
+}
+
+// ── the constrained proposal grammar, enforced mechanically on receipt ──
+const _PROPOSAL_ALLOWED_CAPS = /^(The|A|An|It|This|That|These|Those|What|When|Where|Who|Why|How|And|But|Or|So|Yet|If|Because|While|Though|Although|Since)$/;
+function _parseProposalReply(reply) {
+  const text = String(reply == null ? '' : reply).replace(/```[a-z]*\n?/gi, '').replace(/```/g, '');
+  const report = _LAST_PROMPT_FRICTION || [];
+  const proposals = [], discarded = [];
+  const blocks = text.split(/^[ \t]*PROPOSAL[ \t]*$/m).slice(1);
+  for (const block of blocks) {
+    const get = (k) => {
+      const m = new RegExp('^\\s*' + k + '\\s*:\\s*([\\s\\S]*?)(?=^\\s*(?:convention|register|evidence|resolves)\\s*:|$)', 'mi').exec(block);
+      return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+    };
+    const sentence = get('convention'), register = get('register');
+    const evidence = get('evidence'), resolves = get('resolves');
+    const reasons = [];
+    if (!sentence) reasons.push('missing-convention');
+    if (sentence && sentence.split(/\s+/).length > 60) reasons.push('over-length');
+    const sids = evidence.match(/†\d+/g) || [];
+    if (!sids.length) reasons.push('missing-evidence');
+    const spans = [];
+    for (const sid of sids) {
+      const sp = SPAN_REGISTRY.get(sid);
+      if (!sp) reasons.push('unknown-span');           // it cannot cite what it wasn't shown
+      else spans.push({ sid, docId: sp.docId, sentenceIdx: sp.sentenceIdx, text: sp.text });
+    }
+    const rm = /friction\s*#?\s*(\d+)/i.exec(resolves || '');
+    const friction = rm ? report[(+rm[1]) - 1] || null : null;
+    if (!friction) reasons.push('missing-resolves');   // unsolicited proposals are dropped
+    // the invented-name check, reused: capitalized proper nouns in the
+    // convention sentence must appear in the referenced spans (the lead word
+    // of the sentence is exempt — it capitalizes by position, not by name)
+    if (sentence && spans.length) {
+      const body = sentence.replace(/^\s*\S+\s*/, '');
+      const spanText = spans.map(s => s.text).join(' ');
+      const properNouns = (body.match(/\b[A-Z][a-zA-Z]+\b/g) || []).filter(w => !_PROPOSAL_ALLOWED_CAPS.test(w));
+      for (const noun of properNouns) if (!spanText.includes(noun)) reasons.push('invented-name:' + noun);
+    }
+    if (reasons.length) { discarded.push({ reasons, sentence: sentence.slice(0, 120) }); continue; }
+    proposals.push({ sentence, register, spans, friction });
+  }
+  return { proposals, discarded };
+}
+
+/* ── mechanical conversion: the engine mints everything ──
+   Resolve span-ids through the session table; hash + sign the actual text;
+   stamp the proposer's coupling; distill the records by friction TYPE (the
+   taxonomy is small and closed); validate against the linkage rules; append
+   as a SIGNAL — a pre-convention in exactly the sense a twice-unseen name is
+   a pre-referent: registered, decaying, waiting for an independent witness. */
+function _unmappableProposal(p, why) {
+  p.status = 'unmappable'; p.note = why;
+  PROPOSALS.set(p.pid, p);
+  const rec = { op: 'REC', target: 'core:proposals', action: 'unmappable', value: { pid: p.pid, statement: p.sentence, friction: p.frictionType, note: why }, prov: p.anchors, at: Date.now() };
+  CONVENTIONS_DELTA.push(rec);
+  _shipConventionsRec(rec);
+  return p;   // queued for the audit drawer, not guessed at
+}
+function _knownConventionIds() {
+  const out = new Set(KNOWN_CONV_IDS);
+  for (const [id, r] of Object.entries(READING_RULES)) {
+    out.add(((r.module && r.module !== 'core') ? r.module : 'core') + ':' + id);
+  }
+  for (const m of ['admission', 'sentence-boundary', 'attribution', 'pronoun-resolution',
+    'person-promotion', 'naming-bridge', 'eva-veto', 'routing', 'proposer']) out.add('mechanics:' + m);
+  return out;
+}
+function _validateCandidate(records) {
+  const OPS = new Set(['INS', 'SYN', 'DEF', 'SIG', 'NUL', 'SEG', 'CON', 'EVA', 'REC']);
+  const declared = _knownConventionIds();
+  for (const r of records) if (r.op === 'INS' && r.id) declared.add(r.id);
+  for (const r of records) {
+    if (!OPS.has(r.op)) return 'bad-op';
+    if (r.op === 'INS' && r.kind === 'convention' && !(r.epistemic === 'assertion' && r.revisable === true)) return 'not-revisable';
+    if (r.op === 'SYN' && r.v === 'member-of' && !declared.has(r.o)) return 'dangling-edge';
+    if (r.op === 'SYN' && r.kind === 'link' && (!declared.has(r.s) || !declared.has(r.o))) return 'dangling-edge';
+  }
+  return null;
+}
+async function _mintProposalSignal(parsed, ctx = {}) {
+  const { sentence, register, spans, friction } = parsed;
+  const pid = 'p' + _sha256Hex(_normalizeSpan(sentence)).slice(0, 8);
+  const sig = await _sigOf(sentence);
+  // recurrence: the same proposal (same sentence, or a cosine-close one)
+  // merges into the existing signal rather than depositing afresh
+  let existing = PROPOSALS.get(pid) || null;
+  if (!existing && sig) {
+    const dup = READING_RULES.proposal_dup_sim ? READING_RULES.proposal_dup_sim.value : 0.92;
+    for (const p of PROPOSALS.values()) {
+      const cos = sigCosine(sig, p.sig);
+      if (cos != null && cos >= dup) { existing = p; break; }
+    }
+  }
+  const anchors = [];
+  const seenH = new Set();
+  for (const sp of spans.slice(0, 6)) {
+    const h = spanHash(sp.text);
+    if (seenH.has(h)) continue;
+    seenH.add(h);
+    anchors.push({ h, sig: await _sigOf(sp.text), r: 'llm-proposer', c: _readerCoupling('llm-proposer'), t: ++CONV_SEQ });
+  }
+  if (existing) {
+    const have = new Set(existing.anchors.map(a => a.h));
+    for (const a of anchors) if (!have.has(a.h)) { existing.anchors.push(a); have.add(a.h); }
+    existing.recurrence = (existing.recurrence || 0) + 1;
+    _checkProposalAdmission(existing);     // merged model anchors still cannot self-admit
+    return existing;
+  }
+  const p = {
+    pid, convId: 'core:proposal:' + pid, status: 'signal',
+    sentence, register: register || null,
+    frictionType: friction.type, frictionKey: friction.key,
+    sig, anchors, recurrence: 0,
+    members: [], inventory: null, module: 'core', links: [], probe: null, records: [],
+    at: Date.now(),
+  };
+  // friction type drives the shape; anything the mapper can't shape is
+  // REC'd as unmappable and queued for the drawer, not guessed at
+  if (friction.type === 'speaker-pattern') {
+    const labels = new Set();
+    for (const sp of spans) {
+      const m = /^([^:]{1,40}):\s+\S/.exec(String(sp.text).trim());
+      if (m) labels.add(m[1].trim().toLowerCase());
+    }
+    if (!labels.size) return _unmappableProposal(p, 'no-label-in-evidence');
+    p.inventory = 'colon_speaker_labels'; p.members = [...labels];
+    p.links = [{ v: 'feeds', o: 'mechanics:attribution' }, { v: 'feeds', o: 'mechanics:person-promotion' }];
+    p.probe = { kind: 'colon-label', labels: p.members.slice() };
+  } else if (friction.type === 'boundary') {
+    const shapes = new Set();
+    for (const sp of spans) {
+      const t = String(sp.text).trim();
+      if (_isSeparatorRun(t)) shapes.add(t.replace(/\s+/g, ''));
+    }
+    if (!shapes.size) return _unmappableProposal(p, 'no-shape-in-evidence');
+    p.inventory = 'separator_glyph_lines'; p.members = [...shapes];
+    p.links = [{ v: 'excepts', o: 'mechanics:sentence-boundary' }];
+    p.probe = { kind: 'separator-line', shapes: p.members.slice() };
+  } else {
+    return _unmappableProposal(p, 'no-mechanical-shape:' + friction.type);
+  }
+  p.records = [
+    { op: 'INS', kind: 'convention', id: p.convId, rule: p.inventory, module: p.module,
+      statement: sentence, affinity: register || null, epistemic: 'assertion', revisable: true, prov: p.anchors },
+    ...p.members.map(mb => ({ op: 'SYN', s: mb, v: 'member-of', o: p.module + ':' + p.inventory, prov: p.anchors.slice(0, 1) })),
+    ...p.links.map(l => ({ op: 'SYN', s: p.convId, v: l.v, o: l.o, kind: 'link' })),
+  ];
+  const bad = _validateCandidate(p.records);
+  if (bad) { noteEvaFailure(['proposal-grammar:' + bad], ctx); return null; }
+  PROPOSALS.set(pid, p);
+  const rec = { op: 'REC', target: 'core:proposals', action: 'proposal-signal',
+    value: { pid, statement: sentence, register: register || null, friction: friction.type, inventory: p.inventory, members: p.members.slice() },
+    prov: p.anchors, at: Date.now() };
+  CONVENTIONS_DELTA.push(rec);
+  _shipConventionsRec(rec);
+  _checkProposalAdmission(p);              // model-only anchors: below θ by construction
+  return p;
+}
+
+// ── corroboration → admission ──
+function _checkProposalAdmission(p) {
+  if (!p || p.status !== 'signal') return false;
+  const a = anchorsAdmit(p.anchors);
+  if (!a.admit) return false;
+  _admitProposal(p);
+  return true;
+}
+function _admitProposal(p) {
+  p.status = 'admitted'; p.admittedAt = Date.now();
+  // the live change: members land through the ledger (the same append-only
+  // channel induction uses); the next fold rebuilds the lexical sets and the
+  // reading changes — the colon line binds a voice, the separator stops
+  // being a sentence pick
+  for (const mb of (p.members || [])) {
+    if (!p.inventory || !READING_RULES[p.inventory]) continue;
+    ledgerCommit({ target: 'rule:' + p.inventory, action: 'add-token', bucket: p.module || 'core',
+      value: mb, mass: 2, basis: { proposal: p.pid }, src: 'proposal-admission' });
+  }
+  CONV_PROV.set(p.convId, { anchors: p.anchors });
+  KNOWN_CONV_IDS.add(p.convId);
+  // admission is a REC in the conventions log; the admitted records (the
+  // convention, its membership edges, its anchors — hashes opaque, strict
+  // mode stripping sigs) ship through the writer hook
+  const recs = [
+    ...(p.records || []).map(r => ({ ...r, admitted: true })),
+    { op: 'REC', target: p.convId, action: 'proposal-admitted', admitted: true,
+      value: { pid: p.pid, statement: p.sentence, register: p.register, friction: p.frictionType, inventory: p.inventory, members: (p.members || []).slice() },
+      prov: p.anchors, at: Date.now() },
+  ];
+  for (const rec of recs) { CONVENTIONS_DELTA.push(rec); _shipConventionsRec(rec); }
+}
+// Document co-witness (automatic): every subsequent parse runs the pending
+// signals' probes against the new page. A hit counts only when the WITNESSING
+// DOCUMENT is hash-disjoint from every existing sighting — independence is
+// set arithmetic on h, so the proposer's own source can never re-witness.
+async function _corroborateProposals(doc) {
+  if (!PROPOSALS.size) return;
+  const docHs = DOC_SPAN_HASHES.get(doc.id) || new Set();
+  const texts = doc.sentenceTexts || [];
+  for (const p of PROPOSALS.values()) {
+    if (p.status !== 'signal' || !p.probe) continue;
+    if (p.anchors.some(a => docHs.has(a.h))) continue;
+    let hit = -1;
+    for (let i = 0; i < texts.length; i++) {
+      const s = String(texts[i] || '').trim();
+      if (p.probe.kind === 'colon-label') {
+        const m = /^([^:]{1,40}):\s+\S/.exec(s);
+        if (m && p.probe.labels.indexOf(m[1].trim().toLowerCase()) >= 0) { hit = i; break; }
+      } else if (p.probe.kind === 'separator-line') {
+        if (p.probe.shapes.indexOf(s.replace(/\s+/g, '')) >= 0) { hit = i; break; }
+      }
+    }
+    if (hit < 0) continue;
+    const anchor = { h: spanHash(texts[hit]), sig: await _sigOf(texts[hit]), r: 'doc-witness', c: _readerCoupling('doc-witness'), t: ++CONV_SEQ };
+    p.anchors.push(anchor);
+    const rec = { op: 'REC', target: 'core:proposals', action: 'proposal-witness', value: { pid: p.pid }, prov: [anchor], at: Date.now() };
+    CONVENTIONS_DELTA.push(rec);
+    _shipConventionsRec(rec);
+    _checkProposalAdmission(p);
+  }
+}
+// User confirmation (one tap, from the drawer's Proposals channel): a
+// human-coupling anchor on the proposal sentence itself — instant admission.
+function confirmProposal(pid) {
+  const p = PROPOSALS.get(pid);
+  if (!p || p.status !== 'signal') return null;
+  p.anchors.push({ h: spanHash(p.sentence), sig: p.sig || null, r: 'user', c: _readerCoupling('user'), t: ++CONV_SEQ });
+  const admitted = _checkProposalAdmission(p);
+  return { pid, admitted, status: p.status };
+}
+// Reject is a SEG against the model's anchors: the signal decays hard
+// (below floor), and the rejection itself is a sighting toward a negative
+// convention — a model that keeps proposing the same rejected shape feeds
+// the veto lexicon.
+function rejectProposal(pid) {
+  const p = PROPOSALS.get(pid);
+  if (!p || (p.status !== 'signal' && p.status !== 'unmappable')) return null;
+  p.status = 'rejected';
+  for (const a of p.anchors) a._seg = (a._seg || 0) + 2;
+  const rec = { op: 'SEG', target: p.convId, against: [...new Set(p.anchors.map(a => a.h))],
+    reason: 'user-reject', value: { pid: p.pid, statement: p.sentence }, at: Date.now() };
+  CONVENTIONS_DELTA.push(rec);
+  _shipConventionsRec(rec);
+  noteEvaFailure(['proposal-rejected:' + (p.frictionKey || p.frictionType || 'unknown')], {});
+  return { pid, status: 'rejected' };
+}
+// The drawer's Proposals channel: each pending signal with its sentence, its
+// locally-resolvable evidence, its current mass, and its distance to
+// admission — the full provenance chain inspectable.
+function pendingProposals() {
+  const out = [];
+  for (const p of PROPOSALS.values()) {
+    const adm = anchorsAdmit(p.anchors);
+    out.push({
+      pid: p.pid, status: p.status, statement: p.sentence, register: p.register,
+      friction: p.frictionType, inventory: p.inventory, members: (p.members || []).slice(),
+      recurrence: p.recurrence || 0,
+      mass: +adm.total.toFixed(3), theta: adm.theta,
+      distance: +Math.max(0, adm.theta - adm.total).toFixed(3),
+      needsNonModel: !adm.nonModel,
+      evidence: p.anchors.map(a => {
+        const at = resolveAnchor(a.h);
+        return { reader: a.r, c: a.c, h: a.h, text: at ? at.text : null };
+      }),
+    });
+  }
+  return out;
+}
+
+// One proposal turn: budgeted, friction-gated, never blocking (the host runs
+// it at idle priority). The llm is the same (system, user) => string the
+// talker uses.
+async function proposerTurn(opts = {}) {
+  const llm = typeof opts.llm === 'function' ? opts.llm : null;
+  if (!llm) return { fired: false, reason: 'no-model' };
+  const st = proposerStatus();
+  if (!st.eligible && !opts.force) return { fired: false, reason: st.reason || 'not-eligible' };
+  const prompt = proposerPrompt();
+  if (!prompt) return { fired: false, reason: 'no-friction' };
+  PROPOSER_TURNS_USED++;
+  let reply = '';
+  try { reply = String((await llm(prompt.system, prompt.user)) || ''); }
+  catch (e) { return { fired: true, proposals: [], discarded: [], error: String((e && e.message) || e) }; }
+  const parsed = _parseProposalReply(reply);
+  for (const d of parsed.discarded) {
+    // a model that babbles teaches the veto: grammar failures deposit toward
+    // the eva lexicon (invented names tally with the talker's own)
+    noteEvaFailure(d.reasons.map(r => /^invented-name:/.test(r) ? r : 'proposal-grammar:' + r), {});
+  }
+  const out = [];
+  for (const pr of parsed.proposals) {
+    const sigp = await _mintProposalSignal(pr, {});
+    if (sigp) out.push(sigp);
+  }
+  return {
+    fired: true,
+    proposals: out.map(p => ({ pid: p.pid, status: p.status, statement: p.sentence, inventory: p.inventory, members: (p.members || []).slice() })),
+    discarded: parsed.discarded,
+  };
+}
+
+// ── parse-time observation (pure addition: no events, no rule changes) ──
+// Index every sentence hash (anchors resolve locally; off-device they are
+// opaque), nominate friction, and run pending signals' probes against the
+// new page. Never throws into the parse.
+async function _provenanceObserve(doc) {
+  if (!doc || doc.kind !== 'prose') return;
+  try {
+    const prev = DOC_SPAN_HASHES.get(doc.id);
+    if (prev) for (const h of prev) {
+      const at = ANCHOR_INDEX.get(h);
+      if (at && at.docId === doc.id) ANCHOR_INDEX.delete(h);
+    }
+    const texts = doc.sentenceTexts || [];
+    const set = new Set();
+    const hashes = new Array(texts.length);
+    for (let i = 0; i < texts.length; i++) {
+      const h = spanHash(texts[i]);
+      hashes[i] = h; set.add(h);
+      if (!ANCHOR_INDEX.has(h)) ANCHOR_INDEX.set(h, { docId: doc.id, sentenceIdx: i, text: String(texts[i]) });
+    }
+    DOC_SPAN_HASHES.set(doc.id, set);
+    doc._spanHashes = hashes;
+  } catch (e) { /* hashing failure never blocks a parse */ }
+  try { _nominateFriction(doc); } catch (e) {}
+  try { await _corroborateProposals(doc); } catch (e) {}
 }
 
 // Set the per-language reading mode. modeMap: { en:'original'|'learning', … }.
@@ -2170,6 +3170,41 @@ async function extractEoGraph(text, onProgress) {
         speakerHint: { name: speaker }, speakerRaw: speaker,
         attributed: 'named', in_quote: false,
         sentence_idx: si, sentence: sTxt, src: 'transcript-turn',
+      });
+    });
+  }
+  if (!TRANSCRIPT && COLON_SPEAKER_LABELS && COLON_SPEAKER_LABELS.size) {
+    // ── Convention-admitted colon voices (the proposal channel, live) ──
+    // colon_speaker_labels is an induced inventory — empty until a proposed
+    // convention is ADMITTED (model sighting + independent co-witnesses or a
+    // user confirmation), so this pass is inert at the parity floor. A line
+    // "LABEL: statement" whose LABEL is a member binds a SIG attributing the
+    // statement to that label as a speaking voice — the same attribution
+    // event quoted speech earns, arriving through a typographic slot the
+    // reading itself asked to learn.
+    const seenColonVoices = new Set();
+    sentenceDocs.forEach((d, si) => {
+      const s = d.text().trim();
+      const m = /^([^:]{1,40}):\s+(\S.*)$/.exec(s);
+      if (!m) return;
+      const label = m[1].trim();
+      if (!COLON_SPEAKER_LABELS.has(label.toLowerCase())) return;
+      const rest = m[2].trim();
+      if (!seenColonVoices.has(label.toLowerCase())) {
+        seenColonVoices.add(label.toLowerCase());
+        events.push({
+          id: 'ev-' + seq, seq: seq++, op: 'INS', stance: 'Instantiating',
+          target: label, targetRaw: label, entityType: 'org',
+          referent_id: mintReferent(), in_quote: false,
+          sentence_idx: si, sentence: s, src: 'colon-label-voice',
+        });
+      }
+      events.push({
+        id: 'ev-' + seq, seq: seq++, op: 'SIG', stance: 'Tending',
+        speaker: label, quote: rest.replace(/\s+/g, ' ').slice(0, 300),
+        speakerHint: { name: label }, speakerRaw: label,
+        attributed: 'named', in_quote: false,
+        sentence_idx: si, sentence: s, src: 'colon-label',
       });
     });
   }
@@ -4204,7 +5239,7 @@ function projectGraph(events, frame = {}) {
     // seq → sentence index, so projected entities can list their mentions
     const seqToSent = new Map();
     for (const ev of (result.events || [])) if (ev.sentence_idx != null) seqToSent.set(ev.seq, ev.sentence_idx);
-    return {
+    const doc = {
       id, kind: 'prose', name,
       meta: sentences.length + ' sentences · ' + (result.genre === 'transcript' ? 'transcript' : 'prose') + ' (' + (result.lang || 'en') + ')',
       blocks, sentences, sentenceTexts,
@@ -4215,6 +5250,11 @@ function projectGraph(events, frame = {}) {
       _voices: result.voices || null,
       _seqToSent: seqToSent,
     };
+    // Provenance observation (pure addition — no events, no rule changes, so
+    // golden parity holds): index span hashes, nominate friction, run pending
+    // proposal probes against the new page.
+    try { await _provenanceObserve(doc); } catch (e) { /* never blocks a parse */ }
+    return doc;
   }
 
   async function parseDocument(name, text, id, onProgress) {
@@ -4245,6 +5285,8 @@ function projectGraph(events, frame = {}) {
     'eva-energy': 'eva_energy_budget',
     'mass-weight': 'mass_weight',
     'singular-they': 'singular_they',
+    'convention-proposals': 'convention_proposals',
+    'provenance-weighting': 'provenance_weighting',
   };
 
   /* ---------- Thinking depth: the effort dial's tunable budget ----------
@@ -4324,6 +5366,12 @@ function projectGraph(events, frame = {}) {
       const id = UI_TO_RULE[r.id];
       if (!id || !READING_RULES[id]) continue;
       if (r.installed === false) continue;
+      // flag rules toggled directly from the side panel (Convention
+      // Proposals, provenance weighting): enabled IS the value
+      if (id === 'convention_proposals' || id === 'provenance_weighting') {
+        READING_RULES[id].value = r.enabled !== false;
+        continue;
+      }
       // a turned-off coupling means "no discount": full-strength mentions
       if (r.enabled === false) {
         if (id === 'quote_interior_coupling' || id === 'anaphora_coupling') READING_RULES[id].value = 1.0;
@@ -4705,6 +5753,8 @@ function projectGraph(events, frame = {}) {
     // (Falls back to unfiltered picks if the filter would empty them.)
     const isChrome = (i) => {
       const s = String(doc.sentenceTexts[i] == null ? '' : doc.sentenceTexts[i]).trim();
+      // an admitted separator run ("***") is structure, never a passage pick
+      if (SEPARATOR_GLYPH_LINES.size && SEPARATOR_GLYPH_LINES.has(s.replace(/\s+/g, ''))) return true;
       return s.length < 60 && !/[.!?…"”'’)]$/.test(s);
     };
     const picks = new Set();
@@ -4907,6 +5957,7 @@ function projectGraph(events, frame = {}) {
     const isSectionChrome = (label) => {
       const t = String(label).replace(/\s+/g, ' ').trim();
       const lc = t.toLowerCase();
+      if (SEPARATOR_GLYPH_LINES.size && SEPARATOR_GLYPH_LINES.has(t.replace(/\s+/g, ''))) return true;
       if (titleLC && lc === titleLC) return true;
       if (/^(by|translated by|edited by|illustrated by|with an introduction|contents|title page|frontispiece)\b/i.test(t)) return true;
       if (/^[ivxlcdm]+(\s+[ivxlcdm]+)+\.?$/i.test(t)) return true;     // "I  II  III" — a contents listing, not one section
@@ -5042,14 +6093,13 @@ function projectGraph(events, frame = {}) {
         rec.admitted = true;
       }
       CONVENTIONS_DELTA.push(rec);
-      try {
-        const hook = (typeof window !== 'undefined' && window.EOEngine && window.EOEngine.onConventionsRec);
-        if (typeof hook === 'function') hook(rec);
-      } catch (e) { /* a hook failure never blocks the reading */ }
+      _shipConventionsRec(rec);
     }
   }
   function conventionsDelta() { return CONVENTIONS_DELTA.slice(); }
-  function serializeConventionsDelta() { return CONVENTIONS_DELTA.map(r => JSON.stringify(r)).join('\n'); }
+  // Serialized for the durable file = SHIPPED: strict privacy mode strips
+  // embedding signatures here too (coupling-only off-device).
+  function serializeConventionsDelta() { return CONVENTIONS_DELTA.map(r => JSON.stringify(_shipRecord(r))).join('\n'); }
 
   function evaDraft(draft, p, sentenceTexts) {
     const reasons = [];
@@ -6764,6 +7814,19 @@ function projectGraph(events, frame = {}) {
     // JSONL-shaped and append-ready for memory/conventions.jsonl. A host may
     // set EOEngine.onConventionsRec = (rec) => … to ship each one out.
     conventionsDelta, serializeConventionsDelta,
+    // provenance-anchored conventions: anchors are content-hash + embedding-
+    // signature fingerprints (locally resolvable, globally opaque); mass is a
+    // sum over anchors; admission is mechanical (θ_admit, ≥2 distinct h, ≥1
+    // non-model witness). See the PROVENANCE-ANCHORED CONVENTIONS section.
+    spanHash, resolveAnchor, anchorMass, anchorsAdmit, docSignature, sigCosine,
+    conventionProvenance, conventionMass, conventionVariants, segConvention,
+    provenanceReport, setAnchorPrivacy,
+    // the convention proposer: the local model notices that registered
+    // friction has a common shape and says so in one sentence with
+    // engine-minted span citations — it proposes, it never commits
+    frictionReport, conventionsPortrait, proposerStatus, proposerPrompt, proposerTurn,
+    pendingProposals, confirmProposal, rejectProposal,
+    _parseProposalReply, _mintProposalSignal, _corroborateProposals, _provenanceObserve,
     // read-only: the induced speech-verb class + accrued mass (learning record)
     _learnedVerbs: learnedVerbs, learnedVerbsByLang,
     // persistence: serialize/restore the learned ledger delta (host stores it)
