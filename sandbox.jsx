@@ -119,7 +119,7 @@ function SandboxDrawer({ onClose, onToast }) {
     try {
       const E0 = SB.loadCandidate(src.pivot, src.engine, nlp);
       const battery = await SB.traceBattery(E0, DATA);
-      const agent = SB.liveAgent({ key: apiKey, model: liveCfg.model, thinking: liveCfg.thinking, tokenMax: liveCfg.tokenMax });
+      const agent = SB.liveAgent({ key: apiKey, model: liveCfg.model, thinking: liveCfg.thinking, tokenMax: liveCfg.tokenMax, rules });
       const history = []; let best = null, capped = false;
       for (let g = 0; g < liveCfg.generations; g++) {
         if (agent.exhausted()) { capped = true; break; }
@@ -152,6 +152,49 @@ function SandboxDrawer({ onClose, onToast }) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'evo-candidate.diff'; a.click();
     onToast && onToast('Exported evo-candidate.diff');
   };
+
+  // The artifact you hand back to update the app: every proposal + verdict,
+  // the wins, and the recommended edits to apply (best clean win).
+  const buildRunJSON = (log, provider, tokens) => {
+    const r3 = (x) => (x == null ? null : Math.round(x * 10000) / 10000);
+    const wins = log.filter(g => g.result.surface).sort((a, b) => b.result.qualityDelta - a.result.qualityDelta);
+    return {
+      app: 'cleon-evo-sandbox', schema: 'evo-run/1', generatedAt: new Date().toISOString(),
+      provider, model: provider === 'live' ? liveCfg.model : 'offline', tokensUsed: tokens || 0,
+      baseline: { composite: r3(baseline.quality.composite), components: baseline.quality.components },
+      results: log.map(g => ({
+        target: g.hyp.target, statement: g.hyp.statement || null, rationale: g.hyp.rationale || null,
+        edits: g.hyp.edits, state: g.result.state, qualityDelta: r3(g.result.qualityDelta),
+        componentDeltas: g.result.componentDeltas || null,
+        parity: g.result.parity ? { clean: g.result.parity.clean, diffs: g.result.parity.diffs } : null,
+        note: g.result.note || null,
+      })),
+      wins: wins.map(g => ({ target: g.hyp.target, edits: g.hyp.edits, state: g.result.state, qualityDelta: r3(g.result.qualityDelta) })),
+      recommendedEdits: wins.length ? wins[0].hyp.edits : [],
+    };
+  };
+  const copyRun = (log, provider, tokens) => {
+    const txt = JSON.stringify(buildRunJSON(log, provider, tokens), null, 2);
+    try { navigator.clipboard.writeText(txt); onToast && onToast('Run JSON copied — paste it back to update the app'); }
+    catch (e) { onToast && onToast('copy failed; use Download'); }
+  };
+  const downloadRun = (log, provider, tokens) => {
+    const blob = new Blob([JSON.stringify(buildRunJSON(log, provider, tokens), null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'evo-run-' + provider + '.json'; a.click();
+    onToast && onToast('Downloaded evo-run-' + provider + '.json');
+  };
+  function RunSummary({ log, provider, tokens }) {
+    if (!log.length) return null;
+    const wins = log.filter(g => g.result.surface);
+    const best = wins.length ? Math.max(...wins.map(g => g.result.qualityDelta)) : 0;
+    return (
+      <div className="sbx-runsummary">
+        <span>{log.length} proposal{log.length === 1 ? '' : 's'} · {wins.length} win{wins.length === 1 ? '' : 's'}{wins.length ? ' · best Δ+' + (Math.round(best * 10000) / 10000) : ' · nothing to keep yet'}</span>
+        <button className="mini-btn" onClick={() => copyRun(log, provider, tokens)}><Icon name="copy" size={12} /> Copy run JSON</button>
+        <button className="mini-btn" onClick={() => downloadRun(log, provider, tokens)}><Icon name="upload" size={12} /> Download</button>
+      </div>
+    );
+  }
 
   const STATE_TAG = { 'clean-win': ['✓ clean win', 'win'], 'justified-break': ['⚑ justified break', 'just'], 'regression': ['✗ regression', 'bad'], 'null': ['· null', 'null'], 'rejected-by-allowlist': ['⊘ rejected by constitution', 'bad'] };
 
@@ -269,7 +312,7 @@ function SandboxDrawer({ onClose, onToast }) {
                   </label>
                   <label>generations<input type="number" min="1" max="12" value={liveCfg.generations} onChange={e => setLiveCfg(c => ({ ...c, generations: Number(e.target.value) || 6 }))} /></label>
                   <label>token budget<input type="number" step="10000" min="10000" value={liveCfg.tokenMax} onChange={e => setLiveCfg(c => ({ ...c, tokenMax: Number(e.target.value) || 150000 }))} /></label>
-                  <label className="sbx-check"><input type="checkbox" checked={liveCfg.thinking} onChange={e => setLiveCfg(c => ({ ...c, thinking: e.target.checked }))} /> deep thinking</label>
+                  <label className="sbx-check" title="Adaptive extended thinking — better hypotheses, but roughly 5–10× the tokens. Off is the frugal default."><input type="checkbox" checked={liveCfg.thinking} onChange={e => setLiveCfg(c => ({ ...c, thinking: e.target.checked }))} /> deep thinking (≈5–10× tokens)</label>
                 </div>
                 <button className="btn-ghost" disabled={live.busy || !apiKey} onClick={runLive}>{live.busy ? 'Experimenting…' : 'Run live experiments'}</button>
                 {live.tokens > 0 && <span className="sbx-hint" style={{ marginLeft: 10 }}>{live.tokens} tokens used</span>}
@@ -282,6 +325,7 @@ function SandboxDrawer({ onClose, onToast }) {
                     <Verdict r={g.result} />
                   </div>
                 ))}
+                <RunSummary log={live.log} provider="live" tokens={live.tokens} />
               </div>
 
               <div className="tier">
@@ -297,6 +341,7 @@ function SandboxDrawer({ onClose, onToast }) {
                     <Verdict r={g.result} />
                   </div>
                 ))}
+                <RunSummary log={log} provider="offline" tokens={0} />
               </div>
 
               <div className="tier">

@@ -185,7 +185,9 @@
       const lv = text.match(/value:\s*\[([^\]]*)\]/);
       if (lv) { kind = 'list'; value = lv[1].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean); }
       else if (sv) { kind = 'scalar'; const raw = sv[1]; value = raw === 'true' ? true : raw === 'false' ? false : (raw[0] === "'" ? sv[2] : Number(raw)); }
-      out.push({ name: r.name, evolvable: r.evolvable, reason: r.reason, src: r.src, module: r.module, kind, value });
+      const dv = text.match(/desc:\s*'((?:\\.|[^'])*)'/);
+      const desc = dv ? dv[1].replace(/\\'/g, "'").replace(/\s+/g, ' ').slice(0, 140) : '';
+      out.push({ name: r.name, evolvable: r.evolvable, reason: r.reason, src: r.src, module: r.module, kind, value, desc });
     }
     return { rules: out, talker: { system: !!map.talker.system, retry: !!map.talker.retry } };
   }
@@ -276,9 +278,10 @@
      key the user typed stays in their tab and goes straight to Anthropic. */
   const AGENT_SYSTEM = [
     'You evolve a deterministic reading engine by proposing ONE small, testable change per turn.',
-    'You may ONLY change: physics constants decay_gamma / inertia_delta / mass_weight; any READING_RULES entry whose src is hardcoded-seed or a language-module (e.g. title_tokens, attribution_patterns, pronouns, clitic_suffixes, cold_* thresholds, sentinel_*); or the talker portrait prompts.',
-    'You may NEVER touch the EVA checks, the grounder, citation binding, the operator vocabulary, parity, the golden snapshots, or the quality fixtures — those are the constitution and are rejected mechanically before any rerun.',
-    'Parity is a floor you may break only when the quality gain clearly justifies a deliberate golden recapture; prefer changes that keep parity clean. Stall honesty punishes you for suppressing honest "I don\'t know" stalls — never raise confidence by abolishing abstention.',
+    'You may change ONLY the rules listed under "EVOLVABLE RULES" in the user message. Use their EXACT names — NEVER invent a rule name (an unknown name is rejected and wastes the turn). Everything else — the EVA checks, the grounder, citation binding, the operator vocabulary, parity, the golden snapshots, the quality fixtures — is the constitution and is rejected mechanically before any rerun.',
+    'Make a SMALL change from the rule\'s CURRENT value shown in the list — a gentle nudge (roughly ±10–30%), never an extreme jump (e.g. do not slam a dominance ratio from 2.0 to 0.12). The values are sensitive; large swings break parity and collapse stall honesty.',
+    'Do NOT repeat a change to a rule that already regressed or was rejected this run — read PRIOR ATTEMPTS and try a different rule or direction.',
+    'Parity is a floor; strongly prefer changes that keep it clean. Stall honesty punishes suppressing honest "I don\'t know" stalls — never raise confidence by abolishing abstention.',
     'Respond with ONLY a JSON object: {"target": short label, "statement": one sentence, "rationale": why (grounded in the trace), "argument": why a human should accept it, "predicted_component": "binding"|"stall"|"grounding", "edits": [ ... ]}.',
     'Each edit is one of: {"kind":"rule-value","rule":NAME,"value":NUMBER_OR_BOOL}, {"kind":"rule-tokens-add","rule":NAME,"tokens":[...]}, {"kind":"rule-tokens-remove","rule":NAME,"tokens":[...]}, {"kind":"prompt-edit","slot":"system"|"retry","find":TEXT,"replace":TEXT}.',
   ].join('\n');
@@ -316,11 +319,20 @@
         const hist = (history || []).map(h => '- ' + (h.hyp ? h.hyp.target : '?') + ' → ' + h.result.state +
           (h.result.qualityDelta != null ? ' (Δ' + h.result.qualityDelta.toFixed(4) + ', parity ' + (h.result.parity ? (h.result.parity.clean ? 'clean' : h.result.parity.diffs + ' diffs') : 'n/a') + ')' : '') +
           (h.result.note ? ' — ' + h.result.note : '')).join('\n');
+        const inv = (opts.rules || []).filter(r => r.evolvable).map(r => {
+          const v = r.kind === 'list'
+            ? '[' + (r.value || []).slice(0, 8).join(', ') + ((r.value || []).length > 8 ? ', …' : '') + ']'
+            : String(r.value);
+          return '- ' + r.name + ' = ' + v + (r.kind === 'list' ? ' (list — use rule-tokens-add / rule-tokens-remove)' : '') + (r.desc ? '  · ' + r.desc : '');
+        }).join('\n');
         const user = [
           'CURRENT QUALITY composite ' + baseline.composite.toFixed(4) + ' — binding ' + baseline.components.binding.toFixed(3) + ', stall ' + baseline.components.stall.toFixed(3) + ', grounding ' + baseline.components.grounding.toFixed(3) + '.', '',
+          'EVOLVABLE RULES — the ONLY rules you may change. Use these EXACT names; propose a small change from the current value:',
+          inv || '(none provided)', '',
+          'GRAPH TRACES (what the engine currently extracts — this compact summary is all you get, never the source text):',
           battery, '',
-          (history && history.length) ? 'PRIOR ATTEMPTS THIS RUN (learn from these — do not repeat a rejected or null move):\n' + hist : 'First hypothesis of the run.', '',
-          'Propose ONE change most likely to raise the composite while keeping parity clean. Return only the JSON object.',
+          (history && history.length) ? 'PRIOR ATTEMPTS THIS RUN (do NOT repeat a rejected, null, or regressed move — try a different rule or direction):\n' + hist : 'First hypothesis of the run.', '',
+          'Propose ONE small change most likely to raise the composite while keeping parity clean. Return only the JSON object.',
         ].join('\n');
         const r = await callAnthropic({ key: opts.key, model: opts.model, system: AGENT_SYSTEM, messages: [{ role: 'user', content: user }], maxTokens: opts.maxTokens || 2000, thinking: opts.thinking });
         tokens += r.tokens;
