@@ -84,19 +84,33 @@ npm run evo:score               # print the current quality baseline (determinis
 
 The agent has two providers, chosen by `provider: "auto"` in `config.json`:
 
-- **offline** (default when `ANTHROPIC_API_KEY` is unset) — a deterministic,
-  zero-token scripted agent. A full `evo:run` works with no setup and produces a
-  real proposal. Used for the demo and for CI.
+- **offline** (default when no key) — a deterministic, zero-token scripted
+  agent. A full `evo:run` works with no setup and produces a real proposal.
+  Used for the demo and for CI.
 - **live** — the Anthropic API (`@anthropic-ai/sdk`, `claude-opus-4-8`, adaptive
-  thinking). One Messages call per hypothesis; the 2c rubric is a call per
-  sampled fixture.
+  thinking). It **asks you for the API key** if `ANTHROPIC_API_KEY` is unset
+  (press enter to fall back to offline). Per hypothesis it may first
+  **investigate**: a bounded tool-use loop where it ingests a document (a
+  fixture id, a corpus filename like `pg219.txt`, or raw text), asks the engine
+  a question, and sees how it reads — *injecting sample inputs* — before it
+  proposes. Then it changes the code, the runner reruns + scores, and offers
+  the report.
 
-**Token frugality** (experimental phase) is enforced by `config.json`:
-`apiCallBudget` is a hard ceiling on all Anthropic calls per run (once hit, 2c
-falls back to the stub); `integrationSampleSize` bounds how many 2c fixtures get
-a live rubric; `maxRubricDocChars` truncates the source sent to the judge; and
-`scoreTalkerLive` is off (the talker LLM would double call volume). To use the
-live provider: `npm install @anthropic-ai/sdk` and set `ANTHROPIC_API_KEY`.
+**Token frugality** (experimental phase), all in `config.json`:
+
+- `tokenMax` — the **primary** governor. The live agent meters input+output
+  tokens across every call; when the cap is reached the run **pauses and asks
+  you to continue** (extend) rather than silently stopping. Set it small and
+  extend deliberately.
+- `apiCallBudget` — a secondary hard ceiling on call count.
+- `maxProbeRounds` — how many times the agent may probe the engine per
+  hypothesis before it must propose.
+- `integrationSampleSize` / `maxRubricDocChars` — bound how many 2c fixtures get
+  a live rubric and truncate the source sent to the judge.
+- `scoreTalkerLive` — off by default (the talker LLM would double call volume).
+
+To use the live provider: `npm install @anthropic-ai/sdk`, then run `evo:run`
+and paste the key when asked (or export `ANTHROPIC_API_KEY`).
 
 ## Layout
 

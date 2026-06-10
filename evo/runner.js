@@ -33,13 +33,27 @@ const OBS = path.join(__dirname, 'observations');
 const PROPOSALS = path.join(__dirname, 'proposals');
 
 const scorer = require('./scorer');
-const { loadEngine } = require('./engine-host');
+const { loadEngine, probeDocument } = require('./engine-host');
 const { renderEdits } = require('./patch');
 const agent = require('./agent');
+const { promptApiKey, confirm } = require('./prompt');
 
 function cfg() {
   try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')); }
   catch (e) { return {}; }
+}
+
+/* Resolve a probe `doc` argument to text: a fixture id, a corpus filename,
+   or raw text the agent passed inline. */
+function resolveProbeDoc(doc) {
+  if (!doc) return '';
+  for (const kind of ['binding', 'stalls', 'integration']) {
+    const fx = scorer.loadFixtures(kind).find(f => f.id === doc);
+    if (fx && fx.doc) return fx.doc;
+  }
+  const corpusPath = path.join(__dirname, 'corpus', path.basename(doc));
+  if (fs.existsSync(corpusPath)) { try { return fs.readFileSync(corpusPath, 'utf8'); } catch (e) {} }
+  return String(doc); // treat as raw text
 }
 
 /* ---- small utils ---- */
@@ -196,12 +210,20 @@ async function cmdRun(opts = {}) {
   ensureDir(path.join(WORK, runId));
   const realLocks = [path.join(REPO, 'engine.js'), path.join(REPO, 'tests'), path.join(REPO, 'tests', 'golden.json')];
 
+  // Resolve the provider. When live/auto and no key is set, ASK for it (the
+  // sandbox prompts the human); an empty answer falls back to offline.
+  let desired = opts.provider || c.provider || 'auto';
+  if ((desired === 'auto' || desired === 'live') && !process.env.ANTHROPIC_API_KEY) await promptApiKey();
+  const provider = desired === 'offline' ? 'offline' : (process.env.ANTHROPIC_API_KEY ? 'live' : 'offline');
+
   // budgeted, pluggable agent (live Anthropic when keyed, else deterministic offline)
   const ag = agent.create({
-    provider: opts.provider || c.provider || 'auto',
-    budget: c.apiCallBudget != null ? c.apiCallBudget : 8,
+    provider,
+    budget: c.apiCallBudget != null ? c.apiCallBudget : 60,
     model: (c.models || {}).agent,
     maxRubricDocChars: c.maxRubricDocChars,
+    tokenMax: c.tokenMax,
+    maxProbeRounds: c.maxProbeRounds,
   });
 
   // baseline: the repo engine + its quality. The source the agent patches.
@@ -210,6 +232,14 @@ async function cmdRun(opts = {}) {
   const W0 = loadEngine();
   const baseQuality = await scorer.scoreAll(W0.EOEngine, scoreOpts);
   const baseline = { source: baseSource, quality: baseQuality, scoreOpts };
+
+  // The agent's investigation capability: ingest a doc (fixture id / corpus
+  // filename / raw text), ask the engine a question, see how it reads.
+  // Read-only against the baseline engine; capped for token frugality.
+  const probe = async ({ doc, query }) => {
+    const text = resolveProbeDoc(doc);
+    return await probeDocument(W0.EOEngine, { text: text.slice(0, 8000), query });
+  };
 
   appendObservation(runId, observationHeader(runId, ag, baseQuality));
 
@@ -220,15 +250,20 @@ async function cmdRun(opts = {}) {
   const N = opts.generations || c.generations || 8;
   let best = null;
 
-  console.log('▶ evo run ' + runId + '  (provider: ' + ag.provider + ', up to ' + N + ' generations)');
+  console.log('▶ evo run ' + runId + '  (provider: ' + ag.provider + ', up to ' + N + ' generations' + (ag.provider === 'live' ? ', token max ' + (c.tokenMax || 150000) : '') + ')');
   console.log('  baseline composite ' + r4(baseQuality.composite) + '  (bind ' + r4(baseQuality.components.binding) + ', stall ' + r4(baseQuality.components.stall) + ', integ ' + r4(baseQuality.components.integration) + ')\n');
 
   lockReadOnly(realLocks);
   try {
     for (let g = 0; g < N; g++) {
-      if (ag.exhausted()) { console.log('  · API budget exhausted — stopping at generation ' + g); break; }
-      // HYPOTHESIZE — one proposal (offline: scripted & deterministic; live: one API call)
-      const hyp = await ag.hypothesize({ traces, baseline: baseQuality, history: generations });
+      if (ag.exhausted()) {
+        // Token max reached — pause and let the human extend the experiment.
+        const cont = await confirm('Token max reached (~' + ag.tokensUsed() + ' tokens over ' + ag.calls() + ' calls). Continue the experiment?', false);
+        if (cont) { ag.extendBudget(); console.log('  · token max extended — continuing'); }
+        else { console.log('  · stopping at token max (' + ag.tokensUsed() + ' tokens used)'); break; }
+      }
+      // HYPOTHESIZE — observe → (optionally) probe the engine → propose one change
+      const hyp = await ag.hypothesize({ traces, baseline: baseQuality, history: generations, probe });
       if (!hyp) { console.log('  · agent has no further hypotheses — stopping'); break; }
 
       // PATCH + RERUN + SCORE + DECIDE
@@ -249,7 +284,8 @@ async function cmdRun(opts = {}) {
 
   // SURFACE — at most one proposal for a human.
   const summary = writeProposal(runId, best, baseline, generations, ag);
-  fs.writeFileSync(path.join(WORK, runId, 'run.json'), JSON.stringify({ runId, best: best ? best.gen : null, generations: generations.map(stripGen), baselineComposite: baseQuality.composite, provider: ag.provider, apiCalls: ag.calls() }, null, 2));
+  fs.writeFileSync(path.join(WORK, runId, 'run.json'), JSON.stringify({ runId, best: best ? best.gen : null, generations: generations.map(stripGen), baselineComposite: baseQuality.composite, provider: ag.provider, apiCalls: ag.calls(), tokensUsed: ag.tokensUsed() }, null, 2));
+  if (ag.provider === 'live') console.log('\n  (live run used ~' + ag.tokensUsed() + ' tokens over ' + ag.calls() + ' Anthropic calls)');
 
   console.log('\n' + summary.banner);
   return { runId, best, generations };

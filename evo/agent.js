@@ -1,26 +1,24 @@
 /* ============================================================
-   evo/agent.js — the reasoning agent: observe → hypothesize → patch
-   → argue. Two pluggable providers behind one interface:
+   evo/agent.js — the reasoning agent: observe → investigate →
+   hypothesize → patch → argue. Two pluggable providers:
 
      live    — the Anthropic API. Reads the trace battery + the current
-               quality breakdown (one Messages call per generation),
-               forms one hypothesis, emits STRUCTURED edits + a written
-               argument. Also serves the 2c integration rubric and the
-               talker LLM. Uses the official @anthropic-ai/sdk (lazy-
-               required) with claude-opus-4-8 + adaptive thinking.
+               quality breakdown, may INVESTIGATE with a probe tool
+               (ingest a document, ask the engine a question, inject a
+               sample input, see how it reads), then proposes ONE change
+               via a propose_change tool with a written argument. Also
+               serves the 2c rubric and the talker LLM. Uses the official
+               @anthropic-ai/sdk (lazy-required) with claude-opus-4-8 +
+               adaptive thinking. Token-metered against a continuable max.
 
-     offline — a deterministic, budget-free scripted agent. No network,
-               no key. Proposes a small, real sequence of hypotheses
-               (verified to move the battery) so a full `evo:run` works
-               and produces an actionable proposal with zero setup, and
-               so the loop is testable in CI. The story it tells is real:
-               a clean-parity win, an over-correction that costs honesty,
-               a constitutionally-rejected attempt to game the metric, and
-               a regression — the tension the whole loop exists to surface.
+     offline — a deterministic, zero-token scripted agent so a full
+               `evo:run` works with no key and the loop is testable. Its
+               story is real: a clean-parity win, an over-correction that
+               costs honesty, a constitutionally-rejected attempt to game
+               the metric, and a regression.
 
    provider:'auto' uses live when ANTHROPIC_API_KEY is set, else offline.
-
-   The agent only ever emits structured edits; the runner renders + the
+   The agent only emits structured edits; the runner renders + the
    allowlist validates them. The agent cannot reach past its sandbox.
    ============================================================ */
 'use strict';
@@ -64,9 +62,14 @@ function renderTraces(traces, baseline) {
   return L.join('\n');
 }
 
+function parseJson(text) {
+  const a = text.indexOf('{'), b = text.lastIndexOf('}');
+  if (a < 0 || b < 0) return null;
+  try { return JSON.parse(text.slice(a, b + 1)); } catch (e) { return null; }
+}
+
 /* =====================  OFFLINE provider  ===================== */
 function offlineAgent() {
-  // A verified, deterministic sequence. Each entry is a full hypothesis.
   const script = [
     {
       target: 'inertia_delta 2.0 → 1.75',
@@ -108,15 +111,21 @@ function offlineAgent() {
     recordResult() {},
     exhausted() { return false; },
     calls() { return 0; },
-    async rubricScore() { return null; },   // 2c stays stubbed offline
-    async talker() { return null; },         // talker uses fallbackSignificance offline
+    tokensUsed() { return 0; },
+    extendBudget() {},
+    async rubricScore() { return null; },
+    async talker() { return null; },
   };
 }
 
 /* =====================  LIVE provider (Anthropic)  ===================== */
-function liveAgent({ budget, model, maxRubricDocChars }) {
+function liveAgent({ budget, model, maxRubricDocChars, tokenMax, maxProbeRounds }) {
   const DOC_CAP = maxRubricDocChars || 4000;
-  let client = null;
+  const PROBE_ROUNDS = maxProbeRounds != null ? maxProbeRounds : 4;
+  const MODEL = model || 'claude-opus-4-8';
+  let TOKEN_MAX = tokenMax || 150000;
+  let calls = 0, tokens = 0, client = null;
+
   const getClient = () => {
     if (client) return client;
     let Anthropic;
@@ -125,74 +134,97 @@ function liveAgent({ budget, model, maxRubricDocChars }) {
     client = new Anthropic(); // reads ANTHROPIC_API_KEY
     return client;
   };
-  const MODEL = model || 'claude-opus-4-8';
-  let calls = 0;
-
+  const track = (resp) => {
+    const u = resp.usage || {};
+    tokens += (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+  };
+  const textOf = (resp) => (resp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  async function raw(req) { calls++; const resp = await getClient().messages.create(req); track(resp); return resp; }
   async function call({ system, user, maxTokens, thinking }) {
-    calls++;
     const req = { model: MODEL, max_tokens: maxTokens || 4096, system, messages: [{ role: 'user', content: user }] };
     if (thinking) req.thinking = { type: 'adaptive' };
-    const resp = await getClient().messages.create(req);
-    return (resp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    return textOf(await raw(req));
   }
 
   const SYSTEM = [
     'You evolve a deterministic reading engine by proposing ONE small, testable change per turn.',
     'You may ONLY change: physics constants decay_gamma / inertia_delta / mass_weight; any READING_RULES entry whose src is hardcoded-seed or a language-module; or the talker portrait prompts.',
-    'You may NEVER touch the EVA checks, the grounder, citation binding, the operator vocabulary, parity, the golden snapshots, or the quality fixtures — those are the constitution and are rejected mechanically.',
-    'Parity is a floor you may break only when the quality gain clearly justifies a deliberate golden recapture; prefer changes that keep parity clean. Stall honesty punishes you for suppressing honest "I don\'t know" stalls — do not try to raise confidence by abolishing abstention.',
-    'Respond with ONLY a JSON object: {"target": short label, "statement": one sentence, "rationale": why, grounded in the trace, "argument": why a human should accept it, "predicted_component": "binding"|"stall"|"integration", "edits": [ ... ]}.',
+    'You may NEVER touch the EVA checks, the grounder, citation binding, the operator vocabulary, parity, the golden snapshots, or the quality fixtures — those are the constitution and are rejected mechanically before any rerun.',
+    'Parity is a floor you may break only when the quality gain clearly justifies a deliberate golden recapture; prefer changes that keep parity clean. Stall honesty punishes you for suppressing honest "I don\'t know" stalls — never raise confidence by abolishing abstention.',
+    'First INVESTIGATE if useful: call probe_engine to ingest a document (a fixture id, a corpus filename like "pg219.txt", or raw text) and ask the engine a question — inject sample inputs and see how it reads them. Then call propose_change EXACTLY ONCE with your hypothesis and structured edits.',
     'Each edit is one of: {"kind":"rule-value","rule":NAME,"value":NUMBER_OR_BOOL}, {"kind":"rule-tokens-add","rule":NAME,"tokens":[...]}, {"kind":"rule-tokens-remove","rule":NAME,"tokens":[...]}, {"kind":"prompt-edit","slot":"system"|"retry","find":TEXT,"replace":TEXT}.',
   ].join('\n');
 
-  function parseJson(text) {
-    const a = text.indexOf('{'), b = text.lastIndexOf('}');
-    if (a < 0 || b < 0) return null;
-    try { return JSON.parse(text.slice(a, b + 1)); } catch (e) { return null; }
-  }
+  const TOOLS = [
+    {
+      name: 'probe_engine',
+      description: 'Ingest a document and ask the current reading engine a question. Returns its grounded answer, the entities it found, and where it stalled (NUL). Use to investigate before proposing — inject sample inputs and see how the engine reads them.',
+      input_schema: { type: 'object', properties: { doc: { type: 'string', description: 'a fixture id (e.g. "steward"), a corpus filename (e.g. "pg219.txt"), or raw text' }, query: { type: 'string', description: 'the question to ask the engine about the doc' } }, required: ['doc', 'query'] },
+    },
+    {
+      name: 'propose_change',
+      description: 'Propose ONE change to evolve the engine. Call exactly once when ready.',
+      input_schema: { type: 'object', properties: { target: { type: 'string' }, statement: { type: 'string' }, rationale: { type: 'string' }, argument: { type: 'string' }, predicted_component: { type: 'string', enum: ['binding', 'stall', 'integration'] }, edits: { type: 'array', items: { type: 'object' } } }, required: ['target', 'statement', 'edits'] },
+    },
+  ];
+
+  const finish = (h) => { if (!h || !Array.isArray(h.edits) || !h.edits.length) return null; h.predicted = h.predicted_component || h.predicted; return h; };
 
   return {
     provider: 'live',
-    async hypothesize({ traces, baseline, history }) {
-      if (calls >= budget) return null;
+    tokensUsed() { return tokens; },
+    tokenMax() { return TOKEN_MAX; },
+    calls() { return calls; },
+    exhausted() { return tokens >= TOKEN_MAX || calls >= budget; },
+    extendBudget(extra) { TOKEN_MAX += (extra || tokenMax || 150000); },
+    recordResult() {},
+
+    async hypothesize({ traces, baseline, history, probe }) {
+      if (this.exhausted()) return null;
       const hist = history.filter(h => h.state).slice(-6).map(h =>
         '- ' + (h.hypothesis ? h.hypothesis.target : '?') + ' → ' + h.state +
         (h.qualityDelta != null ? ' (Δ' + h.qualityDelta.toFixed(4) + (h.parity ? ', parity ' + (h.parity.clean ? 'clean' : h.parity.diffs + ' diffs') : '') + ')' : '') +
         (h.note ? ' — ' + h.note : '')).join('\n');
-      const user = [
-        renderTraces(traces, baseline),
-        '',
-        history.length ? 'PRIOR ATTEMPTS THIS RUN (learn from these — do not repeat a rejected or null move):\n' + hist : 'First hypothesis of the run.',
-        '',
-        'Propose ONE change most likely to raise the composite while keeping parity clean. Return only the JSON object.',
-      ].join('\n');
-      const text = await call({ system: SYSTEM, user, maxTokens: 8000, thinking: true });
-      const h = parseJson(text);
-      if (!h || !Array.isArray(h.edits) || !h.edits.length) return null;
-      h.predicted = h.predicted_component || h.predicted;
-      return h;
-    },
-    recordResult() {},
-    exhausted() { return calls >= budget; },
-    calls() { return calls; },
+      const messages = [{ role: 'user', content: [
+        renderTraces(traces, baseline), '',
+        history.length ? 'PRIOR ATTEMPTS THIS RUN (learn from these — do not repeat a rejected or null move):\n' + hist : 'First hypothesis of the run.', '',
+        'Investigate with probe_engine if useful, then call propose_change once.',
+      ].join('\n') }];
 
-    // 2c integration rubric — one call per fixture document.
+      for (let round = 0; round <= PROBE_ROUNDS; round++) {
+        if (this.exhausted()) break;
+        const resp = await raw({ model: MODEL, max_tokens: 8000, system: SYSTEM, tools: TOOLS, thinking: { type: 'adaptive' }, messages });
+        const toolUses = (resp.content || []).filter(b => b.type === 'tool_use');
+        const propose = toolUses.find(t => t.name === 'propose_change');
+        if (propose) return finish(propose.input);
+        const probes = toolUses.filter(t => t.name === 'probe_engine');
+        if (!probes.length) { const j = finish(parseJson(textOf(resp))); if (j) return j; break; }
+        // preserve the assistant turn verbatim (incl. thinking blocks) for the tool-use round
+        messages.push({ role: 'assistant', content: resp.content });
+        const results = [];
+        for (const p of probes) {
+          let r; try { r = probe ? await probe(p.input) : { error: 'probe unavailable' }; } catch (e) { r = { error: String(e.message || e) }; }
+          results.push({ type: 'tool_result', tool_use_id: p.id, content: JSON.stringify(r).slice(0, 2000) });
+        }
+        messages.push({ role: 'user', content: results });
+      }
+      // round cap hit without a proposal — one last no-tools ask for the JSON
+      if (this.exhausted()) return null;
+      messages.push({ role: 'user', content: 'Stop investigating and respond now with ONLY a JSON object: {"target","statement","rationale","argument","predicted_component","edits":[...]}.' });
+      return finish(parseJson(textOf(await raw({ model: MODEL, max_tokens: 4000, system: SYSTEM, messages }))));
+    },
+
     async rubricScore(fx, grounded) {
-      if (calls >= budget) return null;
+      if (this.exhausted()) return null;
       const system = 'You are a strict reading-quality grader. Score 0.0–1.0 on this rubric, averaging four criteria each in [0,1]: (1) does the reading TRACE to the source, inventing no facts; (2) is the framing EPISTEMIC ("the reading", "the document carries") not ontological ("the text says X is true"); (3) does it CAPTURE what the document turns on; (4) does it AVOID inventing connections the source does not make. Respond with ONLY a JSON object {"score": NUMBER, "why": SHORT}.';
-      // Truncate the source to bound tokens (frugality). The reading is short.
       const src = fx.doc.length > DOC_CAP ? fx.doc.slice(0, DOC_CAP) + '\n…[truncated]' : fx.doc;
       const user = 'RUBRIC FOCUS: ' + (fx.rubric_focus || fx.question || '(general)') + '\n\nSOURCE DOCUMENT:\n' + src + '\n\nTHE ENGINE\'S GROUNDED READING:\n' + grounded;
-      const text = await call({ system, user, maxTokens: 1024 });
-      const j = parseJson(text);
-      const s = j && typeof j.score === 'number' ? Math.max(0, Math.min(1, j.score)) : null;
-      return s;
+      const j = parseJson(await call({ system, user, maxTokens: 1024 }));
+      return j && typeof j.score === 'number' ? Math.max(0, Math.min(1, j.score)) : null;
     },
 
-    // talker LLM — produces the significance paragraph the talker portrait
-    // composes (so evolved prompts actually move 2c when live).
     async talker(sys, userMsg) {
-      if (calls >= budget) return '';
+      if (this.exhausted()) return '';
       return await call({ system: sys, user: userMsg, maxTokens: 700 });
     },
   };
@@ -202,7 +234,7 @@ function liveAgent({ budget, model, maxRubricDocChars }) {
 function create(opts = {}) {
   let provider = opts.provider || 'auto';
   if (provider === 'auto') provider = process.env.ANTHROPIC_API_KEY ? 'live' : 'offline';
-  if (provider === 'live') return liveAgent({ budget: opts.budget != null ? opts.budget : 24, model: opts.model });
+  if (provider === 'live') return liveAgent({ budget: opts.budget != null ? opts.budget : 60, model: opts.model, maxRubricDocChars: opts.maxRubricDocChars, tokenMax: opts.tokenMax, maxProbeRounds: opts.maxProbeRounds });
   return offlineAgent();
 }
 

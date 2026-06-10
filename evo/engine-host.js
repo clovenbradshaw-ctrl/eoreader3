@@ -133,4 +133,23 @@ async function traceDocument(EOEngine, { name, text, id }) {
   };
 }
 
-module.exports = { loadEngine, traceDocument, normName, sameName, REPO_ROOT };
+/* Probe: ingest a document and ask the engine a question — the agent's
+   "inject a sample input and see how it reads" capability. Read-only (runs
+   answer() + a short trace); never mutates anything. `text` is capped by the
+   caller for token frugality. */
+async function probeDocument(EOEngine, { text, query, id = 'probe' }) {
+  const doc = await EOEngine.parseDocument(id + '.txt', text, id);
+  let answer = null;
+  try { const a = EOEngine.answer(doc, query || 'what is this about'); answer = { text: a.text, audit: a.audit, cites: (a.cites || []).length }; }
+  catch (e) { answer = { text: null, error: String(e.message || e) }; }
+  const events = doc._events || [];
+  return {
+    answer,
+    entities: (() => { try { return (EOEngine.projectEntities(doc).entities || []).slice(0, 8).map(e => e.name + ':' + e.type); } catch (e) { return []; } })(),
+    stalls: events.filter(e => e.op === 'NUL' && e.reason && e.reason.startsWith('pronoun-stall'))
+      .map(e => 's' + e.sentence_idx + ' "' + (e.surface || '') + '"'),
+    counts: events.reduce((m, e) => (m[e.op] = (m[e.op] || 0) + 1, m), {}),
+  };
+}
+
+module.exports = { loadEngine, traceDocument, probeDocument, normName, sameName, REPO_ROOT };
