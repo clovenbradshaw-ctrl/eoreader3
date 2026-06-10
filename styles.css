@@ -1048,3 +1048,5 @@ table.grid .member td:first-child { padding-left: 30px; }
 .sbx-audit { margin-top: 6px; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .sbx-runsummary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-2); }
 .sbx-runsummary > span { flex: 1; min-width: 170px; font-variant-numeric: tabular-nums; }
+.sbx-prompt { width: 100%; box-sizing: border-box; font-size: 12px; line-height: 1.5; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); font-family: 'JetBrains Mono', monospace; resize: vertical; margin-bottom: 9px; }
+.sbx-prompt:focus { border-color: var(--accent); outline: none; }

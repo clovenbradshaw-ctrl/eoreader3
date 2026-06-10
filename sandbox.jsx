@@ -13,7 +13,7 @@
    evo/patch.js, evo/sandbox.browser.js (→ window.EVO_SANDBOX) and the
    generated evo/sandbox-data.js (→ window.EVO_SANDBOX_DATA).
    ============================================================ */
-function SandboxDrawer({ onClose, onToast }) {
+function SandboxDrawer({ onClose, onToast, mlcKey, modelReady }) {
   const { useState, useEffect, useRef, useCallback } = React;
   const [phase, setPhase] = useState('loading'); // loading | ready | error
   const [error, setError] = useState(null);
@@ -32,6 +32,9 @@ function SandboxDrawer({ onClose, onToast }) {
   const [graph, setGraph] = useState(null);
   const [chatQ, setChatQ] = useState('');
   const [chatA, setChatA] = useState(null);
+  const [promptText, setPromptText] = useState('');
+  const [labQ, setLabQ] = useState('');
+  const [lab, setLab] = useState({ busy: false, answer: null, score: null, critique: null, claudeWould: null, history: [], error: null });
   const dialogRef = useRef(null);
 
   const allFixtures = () => ['binding', 'stalls', 'integration'].flatMap(k => ((DATA && DATA.fixtures[k]) || []).map(f => ({ ...f, kind: k })));
@@ -79,16 +82,38 @@ function SandboxDrawer({ onClose, onToast }) {
     const fx = allFixtures().find(f => f.id === inspectId);
     if (!fx) return;
     (async () => {
-      try { const g = await SB.graphOf(baseEngine, fx.doc, fx.id); if (on) { setGraph(g); setChatQ(fx.question || 'who is in this and what happens'); } }
+      try { const g = await SB.graphOf(baseEngine, fx.doc, fx.id); if (on) { setGraph(g); const q = fx.question || 'who is in this and what happens'; setChatQ(q); setLabQ(q); } }
       catch (e) { if (on) setGraph({ error: String(e.message || e) }); }
     })();
     return () => { on = false; };
   }, [baseEngine, inspectId]);
 
+  // Seed the editable talker prompt from the model's current grounded prompt.
+  useEffect(() => {
+    if (promptText) return;
+    try { if (window.EOLLM && window.EOLLM.systemFor) setPromptText(window.EOLLM.systemFor('grounded', null, true, 1) || ''); } catch (e) {}
+  }, [phase, modelReady]);
+
   const runQuery = useCallback(() => {
     if (!graph || !graph._doc || !baseEngine || !chatQ.trim()) return;
     setChatA(SB.queryGraph(baseEngine, graph._doc, chatQ.trim()));
   }, [graph, baseEngine, chatQ]);
+
+  // Prompt lab: local model answers off the grounded context under the
+  // candidate prompt, then Claude grades it.
+  const runLab = useCallback(async () => {
+    if (!apiKey) { onToast && onToast('Enter your Claude key (Live agent section)'); return; }
+    if (!modelReady || !mlcKey) { onToast && onToast('Load a local model first — the model picker in the top bar'); return; }
+    if (!graph || !graph._doc) { onToast && onToast('Pick a text above'); return; }
+    const fx = allFixtures().find(f => f.id === inspectId);
+    setLab(s => ({ ...s, busy: true, error: null }));
+    try {
+      const { answer } = await SB.localAnswer({ EOLLM: window.EOLLM, EOEngine: baseEngine, doc: graph._doc, question: labQ, mlcKey, sysOverride: promptText || undefined });
+      const judged = await SB.judgeAnswer({ key: apiKey, model: liveCfg.model, source: fx.doc, question: labQ, answer });
+      setLab(s => ({ ...s, busy: false, answer, score: judged.score, critique: judged.critique, claudeWould: judged.claudeWould, history: [{ score: judged.score, chars: (promptText || '').length }, ...s.history].slice(0, 8) }));
+      onToast && onToast(judged.score != null ? 'Claude scored it ' + judged.score : 'judged');
+    } catch (e) { setLab(s => ({ ...s, busy: false, error: String(e.message || e) })); }
+  }, [apiKey, modelReady, mlcKey, graph, inspectId, labQ, promptText, baseEngine, liveCfg]);
 
   const cfg = { qualityWinThreshold: 0.01, justifiedBreakThreshold: 0.03 };
 
@@ -304,6 +329,33 @@ function SandboxDrawer({ onClose, onToast }) {
                     </div>
                   </React.Fragment>
                 )}
+              </div>
+
+              <div className="tier">
+                <div className="tier-head">
+                  <div className="rule-group-label">Prompt lab · local model, Claude-judged</div>
+                  <p className="tier-sub">Tune how the on-device model answers — the second half of the goal. It reads off the engine's grounded context for the text selected above; you edit the talker prompt; <b>Claude grades the answer 0–1</b> for Claude-comparable quality. Needs a local model loaded (top-bar picker) and your key.</p>
+                </div>
+                {!modelReady && <div className="sbx-hint" style={{ display: 'block', marginBottom: 8 }}>No local model loaded — open the model picker in the top bar first.</div>}
+                <label className="sbx-rule-name" style={{ display: 'block', marginBottom: 4 }}>question</label>
+                <div className="sbx-chat"><input value={labQ} onChange={e => setLabQ(e.target.value)} placeholder="question for the local model…" /></div>
+                <label className="sbx-rule-name" style={{ display: 'block', margin: '10px 0 4px' }}>talker prompt — the lever you tune</label>
+                <textarea className="sbx-prompt" value={promptText} onChange={e => setPromptText(e.target.value)} rows={5} spellCheck={false} placeholder="(loads from the model's current grounded prompt)" />
+                <button className="btn-ghost" disabled={lab.busy || !apiKey || !modelReady} onClick={runLab}>{lab.busy ? 'Answering + judging…' : 'Run local model + judge with Claude'}</button>
+                {lab.error && <div className="sbx-error" style={{ padding: '10px 2px' }}>{lab.error}</div>}
+                {lab.answer != null && (
+                  <div className="op-block" style={{ marginTop: 10 }}>
+                    <div className="op-tag chat">local model answer</div>
+                    <div className="sbx-answer">{lab.answer || '(empty)'}</div>
+                    {lab.score != null && (
+                      <div className="sbx-verdict" style={{ marginTop: 8 }}>
+                        <div className="sbx-verdict-head"><span className={'sbx-badge ' + (lab.score >= 0.7 ? 'win' : lab.score >= 0.4 ? 'just' : 'bad')}>Claude score {lab.score}</span><span className="sbx-note">{lab.critique}</span></div>
+                        {lab.claudeWould && <div className="sbx-note" style={{ marginTop: 6 }}>a top answer would: {lab.claudeWould}</div>}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {lab.history.length > 1 && <div className="sbx-hint" style={{ display: 'block', marginTop: 8 }}>scores this session (newest first): {lab.history.map(h => h.score == null ? '?' : h.score).join(' · ')}</div>}
               </div>
 
               <div className="tier">
