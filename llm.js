@@ -59,25 +59,39 @@
     if (mode === 'creative')
       return 'You are Cleon, a private assistant running locally in the user\'s browser. Use any supplied passages as raw material to compose freely. Do not add citation markers.';
     if (grounded) {
-      // Thinking depth reaches the PHRASING, not just retrieval: a deeper turn has
-      // already gathered more material (extra seek rounds, association, working
-      // memory), so it is also told to write a fuller, more synthesized reading
-      // rather than the reflex one- or two-liner. The faithfulness contract is
-      // unchanged at every level — only the passages, never invented, exact
-      // "The passages don't say." refusal, no model-written citations. depth 1
-      // returns the exact floor strings, so the parity floor stays byte-identical.
-      const lvl = depth >= 3 ? 3 : depth === 2 ? 2 : 1;
-      if (task === 'summary')
-        return lvl === 3
-          ? 'You are Cleon. Write a thorough, connected summary — a short paragraph or two — of what the passages are ABOUT in your own words: the figures, what is claimed of them, how it develops, and the connections or tensions between passages. Synthesize everything supplied into one coherent account; never copy or lightly reword a single line as the whole answer. Use only what they state, add nothing not present, and write no citation markers; those are added mechanically afterward.'
-          : lvl === 2
-          ? 'You are Cleon. In a full, connected summary of about 4 to 6 sentences, say what the passages are ABOUT in your own words — the figures, what is claimed of them, and how it moves — drawing the passages together rather than listing them. Never copy or lightly reword a single line as the whole answer. Use only what they state, add nothing not present, and write no citation markers; those are added mechanically afterward.'
-          : 'You are Cleon. In 2 to 4 sentences, say what the passages are ABOUT in your own words — the figures, what is claimed of them, and how it moves. Synthesize across the passages; never copy or lightly reword a single line as the whole answer. Use only what they state, add nothing not present, and write no citation markers; those are added mechanically afterward.';
-      return lvl === 3
-        ? 'You are Cleon. Answer using ONLY the supplied passages, as fully as they allow — a short paragraph that gathers every passage bearing on the question, follows the through-line, and notes how they fit together. Stay close to the passages\' own facts and wording, and never add anything they do not state. If they do not answer the question, reply exactly: The passages don\'t say. Do not write citation markers like [s1]; those are added mechanically afterward.'
-        : lvl === 2
-        ? 'You are Cleon. Answer using ONLY the supplied passages, in a few sentences that bring together every passage bearing on the question rather than stopping at the first. Stay close to the passages\' own facts and wording, and never add anything they do not state. If they do not answer the question, reply exactly: The passages don\'t say. Do not write citation markers like [s1]; those are added mechanically afterward.'
-        : 'You are Cleon. Answer using ONLY the supplied passages. Reply in one or two sentences, staying close to the passages\' own facts and wording. Never add anything the passages do not state. If they do not answer the question, reply exactly: The passages don\'t say. Do not write citation markers like [s1]; those are added mechanically afterward.';
+      // The notes-and-spans framing. The old prompts treated the model as a
+      // hostile witness ("Answer using ONLY the supplied passages… never add
+      // anything") — which produced literalism over substitution: "who wrote
+      // it?" answered "The author wrote it." while the span carried the name,
+      // because echoing the question's noun stays closer to "the passages'
+      // own wording" than pulling the name out. The reframe: spans are
+      // verbatim quotes to trust and USE; notes are the reader's own graph
+      // understanding, usually right, sometimes wrong; spans win conflicts.
+      // One prompt replaces six near-duplicates, with NO length
+      // prescriptions — the model answers as it sees fit; depth scales
+      // max_tokens (the real bound) and nothing else. The faithfulness
+      // contract survives: nothing beyond what was handed over, a plain
+      // "the document doesn't say" refusal (the veto's modelDeclined
+      // watches for that shape), and no model-written citation markers —
+      // binding stays mechanical. The one summary-specific line is the
+      // degeneracy guard (don't hand back a single span as the summary),
+      // which is faithfulness, not length.
+      const lines = [
+        'You\'re Cleon, a helpful assistant running locally in the user\'s browser. You\'re in the middle of a conversation with them about a document you\'ve been reading together.',
+        '',
+        'Two kinds of context come with each turn:',
+        '- Spans — exact sentences quoted verbatim from the document. Trust them; lean on them whenever a fact is in there.',
+        '- Your notes — your own understanding from reading the document. Usually right, sometimes wrong. Good for shape, connections, and who-is-who.',
+        '',
+        'If a span and a note disagree, the span wins. If a span contains a name, date, or title that answers the question, use it directly — don\'t echo the question\'s wording back. Don\'t add facts that are in neither the spans nor your notes. If neither covers the question, say plainly that the document doesn\'t say, rather than guessing — you don\'t have the whole document, just what you were handed.',
+      ];
+      if (task === 'summary') {
+        lines.push('');
+        lines.push('Right now they want a summary: say what the document is about in your own words, drawing the spans together — never copy or lightly reword a single span as the whole answer.');
+      }
+      lines.push('');
+      lines.push('Don\'t write citation markers like [s1] — those are added mechanically after you write.');
+      return lines.join('\n');
     }
     return 'You are Cleon, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. Do not invent facts about real people, places, or events: if you are not sure something is true, say you are not sure rather than making something up — a confident wrong answer is worse than an honest "I\'m not certain." A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. If the user is clearly asking about an open document but you were not handed a relevant passage, say so and offer to look it up, rather than guessing at what it contains. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
   }
@@ -127,36 +141,40 @@
     return out;
   }
 
-  // Render the heat-ranked working memory (depth > 1) into a compact block: the
-  // conversation's hot subgraph, condensed warm one-hop, and a cold index of
-  // rewarmable pointers. Folded into the system message (never its own message),
-  // so the single-system-message-first invariant holds. Empty ⇒ '' ⇒ today's path.
-  function renderWorkingMemory(wm) {
+  // Render the heat-ranked working memory (depth > 1) as the model's own
+  // NOTES — first-person voice ("things you noticed"), joined into the user
+  // message's notes block rather than the system prompt. Notes are turn
+  // context, not standing instruction: this is what lets the grounded
+  // reframe ("your notes — usually right, sometimes wrong") actually pay
+  // off, and it's where who-is-who answers come from when retrieval has no
+  // lexical hook. Empty ⇒ '' ⇒ the prompt is byte-identical to having none.
+  function renderNotes(wm) {
     if (!wm) return '';
     const hot = wm.hot || [], warm = wm.warm || [], cold = wm.cold || [], recalled = wm.recalled || [];
     if (!hot.length && !warm.length && !cold.length && !recalled.length) return '';
-    const out = ['Working memory — what this conversation is actively holding. Treat it as already in focus; the user may refer to it without naming it again.'];
+    const out = [];
     if (hot.length) {
-      out.push('In focus:');
+      out.push('Things in focus right now:');
       for (const h of hot.slice(0, 5)) {
         const s = (h.sents || []).map(x => x && x.t).filter(Boolean).slice(0, 2).join(' ');
         out.push(`- ${h.entity}${s ? ' — ' + condense(s, 220) : ''}`);
       }
     }
     if (warm.length) {
-      out.push('One step away:');
+      out.push('Connected, one step away:');
       for (const w of warm.slice(0, 4)) out.push(`- ${w.entity} (via ${w.oneHopFrom})${w.portraitLine ? ': ' + condense(w.portraitLine, 160) : ''}`);
     }
     if (recalled.length) {
-      out.push('Recalled (earlier material relevant again):');
+      out.push('Earlier material that came back into view:');
       for (const r of recalled.slice(0, 3)) if (r && r.t) out.push(`- ${condense(r.t, 200)}`);
     }
     if (cold.length) {
       const rng = (c) => c.sentRange ? ` [s${c.sentRange[0]}${c.sentRange[1] !== c.sentRange[0] ? '–s' + c.sentRange[1] : ''}]` : '';
-      out.push('Cooled (rewarmable — ask to expand): ' + cold.slice(0, 8).map(c => c.label + rng(c)).join(', '));
+      out.push('Other things you noticed (mention if relevant): ' + cold.slice(0, 8).map(c => c.label + rng(c)).join(', '));
     }
     return out.join('\n');
   }
+  const renderWorkingMemory = renderNotes;   // legacy name (sandbox / prompt lab)
 
   // Assemble the chat messages: system + a condensed recap of older turns + as
   // many recent turns verbatim as fit the budget + this turn. Exposed for
@@ -184,13 +202,111 @@
   // leaned on the caller's catch-retry to recover.
   const DEFAULT_BUDGET = 3300;
 
-  function assembleMessages({ sys, history, contextText, question, grounded, budget = DEFAULT_BUDGET, recentTurns = RECENT_TURNS, workingMemory = null }) {
+  // ---- the shape pass (two-stage answering) ----
+  // A small first call that characterizes the TURN — a director's note, not
+  // a rubric: what the user is actually after, what register fits, what a
+  // bad answer would look like. The answer pass then speaks freely with the
+  // note as guidance, not a leash. The shape pass sees the question, a
+  // little recent history, the doc title, and whether header metadata
+  // exists — deliberately NOT the spans or notes, so it decides what kind
+  // of turn this is instead of getting lured into answering it (a note that
+  // answers the question just gets paraphrased by the answer pass: wasted
+  // compute and a worse answer). The taste lives in the examples below.
+  const SHAPE_SYSTEM = [
+    'You are the editor sitting beside Cleon, a local assistant that answers questions about a document it has read. Before Cleon answers, you hand it a one-breath director\'s note: what the user is actually after this turn, what register fits, and what a bad answer would look like. You characterize the move — you never answer the question yourself, and you never state facts about the document.',
+    '',
+    'Examples of the notes you write:',
+    '',
+    'Question: "what\'s the point of the book?"',
+    'Note: They\'re asking for the through-line — what the book is about beneath its plot. Synthesis, not lookup: they want your reading, not a quote. A literalist answer that hugs the passages will frustrate them; so will a generic book-report thesis. Pull from your notes, name a tension you actually noticed, and commit to a view. Conversational.',
+    '',
+    'Question: "who wrote it?"',
+    'Note: Bibliographic lookup. They want the name. One line, no hedging, and never "the author" — say the name if the header metadata or a span has it; if nothing does, say what\'s missing.',
+    '',
+    'Question (right after Cleon listed characters, including obvious boilerplate): "project gutenberg is a character?"',
+    'Note: Pushback, and they\'re right — that\'s boilerplate, not a character. Acknowledge the mistake without grovelling and give the cleaner answer. This is repair, not fresh retrieval; don\'t re-serve the old list.',
+    '',
+    'Question: "thanks, that helps"',
+    'Note: Not a question — acknowledgment. A sentence back, warm, no new material unless they ask.',
+    '',
+    'Write 2–4 plain sentences in that voice. The note is guidance for HOW to answer — never the answer itself, and never new facts.',
+  ].join('\n');
+
+  async function shapePass({ mlcKey, question, history, docTitle, metaHint }) {
+    const eng = await load(mlcKey);
+    const recent = (Array.isArray(history) ? history : []).slice(-4)
+      .map(m => `${m.role === 'assistant' ? 'Cleon' : 'user'}: ${condense(m.content, 200)}`).join('\n');
+    const user = [
+      docTitle ? `Document open: "${docTitle}".` : 'A document is open.',
+      metaHint ? `Header metadata on hand: ${metaHint}.` : '',
+      recent ? `\nRecent turns:\n${recent}` : '',
+      `\nUser just asked: "${question}"`,
+      '\nWhat does this turn want? Reply with the note only.',
+    ].filter(Boolean).join('\n');
+    const messages = [{ role: 'system', content: SHAPE_SYSTEM }, { role: 'user', content: user }];
+    const A = (typeof window !== 'undefined') ? window.EOAudit : null;
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    let full = '';
+    try {
+      const res = await eng.chat.completions.create({ messages, temperature: 0.3, max_tokens: 90, stop: STOP_SEQUENCES, stream: true });
+      for await (const chunk of res) full += chunk.choices?.[0]?.delta?.content || '';
+    } catch (e) {
+      if (A && A.step) try { A.step('llm', { mode: 'shape', grounded: false, mlcKey, system: SHAPE_SYSTEM, messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })), output: full, error: String((e && e.message) || e), ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0) }); } catch (_) {}
+      throw e;
+    }
+    const note = stripThink(full);
+    if (A && A.step) try { A.step('llm', { mode: 'shape', grounded: false, mlcKey, params: { temperature: 0.3, max_tokens: 90 }, system: SHAPE_SYSTEM, messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })), output: full.trim(), filtered: note !== full.trim() ? note : undefined, ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0) }); } catch (_) {}
+    return note;
+  }
+
+  // The grounded user message, tiered: the question first (orientation), the
+  // shape note (the director's read of what this turn wants), the spans
+  // quoted exactly, the notes as their own epistemic level, and the question
+  // again as the closing instruction — without the second occurrence, long
+  // context pushes the question out of the model's recency window and
+  // answers drift. Non-grounded callers (plain chat, creative) keep their
+  // old shapes; a grounded caller that still passes a prebuilt blob (the
+  // summary sample) gets the same frame around the blob.
+  function buildUserContent({ question, docTitle, spans, notesProse, contextText, grounded, shapeNote }) {
+    if (!grounded) return contextText ? `Passages:\n${contextText}\n\n${question}` : question;
+    const hasSpans = Array.isArray(spans) && spans.length > 0;
+    if (!hasSpans && !notesProse && !contextText && !shapeNote) return question;
+    const parts = [`The user just asked: ${question}`, ''];
+    if (shapeNote) {
+      parts.push('What this turn wants:');
+      parts.push(String(shapeNote).trim());
+      parts.push('');
+    }
+    parts.push('Context for this turn:');
+    if (docTitle) parts.push(`You've been reading a document called "${docTitle}".`);
+    parts.push('');
+    if (hasSpans) {
+      parts.push('Sentences from the document that look relevant, quoted exactly:');
+      for (const s of spans) parts.push(`  [${s.tag != null ? s.tag : 's' + s.idx}] ${s.text}`);
+      parts.push('');
+    } else if (contextText) {
+      parts.push('Material from the document:');
+      parts.push(contextText);
+      parts.push('');
+    }
+    if (notesProse) {
+      parts.push('Your notes on the document (your understanding from reading it — usually right, sometimes wrong):');
+      parts.push(notesProse);
+      parts.push('');
+    }
+    parts.push(`Answer the user's question: ${question}`);
+    return parts.join('\n');
+  }
+
+  function assembleMessages({ sys, history, contextText, question, grounded, budget = DEFAULT_BUDGET, recentTurns = RECENT_TURNS, workingMemory = null, spans = null, notes = '', docTitle = '', shapeNote = '' }) {
     const est = (m) => estTokens((m && m.content) || '');
-    const userContent = (grounded && contextText)
-      ? `Passages from the document:\n${contextText}\n\nUsing only the passages above, answer: ${question}`
-      : (contextText ? `Passages:\n${contextText}\n\n${question}` : question);
-    const wmBlock = renderWorkingMemory(workingMemory);
-    const sysFull = wmBlock ? `${sys}\n\n${wmBlock}` : sys;
+    // Working memory renders as the model's own notes and joins any
+    // graph-derived notes in the USER message — turn context, not standing
+    // instruction. The system message stays bare (plus the recap below).
+    const wmBlock = renderNotes(workingMemory);
+    const notesProse = [String(notes || '').trim(), wmBlock].filter(Boolean).join('\n\n');
+    const userContent = buildUserContent({ question, docTitle, spans, notesProse, contextText, grounded, shapeNote });
+    const sysFull = sys;
     const head = { role: 'system', content: sysFull };
     const tail = { role: 'user', content: userContent };
     let used = est(head) + est(tail);
@@ -288,7 +404,7 @@
 
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
   // pass retrieved passages. onToken(deltaText).
-  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride }) {
+  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride, spans, notes, docTitle, shapeNote }) {
     const eng = await load(mlcKey);
     // Thinking depth (1 reflex … 3 deepest) shapes the grounded phrasing and how
     // much room the answer gets. Absent/1 ⇒ today's prompt and token caps (parity).
@@ -296,7 +412,7 @@
     // sysOverride lets the sandbox's prompt lab try a candidate talker prompt;
     // unset everywhere else, so normal chat is byte-identical (parity holds).
     const sys = sysOverride || systemFor(mode, task, grounded, lvl);
-    const messages = assembleMessages({ sys, history, contextText, question, grounded, budget, workingMemory });
+    const messages = assembleMessages({ sys, history, contextText, question, grounded, budget, workingMemory, spans, notes, docTitle, shapeNote });
     const temperature = mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4);
     // Deeper reading earns more room to synthesize: the grounded caps grow with the
     // dial (summary 260→520, answer 180→420). lvl 1 holds today's exact ceilings.
@@ -341,5 +457,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, systemFor, assembleMessages, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, stripThink, makeThinkFilter };
 })();

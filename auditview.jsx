@@ -73,6 +73,11 @@ function AuditStep({ s }) {
       {' '}{s.recovered ? <b>recovered</b> : <span className="aud-dim">→ chat</span>}
     </Line>
   );
+  if (s.t === 'shape') return (
+    <Line label="shape" kind="intent">
+      {s.note ? <span className="aud-dim">“{s.note}”</span> : <span className="aud-dim">no note (shape pass empty or dropped) — answer pass ran bare</span>}
+    </Line>
+  );
   if (s.t === 'repair') return (
     <Line label="repair" kind="route">
       <b>{s.kind}</b>

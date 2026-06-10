@@ -87,10 +87,12 @@ group('no history — bare system + question', () => {
   eq(messages.length, 2, 'system + the single user turn');
 });
 
-// Heat-ranked working memory (thinking depth > 1) folds into the prompt without
-// breaking the one-system-message-first invariant, and shrinks the verbatim
-// recency window. Absent/empty working memory must be byte-identical to before.
-group('working memory folds into the single system message (depth > 1)', () => {
+// Heat-ranked working memory (thinking depth > 1) renders as the model's own
+// NOTES inside the USER message — turn context, not standing instruction —
+// without breaking the one-system-message-first invariant, and still shrinks
+// the verbatim recency window. Absent/empty working memory must be
+// byte-identical to having none.
+group('working memory becomes first-person notes in the user message (depth > 1)', () => {
   const wm = {
     hot: [{ entity: 'Edith', heat: 2, sents: [{ i: 1, t: 'She set the kettle down and listened.' }] }],
     warm: [{ entity: 'Marlow', oneHopFrom: 'Edith', portraitLine: 'Edith thought about Marlow.' }],
@@ -104,10 +106,13 @@ group('working memory folds into the single system message (depth > 1)', () => {
   eq(messages[0].role, 'system', 'the system message is first');
   ok(messages.slice(1).every(m => m.role !== 'system'), 'working memory does not become a second system message');
   ok(messages[0].content.startsWith('SYS'), 'the base system prompt is preserved at the front');
-  ok(/Working memory/.test(messages[0].content), 'the working-memory block is folded into the system message');
-  ok(/Edith/.test(messages[0].content) && /Marlow/.test(messages[0].content), 'hot and warm entities appear in the block');
-  ok(/the boat/.test(messages[0].content), 'a cooled pointer is listed');
-  eq(messages[messages.length - 1].role, 'user', 'the final message is the current user turn');
+  ok(!/Things in focus/.test(messages[0].content), 'the notes do NOT live in the system message');
+  const last = messages[messages.length - 1];
+  eq(last.role, 'user', 'the final message is the current user turn');
+  ok(/Your notes on the document/.test(last.content), 'the user message carries the notes block');
+  ok(/Edith/.test(last.content) && /Marlow/.test(last.content), 'hot and warm entities appear in the notes');
+  ok(/the boat/.test(last.content), 'a cooled pointer is listed in the notes');
+  ok(/^Things in focus right now:/m.test(LLM.renderNotes(wm)), 'notes render in the model\'s own voice');
 });
 
 group('working memory shrinks the verbatim recency window', () => {
@@ -133,37 +138,84 @@ group('no working memory ⇒ byte-identical to before (parity floor)', () => {
   eq(LLM.renderWorkingMemory({ hot: [], warm: [], cold: [], recalled: [] }), '', 'an empty working memory renders empty');
 });
 
-// Thinking depth (1 reflex … 3 deepest) reaches the grounded PHRASING, not just
-// retrieval: a deeper turn is told to write a fuller, synthesized reading. depth 1
-// must return the exact floor strings (the dial's parity floor), and the
-// faithfulness contract — exact "The passages don't say." refusal, no model-written
-// citation markers — must survive at every level.
-group('thinking depth shapes the grounded prompt; depth 1 is the parity floor', () => {
+// The grounded prompt is the notes-and-spans framing: spans are verbatim and
+// win conflicts; notes are the reader's own understanding; names/dates in a
+// span are USED, not echoed back. No hardcoded length prescriptions — the
+// model answers as it sees fit (depth scales max_tokens, nothing else, so
+// the prompt is identical at every depth). The faithfulness contract
+// survives the reframe: a plain "the document doesn't say" refusal (the
+// veto's modelDeclined watches that shape), no model-written citations, and
+// the summary keeps its degeneracy guard (never a single span as the answer).
+group('the grounded prompt: notes-and-spans framing, no length prescriptions', () => {
   const ans1 = LLM.systemFor('grounded', 'answer', true, 1);
   const ans2 = LLM.systemFor('grounded', 'answer', true, 2);
   const ans3 = LLM.systemFor('grounded', 'answer', true, 3);
   const sum1 = LLM.systemFor('grounded', 'summary', true, 1);
   const sum3 = LLM.systemFor('grounded', 'summary', true, 3);
 
-  // parity floor: depth 1 (and a missing depth) is byte-identical to today.
   eq(ans1, LLM.systemFor('grounded', 'answer', true), 'answer @ depth 1 == default (no depth arg)');
-  eq(sum1, LLM.systemFor('grounded', 'summary', true), 'summary @ depth 1 == default (no depth arg)');
-  ok(/one or two sentences/.test(ans1), 'the floor answer keeps the reflex one-or-two-sentence instruction');
-  ok(/In 2 to 4 sentences/.test(sum1), 'the floor summary keeps the 2-to-4-sentence instruction');
+  eq(ans1, ans2, 'depth does not change the prompt (it scales max_tokens instead)');
+  eq(ans2, ans3, 'the prompt is one prompt at every depth');
+  eq(sum1, sum3, 'the summary prompt is depth-invariant too');
+  ok(!/\b(one or two|2 to 4|4 to 6) sentences\b/.test(ans1 + sum1), 'no sentence-count prescriptions anywhere');
+  ok(/never copy or lightly reword a single span/.test(sum1), 'the summary keeps its degeneracy guard');
+  ok(!/never copy or lightly reword/.test(ans1), 'the answer prompt carries no summary instruction');
 
-  // deeper levels ask for a fuller reading and differ from the floor and each other.
-  ok(ans3.length > ans1.length, 'the deepest answer prompt asks for more than the floor');
-  ok(ans2 !== ans1 && ans2 !== ans3, 'the middle depth is its own prompt');
-  ok(!/one or two sentences/.test(ans3), 'the deepest answer drops the one-or-two-sentence cap');
-  ok(sum3.length > sum1.length, 'the deepest summary prompt asks for more than the floor');
-
-  // faithfulness contract holds at every level.
-  for (const [name, s] of [['answer@1', ans1], ['answer@2', ans2], ['answer@3', ans3]])
-    ok(/The passages don't say/.test(s), `${name} keeps the exact refusal phrase`);
-  for (const [name, s] of [['answer@3', ans3], ['summary@3', sum3]]) {
-    ok(/citation markers/.test(s), `${name} still forbids model-written citations`);
-    ok(/only|nothing not present|do not state/i.test(s), `${name} still pins answers to the passages`);
+  for (const [name, s] of [['answer', ans1], ['summary', sum1]]) {
+    ok(/the span wins/.test(s), `${name}: spans win over notes`);
+    ok(/use it directly — don't echo the question's wording back/.test(s), `${name}: substitution over literalism (the "who wrote it?" fix)`);
+    ok(/say plainly that the document doesn't say/.test(s), `${name}: keeps a plain, detectable refusal`);
+    ok(/citation markers/.test(s), `${name}: still forbids model-written citations`);
+    ok(/in neither the spans nor your notes/i.test(s), `${name}: nothing beyond spans + notes`);
   }
+});
+
+// The tiered user message: question first (orientation), spans quoted
+// exactly, notes as their own level, the question again as the closing
+// instruction. A grounded caller without spans (the summary sample) gets the
+// same frame around its blob; plain chat and creative are unchanged.
+group('buildUserContent — tiered spans/notes, question first and last', () => {
+  const spans = [{ idx: 12, text: 'Until recently, his son served at Solaren.' }, { tag: 's11', text: 'The Director is David Corman.' }];
+  const u = LLM.buildUserContent({ question: 'whose son is mentioned?', docTitle: 'NDP.txt', spans, notesProse: 'The son mentioned at [s12] is David Corman’s.', grounded: true });
+  ok(u.startsWith('The user just asked: whose son is mentioned?'), 'opens with the question (orientation)');
+  ok(/Answer the user's question: whose son is mentioned\?$/.test(u), 'closes with the question (instruction)');
+  ok(/reading a document called "NDP\.txt"/.test(u), 'names the document');
+  ok(/quoted exactly:/.test(u) && /\[s12\] Until recently/.test(u) && /\[s11\] The Director/.test(u), 'spans are listed with their tags');
+  ok(/Your notes on the document/.test(u) && /David Corman’s/.test(u), 'notes are their own tier');
+  ok(u.indexOf('quoted exactly') < u.indexOf('Your notes'), 'spans come before notes');
+
+  const blob = LLM.buildUserContent({ question: 'summarize this', contextText: '[s0] line one\n[s1] line two', grounded: true });
+  ok(blob.startsWith('The user just asked: summarize this'), 'blob fallback keeps the question-first frame');
+  ok(/Material from the document:/.test(blob) && /\[s0\] line one/.test(blob), 'the blob rides as material');
+
+  eq(LLM.buildUserContent({ question: 'hi', grounded: false }), 'hi', 'plain chat: bare question unchanged');
+  eq(LLM.buildUserContent({ question: 'write a poem', contextText: '[s0] x', grounded: false }),
+    'Passages:\n[s0] x\n\nwrite a poem', 'creative/ungrounded passage shape unchanged');
+  eq(LLM.buildUserContent({ question: 'q', grounded: true }), 'q', 'grounded with no material at all: bare question');
+});
+
+// The shape pass: a director's note, not a rubric. The system prompt is the
+// taste surface — it characterizes the move and never answers; the note
+// rides the user message between the question and the spans.
+group('shape pass — a director\'s note between question and spans', () => {
+  ok(/never answer the question yourself/.test(LLM.SHAPE_SYSTEM), 'the shape prompt forbids answering');
+  ok(/never state facts about the document/.test(LLM.SHAPE_SYSTEM), '…and forbids inventing document facts');
+  ok(/what's the point of the book\?/.test(LLM.SHAPE_SYSTEM), 'synthesis example present (the taste lives in examples)');
+  ok(/who wrote it\?/.test(LLM.SHAPE_SYSTEM) && /never "the author"/.test(LLM.SHAPE_SYSTEM), 'lookup example demands the name, not "the author"');
+  ok(/project gutenberg is a character\?/.test(LLM.SHAPE_SYSTEM) && /repair, not fresh retrieval/.test(LLM.SHAPE_SYSTEM), 'pushback example routes as repair');
+  ok(typeof LLM.shapePass === 'function', 'shapePass is exposed');
+
+  const u = LLM.buildUserContent({
+    question: 'who wrote it?', docTitle: 'crime.txt',
+    spans: [{ idx: 4, text: 'Author: Fyodor Dostoyevsky' }],
+    notesProse: '', grounded: true,
+    shapeNote: 'Bibliographic lookup. They want the name — one line.',
+  });
+  ok(/What this turn wants:\nBibliographic lookup/.test(u), 'the note has its own block');
+  ok(u.indexOf('The user just asked') < u.indexOf('What this turn wants'), 'question orients first');
+  ok(u.indexOf('What this turn wants') < u.indexOf('quoted exactly'), 'the note precedes the spans');
+  const bare = LLM.buildUserContent({ question: 'q', spans: [{ idx: 1, text: 'x' }], grounded: true, shapeNote: '' });
+  ok(!/What this turn wants/.test(bare), 'no note ⇒ no empty block (answer pass unchanged)');
 });
 
 // Reasoning-model think gating: tagged chain-of-thought never reaches the
