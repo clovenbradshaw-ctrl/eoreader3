@@ -166,5 +166,33 @@ group('thinking depth shapes the grounded prompt; depth 1 is the parity floor', 
   }
 });
 
+// Reasoning-model think gating: tagged chain-of-thought never reaches the
+// user — not in the stream (the delta filter), not in the returned answer
+// (the post-strip) — including when max_tokens cuts the turn mid-think and
+// the close tag never arrives.
+group('think gating — reasoning never reaches the user', () => {
+  eq(LLM.stripThink('<think>step 1… step 2…</think>The author is Dostoyevsky.'),
+    'The author is Dostoyevsky.', 'a closed think block is stripped from the returned text');
+  eq(LLM.stripThink('<think>ran out of tok'), '', 'an UNCLOSED think tail (max_tokens cutoff) is dropped entirely');
+  eq(LLM.stripThink('plain answer, no tags'), 'plain answer, no tags', 'text without tags passes through');
+  eq(LLM.stripThink('a<think>x</think>b<think>y</think>c'), 'abc', 'multiple think blocks all stripped');
+
+  // The streaming filter: emit only outside-think text, even when the tags
+  // split across deltas; flush() releases the held look-behind at stream end.
+  const seen = [];
+  const f = LLM.makeThinkFilter(d => seen.push(d));
+  for (const d of ['Hello <th', 'ink>secret reaso', 'ning</thi', 'nk> world!']) f.feed(d);
+  f.flush();
+  eq(seen.join(''), 'Hello  world!', 'split-across-deltas tags are caught; only non-think text streams');
+  const seen2 = [];
+  const f2 = LLM.makeThinkFilter(d => seen2.push(d));
+  f2.feed('<think>never closes because max_tokens'); f2.flush();
+  eq(seen2.join(''), '', 'an unclosed think stream emits nothing');
+  const seen3 = [];
+  const f3 = LLM.makeThinkFilter(d => seen3.push(d));
+  f3.feed('no tags at all'); f3.flush();
+  eq(seen3.join(''), 'no tags at all', 'tag-free streaming is unchanged');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }

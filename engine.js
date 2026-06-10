@@ -318,7 +318,7 @@ const LANGUAGE_MODULES = {
     provides: [
       'attribution_patterns',
       'pronouns', 'person_pronouns', 'nonperson_pronouns',
-      'female_pronouns', 'male_pronouns',
+      'female_pronouns', 'male_pronouns', 'kin_terms',
       'female_titles', 'male_titles', 'title_tokens',
       'base_stopwords', 'function_words',
       'clitic_suffixes', 'adverb_heads', 'name_connectors',
@@ -439,6 +439,11 @@ const READING_RULES = {
     value: ['he','him','his'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Pronouns that resolve to male-gendered sites.',
+  },
+  kin_terms: {
+    value: ['son','daughter','father','mother','brother','sister','wife','husband','uncle','aunt','nephew','niece','cousin','grandfather','grandmother','grandson','granddaughter','parents','children','child','sons','daughters','brothers','sisters','widow','widower','stepson','stepdaughter','stepfather','stepmother'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Kinship nouns. A possessive pronoun + kin noun ("his son", "her mother") names a relation the page never states as a copula — the possessor is resolved by activation and the relation recorded as a kin DEF, so "whose son is mentioned?" is answerable from the graph instead of stranding on an unresolved pronoun.',
   },
   // ── Production guards — conventions of the reading's own hygiene ──
   // Assertions, contextual and revisable: each is what THIS reader currently
@@ -703,7 +708,7 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
     DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
     GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS,
-    SPEAKER_LABEL_RES;
+    KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -717,6 +722,12 @@ function rebuildLangSets() {
   FEMALE_PRONOUNS = new Set(mod_values('female_pronouns'));
   MALE_PRONOUNS = new Set(mod_values('male_pronouns'));
   NEUTRAL_PERSON_PRONOUNS = new Set(mod_values('neutral_person_pronouns'));
+  KIN_TERMS = new Set(mod_values('kin_terms'));
+  // "his/her (own|late|elder…) <kin-noun>" — the possessive-kin shape the
+  // extractor reads. Empty inventory (a language without it yet) disables it.
+  KIN_POSS_RE = KIN_TERMS.size
+    ? new RegExp("\\b(his|her)\\s+(?:own\\s+|late\\s+|elder\\s+|eldest\\s+|younger\\s+|youngest\\s+|only\\s+)?(" + [...KIN_TERMS].join('|') + ")\\b", 'giu')
+    : /$^/;
   FEMALE_TITLES = new Set(mod_values('female_titles'));
   MALE_TITLES = new Set(mod_values('male_titles'));
   // Every personal title (gendered + genderless: Mr, Mrs, Dr, Captain,
@@ -3287,6 +3298,9 @@ async function extractEoGraph(text, onProgress) {
   // sentence_idx → sentence_texts, so carrying a full copy on every event was
   // pure retained weight (the main lever on a long document's memory).
   const sentenceTexts = new Array(sentenceDocs.length);
+  // The PERSONS the previous sentence named — the local field the possessive-
+  // kin reader resolves against (a possessive determiner is a local anaphor).
+  let prevSentencePersons = new Set();
   const processSentence = (sentDoc, i) => {
     const sentText = sentDoc.text();
     sentenceTexts[i] = sentText.trim();
@@ -3649,6 +3663,80 @@ async function extractEoGraph(text, onProgress) {
             }
           }
         }
+      }
+    }
+
+    // ── DEF (Dissecting): possessive kin — "his son", "her mother" ──
+    // A possessive determiner + kin noun holds a relation the page never
+    // states as a copula: "Until recently, his son served as Director…"
+    // says WHOSE son only through the pronoun. Without this reader the
+    // phrase deposits nothing — a question like "whose son is mentioned?"
+    // strands on a pronoun no retrieval can resolve. The possessor is
+    // resolved under the same activation law every pronoun obeys (surface
+    // mass × weight + momentum, δ dominance, absolute floor, stall-to-NUL),
+    // and the relation lands as a DEF the answer layer reads back.
+    // Narration only — a character saying "my son…" is speech, not record.
+    if (KIN_TERMS && KIN_TERMS.size) {
+      const narration = sentText
+        .replace(/“[^”]*[”]?/g, ' ')
+        .replace(/"[^"]*"/g, ' ');
+      KIN_POSS_RE.lastIndex = 0;
+      let km; const kinSeen = new Set();
+      // The local field: persons named in the previous or current sentence.
+      // A possessive determiner is a LOCAL anaphor — "…is David Corman, a
+      // former commander. Until recently, his son served…" reads as Corman's
+      // son to any reader, even while a heavier name from earlier pages still
+      // out-masses him globally. The narrowing is the linguistic convention;
+      // within the narrowed field the SAME laws apply (sign exclusion, δ
+      // dominance, absolute floor). A contested local field stalls honestly —
+      // two fresh local persons IS ambiguity, and the global field must not
+      // break that tie with stale mass. Only an EMPTY or sign-excluded local
+      // field falls back to whole-page activation.
+      const localPersons = new Map();
+      for (const k of prevSentencePersons) { const v = sites.get(k); if (v) localPersons.set(k, v); }
+      for (const a of admitted) {
+        const rk = resolveSiteKey(a.key);
+        const v = rk ? sites.get(rk) : null;
+        if (v && v.type === 'person') localPersons.set(rk, v);
+      }
+      while ((km = KIN_POSS_RE.exec(narration)) !== null) {
+        const poss = km[1].toLowerCase(), kin = km[2].toLowerCase();
+        if (kinSeen.has(poss + ':' + kin)) continue;
+        kinSeen.add(poss + ':' + kin);
+        let hint = null, localStalled = false;
+        if (localPersons.size) {
+          const r = resolveByActivation(poss, localPersons);
+          if (r && r.key) {
+            hint = r;
+            // a binding is an inferred mention: warm at the anaphora coupling,
+            // exactly as resolvePronoun does for its own binds
+            const site = sites.get(r.key);
+            if (site) { site.mass += ANAPHORA_W(); site.momentum = site.momentum * GAMMA + 1; }
+          } else if (r && r.nul) {
+            localStalled = true;
+            events.push({
+              id: 'ev-' + seq, seq: seq++, op: 'NUL', stance: 'Preserving',
+              surface: poss + ' ' + kin, reason: 'pronoun-stall:' + r.reason,
+              competing: r.competing,
+              observed: { frame: frameStamp(currentSentIdx), competing: r.competing },
+              sentence_idx: currentSentIdx, sentence: currentSentText, src: 'possessive-kin',
+            });
+          }
+        }
+        if (!hint && !localStalled) {
+          const r = resolvePronoun(poss);
+          // A stall or a provisional (signal) binding deposits nothing here —
+          // the NUL resolvePronoun just logged IS the honest record.
+          if (r && !r.provisional && r.referent_id && r.key) hint = r;
+        }
+        if (!hint) continue;
+        events.push({
+          id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
+          target: hint.name, path: 'kin', value: kin,
+          targetHint: { key: hint.key, name: hint.name, referent_id: hint.referent_id },
+          basis: `possessive "${poss} ${kin}"`,
+          ...sentMeta, src: 'possessive-kin',
+        });
       }
     }
 
@@ -4084,6 +4172,15 @@ async function extractEoGraph(text, onProgress) {
       // shouldn't pretend to know who the next one belongs to either.
       if (speaker && attributionConfident) lastSpeaker = speaker;
     });
+
+    // Hand the next sentence its local anaphor field: the persons THIS
+    // sentence named (see the possessive-kin reader above).
+    prevSentencePersons = new Set();
+    for (const a of admitted) {
+      const rk = resolveSiteKey(a.key);
+      const v = rk ? sites.get(rk) : null;
+      if (v && v.type === 'person') prevSentencePersons.add(rk);
+    }
   };
   // Drive the structure pass on a clock: read sentences until ~a frame has
   // elapsed, then hand control back. Each sentence's compromise doc is nulled
@@ -5520,6 +5617,21 @@ function projectGraph(events, frame = {}) {
     if (t.length < 3) return true;
     return /\b(i (cannot|can ?not|can'?t|am unable to|won'?t|am not able)|i'?m sorry,? but|i'?m unable|unable to (provide|summari|comply|help|do)|as an ai|i do(n'?t| not) have (enough|the|access)|cannot (provide|create|write|generate)|can'?t (provide|create|write|generate))\b/.test(t);
   }
+  // Leaked chain-of-thought, hard-failed at the veto. The llm layer already
+  // strips tagged `<think>` blocks from the stream and the returned text;
+  // this catches what tagging can't — an answer that IS the reasoning
+  // (truncated mid-think, or an untagged preamble like "Okay, the user
+  // wants…"). Narrow on purpose: only the signatures reasoning models
+  // actually emit, so a legitimate answer starting "Okay," never trips it.
+  function looksLeakedReasoning(text) {
+    const s = String(text == null ? '' : text);
+    if (/<\/?think/i.test(s)) return true;
+    const t = s.trim();
+    return /^(?:okay|alright)[,.!]?\s+(?:so\s+)?the user\b/i.test(t)
+      || /^let me think\b/i.test(t)
+      || /^first,?\s+i need to\b/i.test(t)
+      || /^the user (?:wants|is asking|asked)\b/i.test(t);
+  }
 
   /* ============================================================ INTENT */
   function classifyIntent(q) {
@@ -5581,6 +5693,66 @@ function projectGraph(events, frame = {}) {
   function isCreativeCompose(q) {
     const t = ' ' + String(q).toLowerCase().replace(/[’']/g, "'") + ' ';
     return /\b(write|compose|create|make|give|pen)\b[^?!.]*\b(song|songs|poem|poems|sonnet|haiku|limerick|ballad|rap|verse|verses|lyric|lyrics|rhyme|ode|story|tale|jingle|hymn|villanelle|monologue|dialogue)\b/.test(t);
+  }
+  /* ---------- conversational repair ----------
+     A turn about the EXCHANGE, not the page: the user pushing back on the
+     previous reply. Three shapes:
+       frustration   — pure meta-talk ("you're not listening", "that's not
+                       what I asked"); carries no content of its own.
+       contradiction — flatly disputing the previous reply ("yeah it does",
+                       "no it doesn't", "it's right there").
+       refinement    — a correction that carries content ("no, the son of
+                       someone involved with NDP", "I mean the garage fire"),
+                       or an insistence that the page contains something
+                       ("someone's son is mentioned").
+     The router consults this FIRST for factual turns (and only when the
+     conversation context says something has been said): a repair turn fed to
+     lexical retrieval re-serves the failure the user is objecting to — the
+     observed trace answered "you're not listening to what i'm saying" with a
+     parking-garage line and a citation chip. Mechanical and cheap; inert for
+     batch callers that pass no conversation context. */
+  function repairSignal(q) {
+    const raw = String(q == null ? '' : q).toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, ' ').trim();
+    if (!raw) return null;
+    const t = ' ' + raw + ' ';
+    // FRUSTRATION — about the conversation itself.
+    if (/\b(?:you'?re? (?:not|n'?t) (?:listening|hearing|getting|reading|understanding)|you are not (?:listening|hearing|getting|reading|understanding)|not what i asked|not what i'?m asking|not what i (?:said|meant|mean)|that'?s not what i|you'?re? missing (?:the|my) point|you keep (?:saying|repeating|giving|missing)|listen to (?:me|what i)|read (?:it|that|my (?:question|message)) again|are you (?:even )?(?:listening|reading)|i'?m getting (?:annoyed|frustrated|nowhere)|this is (?:useless|pointless|frustrating|annoying|not working)|wtf|ffs)\b/.test(t)
+        || /^\s*(?:ugh|come on|seriously)\W*$/.test(raw))
+      return { kind: 'frustration', content: false };
+    // CONTRADICTION — disputing the previous reply, with nothing new to add.
+    if (/^(?:no|yes|yeah|yep|nope|nah|wrong|incorrect)[,!. ]*(?:(?:it|that|there|the (?:page|document|doc|text|article)) (?:does|did|do|is|was|are|were|can|could)(?:n'?t| not)?)?[.! ]*$/.test(raw)
+        || /^(?:it|that|there)('s| is| does| did| was)? (?:right there|in there|literally (?:says|there)|mentioned)[.! ]*$/.test(raw))
+      return { kind: 'contradiction', content: false };
+    // REFINEMENT — a correction carrying its own content. A leading bare "no"
+    // (not "no one/nobody/nothing") re-aims the previous question.
+    if (/^no\b(?!\s*(?:one|body|thing|where)\b)[\s,—–-]/.test(raw) && tok(raw).length >= 1)
+      return { kind: 'refinement', content: true };
+    if (/^(?:not that\b|i mean[t]?\b|i'?m (?:saying|asking|talking about)\b|i (?:said|asked)\b|i was asking\b)/.test(raw))
+      return { kind: 'refinement', content: true };
+    // INSISTENCE — asserting the page contains something the replies deny.
+    if (/\b(?:is|are|was|were)\s+(?:mentioned|in (?:there|the (?:text|document|doc|page|article)))\b/.test(t) && !/\?/.test(raw))
+      return { kind: 'refinement', content: true };
+    return null;
+  }
+  /* Across-turn repetition guard: does a draft repeat a reply already sent?
+     The within-answer twin of dedupeSentences. Normalizes away cite/void
+     markup, case and punctuation; equality or ≥90% containment is an echo.
+     A conversation partner who re-serves the same failed sentence after an
+     objection isn't answering — the caller must vary or say it's stuck. */
+  const _replyKey = (s) => String(s == null ? '' : s)
+    .replace(/\{\{[^}]*\}\}/g, ' ')
+    .toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  function echoesPriorReply(draft, priorTexts) {
+    const d = _replyKey(draft);
+    if (!d || d.length < 12) return false;
+    for (const p of (Array.isArray(priorTexts) ? priorTexts : [])) {
+      const k = _replyKey(p);
+      if (!k || k.length < 12) continue;
+      if (k === d) return true;
+      if ((k.includes(d) || d.includes(k))
+          && Math.min(d.length, k.length) / Math.max(d.length, k.length) >= 0.9) return true;
+    }
+    return false;
   }
   // The small models loop, emitting the same sentence twice in a grounded
   // summary. Drop a later sentence that repeats one already kept (compared
@@ -6600,6 +6772,10 @@ function projectGraph(events, frame = {}) {
     // the name IS, not whichever sentence shares the most tokens
     const defined = answerDefine(doc, query, opts);
     if (defined) return defined;
+    // a kin-shaped ask ("whose son…?") is answered from the possessive-kin
+    // record — the possessor named outright, which the raw sentence can't do
+    const kin = answerKin(doc, query, opts);
+    if (kin) return kin;
     return answerProse(doc, query, opts);
   }
 
@@ -6615,18 +6791,33 @@ function projectGraph(events, frame = {}) {
     const hits = retrieve(doc, query, k);
     const have = new Set(hits.map(h => h.i));
     const lines = hits.map(s => `[s${s.i}] ${s.t}`);
-    for (const s of entityEvidence(doc, query)) if (!have.has(s.i)) lines.push(`[s${s.i}] ${s.t}`);
+    for (const s of entityEvidence(doc, query)) if (!have.has(s.i)) { lines.push(`[s${s.i}] ${s.t}`); have.add(s.i); }
+    const heads = [];
     // A definitional ask opens with the page's assertions about the name —
     // the graph speaks first (same format the depth>1 walk uses, so citation
     // binding is untouched); the model only phrases over it, and its draft is
     // vetoed against these same assertions. A signal, never a tie-breaker.
     const da = defineAssertions(doc, query);
     if (da && da.picked.length) {
-      const head = ['What the page asserts about ' + da.subject + ':'];
+      heads.push('What the page asserts about ' + da.subject + ':');
       for (const d of da.picked)
-        head.push(`- ${d.subject} ${d.path === 'role' ? '' : 'is '}${d.is}` + (d.sent != null ? ` [s${d.sent}]` : '') + '.');
-      return head.join('\n') + '\n\nPassages:\n' + lines.join('\n');
+        heads.push(`- ${d.subject} ${d.path === 'role' ? '' : 'is '}${d.is}` + (d.sent != null ? ` [s${d.sent}]` : '') + '.');
     }
+    // A kin-shaped ask opens with the resolved possessive — the kin sentence
+    // alone says WHOSE only through a pronoun a small model cannot read; the
+    // record names the possessor and the anchor line rides along as evidence.
+    const asked = kinAsked(query);
+    if (asked.length) {
+      const texts = doc.sentenceTexts || [];
+      const recs = kinRecords(doc).filter(r => asked.includes(r.kin) || asked.includes(r.kin + 's'));
+      for (const r of recs.slice(0, 2)) {
+        heads.push(`${heads.length ? '' : 'What the page records:\n'}- the ${r.kin} mentioned${r.sent != null ? ' at [s' + r.sent + ']' : ''} is ${r.possessor}’s.`);
+        for (const i of [r.sent, r.anchor]) {
+          if (i != null && !have.has(i) && texts[i]) { lines.push(`[s${i}] ${texts[i]}`); have.add(i); }
+        }
+      }
+    }
+    if (heads.length) return heads.join('\n') + '\n\nPassages:\n' + lines.join('\n');
     return lines.join('\n');
   }
   /* ---------- splitting a draft into claim-sentences ----------
@@ -7014,6 +7205,12 @@ function projectGraph(events, frame = {}) {
       if (namedKeys.has(d.key) || (d.key.length >= 4 && [...namedKeys].some(k => _keyWithin(k, d.key) || _keyWithin(d.key, k))))
         take(d.sent);
     }
+    // kin records are evidence about the possessor too — the sentence carries
+    // only a pronoun, so name-keyed retrieval can never reach it on its own
+    for (const r of kinRecords(doc)) {
+      if (namedKeys.has(r.key) || (r.key.length >= 4 && [...namedKeys].some(k => _keyWithin(k, r.key) || _keyWithin(r.key, k))))
+        take(r.sent);
+    }
     for (const e of named) for (const i of (e.sents || []).slice(0, 2)) take(i);
     return [...picks].sort((a, b) => a - b).slice(0, cap).map(i => ({ i, t: texts[i] }));
   }
@@ -7086,6 +7283,98 @@ function projectGraph(events, frame = {}) {
       text, cites,
       audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
         note: 'Read from the page’s recorded assertions (DEF events) about ' + da.subject + ' — no model involved.' },
+    };
+  }
+
+  /* ---------- kin asks answered from the graph ----------
+     "whose son is mentioned?" / "what about his son?" / "the son of someone
+     involved with NDP" name a RELATION, not a referent — lexical retrieval
+     lands on the kin sentence but the possessive pronoun in it is unreadable
+     to a small model, and the question often ranks below noise. The parse
+     already resolved the possessor (possessive-kin DEFs); these readers hand
+     that resolution back: mechanically (answerKin) and as prompt context. */
+  function kinRecords(doc) {
+    if (!doc || doc.kind !== 'prose' || !doc._events) return [];
+    let entities = [];
+    try { entities = projectEntities(doc).entities || []; } catch (e) {}
+    const out = [];
+    for (const ev of doc._events) {
+      if (ev.op !== 'DEF' || ev.path !== 'kin' || !ev.value || !ev.target) continue;
+      const k = normSurface(String(ev.target));
+      const ent = entities.find(e => e.key === k)
+        || (k.length >= 4 ? entities.find(e => _keyWithin(k, e.key) || _keyWithin(e.key, k)) : null);
+      out.push({
+        possessor: ent ? ent.name : String(ev.target).trim(),
+        key: ent ? ent.key : k,
+        kin: String(ev.value).toLowerCase(),
+        sent: ev.sentence_idx != null ? ev.sentence_idx : null,
+        anchor: ent && ent.sents && ent.sents.length ? ent.sents[0] : null,
+      });
+    }
+    return out;
+  }
+  // The kin nouns the question itself names (possessives stripped: "corman's son").
+  function kinAsked(q) {
+    if (!KIN_TERMS || !KIN_TERMS.size) return [];
+    const out = [];
+    const toks = String(q == null ? '' : q).toLowerCase().match(/[\p{L}][\p{L}'’-]*/gu) || [];
+    for (const t of toks) {
+      const b = t.replace(/['’]s$/, '');
+      if (KIN_TERMS.has(b) && !out.includes(b)) out.push(b);
+    }
+    return out;
+  }
+  /* The mechanical kin answer. Fires only when the question names a kin term
+     AND the parse recorded a matching possessive-kin resolution. Names the
+     possessor outright — the one thing the raw sentence cannot do — and cites
+     both the kin sentence and the possessor's anchor line. When the question
+     (or the conversation's hot entity) points at someone the page records NO
+     kin for, it says that first instead of silently switching subjects: the
+     misleading half-match is the failure this exists to prevent. */
+  function answerKin(doc, query, opts = {}) {
+    if (!doc || doc.kind !== 'prose') return null;
+    const asked = kinAsked(query);
+    if (!asked.length) return null;
+    const recs = kinRecords(doc).filter(r => asked.includes(r.kin) || asked.includes(r.kin + 's') || asked.includes(r.kin.replace(/s$/, '')));
+    if (!recs.length) return null;
+    try {
+      let { antimatter } = referents(doc, query);
+      if (opts.voidWhitelist) antimatter = antimatter.filter(t => opts.voidWhitelist.has(t));
+      if (antimatter.length) return null;     // let the void speak first
+    } catch (e) {}
+    const named = namedEntitiesIn(doc, query);
+    let mine = recs, missing = null;
+    if (named.length) {
+      const keys = new Set(named.map(e => e.key));
+      const filtered = recs.filter(r => keys.has(r.key) || [...keys].some(k => _keyWithin(k, r.key) || _keyWithin(r.key, k)));
+      if (filtered.length) mine = filtered;
+      else missing = named[0].name;           // asked about X's kin; the page ties it to someone else
+    } else if (opts.hotEntity) {
+      // No name in the question, but the conversation is ABOUT someone ("his
+      // son" riding on the previous turn). If the hot entity holds no kin
+      // record while another referent does, surface the correction.
+      const hk = normSurface(String(opts.hotEntity));
+      const hot = recs.filter(r => r.key === hk || (hk.length >= 4 && (_keyWithin(hk, r.key) || _keyWithin(r.key, hk))));
+      if (hot.length) mine = hot;
+      else if (hk && !recs.some(r => r.key === hk)) missing = String(opts.hotEntity);
+    }
+    const cites = [], seenCite = new Set();
+    const cite = (i) => {
+      if (i == null || seenCite.has(i)) return '';
+      seenCite.add(i); cites.push({ docId: doc.id, idx: i });
+      return ` {{cite:${doc.id}:${i}:s${i}}}`;
+    };
+    const texts = doc.sentenceTexts || [];
+    const parts = [];
+    if (missing) parts.push(`The page records no ${asked[0]} for ${missing}.`);
+    for (const r of mine.slice(0, 2)) {
+      const line = r.sent != null && texts[r.sent] ? `“${texts[r.sent]}”` : '';
+      parts.push(`The ${r.kin} mentioned is ${r.possessor}’s${line ? ': ' + line : ''}${cite(r.sent)}${r.anchor != null && r.anchor !== r.sent ? cite(r.anchor) : ''}.`);
+    }
+    return {
+      text: parts.join(' '), cites,
+      audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
+        note: 'Read from the page’s kin record — the possessive ("his/her ' + mine[0].kin + '") resolved by activation at parse time. No model involved.' },
     };
   }
 
@@ -7308,6 +7597,16 @@ function projectGraph(events, frame = {}) {
     const ds = scopeDocs(docs);
     if (!ds.length) return { decision: 'chat', confidence: 'none', reason: 'no-scope' };
     const intent = classifyIntent(q);
+    // CONVERSATIONAL REPAIR — the turn is about the EXCHANGE (pushing back on
+    // the previous reply), not fresh content. Checked before every lexical
+    // reader, because a repair turn dragged onto the page by token overlap
+    // re-serves exactly the failure being objected to. Confirm-shaped turns
+    // keep their graph-check path; repair claims only the factual band. Needs
+    // a conversation to repair (ctx), so batch/parity callers never see it.
+    if (ctx && (ctx.prevGrounded || ctx.hadReply) && intent === 'factual') {
+      const rep = repairSignal(q);
+      if (rep) return { decision: 'repair', confidence: 'high', reason: 'repair:' + rep.kind, repair: rep, primary: routePrimary(ds, q, ctx), intent };
+    }
     // SIGNIFICANCE — who/summary always belong to the source: the graph portrait
     // is the free mechanical answer, the model (if any) only phrases it.
     if (intent === 'who' || intent === 'summary')
@@ -7654,6 +7953,9 @@ function projectGraph(events, frame = {}) {
     checkAssertions, checkAssertionsScope, entityEvidence,
     // definitional asks answered from the graph's own assertions
     answerDefine, defineAssertions, isDefinitionalAsk,
+    // kin asks answered from possessive-kin resolutions ("whose son…?"), the
+    // conversational-repair reader, and the across-turn repetition guard
+    answerKin, kinRecords, kinAsked, repairSignal, echoesPriorReply,
     // CONFIRM/DENY: a proposition checked mechanically against the graph
     // (DEF assertions, SIG attribution slots, absence attested with ⊥ receipts),
     // and the abbreviation-aware draft splitter the binders/veto share
@@ -7662,8 +7964,10 @@ function projectGraph(events, frame = {}) {
     associativeNeighbors,
     // the inference void: mark what the reader ADDED across two cited spans
     markInferred,
-    // reconsideration: does a draft read as a refusal / non-answer (plan SEG)
-    looksRefused,
+    // reconsideration: does a draft read as a refusal / non-answer (plan SEG),
+    // and the leaked-reasoning hard fail (the veto's belt-and-suspenders over
+    // the llm layer's think-stripping)
+    looksRefused, looksLeakedReasoning,
     // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
     // and the transmuting-DEF classifier (the significance-layer "weak" law)
     layerLadder, isTransmutingDef,

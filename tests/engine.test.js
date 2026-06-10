@@ -344,6 +344,104 @@ group('routing — cost-ordered bands (existence → structure → significance)
   ok(/^\[s\d+\] /.test(E.contextFromHits([voss], hyb.hits.slice(0, 1))), 'contextFromHits tags a single-doc span [sN]');
 });
 
+// Possessive kin: "his son" deposits a relation the answer layer can read
+// back. The observed failure: a page introduces David Corman, the next
+// sentence says "his son served as…", and "whose son is mentioned?" got
+// "the passages don't say" — the pronoun was never resolved into the graph.
+const KIN_DOC = `The Partnership
+
+If you own a business downtown, you pay the partnership. A significant share of that money funds the private security operation. The contract was created by the same person who runs the DMC and who then hires his own firm, NDP, to manage it. That person is Tom Turner. The council never approved a budget.
+
+NDP's Director of Safety Services is David Corman, a former precinct commander, who earned a large salary directing the private policing operation. Until recently, his son served as Director of Administration at Solaren Risk Management, overseeing payroll and compliance. The younger Corman graduated college in 2022 with a degree in geology.
+
+"My daughter would never work there," a passerby said.`;
+const kinDoc = await E.parseDocument('kin.txt', KIN_DOC, 'kin');
+group('kin — the possessive resolved into the graph', () => {
+  const kinDefs = kinDoc._events.filter(ev => ev.op === 'DEF' && ev.path === 'kin');
+  eq(kinDefs.length, 1, 'exactly one kin DEF (the quoted "my daughter" is speech, not record)');
+  eq(kinDefs[0].value, 'son', 'the kin noun is recorded');
+  ok(/corman/i.test(kinDefs[0].target), 'the possessor resolved to Corman (fresh momentum beats Turner\'s decayed mass)');
+  const recs = E.kinRecords(kinDoc);
+  eq(recs.length, 1, 'kinRecords projects the DEF');
+  ok(recs[0].sent != null && recs[0].anchor != null, 'record carries the kin sentence and the possessor anchor');
+  // The mechanical answer names the possessor — the one thing the raw sentence can't do.
+  const whose = E.answer(kinDoc, 'whose son is mentioned?');
+  ok(/David Corman/.test(whose.text), '"whose son is mentioned?" names David Corman');
+  ok(whose.audit.grounded && whose.audit.status === 'clean', 'kin answer is grounded and clean');
+  ok((whose.cites || []).length >= 1, 'kin answer carries cites');
+  // The conversation was ABOUT Tom Turner; the answer corrects the antecedent
+  // instead of silently switching subjects (the misleading-half-match failure).
+  const deal = E.answerScope([kinDoc], "what's the deal with his son?", { hotEntity: 'Tom Turner' });
+  ok(/no son for Tom Turner/i.test(deal.text), 'a hot Tom Turner gets the correction first');
+  ok(/David Corman/.test(deal.text), '…and then the actual possessor');
+  // An explicitly named non-possessor gets the same correction.
+  const named = E.answer(kinDoc, "tom turner's son");
+  ok(/no son for Tom Turner/i.test(named.text) && /David Corman/.test(named.text), 'naming the wrong possessor is corrected, not indulged');
+  // The model path is handed the resolution too: context leads with the record
+  // and joins the anchor sentence retrieval can never reach by the kin token.
+  const ctx = E.context(kinDoc, 'whose son is mentioned?', 6);
+  ok(/is David Corman/.test(ctx), 'context opens with the resolved possessor');
+  ok(/Director of Safety Services is David Corman/.test(ctx), 'the anchor sentence rides along');
+  // A bare-name ask reaches the kin sentence as graph evidence.
+  ok(E.entityEvidence(kinDoc, 'corman').some(s => /his son served/.test(s.t)), 'entityEvidence for "corman" includes the kin sentence');
+  // VOSS carries no kin phrases: the reader deposits nothing there (parity).
+  eq(voss._events.filter(ev => ev.op === 'DEF' && ev.path === 'kin').length, 0, 'no kin DEFs on a page without kin possessives');
+});
+
+// Conversational repair: pushback is a ROUTE, not a retrieval query. The
+// observed failure: "you're not listening to what i'm saying" was lexically
+// dragged onto the page and answered with an unrelated line + a citation.
+group('repair — pushback routes to repair, not retrieval', () => {
+  const ctx = { prevGrounded: true, hadReply: true };
+  const band = (q, c) => E.routeTurn([voss], q, c === undefined ? ctx : c);
+  eq(band("you're not listening to what i'm saying").reason, 'repair:frustration', 'frustration → repair');
+  eq(band('yeah it does').reason, 'repair:contradiction', 'contradiction → repair');
+  eq(band("no it doesn't").reason, 'repair:contradiction', 'denial → repair');
+  eq(band('no the son of something involved with ndp').reason, 'repair:refinement', 'a leading-no correction → repair (carries content)');
+  ok(band('no the son of something involved with ndp').repair.content, 'refinement is marked content-bearing');
+  eq(band("someone's sone is mentioned").reason, 'repair:refinement', 'insistence ("…is mentioned") → repair, typo and all');
+  eq(band("that's not what i asked").reason, 'repair:frustration', 'misfire complaint → repair');
+  // Inert without a conversation: batch/parity callers pass no ctx and see
+  // exactly the old routing.
+  ok(band("you're not listening to what i'm saying", {}).decision !== 'repair', 'no ctx → never repair (parity)');
+  ok(band("someone's sone is mentioned", null).decision !== 'repair', 'null ctx → never repair');
+  // Repair never hijacks real questions or other intents.
+  eq(band('who is in this story').reason, 'who', 'who-intent keeps its path');
+  eq(band('what did Edith do').reason, 'names-entity', 'a named-entity ask keeps its path');
+  eq(band("but it sounds like he's not a speaker").decision !== 'repair', true, 'confirm-shaped turns keep the graph-check path');
+  eq(band('no one could row to the mainland, right?').decision !== 'repair', true, '"no one…" is not a leading-no correction');
+  // The signal itself, directly.
+  eq(E.repairSignal('i mean the keeper').kind, 'refinement', '"i mean…" refines');
+  eq((E.repairSignal('wrong') || {}).kind, 'contradiction', 'a bare "wrong" contradicts');
+  ok(E.repairSignal('ugh') && E.repairSignal('ugh').kind === 'frustration', 'a bare "ugh" is frustration');
+  eq(E.repairSignal('where is Voss Point'), null, 'an ordinary question is not repair');
+  eq(E.repairSignal('thanks that really helps'), null, 'gratitude is not repair');
+});
+
+// Leaked chain-of-thought hard fail: think tags and reasoning preambles are
+// vetoed (→ mechanical answer); ordinary answers — even ones starting
+// "Okay," — are not.
+group('veto — leaked reasoning is hard-failed', () => {
+  ok(E.looksLeakedReasoning('<think>hmm</think>The author is X.'), 'a think tag anywhere hard-fails');
+  ok(E.looksLeakedReasoning('<think>truncated mid-reason'), 'an unclosed think tag hard-fails');
+  ok(E.looksLeakedReasoning('Okay, the user wants the author. Looking at s4…'), 'the "Okay, the user…" preamble hard-fails');
+  ok(E.looksLeakedReasoning('Let me think about what the passages say.'), '"Let me think" hard-fails');
+  ok(E.looksLeakedReasoning('First, I need to find the name.'), '"First, I need to" hard-fails');
+  ok(!E.looksLeakedReasoning('Okay — the author is Dostoyevsky.'), 'a real answer starting "Okay" is NOT flagged');
+  ok(!E.looksLeakedReasoning('The author is Dostoyevsky.'), 'a plain answer is NOT flagged');
+});
+
+// Across-turn echo guard: a reply (near-)identical to one already sent is
+// detected, markup- and punctuation-insensitively.
+group('repair — echoesPriorReply', () => {
+  const prior = ['The passages do not mention who is the son of Tom Turner. {{cite:doc-1:10:s10}}'];
+  ok(E.echoesPriorReply('The passages do not mention who is the son of Tom Turner.', prior), 'identical modulo cite markup → echo');
+  ok(E.echoesPriorReply('the passages do not mention who is the son of tom turner', prior), 'case/punctuation-insensitive');
+  ok(!E.echoesPriorReply('The son mentioned is David Corman’s.', prior), 'a different answer is not an echo');
+  ok(!E.echoesPriorReply('No.', ['No.']), 'too short to count as a repeated reply');
+  ok(!E.echoesPriorReply('anything', []), 'no priors → no echo');
+});
+
 // The thinking-depth dial: level 1 is the parity floor (every knob inert =
 // today), and turning it up spends more. The budget is the only thing the
 // deeper-thinking paths read, so pinning the floor here pins parity above.

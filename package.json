@@ -8,6 +8,7 @@
     "test:update": "node tests/parity.js --update",
     "bench": "node tests/bench.js",
     "demo": "node tests/demo-learning.js",
+    "demo:repair": "node tests/demo-repair.js",
     "build": "node build.mjs",
     "evo:run": "node evo/runner.js",
     "evo:review": "node evo/runner.js --review",
