@@ -50,8 +50,14 @@ The intelligence is **mechanical**; the language model only phrases things.
   grounded / coverage / stable audit. Deterministic; no model involved.
 - **`llm.js`** — optional local model (WebLLM / WebGPU, e.g. Qwen2.5). It holds
   the conversation and phrases answers. On a document question it's handed the
-  retrieved passages and its output is checked and re-cited mechanically — it
-  never writes its own citations and never overrides the page.
+  retrieved **spans** (verbatim sentences, trusted) and its own **notes** (the
+  graph's reading — assertions, kin records, header metadata, working memory —
+  "usually right, sometimes wrong"), preceded by a small **shape pass**: a
+  director's-note call that characterizes what the turn wants before the
+  answer pass writes. Reasoning-model `<think>` blocks are gated out of the
+  stream and the answer (the audit keeps them verbatim). Output is checked
+  and re-cited mechanically — the model never writes its own citations and
+  never overrides the page.
 - **`pivot.jsx`** — deterministic pivot/fold over tables (totals, counts,
   grouping) driven by a small natural-language → spec parser.
 - **`audit.js`** — the audit recorder (`window.EOAudit`). Records each chat
@@ -119,6 +125,31 @@ kin at the *wrong* person ("Tom Turner's son") is corrected, not indulged —
 "The page records no son for Tom Turner; the son it mentions is David
 Corman's." Kin nouns are a language-module convention (`kin_terms` in
 `memory/conventions.jsonl`), like every other lexical inventory.
+
+### The two-pass answer (shape, then phrasing)
+
+A grounded turn is two calls through the same resident model. First the
+**shape pass**: a tiny call (≈90 tokens) that reads the question, the last
+few turns, and the doc title — never the spans or notes, so it can't be
+lured into answering — and writes a one-breath director's note: what the
+user is actually after, what register fits, what a bad answer would look
+like ("Bibliographic lookup. They want the name. One line, never 'the
+author'…"). The answer pass then speaks freely with that note as guidance,
+not a leash: spans are verbatim quotes to trust and *use* ("if a span
+contains a name, date, or title that answers the question, use it directly —
+don't echo the question's wording back"), notes are the reader's own
+understanding, spans win conflicts, and there are no hardcoded length
+prescriptions — the model answers as it sees fit, bounded by `max_tokens`.
+The shape note is recorded as its own audit step; a failed or empty shape
+pass degrades to the bare answer pass, and with no model at all the
+mechanical paths answer as ever. Citations stay mechanical throughout.
+
+Gutenberg-style header metadata (`Title:` / `Author:` / `Release date:`…)
+is parsed mechanically, cached on the document, and joined to the notes
+tier with cite tags — so "who wrote it?" reaches the model with the name in
+hand instead of competing with content retrieval. On Gutenberg texts the
+cast is also cleaned: boilerplate names ("Project Gutenberg") and names
+living only in the header or license tail are not characters.
 
 ### Checking a claim (CONFIRM/DENY)
 
