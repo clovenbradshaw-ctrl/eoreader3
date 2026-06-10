@@ -1343,7 +1343,7 @@ function App() {
       {rulesOpen && <RulesDrawer rules={rules} langModes={langModes}
         learnedByLang={window.EOEngine && window.EOEngine.learnedVerbsByLang ? window.EOEngine.learnedVerbsByLang() : {}}
         onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
-      {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} />}
+      {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}

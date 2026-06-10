@@ -222,12 +222,14 @@
 
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
   // pass retrieved passages. onToken(deltaText).
-  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth }) {
+  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride }) {
     const eng = await load(mlcKey);
     // Thinking depth (1 reflex … 3 deepest) shapes the grounded phrasing and how
     // much room the answer gets. Absent/1 ⇒ today's prompt and token caps (parity).
     const lvl = Math.min(3, Math.max(1, (depth | 0) || 1));
-    const sys = systemFor(mode, task, grounded, lvl);
+    // sysOverride lets the sandbox's prompt lab try a candidate talker prompt;
+    // unset everywhere else, so normal chat is byte-identical (parity holds).
+    const sys = sysOverride || systemFor(mode, task, grounded, lvl);
     const messages = assembleMessages({ sys, history, contextText, question, grounded, budget, workingMemory });
     const temperature = mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4);
     // Deeper reading earns more room to synthesize: the grounded caps grow with the

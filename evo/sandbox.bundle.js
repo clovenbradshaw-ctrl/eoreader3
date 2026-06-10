@@ -741,6 +741,34 @@
             return { text: null, error: String(e.message || e) };
           }
         }
+        async function localAnswer({ EOLLM, EOEngine, doc, question, mlcKey, sysOverride }) {
+          let ctx = "";
+          try {
+            ctx = EOEngine.context(doc, question, 8) || "";
+          } catch (e) {
+          }
+          const answer = await EOLLM.phrase({ mlcKey, question, contextText: ctx, mode: "grounded", task: null, grounded: true, depth: 1, sysOverride });
+          return { answer: String(answer || "").trim(), contextChars: ctx.length };
+        }
+        async function judgeAnswer({ key, model, source, question, answer, maxSourceChars }) {
+          const cap = maxSourceChars || 3500;
+          const src = source.length > cap ? source.slice(0, cap) + "\n\u2026[truncated]" : source;
+          const system = `You are grading a small on-device language model's answer for "Claude-comparable" quality. It must read off the provided document only. Score 0.0\u20131.0, averaging three criteria each in [0,1]: (1) FAITHFUL \u2014 every claim traces to the source, nothing invented; (2) ANSWERS \u2014 actually addresses the question; (3) INTELLIGENT \u2014 clear, well-organized, the kind of answer a strong model gives. Respond with ONLY a JSON object {"score": NUMBER, "critique": SHORT, "claude_would": ONE_SENTENCE on what a top answer adds}.`;
+          const user = "QUESTION: " + question + "\n\nSOURCE DOCUMENT:\n" + src + "\n\nLOCAL MODEL ANSWER:\n" + (answer || "(empty)");
+          const r = await callAnthropic({ key, model: model || "claude-opus-4-8", system, messages: [{ role: "user", content: user }], maxTokens: 700 });
+          let j = null;
+          try {
+            const a = r.text.indexOf("{"), b = r.text.lastIndexOf("}");
+            j = JSON.parse(r.text.slice(a, b + 1));
+          } catch (e) {
+          }
+          return {
+            score: j && typeof j.score === "number" ? Math.max(0, Math.min(1, j.score)) : null,
+            critique: j ? j.critique : (r.text || "").slice(0, 240),
+            claudeWould: j ? j.claude_would : null,
+            tokens: r.tokens
+          };
+        }
         async function traceBattery(E, data) {
           const fx = data.fixtures || {};
           const out = [];
@@ -864,6 +892,8 @@
           callAnthropic,
           graphOf,
           queryGraph,
+          localAnswer,
+          judgeAnswer,
           sameName,
           normName,
           DEFAULT_WEIGHTS,
