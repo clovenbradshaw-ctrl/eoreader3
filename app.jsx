@@ -533,6 +533,38 @@ function App() {
     return () => mq.removeEventListener('change', on);
   }, []);
 
+  // ---- mobile keyboard: track the visual viewport so the composer stays pinned
+  // just above the on-screen keyboard. The layout height normally follows the
+  // full screen (100dvh); when the soft keyboard opens it overlaps the page on
+  // iOS Safari (and older Android), hiding the input. visualViewport.height
+  // shrinks to the space the keyboard leaves, so we mirror it into --app-height
+  // so the layout (and the bottom-pinned composer) fits the visible area. ----
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const root = document.documentElement;
+    let raf = 0;
+    const sync = () => {
+      raf = 0;
+      root.style.setProperty('--app-height', vv.height + 'px');
+      // when the keyboard scrolls the layout viewport (iOS Safari), reset it so
+      // the app's top edge stays aligned with the visible area.
+      if (vv.offsetTop > 0 && (window.innerHeight - vv.height) > 120) {
+        window.scrollTo(0, 0);
+      }
+    };
+    const onChange = () => { if (!raf) raf = requestAnimationFrame(sync); };
+    sync();
+    vv.addEventListener('resize', onChange);
+    vv.addEventListener('scroll', onChange);
+    return () => {
+      vv.removeEventListener('resize', onChange);
+      vv.removeEventListener('scroll', onChange);
+      if (raf) cancelAnimationFrame(raf);
+      root.style.removeProperty('--app-height');
+    };
+  }, []);
+
   // keep an in-chat "loading model" message in sync with download progress
   useEffect(() => {
     setMessages(m => {
