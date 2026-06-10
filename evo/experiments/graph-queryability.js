@@ -338,14 +338,19 @@ function fmtTable(rows, cols) {
   // much Q is left on the table by admission noise (the precision headroom,
   // which no runtime knob here reaches)? The bigger number names the lever.
   const sweepQs = configs.map(c => c.agg.Q);
+  const bestGain = Math.max(...sweepQs) - baseQ;
   const physicsSpread = Math.max(...sweepQs) - Math.min(...sweepQs);
   const precisionHeadroom = Q_WEIGHTS.precision * (1 - base.agg.precision);
   const denoisedQ = base.agg.Q + precisionHeadroom;
+  const ratio = bestGain > 0 ? (precisionHeadroom / bestGain).toFixed(1) + 'x' : '∞';
   console.log('\n=== WHERE THE LEVER IS ===');
-  console.log('  tunable knobs (physics + two-sighting): max ΔQ across the whole sweep = ' + r3(physicsSpread)
-    + '  → ' + (physicsSpread < 0.01 ? 'SATURATED. The shipped defaults are robustly near-optimal on English.' : 'sensitive.'));
+  console.log('  tunable knobs (physics + two-sighting): best gain over baseline = +' + r3(bestGain)
+    + ' (spread ' + r3(physicsSpread) + ')'
+    + '  → ' + (bestGain < 0.005 ? 'SATURATED. The shipped defaults are robustly near-optimal on English.'
+      : 'best: ' + ranked[0].label + '.'));
   console.log('  admission PRECISION: mean ' + r3(base.agg.precision) + ' (' + Math.round(base.agg.noise) + ' noise nodes / battery)'
-    + '  → denoising admission would lift Q to ~' + r3(denoisedQ) + ' (+' + r3(precisionHeadroom) + '), an order of magnitude past the whole physics sweep.');
+    + '  → denoising admission would lift Q to ~' + r3(denoisedQ) + ' (+' + r3(precisionHeadroom) + '), '
+    + ratio + ' the best tunable gain.');
   console.log('  Noise lives in capitalized common nouns / title words / sentence-initial markers ("Darkness", "Nature", "But").');
   console.log('  That surface is the language-module disqualify lists (base_stopwords, *_lead_disqualify) — evolvable, but NOT reachable by applyRules().');
   console.log('  → the experiment hands the evo loop a concrete target: tighten admission, not the physics.');

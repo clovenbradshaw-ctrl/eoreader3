@@ -1,5 +1,13 @@
 # What creates a better graph for querying against?
 
+> **Round 2 update** (`ROUND2.md`): re-run at 30k chars/doc, the finding
+> *strengthens* — noise nodes 13 → 31, precision 0.897 → 0.847, and the noise
+> now provably leaks into the small model's prompts (the salient header opens
+> with it). One nuance: at 30k a single physics config does separate
+> (`inertia-delta=3`, +0.017 via answerability), so "order of magnitude" below
+> is the 14k number — at scale the precision headroom is ~2× the best tunable
+> gain, and unlike the physics it grows with document length.
+
 A corpus experiment over the reading engine. The engine turns a document into
 a **graph** (entities + mentions, speech signals, DEF assertions, relations)
 and every answer is a query **against** that graph — so "a better graph" is one
