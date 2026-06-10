@@ -262,8 +262,11 @@
       "use strict";
       var _AL = typeof __require !== "undefined" ? require_allowlist() : typeof window !== "undefined" ? window.EVO_ALLOWLIST : {};
       var { buildRegionMap, validateStructuredEdit, validateDiff } = _AL;
+      function escSingle(s) {
+        return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      }
       function fmtValue(v) {
-        if (typeof v === "string") return "'" + v.replace(/'/g, "\\'") + "'";
+        if (typeof v === "string") return "'" + escSingle(v) + "'";
         return String(v);
       }
       function applyEdit(src, edit, map) {
@@ -290,7 +293,7 @@
               const items = m[2].split(",").map((s) => s.trim()).filter(Boolean);
               const have = new Set(items.map((s) => s.replace(/^['"]|['"]$/g, "")));
               if (edit.kind === "rule-tokens-add") {
-                for (const t of edit.tokens) if (!have.has(t)) items.push("'" + t + "'");
+                for (const t of edit.tokens) if (!have.has(t)) items.push("'" + escSingle(t) + "'");
               } else {
                 const drop = new Set(edit.tokens);
                 for (let k = items.length - 1; k >= 0; k--) if (drop.has(items[k].replace(/^['"]|['"]$/g, ""))) items.splice(k, 1);
@@ -304,10 +307,11 @@
             const slot = edit.slot === "retry" ? map.talker.retry : edit.slot === "system" ? map.talker.system : null;
             if (!slot) throw new Error("unknown prompt slot " + edit.slot);
             if (/\n/.test(edit.replace || "")) throw new Error("prompt replace text may not introduce newlines");
+            const safeReplace = escSingle(edit.replace);
             let hit = false;
             for (let i = slot.startLine - 1; i < slot.endLine; i++) {
               if (lines[i].includes(edit.find)) {
-                lines[i] = lines[i].split(edit.find).join(edit.replace);
+                lines[i] = lines[i].split(edit.find).join(safeReplace);
                 hit = true;
               }
             }
@@ -388,8 +392,17 @@
         if (!dv.ok) {
           for (const r of dv.rejected) rejected.push({ edit: null, reason: "rendered diff failed constitution: " + r.reason });
         }
+        let compileErr = null;
+        if (src !== engineSource) {
+          try {
+            new Function(src);
+          } catch (e) {
+            compileErr = String(e.message || e);
+            rejected.push({ edit: null, reason: "rendered source is not valid JavaScript: " + compileErr });
+          }
+        }
         return {
-          ok: accepted.length > 0 && dv.ok,
+          ok: accepted.length > 0 && dv.ok && !compileErr,
           newSource: src,
           diff,
           accepted,
@@ -599,7 +612,12 @@
         async function evaluate({ pivotSrc, engineSrc, edits, nlp, data, baseline, cfg }) {
           const rendered = PATCH.renderEdits(engineSrc, edits);
           if (!rendered.ok) return { state: "rejected-by-allowlist", surface: false, rejected: rendered.rejected, note: rendered.rejected.map((r) => r.reason).join("; ") };
-          const E = loadCandidate(pivotSrc, rendered.newSource, nlp);
+          let E;
+          try {
+            E = loadCandidate(pivotSrc, rendered.newSource, nlp);
+          } catch (e) {
+            return { state: "broken", surface: false, diff: rendered.diff, note: "candidate engine failed to load: " + String(e.message || e) };
+          }
           const quality = await scoreQuality(E, data);
           const parity = await runParity(E, data);
           const qualityDelta = quality.composite - baseline.composite;

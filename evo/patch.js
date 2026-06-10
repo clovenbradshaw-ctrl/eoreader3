@@ -22,8 +22,13 @@ const _AL = (typeof require !== 'undefined') ? require('./allowlist')
   : (typeof window !== 'undefined' ? window.EVO_ALLOWLIST : {});
 const { buildRegionMap, validateStructuredEdit, validateDiff } = _AL;
 
+// Escape a string for embedding inside a single-quoted JS literal — backslash
+// first, then the quote. Without this, an apostrophe in a rule value, a token
+// (O'Brien, clitics), or a prompt edit ("the document's") breaks the literal
+// and the patched engine fails to parse ("Unexpected identifier").
+function escSingle(s) { return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
 function fmtValue(v) {
-  if (typeof v === 'string') return "'" + v.replace(/'/g, "\\'") + "'";
+  if (typeof v === 'string') return "'" + escSingle(v) + "'";
   return String(v);
 }
 
@@ -54,7 +59,7 @@ function applyEdit(src, edit, map) {
         const items = m[2].split(',').map(s => s.trim()).filter(Boolean);
         const have = new Set(items.map(s => s.replace(/^['"]|['"]$/g, '')));
         if (edit.kind === 'rule-tokens-add') {
-          for (const t of edit.tokens) if (!have.has(t)) items.push("'" + t + "'");
+          for (const t of edit.tokens) if (!have.has(t)) items.push("'" + escSingle(t) + "'");
         } else {
           const drop = new Set(edit.tokens);
           for (let k = items.length - 1; k >= 0; k--) if (drop.has(items[k].replace(/^['"]|['"]$/g, ''))) items.splice(k, 1);
@@ -68,9 +73,12 @@ function applyEdit(src, edit, map) {
       const slot = edit.slot === 'retry' ? map.talker.retry : (edit.slot === 'system' ? map.talker.system : null);
       if (!slot) throw new Error('unknown prompt slot ' + edit.slot);
       if (/\n/.test(edit.replace || '')) throw new Error('prompt replace text may not introduce newlines');
+      // The talker prompts are single-quoted literals, so the inserted text
+      // must be escaped for that context (apostrophes are common in prose).
+      const safeReplace = escSingle(edit.replace);
       let hit = false;
       for (let i = slot.startLine - 1; i < slot.endLine; i++) {
-        if (lines[i].includes(edit.find)) { lines[i] = lines[i].split(edit.find).join(edit.replace); hit = true; }
+        if (lines[i].includes(edit.find)) { lines[i] = lines[i].split(edit.find).join(safeReplace); hit = true; }
       }
       if (!hit) throw new Error('find text not present in prompt slot ' + edit.slot + ': ' + JSON.stringify(edit.find));
       return lines.join('\n');
@@ -136,8 +144,15 @@ function renderEdits(engineSource, edits, relPath = 'engine.js') {
   if (!dv.ok) {
     for (const r of dv.rejected) rejected.push({ edit: null, reason: 'rendered diff failed constitution: ' + r.reason });
   }
+  // Defense: a rendered source that won't parse (e.g. an edit that broke a
+  // string literal) must be rejected here, not blow up the candidate loader.
+  // `new Function` COMPILES without executing — a pure syntax check.
+  let compileErr = null;
+  if (src !== engineSource) {
+    try { new Function(src); } catch (e) { compileErr = String(e.message || e); rejected.push({ edit: null, reason: 'rendered source is not valid JavaScript: ' + compileErr }); }
+  }
   return {
-    ok: accepted.length > 0 && dv.ok,
+    ok: accepted.length > 0 && dv.ok && !compileErr,
     newSource: src, diff,
     accepted, rejected,
     touchedRegions: dv.touchedRegions || [],
