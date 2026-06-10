@@ -1,0 +1,12 @@
+{
+  "id": "dispatch",
+  "docFile": "dispatch.txt",
+  "genre": "news report — two named officials, a third unnamed actor (the engineer), inanimate referents (the motion, the works)",
+  "note": "The honest-stall cases: pronouns whose true referent is NOT a tracked person (the harbor works, the motion) or is an untracked person (the engineer). Forcing any of these onto Vance or Ruiz would be a hallucinated binding; the honest behavior is to stall.",
+  "sites": [
+    { "sentence": "wanted them preserved", "surface": "them", "expect": "stall", "note": "them = the harbor works, not a person" },
+    { "sentence": "She said instead that the harbor", "surface": "She", "expect": "bind", "note": "She = Ruiz, named in the immediately prior sentence — clear" },
+    { "sentence": "She had surveyed the structure twice", "surface": "she", "expect": "stall", "note": "she = the engineer, who is not a tracked entity; binding to Vance/Ruiz would be wrong" },
+    { "sentence": "It failed by a single voice", "surface": "It", "expect": "stall", "note": "It = the motion/vote, not a person" }
+  ]
+}

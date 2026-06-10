@@ -1,0 +1,21 @@
+{
+  "_comment": "Evolution-loop configuration. The quality weights live here (not in engine.js READING_RULES) so the agent — which may edit READING_RULES — can never retune its own exam. Change these by hand to tell the loop which failure mode it currently cares about.",
+  "weights": { "binding": 0.35, "stall": 0.35, "integration": 0.30 },
+  "qualityWinThreshold": 0.01,
+  "justifiedBreakThreshold": 0.03,
+  "generations": 6,
+  "apiCallBudget": 60,
+  "tokenMax": 150000,
+  "maxProbeRounds": 4,
+  "integrationStub": 0.70,
+  "provider": "auto",
+  "_frugality": "Token guards for the experimental phase. tokenMax is the PRIMARY governor: the live agent tracks input+output tokens across all calls (hypotheses, engine probes, rubric) and the run PAUSES and asks for confirmation to continue once it is reached — set the cap small and extend deliberately. apiCallBudget is a secondary hard ceiling on call count. maxProbeRounds bounds how many times the agent may ingest a doc / ask the engine a question before it must propose. integrationSampleSize bounds how many 2c fixtures get a live rubric; maxRubricDocChars truncates the source sent to the judge; scoreTalkerLive is off (the talker LLM would double call volume). The default run is offline and spends zero tokens; the live agent ASKS for the API key if ANTHROPIC_API_KEY is unset.",
+  "integrationSampleSize": 2,
+  "maxRubricDocChars": 4000,
+  "scoreTalkerLive": false,
+  "models": {
+    "agent": "claude-opus-4-8",
+    "scorer": "claude-opus-4-8",
+    "talker": "claude-opus-4-8"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "rashomon",
+  "docFile": "rashomon.txt",
+  "genre": "Japanese literary fiction — Akutagawa, non-Latin script (corpus: akutagawa_rashomon)",
+  "question": "What situation does this opening establish?",
+  "rubric_focus": "A stress case for a reader whose language module is English-only: the engine has no attribution patterns, pronoun inventory, or capitalization cue for Japanese, so it should read this thinly and NOT fabricate confident structure. Honest thinness beats invented detail. This is exactly the gap that motivates evolving the language modules.",
+  "note": "Included to exercise a very different text type and to make the language-module evolution surface concrete: the deterministic 2a/2b components do not label this doc; it informs 2c and the agent's trace only."
+}

@@ -8,7 +8,12 @@
     "test:update": "node tests/parity.js --update",
     "bench": "node tests/bench.js",
     "demo": "node tests/demo-learning.js",
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "evo:run": "node evo/runner.js",
+    "evo:review": "node evo/runner.js --review",
+    "evo:accept": "node evo/runner.js --accept",
+    "evo:reject": "node evo/runner.js --reject",
+    "evo:score": "node evo/scorer.js"
   },
   "devDependencies": {
     "compromise": "^14.14.0",
