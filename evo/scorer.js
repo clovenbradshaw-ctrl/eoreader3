@@ -31,7 +31,10 @@ const path = require('path');
 const { loadEngine, traceDocument, sameName, normName } = require('./engine-host');
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
-const DEFAULT_WEIGHTS = { binding: 0.35, stall: 0.35, integration: 0.30 };
+// "Good reading" as four facets — three deterministic, one holistic — with the
+// deterministic ones (binds the right referents, stalls honestly, stays
+// grounded and fabricates nothing) outweighing the gameable API rubric.
+const DEFAULT_WEIGHTS = { binding: 0.30, stall: 0.30, grounding: 0.20, integration: 0.20 };
 const INTEGRATION_STUB = 0.70;
 
 function readConfig() {
@@ -117,6 +120,27 @@ async function scoreStall(EOEngine, fixtures) {
   return { score, f1, precision, recall, TP, FP, FN, TN, detail };
 }
 
+/* ---- 2d — grounding fidelity (deterministic, no API) ----
+   The faithfulness facet of good reading: when asked, the engine's answer
+   stays GROUNDED (cited, or honestly held rather than invented) and the veto
+   finds NOTHING fabricated. A guard the agent can raise only by reading more
+   faithfully — never by editing the (constitutional) grounder/veto itself. */
+async function scoreGrounding(EOEngine, fixtures) {
+  let sum = 0, n = 0;
+  const detail = [];
+  for (const fx of fixtures) {
+    const doc = await EOEngine.parseDocument(fx.id + '.txt', fx.doc, fx.id);
+    const q = fx.question || 'what is this about';
+    let grounded = false, clean = true, cites = 0;
+    try { const a = EOEngine.answer(doc, q); grounded = !!(a.audit && a.audit.grounded); cites = (a.cites || []).length; } catch (e) {}
+    try { clean = (EOEngine.inventedTerms(doc, q) || []).length === 0; } catch (e) {}
+    const s = (grounded ? 0.5 : 0) + (clean ? 0.5 : 0);
+    sum += s; n++;
+    detail.push({ fixture: fx.id, grounded, clean, cites, score: s });
+  }
+  return { score: n ? sum / n : 1, detail };
+}
+
 /* ---- 2c — integration quality ---- */
 // `integrationScorer(fx, groundedAnswer)` → number in [0,1], or null to use
 // the stub. Injected by the runner/agent in E3 (live Anthropic rubric).
@@ -157,20 +181,23 @@ async function scoreIntegration(EOEngine, fixtures, opts = {}) {
 async function scoreAll(EOEngine, opts = {}) {
   const cfg = readConfig();
   const weights = opts.weights || cfg.weights || DEFAULT_WEIGHTS;
+  const integrationFx = loadFixtures('integration');
   const binding = await scoreBinding(EOEngine, loadFixtures('binding'));
   const stall = await scoreStall(EOEngine, loadFixtures('stalls'));
-  const integration = await scoreIntegration(EOEngine, loadFixtures('integration'), {
+  const grounding = await scoreGrounding(EOEngine, integrationFx);
+  const integration = await scoreIntegration(EOEngine, integrationFx, {
     integrationStub: opts.integrationStub != null ? opts.integrationStub : cfg.integrationStub,
     integrationScorer: opts.integrationScorer,
     talkerLlm: opts.talkerLlm,
     integrationSampleSize: opts.integrationSampleSize != null ? opts.integrationSampleSize : cfg.integrationSampleSize,
   });
-  const composite = weights.binding * binding.score + weights.stall * stall.score + weights.integration * integration.score;
+  const composite = weights.binding * binding.score + weights.stall * stall.score
+    + (weights.grounding || 0) * grounding.score + weights.integration * integration.score;
   return {
     weights,
-    components: { binding: binding.score, stall: stall.score, integration: integration.score },
+    components: { binding: binding.score, stall: stall.score, grounding: grounding.score, integration: integration.score },
     composite,
-    binding, stall, integration,
+    binding, stall, grounding, integration,
   };
 }
 
@@ -182,12 +209,13 @@ function formatReport(res) {
   lines.push('quality composite = ' + r3(res.composite));
   lines.push('  2a binding accuracy  ' + r3(c.binding) + '   (w ' + w.binding + ')  — ' + res.binding.correct + '/' + res.binding.total + ' bindings');
   lines.push('  2b stall honesty F1  ' + r3(c.stall) + '   (w ' + w.stall + ')  — P ' + r3(res.stall.precision) + ' R ' + r3(res.stall.recall) + ' (TP' + res.stall.TP + ' FP' + res.stall.FP + ' FN' + res.stall.FN + ' TN' + res.stall.TN + ')');
+  lines.push('  2d grounding fidelity ' + r3(c.grounding) + '  (w ' + (w.grounding || 0) + ')  — ' + res.grounding.detail.filter(d => d.grounded && d.clean).length + '/' + res.grounding.detail.length + ' grounded & fabrication-free');
   lines.push('  2c integration       ' + r3(c.integration) + '   (w ' + w.integration + ')  — ' + (res.integration.detail.some(d => d.live) ? 'live rubric' : 'stub ' + r3(res.integration.score)));
   return lines.join('\n');
 }
 
 module.exports = {
-  loadFixtures, scoreBinding, scoreStall, scoreIntegration, scoreAll,
+  loadFixtures, scoreBinding, scoreStall, scoreGrounding, scoreIntegration, scoreAll,
   formatReport, locate, DEFAULT_WEIGHTS, INTEGRATION_STUB,
 };
 

@@ -169,6 +169,7 @@ async function evaluateCandidate(runId, edits, baseline, c) {
   rec.componentDeltas = {
     binding: q.components.binding - baseline.quality.components.binding,
     stall: q.components.stall - baseline.quality.components.stall,
+    grounding: (q.components.grounding || 0) - (baseline.quality.components.grounding || 0),
     integration: q.components.integration - baseline.quality.components.integration,
   };
 
@@ -332,9 +333,10 @@ function logGeneration(runId, gen) {
   }
   lines.push('**Parity:** ' + (gen.parity.clean ? 'CLEAN (0 diffs)' : 'BREAK (' + gen.parity.diffs + '/' + gen.parity.total + ' snapshot diffs)'));
   lines.push('**Quality:** composite ' + r4(gen.quality.composite) + '  (Δ ' + (gen.qualityDelta >= 0 ? '+' : '') + r4(gen.qualityDelta) + ')');
-  lines.push('  - 2a binding ' + r4(gen.quality.components.binding) + ' (Δ ' + sign(gen.componentDeltas.binding) + ')');
-  lines.push('  - 2b stall   ' + r4(gen.quality.components.stall) + ' (Δ ' + sign(gen.componentDeltas.stall) + ')  TP' + gen.quality.stall.TP + ' FP' + gen.quality.stall.FP + ' FN' + gen.quality.stall.FN + ' TN' + gen.quality.stall.TN);
-  lines.push('  - 2c integ   ' + r4(gen.quality.components.integration) + ' (Δ ' + sign(gen.componentDeltas.integration) + ')');
+  lines.push('  - 2a binding   ' + r4(gen.quality.components.binding) + ' (Δ ' + sign(gen.componentDeltas.binding) + ')');
+  lines.push('  - 2b stall     ' + r4(gen.quality.components.stall) + ' (Δ ' + sign(gen.componentDeltas.stall) + ')  TP' + gen.quality.stall.TP + ' FP' + gen.quality.stall.FP + ' FN' + gen.quality.stall.FN + ' TN' + gen.quality.stall.TN);
+  lines.push('  - 2d grounding ' + r4(gen.quality.components.grounding || 0) + ' (Δ ' + sign(gen.componentDeltas.grounding || 0) + ')');
+  lines.push('  - 2c integ     ' + r4(gen.quality.components.integration) + ' (Δ ' + sign(gen.componentDeltas.integration) + ')');
   lines.push('**Decision:** ' + gen.state + ' — ' + gen.note);
   // REC events — the engine's own evolution in the nine-operator vocabulary
   lines.push('');
@@ -425,6 +427,7 @@ function winReport(runId, best, baseline, generations) {
   L.push('|---|---|---|---|---|');
   L.push(row('2a pronoun-binding accuracy', baseline.quality.weights.binding, baseline.quality.components.binding, best.quality.components.binding, cd.binding));
   L.push(row('2b stall honesty (F1)', baseline.quality.weights.stall, baseline.quality.components.stall, best.quality.components.stall, cd.stall));
+  L.push(row('2d grounding fidelity', baseline.quality.weights.grounding || 0, baseline.quality.components.grounding || 0, best.quality.components.grounding || 0, cd.grounding || 0));
   L.push(row('2c integration quality', baseline.quality.weights.integration, baseline.quality.components.integration, best.quality.components.integration, cd.integration));
   L.push('');
   L.push('Stall confusion on the candidate: TP ' + best.quality.stall.TP + ', FP ' + best.quality.stall.FP + ', FN ' + best.quality.stall.FN + ', TN ' + best.quality.stall.TN + '.');
@@ -449,6 +452,7 @@ function recommendation(best) {
     const names = [];
     if (cd.binding > 0.0005) names.push('pronoun-binding accuracy');
     if (cd.stall > 0.0005) names.push('stall honesty');
+    if ((cd.grounding || 0) > 0.0005) names.push('grounding fidelity');
     if (cd.integration > 0.0005) names.push('integration quality');
     return names;
   };
