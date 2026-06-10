@@ -1017,3 +1017,12 @@ table.grid .member td:first-child { padding-left: 30px; }
 .sbx-lock { display: flex; gap: 10px; font-size: 12px; padding: 6px 9px; border-radius: var(--r-sm); background: var(--bg-subtle); }
 .sbx-lock span { font-family: 'JetBrains Mono', monospace; color: var(--text-2); min-width: 180px; }
 .sbx-lock i { font-style: normal; color: var(--text-3); line-height: 1.4; }
+.sbx-key { margin-bottom: 9px; }
+.sbx-key input { width: 100%; box-sizing: border-box; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); }
+.sbx-key input:focus { border-color: var(--accent); outline: none; }
+.sbx-livecfg { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 11px; }
+.sbx-livecfg label { display: flex; align-items: center; gap: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); font-weight: 600; }
+.sbx-livecfg input[type=number], .sbx-livecfg select { font-size: 13px; padding: 5px 7px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); font-variant-numeric: tabular-nums; text-transform: none; }
+.sbx-livecfg input[type=number] { width: 78px; }
+.sbx-livecfg .sbx-check { text-transform: none; letter-spacing: 0; color: var(--text-2); font-weight: 500; }
+.sbx-livecfg .sbx-check input { margin: 0; }

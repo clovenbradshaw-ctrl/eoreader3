@@ -612,6 +612,103 @@
           const cls = classify(parity.diffs, qualityDelta, cfg);
           return Object.assign({ diff: rendered.diff, quality, parity, qualityDelta, componentDeltas, touchedRegions: rendered.touchedRegions }, cls);
         }
+        async function traceBattery(E, data) {
+          const fx = data.fixtures || {};
+          const out = [];
+          for (const kind of ["binding", "stalls", "integration"]) {
+            out.push("## " + kind + " fixtures");
+            for (const f of fx[kind] || []) {
+              const doc = await E.parseDocument(f.id + ".txt", f.doc, f.id);
+              const ev = doc._events || [];
+              let people = [];
+              try {
+                people = (E.projectEntities(doc).entities || []).filter((e) => e.type === "person").map((e) => e.name + "(" + (e.gender || "?") + ")");
+              } catch (e) {
+              }
+              const stalls = ev.filter((e) => e.op === "NUL" && e.reason && e.reason.indexOf("pronoun-stall") === 0).map((e) => "s" + e.sentence_idx + ' "' + (e.surface || "") + '"' + (e.competing ? " {" + e.competing.slice(0, 3).map((c) => c.siteName + ":" + c.score).join(" ") + "}" : ""));
+              const sigs = ev.filter((e) => e.op === "SIG").map((e) => "s" + e.sentence_idx + "\u2192" + e.speaker + "<" + (e.attributed || "") + ">");
+              out.push("- " + f.id + " [" + (f.genre || "") + "] people: " + people.join(", "));
+              if (stalls.length) out.push("    stalls: " + stalls.join("; "));
+              if (sigs.length) out.push("    attributions: " + sigs.join(" "));
+            }
+          }
+          return out.join("\n");
+        }
+        const AGENT_SYSTEM = [
+          "You evolve a deterministic reading engine by proposing ONE small, testable change per turn.",
+          "You may ONLY change: physics constants decay_gamma / inertia_delta / mass_weight; any READING_RULES entry whose src is hardcoded-seed or a language-module (e.g. title_tokens, attribution_patterns, pronouns, clitic_suffixes, cold_* thresholds, sentinel_*); or the talker portrait prompts.",
+          "You may NEVER touch the EVA checks, the grounder, citation binding, the operator vocabulary, parity, the golden snapshots, or the quality fixtures \u2014 those are the constitution and are rejected mechanically before any rerun.",
+          `Parity is a floor you may break only when the quality gain clearly justifies a deliberate golden recapture; prefer changes that keep parity clean. Stall honesty punishes you for suppressing honest "I don't know" stalls \u2014 never raise confidence by abolishing abstention.`,
+          'Respond with ONLY a JSON object: {"target": short label, "statement": one sentence, "rationale": why (grounded in the trace), "argument": why a human should accept it, "predicted_component": "binding"|"stall"|"grounding", "edits": [ ... ]}.',
+          'Each edit is one of: {"kind":"rule-value","rule":NAME,"value":NUMBER_OR_BOOL}, {"kind":"rule-tokens-add","rule":NAME,"tokens":[...]}, {"kind":"rule-tokens-remove","rule":NAME,"tokens":[...]}, {"kind":"prompt-edit","slot":"system"|"retry","find":TEXT,"replace":TEXT}.'
+        ].join("\n");
+        async function callAnthropic(opts) {
+          const body = { model: opts.model || "claude-opus-4-8", max_tokens: opts.maxTokens || 2e3, system: opts.system, messages: opts.messages };
+          if (opts.thinking) body.thinking = { type: "adaptive" };
+          const resp = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-api-key": opts.key,
+              "anthropic-version": "2023-06-01",
+              "anthropic-dangerous-direct-browser-access": "true"
+            },
+            body: JSON.stringify(body)
+          });
+          let j;
+          try {
+            j = await resp.json();
+          } catch (e) {
+            throw new Error("bad response from Anthropic (HTTP " + resp.status + ")");
+          }
+          if (!resp.ok || j && j.error) throw new Error(j && j.error && j.error.message || "Anthropic HTTP " + resp.status);
+          const text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+          const u = j.usage || {};
+          return { text, tokens: (u.input_tokens || 0) + (u.output_tokens || 0) };
+        }
+        function liveAgent(opts) {
+          let tokens = 0, TOKEN_MAX = opts.tokenMax || 15e4;
+          return {
+            provider: "live",
+            tokensUsed() {
+              return tokens;
+            },
+            tokenMax() {
+              return TOKEN_MAX;
+            },
+            exhausted() {
+              return tokens >= TOKEN_MAX;
+            },
+            extend(extra) {
+              TOKEN_MAX += extra || opts.tokenMax || 15e4;
+            },
+            async hypothesize({ battery, baseline, history }) {
+              if (this.exhausted()) return null;
+              const hist = (history || []).map((h2) => "- " + (h2.hyp ? h2.hyp.target : "?") + " \u2192 " + h2.result.state + (h2.result.qualityDelta != null ? " (\u0394" + h2.result.qualityDelta.toFixed(4) + ", parity " + (h2.result.parity ? h2.result.parity.clean ? "clean" : h2.result.parity.diffs + " diffs" : "n/a") + ")" : "") + (h2.result.note ? " \u2014 " + h2.result.note : "")).join("\n");
+              const user = [
+                "CURRENT QUALITY composite " + baseline.composite.toFixed(4) + " \u2014 binding " + baseline.components.binding.toFixed(3) + ", stall " + baseline.components.stall.toFixed(3) + ", grounding " + baseline.components.grounding.toFixed(3) + ".",
+                "",
+                battery,
+                "",
+                history && history.length ? "PRIOR ATTEMPTS THIS RUN (learn from these \u2014 do not repeat a rejected or null move):\n" + hist : "First hypothesis of the run.",
+                "",
+                "Propose ONE change most likely to raise the composite while keeping parity clean. Return only the JSON object."
+              ].join("\n");
+              const r = await callAnthropic({ key: opts.key, model: opts.model, system: AGENT_SYSTEM, messages: [{ role: "user", content: user }], maxTokens: opts.maxTokens || 2e3, thinking: opts.thinking });
+              tokens += r.tokens;
+              let h;
+              try {
+                const a = r.text.indexOf("{"), b = r.text.lastIndexOf("}");
+                h = JSON.parse(r.text.slice(a, b + 1));
+              } catch (e) {
+                return null;
+              }
+              if (!h || !Array.isArray(h.edits) || !h.edits.length) return null;
+              h.predicted = h.predicted_component || h.predicted;
+              return h;
+            }
+          };
+        }
         return {
           loadCandidate,
           scoreQuality,
@@ -621,6 +718,9 @@
           evolvableRules,
           renderEdits: (s, e) => PATCH.renderEdits(s, e),
           offlineHypotheses,
+          traceBattery,
+          liveAgent,
+          callAnthropic,
           sameName,
           normName,
           DEFAULT_WEIGHTS,
