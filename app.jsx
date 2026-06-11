@@ -975,6 +975,11 @@ function App() {
       'Right, with that correction:',
       'Re-reading with that in mind.',
     ],
+    support: [
+      'Fair question — here’s what in the text I was leaning on:',
+      'Let me point at the lines behind that:',
+      'Here’s where the page actually backs that up:',
+    ],
   };
   // Flag the most recent settled assistant reply as objected-to; epistemicTag
   // re-tags it in every future prompt.
@@ -1016,6 +1021,17 @@ function App() {
     const parts = [anchor, ...refinements.slice(-3)];
     if (repair.content) parts.push(q);
     let probe = [...new Set(parts.filter(Boolean))].join(' ').trim();
+    // SUPPORT/EVIDENCE repair: the user is asking what in the text backs the
+    // PRIOR reply ("what makes you say that?"). The retrieval target is the
+    // substance of that reply, not the anaphoric, content-free question about
+    // it — seed the probe with the reply's own content terms (markup stripped,
+    // void terms already gone) so the re-read lands on the passages behind it.
+    if (repair.kind === 'support' && lastReply) {
+      try {
+        const replyTerms = E.supportProbeTerms(scope, lastReply, 20);
+        if (replyTerms.length) probe = [probe, ...replyTerms].filter(Boolean).join(' ').trim();
+      } catch (e) { eoWarn('support probe', e); }
+    }
     try {
       const kin = E.kinAsked(probe + ' ' + lastReply);
       for (const k of kin) if (!new RegExp('\\b' + k, 'i').test(probe)) probe += ' ' + k;
