@@ -125,7 +125,7 @@ group('working memory becomes first-person notes in the user message (depth > 1)
   ok(!/Things in focus/.test(messages[0].content), 'the notes do NOT live in the system message');
   const last = messages[messages.length - 1];
   eq(last.role, 'user', 'the final message is the current user turn');
-  ok(/Your notes on the document/.test(last.content), 'the user message carries the notes block');
+  ok(/What I remember about it/.test(last.content), 'the user message carries the notes block');
   ok(/Edith/.test(last.content) && /Marlow/.test(last.content), 'hot and warm entities appear in the notes');
   ok(/the boat/.test(last.content), 'a cooled pointer is listed in the notes');
   ok(/^Things in focus right now:/m.test(LLM.renderNotes(wm)), 'notes render in the model\'s own voice');
@@ -186,23 +186,30 @@ group('the grounded prompt: notes-and-spans framing, no length prescriptions', (
   }
 });
 
-// The tiered user message: question first (orientation), spans quoted
-// exactly, notes as their own level, the question again as the closing
-// instruction. A grounded caller without spans (the summary sample) gets the
-// same frame around its blob; plain chat and creative are unchanged.
-group('buildUserContent — tiered spans/notes, question first and last', () => {
+// The grounded user message in the soft "respond to the user" frame: a plain
+// instruction, the user's message up front, then the engine's material offered
+// as AMBIENT context ("things on my mind that may or may not be relevant")
+// rather than a brief to fill — and the old imperative scaffolding ("What this
+// turn wants:" / "Answer the user's question:") gone, since the small model read
+// that as the answer and parroted it. The message rides the closing line too
+// (recency / anti-drift). A grounded caller without spans (the summary sample)
+// gets the same frame around its blob; plain chat and creative are unchanged.
+group('buildUserContent — ambient context frame, user message first and last', () => {
   const spans = [{ idx: 12, text: 'Until recently, his son served at Solaren.' }, { tag: 's11', text: 'The Director is David Corman.' }];
   const u = LLM.buildUserContent({ question: 'whose son is mentioned?', docTitle: 'NDP.txt', spans, notesProse: 'The son mentioned at [s12] is David Corman’s.', grounded: true });
-  ok(u.startsWith('The user just asked: whose son is mentioned?'), 'opens with the question (orientation)');
-  ok(/Answer the user's question: whose son is mentioned\?$/.test(u), 'closes with the question (instruction)');
-  ok(/reading a document called "NDP\.txt"/.test(u), 'names the document');
-  ok(/quoted exactly:/.test(u) && /\[s12\] Until recently/.test(u) && /\[s11\] The Director/.test(u), 'spans are listed with their tags');
-  ok(/Your notes on the document/.test(u) && /David Corman’s/.test(u), 'notes are their own tier');
-  ok(u.indexOf('quoted exactly') < u.indexOf('Your notes'), 'spans come before notes');
+  ok(u.startsWith('Respond to the user.'), 'opens with the plain instruction');
+  ok(/^User: whose son is mentioned\?$/m.test(u), 'the user message rides up front');
+  ok(/Now write your reply to the user\. They asked: whose son is mentioned\?$/.test(u), 'closes by restating the message (recency)');
+  ok(/things on my mind that may or may not be relevant/i.test(u), 'context is framed as ambient, not a brief');
+  ok(/From "NDP\.txt", word for word:/.test(u) && /\[s12\] Until recently/.test(u) && /\[s11\] The Director/.test(u), 'spans are listed verbatim with their tags, under the document');
+  ok(/What I remember about it/.test(u) && /David Corman’s/.test(u), 'notes are their own tier');
+  ok(u.indexOf('word for word') < u.indexOf('What I remember'), 'spans come before notes');
+  ok(!/What this turn wants/.test(u) && !/Answer the user's question/.test(u), 'the old imperative scaffolding is gone (no parroting hook)');
 
   const blob = LLM.buildUserContent({ question: 'summarize this', contextText: '[s0] line one\n[s1] line two', grounded: true });
-  ok(blob.startsWith('The user just asked: summarize this'), 'blob fallback keeps the question-first frame');
-  ok(/Material from the document:/.test(blob) && /\[s0\] line one/.test(blob), 'the blob rides as material');
+  ok(blob.startsWith('Respond to the user.'), 'blob fallback keeps the soft frame');
+  ok(/^User: summarize this$/m.test(blob), 'blob fallback carries the user message');
+  ok(/From the document:/.test(blob) && /\[s0\] line one/.test(blob), 'the blob rides as ambient material');
 
   eq(LLM.buildUserContent({ question: 'hi', grounded: false }), 'hi', 'plain chat: bare question unchanged');
   eq(LLM.buildUserContent({ question: 'write a poem', contextText: '[s0] x', grounded: false }),
@@ -211,9 +218,10 @@ group('buildUserContent — tiered spans/notes, question first and last', () => 
 });
 
 // The shape pass: a director's note, not a rubric. The system prompt is the
-// taste surface — it characterizes the move and never answers; the note
-// rides the user message between the question and the spans.
-group('shape pass — a director\'s note between question and spans', () => {
+// taste surface — it characterizes the move and never answers; the note rides
+// the context block as "what they seem to be after," before the spans, framed
+// as one of the things on mind rather than an instruction to fulfil.
+group('shape pass — a director\'s note folded into the context block', () => {
   ok(/never answer the question yourself/.test(LLM.SHAPE_SYSTEM), 'the shape prompt forbids answering');
   ok(/never state facts about the document/.test(LLM.SHAPE_SYSTEM), '…and forbids inventing document facts');
   ok(/what's the point of the book\?/.test(LLM.SHAPE_SYSTEM), 'synthesis example present (the taste lives in examples)');
@@ -227,11 +235,12 @@ group('shape pass — a director\'s note between question and spans', () => {
     notesProse: '', grounded: true,
     shapeNote: 'Bibliographic lookup. They want the name — one line.',
   });
-  ok(/What this turn wants:\nBibliographic lookup/.test(u), 'the note has its own block');
-  ok(u.indexOf('The user just asked') < u.indexOf('What this turn wants'), 'question orients first');
-  ok(u.indexOf('What this turn wants') < u.indexOf('quoted exactly'), 'the note precedes the spans');
+  ok(/· What they seem to be after: Bibliographic lookup/.test(u), 'the note rides as one of the things on mind');
+  ok(u.indexOf('User: who wrote it?') < u.indexOf('What they seem to be after'), 'the user message orients first');
+  ok(u.indexOf('What they seem to be after') < u.indexOf('word for word'), 'the note precedes the spans');
+  ok(!/What this turn wants/.test(u), 'no imperative "What this turn wants:" header (the parroting hook)');
   const bare = LLM.buildUserContent({ question: 'q', spans: [{ idx: 1, text: 'x' }], grounded: true, shapeNote: '' });
-  ok(!/What this turn wants/.test(bare), 'no note ⇒ no empty block (answer pass unchanged)');
+  ok(!/What they seem to be after/.test(bare), 'no note ⇒ no empty block (answer pass unchanged)');
 });
 
 // Reasoning-model think gating: tagged chain-of-thought never reaches the

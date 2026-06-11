@@ -1200,3 +1200,19 @@ button.gax-leg:hover .gax-dim { color: var(--text-2); }
 .gax-evdetail { padding: 4px 8px 12px 47px; }
 .gax-evspan { font-size: 12.5px; color: var(--text-2); line-height: 1.5; margin-bottom: 7px; display: flex; gap: 8px; }
 .gax-evjson { font-family: var(--mono); font-size: 11px; line-height: 1.5; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 9px 11px; overflow-x: auto; white-space: pre; color: var(--text-2); margin: 0; }
+
+/* ---- Prompt book drawer (promptsview.jsx) ---- */
+.prompt-card h4 { display: flex; align-items: center; gap: 8px; }
+.prompt-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: var(--r-pill); background: var(--accent-tint); color: var(--accent); }
+.prompt-params { margin-left: auto; font-size: 10.5px; color: var(--text-3); font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 400; }
+.prompt-blurb { margin: 2px 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
+.prompt-iftt { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.prompt-trigger { display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 1.45; }
+.prompt-if { flex: none; width: 16px; font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--accent); text-align: right; }
+.prompt-if-text { flex: 1; color: var(--text); }
+.prompt-then { flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--r-xs); padding: 1px 6px; white-space: nowrap; }
+.prompt-det { margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.prompt-det summary { cursor: pointer; font-size: 11.5px; color: var(--text-3); user-select: none; }
+.prompt-det summary:hover { color: var(--accent); }
+.prompt-pre { margin: 8px 0 0; padding: 11px 13px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--r-sm); font-family: var(--mono); font-size: 11.5px; line-height: 1.55; color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; }
+.prompt-note { margin-top: 7px; font-size: 11.5px; line-height: 1.5; color: var(--text-3); font-style: italic; }
