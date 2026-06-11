@@ -49,6 +49,36 @@ function loadLLMWith({ webllm, stallMs }) {
 }
 const fakeEngine = () => ({ unloaded: false, unload() { this.unloaded = true; } });
 
+// Like loadLLMWith, but also exposes a fake Worker/Blob/URL so load()'s WORKER
+// path runs (off-main-thread engine, terminate-on-unload, cancel). `workers`
+// collects every spawned worker so a test can assert on terminate(); a worker
+// fires onerror on the next tick when `workerOnError` is set (simulating a
+// blocked import → main-thread fallback). The fake webllm supplies
+// CreateWebWorkerMLCEngine; CreateMLCEngine is the fallback the worker path
+// should normally avoid.
+function loadLLMWithWorker({ webllm, stallMs, workerOnError }) {
+  const workers = [];
+  class FakeWorker {
+    constructor() {
+      this.terminated = false; this.onerror = null; this.onmessageerror = null;
+      workers.push(this);
+      if (workerOnError) setTimeout(() => { if (this.onerror) this.onerror({ message: 'blocked' }); }, 0);
+    }
+    postMessage() {}
+    terminate() { this.terminated = true; }
+  }
+  const window = { EO_WEBLLM: webllm };
+  if (stallMs != null) window.EO_STALL_MS = stallMs;
+  const sandbox = {
+    window, console, performance, navigator: { gpu: {} }, setTimeout, clearTimeout,
+    Worker: FakeWorker, Blob: function () {}, URL: { createObjectURL: () => 'blob:fake', revokeObjectURL: () => {} },
+  };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'llm.js'), 'utf8'), sandbox, { filename: 'llm.js' });
+  return { LLM: sandbox.window.EOLLM, workers };
+}
+
 let pass = 0, fail = 0; const fails = [];
 function ok(cond, msg) { if (cond) { pass++; } else { fail++; fails.push(msg); console.error('  ✗ ' + msg); } }
 function eq(a, b, msg) { ok(a === b, `${msg} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`); }
@@ -358,6 +388,66 @@ async function groupA(name, fn) { console.log('• ' + name); await fn(); }
     eq(cleared, 'Corrupt-Model', 'the right model\'s cache is wiped');
     const none = await loadLLMWith({ stallMs: 20, webllm: { CreateMLCEngine: () => Promise.resolve(fakeEngine()) } }).clearCache('X');
     eq(none, false, 'clearCache is a no-op (false) when the runtime exposes no cache helpers');
+  });
+
+  // ---- the worker path: off-main-thread load, terminate-on-switch, cancel ----
+  // Loading on the main thread froze the UI for the whole multi-GB compile. The
+  // engine now runs in a Web Worker; switching models terminates the old worker
+  // (freeing the GPU device), a worker that can't start falls back to the main
+  // thread, and a user can cancel an in-flight load outright.
+  await groupA('the engine loads in a Worker, and switching models terminates the old one', async () => {
+    const made = [];
+    const webllm = {
+      CreateWebWorkerMLCEngine: (worker, key, opts) => {
+        if (opts && opts.initProgressCallback) opts.initProgressCallback({ progress: 1, text: 'ready' });
+        const e = fakeEngine(); e.key = key; made.push(key); return Promise.resolve(e);
+      },
+      CreateMLCEngine: () => { throw new Error('main-thread engine used despite an available worker'); },
+    };
+    const { LLM, workers } = loadLLMWithWorker({ stallMs: 1000, webllm });
+    const e1 = await LLM.load('Model-A', () => {});
+    ok(e1 && e1.key === 'Model-A', 'load resolves to the worker-hosted engine');
+    eq(made.length, 1, 'the worker engine was built (not the main-thread one)');
+    eq(workers.length, 1, 'one worker was spawned');
+    eq(workers[0].terminated, false, 'the worker stays alive while its model is resident');
+    await LLM.load('Model-B', () => {});
+    eq(workers[0].terminated, true, 'switching models terminates the previous worker (frees the GPU device)');
+    eq(LLM.isLoaded('Model-B'), true, 'the newly-loaded model reports ready');
+  });
+
+  await groupA('a worker that can\'t start falls back to the main thread (load still succeeds)', async () => {
+    let workerTries = 0, mainBuilds = 0;
+    const webllm = {
+      CreateWebWorkerMLCEngine: () => { workerTries++; return new Promise(() => {}); },   // never resolves; onerror drives the fallback
+      CreateMLCEngine: (key, opts) => { mainBuilds++; if (opts && opts.initProgressCallback) opts.initProgressCallback({ progress: 1, text: 'ready' }); return Promise.resolve(fakeEngine()); },
+    };
+    const { LLM, workers } = loadLLMWithWorker({ stallMs: 1000, webllm, workerOnError: true });
+    const e = await LLM.load('Fallback-Model', () => {});
+    ok(workerTries >= 1, 'the worker path is attempted first');
+    eq(mainBuilds, 1, 'it falls back to a main-thread engine when the worker fails to start');
+    ok(e && typeof e.unload === 'function', 'load resolves to an engine after the fallback');
+    eq(workers[0].terminated, true, 'the dead worker is terminated, not left running');
+    eq(LLM.isLoaded('Fallback-Model'), true, 'the model reports ready after falling back');
+  });
+
+  await groupA('cancelLoad stops an in-flight worker load (CANCEL) and never tears down a ready model', async () => {
+    const webllm = {
+      CreateWebWorkerMLCEngine: (worker, key, opts) => {
+        if (opts && opts.initProgressCallback) opts.initProgressCallback({ progress: 0.2, text: 'fetching' });
+        return new Promise(() => {});   // progresses, then hangs → a genuine in-flight load
+      },
+      CreateMLCEngine: () => { throw new Error('fell through to the main thread on cancel'); },
+    };
+    const { LLM, workers } = loadLLMWithWorker({ stallMs: 5000, webllm });
+    let err = null;
+    const p = LLM.load('Cancellable', () => {}).then(() => 'resolved', (e) => { err = e; return 'rejected'; });
+    await new Promise(r => setTimeout(r, 5));   // let the build start and report progress
+    eq(LLM.cancelLoad(), true, 'cancelLoad reports it canceled an in-flight load');
+    eq(await p, 'rejected', 'the in-flight load rejects when canceled');
+    ok(err && err.code === 'CANCEL', 'it rejects with a CANCEL code so the UI can stay quiet');
+    eq(workers[0].terminated, true, 'the worker is terminated so the download halts immediately');
+    eq(LLM.isLoaded('Cancellable'), false, 'a canceled model never reports loaded');
+    eq(LLM.cancelLoad(), false, 'cancelLoad is a no-op when nothing is loading (can\'t tear down a ready model)');
   });
 
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
