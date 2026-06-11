@@ -941,10 +941,13 @@ function App() {
   // When a document IS open, the answer carries an explicit "not grounded"
   // audit so it can never be mistaken for a cited, document-drawn answer —
   // the app's whole promise is that grounded and ungrounded look different. (1b)
-  const runChat = async (q, history, modeTag, ctx, docOpen) => {
+  const runChat = async (q, history, modeTag, ctx, docOpen, mech) => {
     const ungroundedAudit = docOpen
       ? { status: 'plain', grounded: false, note: 'Answered from the model’s general knowledge — not drawn from the open document.' }
       : null;
+    // A document question we couldn't ground still gets the model's answer; the
+    // page's own (deterministic) reading rides along as a click-to-view panel.
+    const mechPanel = (mech && mech.text) ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null;
     const attempt = (hist, budget) => window.EOLLM.phrase({
       mlcKey: model.mlc, question: q, history: hist, contextText: ctx || '',
       mode: modeTag === 'creative' ? 'creative' : 'chat',
@@ -963,7 +966,7 @@ function App() {
         replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
         full = await attempt(history.slice(-2), 2200);
       }
-      replaceLast({ role: 'assistant', text: full, audit: ungroundedAudit, mode: modeTag });
+      replaceLast({ role: 'assistant', text: full, audit: ungroundedAudit, mode: modeTag, mechanical: mechPanel });
       AUD('end', { engine: 'model', text: full, audit: ungroundedAudit, cites: [] });
     } catch (e) {
       const msg = 'I couldn’t finish that one locally — the model likely ran out of memory or context. Try a shorter message, pick a smaller model from the switcher, or ask about an open document and I’ll answer it mechanically.';
@@ -1249,25 +1252,36 @@ function App() {
   const runGroundedScope = async (scope, q, history, semanticHits) => {
     const intent = window.EOEngine.classifyIntent(q);
     AUD('step', 'intent', { intent });
-    if (intent === 'who') { AUD('step', 'route', { detour: 'who → mechanical' }); runMechanicalScope(scope, q); return; }
     // CONFIRM/DENY: a proposition is checked against the graph, never phrased
     // by the model — the grounded-QA prompt presents an assertion as a
     // question, and a small model resolves the confusion by quoting the user
-    // back as if they were the passage. Only when the proposition parses and a
-    // source's graph can check it; otherwise the ordinary path keeps the turn.
+    // back as if they were the passage. This one stays mechanical-primary by
+    // design (handing a proposition to the model degrades the answer); only
+    // when the proposition parses and a source's graph can check it.
     if (intent === 'confirm') {
       let checked = null;
       try { checked = window.EOEngine.answerConfirmScope(scope, q, { hotEntity: hotEntity() }); }
       catch (e) { eoWarn('confirm', e); }
       if (checked) { AUD('step', 'route', { detour: 'confirm → graph-check (mechanical)' }); runMechanicalScope(scope, q, checked); return; }
     }
+    // The deterministic reading of this turn — the cast-list count for a "who"
+    // ask, the best mechanical answer otherwise. It is NO LONGER the primary
+    // reply for a document question (the model phrases it with citations); it
+    // rides along on the settled message as the "exact mechanical reading" the
+    // user can click to view. Best-effort: a failure just means no panel.
+    let mech = null;
+    try { mech = window.EOEngine.answerScope(scope, q, { hotEntity: hotEntity() }); } catch (e) { eoWarn('mechanical reading', e); }
     // Semantic recall already located the material → trust it for ground; else the
     // usual lexical hasGround check decides whether the page can answer.
     const hasSemantic = !!(semanticHits && semanticHits.length);
     const perDocGround = scope.map(d => ({ id: d.id, name: d.name, has: window.EOEngine.hasGround(d, q) }));
     const grounded = hasSemantic || perDocGround.some(d => d.has);
     AUD('step', 'ground', { hasGround: grounded, perDoc: perDocGround, viaSemantic: hasSemantic });
-    if (!grounded) { AUD('step', 'route', { detour: 'no-ground → mechanical' }); runMechanicalScope(scope, q); return; }
+    // No passage answers this. Rather than serve the mechanical reading as the
+    // reply, talk it through with the model (ungrounded, badged "not from the
+    // document") and keep the mechanical reading one click away — "always give
+    // chat": a doc question we can't ground becomes conversation, not a hold.
+    if (!grounded) { AUD('step', 'route', { detour: 'no-ground → chat' }); runChat(q, history, undefined, '', true, mech); return; }
     // Context, tiered (spans + notes) for factual asks: semantically-recovered
     // spans if we have them, else the lexical parts — and above the dial's
     // floor, a factual ask iteratively seeks the parts of the question its
@@ -1275,10 +1289,16 @@ function App() {
     // curated blob (the salient picks read as one piece); buildUserContent
     // frames a blob the same way.
     const budget = turnBudgetRef.current;
-    const useSeek = !!(budget && budget.maxSeekRounds > 1 && !hasSemantic && intent !== 'summary');
+    // A "who appears" turn wants the cast as context, not lexical retrieval —
+    // the same per-doc entity sample the mechanical reading counts from. Treat
+    // it like a summary for context-building (blob, no seek) so the model
+    // phrases the cast in prose with citations; the exact count rides along as
+    // the click-to-view mechanical reading.
+    const wantsBlob = intent === 'summary' || intent === 'who';
+    const useSeek = !!(budget && budget.maxSeekRounds > 1 && !hasSemantic && !wantsBlob);
     const task = intent === 'summary' ? 'summary' : 'answer';
     let ctx = '', parts = null;
-    if (task === 'summary') {
+    if (wantsBlob) {
       ctx = window.EOEngine.contextScope(scope, q, 6);
     } else if (hasSemantic) {
       parts = window.EOEngine.partsFromHits(scope, semanticHits);
@@ -1388,7 +1408,12 @@ function App() {
               audit: res.audit ? { ...res.audit, note: 'Repeats an earlier reply (flagged conversationally in the opening line). ' + (res.audit.note || '') } : res.audit };
           }
         } catch (e) { eoWarn('echo flag', e); }
-        replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded' });
+        // The deterministic reading rides along as a click-to-view panel, but
+        // only when the MODEL phrased the answer — a mechanical fallback (veto)
+        // already IS this reading, so a panel would just echo the reply.
+        const showMech = mech && mech.text && /^model/.test(String(decision || '')) && mech.text !== res.text
+          ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null;
+        replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded', mechanical: showMech });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
         depositSettled(scope, q, res.cites);
         noteOpaque(res, decision);                        // edge-of-trace marker (Phase 6)

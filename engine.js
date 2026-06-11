@@ -6902,7 +6902,14 @@ function projectGraph(events, frame = {}) {
   /* ============================================================ INTENT */
   function classifyIntent(q) {
     const t = ' ' + String(q).toLowerCase().replace(/[’']/g, "'") + ' ';
-    if (/\b(who(\s+all)?\s+(appears?|is in|are in|shows? up|features?)|who are the|characters?|the cast|people (in|who)|list (the )?(people|characters|names|figures)|main characters?|dramatis|everyone (in|who))\b/.test(t)) return 'who';
+    // A turn that JUDGES or selects a single cast member — "who is the FUNNIEST
+    // character", "which figure is the smartest", "the most interesting person"
+    // — is not a request to enumerate the cast. answerWho only counts mentions;
+    // it cannot weigh "funniest", so returning the ranked cast-list as if it had
+    // is confidently off-topic (the worst kind of wrong answer). A superlative
+    // resting on a cast noun routes the turn to the model (factual), never 'who'.
+    if (!judgesCastMember(t) &&
+        /\b(who(\s+all)?\s+(appears?|is in|are in|shows? up|features?)|who are the|characters?|the cast|people (in|who)|list (the )?(people|characters|names|figures)|main characters?|dramatis|everyone (in|who))\b/.test(t)) return 'who';
     // "what's the book about?" is a whole-document overview, but the older
     // "what's (it|this) about" branch only caught the pronoun forms — "the book"
     // fell through to factual and retrieved a single line that merely shared the
@@ -6937,6 +6944,21 @@ function projectGraph(events, frame = {}) {
     if (/^\s*(is|was|are|were|isn'?t|wasn'?t|aren'?t|weren'?t)\b[^?]*\?/.test(t)) return 'confirm';
     if (declarativeProposition(q)) return 'confirm';
     return 'factual';
+  }
+  // A superlative resting on a cast noun — "funniest character", "most
+  // interesting figure", "which character is the smartest". The superlative
+  // must sit ADJACENT to the noun (an article / "most" / "least" may come
+  // between), so a plain enumeration that merely happens to contain an "-est"
+  // word elsewhere ("list the characters in the forest") is left as a 'who'.
+  // Keeps judgment questions off the mechanical, model-free cast-list path.
+  function judgesCastMember(t) {
+    const cast = '(?:characters?|figures?|persons?|people|protagonists?|antagonists?|villains?|heroe?s?|heroines?)';
+    const sup  = '(?:[a-z]+est|most\\s+[a-z]+|least\\s+[a-z]+|best|worst|favou?rite)';
+    // superlative directly before the noun: "the funniest character"
+    if (new RegExp('\\b' + sup + '\\s+(?:the\\s+)?' + cast + '\\b').test(t)) return true;
+    // noun, copula, superlative: "which character is the funniest"
+    if (new RegExp('\\b' + cast + '\\b\\s+(?:is|are|was|were|seems?|feels?)\\s+(?:the\\s+|most\\s+|least\\s+)?' + sup + '\\b').test(t)) return true;
+    return false;
   }
   // A bare copular declarative offered for checking ("He is dead. He was not a
   // speaker."): every sentence leads with a pronoun or a Name and a copula, and
