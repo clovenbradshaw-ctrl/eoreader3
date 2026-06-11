@@ -488,9 +488,29 @@
     };
   }
 
+  // The answer pass's token ceiling. Depth scales the grounded caps (summary
+  // 260→520, answer 180→420); lvl 1 holds today's exact ceilings. An explicit
+  // `override` — the shape layer's best-fit budget, sized from the matched
+  // archetype's own length (shape.js §9) — WINS when present, clamped to a safe
+  // window so a 4096-token prebuild always has room for the assembled prompt
+  // (max_tokens ≤ 520, per the DEFAULT_BUDGET math). With no override the result
+  // is byte-identical to the old inline formula, so callers that don't pass one
+  // are unchanged (parity).
+  function resolveMaxTokens({ mode, grounded, task, depth, override }) {
+    const lvl = Math.min(3, Math.max(1, (depth | 0) || 1));
+    const base = mode === 'creative' ? 320
+      : grounded ? (task === 'summary' ? 260 + (lvl - 1) * 130 : 180 + (lvl - 1) * 120)
+      : 360;
+    if (typeof override === 'number' && isFinite(override) && override > 0)
+      return Math.max(24, Math.min(520, Math.round(override)));
+    return base;
+  }
+
   // Stream a turn. Plain chat passes history with no passages; grounded/summary
-  // pass retrieved passages. onToken(deltaText).
-  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride, spans, notes, docTitle, shapeNote }) {
+  // pass retrieved passages. onToken(deltaText). `maxTokens` (optional) lets the
+  // shape layer set the ceiling from the best-fit archetype's length; unset, the
+  // depth-scaled default applies (parity).
+  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride, spans, notes, docTitle, shapeNote, maxTokens }) {
     const eng = await load(mlcKey);
     // Thinking depth (1 reflex … 3 deepest) shapes the grounded phrasing and how
     // much room the answer gets. Absent/1 ⇒ today's prompt and token caps (parity).
@@ -501,10 +521,10 @@
     const messages = assembleMessages({ sys, history, contextText, question, grounded, budget, workingMemory, spans, notes, docTitle, shapeNote });
     const temperature = mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4);
     // Deeper reading earns more room to synthesize: the grounded caps grow with the
-    // dial (summary 260→520, answer 180→420). lvl 1 holds today's exact ceilings.
-    const max_tokens = mode === 'creative' ? 320
-      : grounded ? (task === 'summary' ? 260 + (lvl - 1) * 130 : 180 + (lvl - 1) * 120)
-      : 360;
+    // dial (summary 260→520, answer 180→420). lvl 1 holds today's exact ceilings,
+    // unless the shape layer hands in a best-fit budget (maxTokens), which wins.
+    const max_tokens = resolveMaxTokens({ mode, grounded, task, depth: lvl, override: maxTokens });
+    const max_tokens_shaped = (typeof maxTokens === 'number' && isFinite(maxTokens) && maxTokens > 0) || undefined;
     // Audit hook (no-op unless window.EOAudit is present): record the EXACT prompt
     // the model saw, its parameters, its raw output, and the wall time — so
     // auditing mode can show what was sent and what came back, verbatim.
@@ -515,7 +535,7 @@
       try {
         A.step('llm', Object.assign({
           mode, task: task || null, grounded: !!grounded, mlcKey,
-          params: { temperature, max_tokens, depth: lvl, budget: budget || null },
+          params: { temperature, max_tokens, max_tokens_shaped, depth: lvl, budget: budget || null },
           system: sys,
           messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })),
           output,
@@ -543,5 +563,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, load, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();

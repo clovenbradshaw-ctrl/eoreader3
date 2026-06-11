@@ -44,7 +44,11 @@ const S = loadShape();
 // Handles both the batch shape (library load: string[] → vec[]) and the single
 // shape (the loop: string → vec) the module calls it with.
 function unit(v) { const n = Math.sqrt(v.reduce((a, b) => a + b * b, 0)) || 1; return v.map(x => x / n); }
-const DIR = { '[LOOKUP]': [1, 0, 0], '[LOOKUP2]': unit([0.9, 0.1, 0]), '[SYNTH]': [0, 1, 0], '[SYNTH2]': unit([0.1, 0.9, 0]) };
+const DIR = {
+  '[LOOKUP]': [1, 0, 0], '[LOOKUP2]': unit([0.9, 0.1, 0]), '[SYNTH]': [0, 1, 0], '[SYNTH2]': unit([0.1, 0.9, 0]),
+  // prompt-side tags (§9): a prompt embeds near its intent's archetype prompts
+  '[QLOOKUP]': [1, 0, 0], '[QLOOKUP2]': unit([0.95, 0.05, 0]), '[QSYNTH]': [0, 1, 0], '[QSYNTH2]': unit([0.05, 0.95, 0]),
+};
 function vecForText(s) {
   for (const tag of Object.keys(DIR)) if (String(s).indexOf(tag) !== -1) return DIR[tag];
   return [0, 0, 1];
@@ -187,6 +191,81 @@ group('pca (§7 proper) — recovers the dominant axis', () => {
 
     ok(lib.score([1, 0, 0], target).score > 0, 'a lookup-shaped draft scores positive against the lookup target');
     ok(lib.score([0, 1, 0], target).score < 0, 'a synthesis-shaped draft scores negative against the lookup target');
+  });
+
+  // §9 — prompt → archetype matching + length-derived token budget.
+  function promptLib() {
+    const exemplars = S.parseExemplars([
+      '{"id":"L1","intent":"lookup","user_turn":"[QLOOKUP] who wrote it","response":"[LOOKUP] Balzac."}',
+      '{"id":"L2","intent":"lookup","user_turn":"[QLOOKUP2] the author?","response":"[LOOKUP2] By Balzac."}',
+      '{"id":"S1","intent":"synthesis","user_turn":"[QSYNTH] what is the point of all this","response":"[SYNTH] A reading that develops a tension across several sentences and keeps unfolding long enough to be clearly the longer shape, with clauses and more clauses besides."}',
+      '{"id":"S2","intent":"synthesis","user_turn":"[QSYNTH2] what does it mean","response":"[SYNTH2] Another extended synthesis, also long, several clauses, developed at length."}',
+    ].join('\n'));
+    return S.createLibrary(exemplars, { embed: fakeEmbed });
+  }
+
+  await group('§9 prompt matching — embeds prompts, matches by prompt-to-prompt, infers intent', async () => {
+    const lib = promptLib();
+    await lib.load();
+    ok(lib.readyPrompts(), 'after load() the prompts are embedded too');
+    ok(lib.exemplars.every(e => e.promptVec), 'every exemplar with a user_turn carries a promptVec');
+
+    const m = lib.matchPrompt([1, 0, 0]);                 // a lookup-shaped prompt
+    ok(m, 'matchPrompt returns a result when prompts are embedded');
+    eq(m.intent, 'lookup', 'the nearest archetype prompts infer the intent');
+    eq(m.best.id, 'L1', 'the single best prompt match is reported');
+    ok(m.confidence > 0.5, 'a clean lookup prompt is confidently lookup (got ' + m.confidence + ')');
+    ok(Array.isArray(m.matches) && m.matches.length >= 1, 'the nearest matches are listed for feedback');
+
+    const synth = lib.matchPrompt([0, 1, 0]);
+    eq(synth.intent, 'synthesis', 'a synthesis-shaped prompt infers synthesis');
+
+    const ambiguous = lib.matchPrompt(unit([1, 1, 0]));   // sits between the two shapes
+    ok(ambiguous.confidence < m.confidence, 'a prompt between shapes is reported less confidently (§9)');
+  });
+
+  await group('§9 select(queryVec) — infers intent and ranks by prompt similarity', async () => {
+    const lib = promptLib();
+    await lib.load();
+    // No intent supplied: the query embedding alone picks the cluster.
+    const target = lib.select({ queryVec: [1, 0, 0], shapeNote: 'they want the name' });
+    eq(target.intent, 'lookup', 'queryVec infers the intent when the caller omits it');
+    eq(target.target_exemplar_ids[0], 'L1', 'the cluster is ranked by prompt-to-prompt similarity');
+    ok(target.prompt_match && target.prompt_match.best_id === 'L1', 'the prompt match rides the target for the audit');
+    ok(target.competitorExemplars.every(e => e.intent !== 'lookup'), 'competitors are the other intents');
+
+    // Backward compatible: no queryVec ⇒ note/weight ranking, prompt_match null.
+    const noQuery = lib.select({ intent: 'lookup', noteVec: [1, 0, 0] });
+    eq(noQuery.prompt_match, null, 'without a query embedding there is no prompt match (parity)');
+    ok(noQuery.target_exemplar_ids[0] === 'L1', 'the noteVec path still ranks by response fit');
+  });
+
+  await group('§9 tokenBudgetFor — sizes max_tokens from the best-fit length', async () => {
+    const lib = promptLib();
+    await lib.load();
+    const lookup = lib.select({ queryVec: [1, 0, 0] });
+    const synth = lib.select({ queryVec: [0, 1, 0] });
+    const bl = S.tokenBudgetFor(lookup), bs = S.tokenBudgetFor(synth);
+    ok(bl && typeof bl.maxTokens === 'number', 'a budget is returned for a matched shape');
+    ok(bl.maxTokens >= S.TOKEN_BUDGET.floor && bl.maxTokens <= S.TOKEN_BUDGET.ceil, 'the budget is clamped to the safe window');
+    eq(bl.maxTokens, S.TOKEN_BUDGET.floor, 'a one-line lookup archetype yields the floor budget');
+    ok(bs.maxTokens > bl.maxTokens, 'a long synthesis archetype yields a larger budget than a lookup (' + bs.maxTokens + ' > ' + bl.maxTokens + ')');
+    eq(bl.basis.exemplar_id, 'L1', 'the budget records the archetype it was sized from (auditable)');
+    ok(typeof bl.basis.best_fit_tokens === 'number', 'the basis records the best-fit length');
+    // No targets ⇒ no budget (caller keeps the default cap).
+    eq(S.tokenBudgetFor({ targetExemplars: [] }), null, 'an empty target shape yields no budget');
+    eq(S.tokenBudgetFor(null), null, 'a null target shape yields no budget');
+  });
+
+  await group('§9 tokenBudgetFor — works on a degraded (unembedded) library', async () => {
+    const lib = S.createLibrary(S.parseExemplars([
+      '{"id":"L1","intent":"lookup","user_turn":"who wrote it","response":"Balzac."}',
+    ].join('\n')), { embed: () => null });
+    await lib.load();
+    ok(!lib.readyPrompts(), 'no embedder ⇒ prompts not embedded, matching off');
+    const target = lib.select({ intent: 'lookup' });           // weight-ordered, no vectors
+    const b = S.tokenBudgetFor(target);
+    ok(b && b.maxTokens >= S.TOKEN_BUDGET.floor, 'the length budget needs no embeddings — it reads the response text');
   });
 
   await group('createLibrary — degraded (no embedder) disables scoring, keeps clustering', async () => {

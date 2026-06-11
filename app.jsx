@@ -105,6 +105,9 @@ function App() {
   const turnBudgetRef = useRef(null);
   // This turn's associative links (Phase 3) — read by the inference void (Phase 4).
   const turnAssocRef = useRef([]);
+  // The shape-steering exemplar library, once loaded+embedded (shape.js §9).
+  // Populated lazily in the background the first eligible turn; null until then.
+  const shapeLibRef = useRef(null);
   const [busy, setBusy] = useState(false);
 
   const [rules, setRules] = useState(window.RULESETS.map(r => ({ ...r })));
@@ -1129,13 +1132,16 @@ function App() {
         // The shape pass sees the tagged history, so the rejected reply and
         // the pushback are in its view — repair register comes out naturally.
         const shapeNote = await shapeFor(scope, q, tagged, primaryDoc);
+        // Size the budget from the reconstructed question (probe), not the
+        // complaint; intent is left for the prompt match to infer (shape.js §9).
+        const shapeMax = await shapeBudgetFor(probe, null, shapeNote);
         replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
         const sysOverride = window.EOLLM.systemFor('grounded', 'answer', true, 1)
           + '\n\nThe user has said your earlier replies missed their question — do not repeat any earlier reply; answer the question afresh from the spans and notes, and if they truly do not answer it, say exactly what they DO establish about the subject instead.';
         let full = await window.EOLLM.phrase({
           mlcKey: model.mlc, question: probe, history: tagged,
           spans: tier.spans, notes: tier.notes.join('\n'),
-          docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote,
+          docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote, maxTokens: shapeMax,
           mode: 'grounded', task: 'answer', grounded: true, sysOverride,
           onToken: streamInto({ mode: 'grounded' }), depth: turnBudgetRef.current && turnBudgetRef.current.level,
         });
@@ -1184,6 +1190,35 @@ function App() {
       AUD('step', 'shape', { note: note || null, ms: Math.round(performance.now() - t0) });
       return note;
     } catch (e) { eoWarn('shape', e); return ''; }
+  };
+
+  // The shape layer's best-fit token budget for this turn (shape.js §9): match
+  // the prompt against the archetype PROMPTS and size the answer's max_tokens
+  // from the best-fit archetype's own length. Returns undefined — i.e. keep
+  // today's depth-scaled cap (parity) — unless the exemplar library is already
+  // loaded AND the embedder is resident, so it never triggers a model download
+  // and never blocks a turn on a first-time library embed: the first eligible
+  // turn warms the library in the background and uses the default budget; later
+  // turns get the shaped one. Any failure ⇒ undefined ⇒ today's cap.
+  const shapeBudgetFor = async (q, intent, shapeNote) => {
+    try {
+      if (!window.EOShape || typeof window.EOShapeLibrary !== 'function') return undefined;
+      if (!(window.EOEmbed && window.EOEmbed.ready())) return undefined;   // never trigger a download
+      let lib = shapeLibRef.current;
+      if (!lib) {
+        window.EOShapeLibrary().then(l => { if (l) shapeLibRef.current = l; }).catch(() => {});
+        return undefined;   // warming; this turn keeps the default cap
+      }
+      if (!lib.readyPrompts || !lib.readyPrompts()) return undefined;
+      const qv = await window.EOEmbed.embedSentences([q]);
+      const queryVec = qv && qv[0];
+      if (!queryVec) return undefined;
+      const target = lib.select({ intent: intent || null, shapeNote: shapeNote || '', queryVec });
+      const tb = target && window.EOShape.tokenBudgetFor(target);
+      if (!tb) return undefined;
+      AUD('step', 'shape-tokens', { maxTokens: tb.maxTokens, basis: tb.basis, intent: target.intent || null, prompt_match: target.prompt_match || null });
+      return tb.maxTokens;
+    } catch (e) { eoWarn('shape-tokens', e); return undefined; }
   };
 
   // Did the model decline (or leak) instead of answering? A grounded draft
@@ -1298,12 +1333,15 @@ function App() {
     // turn this is instead of trying to answer it. Any failure degrades to
     // an empty note and the answer pass runs exactly as before.
     const shapeNote = await shapeFor(scope, q, history, primaryDoc);
+    // Best-fit token budget from the matched archetype's length (shape.js §9);
+    // undefined keeps today's depth-scaled cap. Reused by the stricter retry.
+    const shapeMax = await shapeBudgetFor(q, intent, shapeNote);
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       let full = await window.EOLLM.phrase({
         mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
         spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
-        docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote,
+        docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote, maxTokens: shapeMax,
         grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
         depth: budget && budget.level,
       });
@@ -1390,7 +1428,7 @@ function App() {
             retry = await window.EOLLM.phrase({
               mlcKey: model.mlc, question: q, contextText: stricterCtx, history, mode: 'grounded', task,
               spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
-              docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote, sysOverride: stricterSys,
+              docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote, sysOverride: stricterSys, maxTokens: shapeMax,
               grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
               depth: budget && budget.level,
             });
