@@ -726,6 +726,20 @@ const READING_RULES = {
       '/\\bSubscribe\\b.*\\$\\d+/i',
       // web nav/footer link rows: an enumerated menu vocabulary, nothing else on the line
       '/^(about us|contact|submit|advertise|advertisement( this)?|renew|manage|terms|privacy|subscribe|sign in|log ?in|newsletter|latest issue)( (about us|contact|submit|advertise|advertisement|renew|manage|terms|privacy|subscribe|sign in|log ?in|newsletter|latest issue))*$/i',
+      // web chrome the print rules miss (mined from boilerplate-removal heuristics):
+      // a standalone © mark anywhere on a line — line-leading too, where the
+      // print rule's \\b© boundary fails ("© 2024 The Daily Bugle.")
+      '/(^|[^\\p{L}\\p{N}])(©|\\(c\\))(?=\\s|\\d|$)/u',
+      // a space-separated share/social row ("Share Tweet Facebook Email")
+      '/^(share|tweet|post|pin it|pinterest|whats?app|reddit|linkedin|flipboard)(\\s+(share|tweet|post|pinterest|email|print|facebook|twitter|whats?app|reddit|linkedin|flipboard|x))+\\s*$/i',
+      // a home/menu nav row: a whole line of three+ menu-vocabulary tokens
+      '/^((home|menu|sections?|topics?|search|more|about|us|contact|submit|advertise|advertisement|renew|manage|terms|privacy|subscribe|sign|in|log|newsletter|latest|issue)\\s+){2,}(home|menu|sections?|topics?|search|more|about|us|contact|submit|advertise|advertisement|renew|manage|terms|privacy|subscribe|sign|in|log|newsletter|latest|issue)\\s*$/i',
+      // cookie/consent banners and newsletter sign-up appeals
+      '/\\b(we use cookies|accept (all )?cookies|cookie (policy|settings|preferences|consent)|consent to (the use of )?cookies|by continuing to (use|browse))\\b/i',
+      '/\\b(sign up for (our )?newsletter|subscribe to (our )?newsletter|get (our )?newsletter|enter your email( address)?)\\b/i',
+      // article meta rows: "5 min read", "12 Comments"
+      '/^\\d+\\s+min(ute)?s?\\s+read\\b/i',
+      '/^\\d+\\s+comments?\\s*$/i',
       // book apparatus: front-matter heads, numbered chapter/section heads,
       // roman-numeral and bare-number lines, bracketed plates, transcriber
       // boilerplate, and the Gutenberg wrapper
@@ -2502,6 +2516,90 @@ function isChrome(text) {
   if (!trimmed) return false;
   for (const rx of CHROME_RES) { rx.lastIndex = 0; if (rx.test(trimmed)) return true; }
   return false;
+}
+
+// ── De-chroming: the document-level verdict over the chrome gate ──────────
+// The chrome gate (isChrome / the Gutenberg wrapper) tags each apparatus line
+// as it reads and collects its index into doc._chrome — the line stays verbatim
+// in the spine but reaches no operator emitter. This pass reads that verdict at
+// the scale of the whole document: it groups the gated lines into contiguous
+// SEGMENTS, labels each by the kind of chrome it is (web share / subscribe /
+// nav / copyright / byline vs. book apparatus), and records a SEG-shaped
+// boundary decision per segment carrying the raw span's content hash as prov.
+// Nothing is removed — the full page is still in sentenceTexts — so a strip is
+// recoverable: the segments name exactly what the de-chromed view holds back,
+// and a turn about the html / the de-chroming queries the full content against
+// them. Pure addition: these SEG verdicts live on the doc (doc._dechrome), never
+// in the append-only event log, so golden parity holds.
+//
+// The labels are for the report only — what counts as chrome is decided once, by
+// the chrome_patterns convention, not here; a line matching no bucket is generic
+// 'apparatus' (a Gutenberg wrapper line, an OCR heading).
+const _DECHROME_LABELS = [
+  // [reason, web?, /test/] — first match wins.
+  ['share',       true,  /^(share|tweet|post|pin it|pinterest|email|print|copy link|save|whatsapp|reddit|linkedin|flipboard|facebook|twitter)(\s*[•|·/]?\s*(share|tweet|post|pin it|pinterest|email|print|copy link|save|whatsapp|reddit|linkedin|flipboard|facebook|twitter|x))*\s*$/i],
+  ['subscribe',   true,  /\$\d|\b(subscribe (?:now|today|for|to)|sign\s?up|create an account|enter your email|newsletter)\b/i],
+  ['meta',        true,  /^\d+\s+(min(?:ute)?s?\s+read|comments?)\b/i],
+  ['nav',         true,  /^((?:home|menu|sections?|topics?|search|more|about|us|contact|submit|advertise|advertisement|renew|manage|terms|privacy|subscribe|sign|in|log|newsletter|latest|issue)\s*)+$/i],
+  ['signin',      true,  /\b(?:sign\s?in|log\s?in)\b/i],
+  ['copyright',   true,  /(©|\(c\)|copyright|all rights reserved|registered trademark)/i],
+  ['byline',      true,  /^by\s+[a-z]/i],
+  ['rule',        false, /^[\s_*=·•—–-]{3,}$|^\*\s*\*\s*\*/],
+  ['frontmatter', false, /^(contents|index|preface|introduction|appendix|notes?|footnotes?|bibliography|glossary|errata|epilogue|prologue|dedication|illustrations?|chapter|book|volume|part|section|canto|act|scene|cap[ií]tulo)\b/i],
+  ['numbering',   false, /^([ivxlcdm]+|\d+)[.)]?$/i],
+  ['transcriber', false, /^(produced|prepared|transcribed|digitized|translated|edited|illustrated|compiled|adapted|annotated)\s+by\b|^transcriber/i],
+  ['heading',     false, /^[A-Z0-9][A-Z0-9 ,;:.’'&()-]{5,}$/],
+];
+function _dechromeLabel(text) {
+  const t = String(text == null ? '' : text).trim();
+  for (const [reason, web, rx] of _DECHROME_LABELS) { rx.lastIndex = 0; if (rx.test(t)) return { reason, web }; }
+  return { reason: 'apparatus', web: false };
+}
+// Read the chrome gate's verdict at document scale (see above). Pure; safe on
+// any doc — an empty _chrome yields { present:false } and changes nothing.
+function computeDechrome(doc) {
+  const sents = (doc && doc.sentenceTexts) || [];
+  const chrome = (doc && doc._chrome) || [];
+  const idxs = [...new Set(chrome)].filter(i => Number.isInteger(i) && i >= 0 && i < sents.length).sort((a, b) => a - b);
+  const byReason = {};
+  let removedChars = 0, web = false;
+  const segments = [];
+  let run = null;
+  const flush = () => {
+    if (!run) return;
+    const sample = run.sentences.map(s => s.t).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+    segments.push({
+      op: 'SEG', stance: 'Dissecting', reason: 'chrome:' + run.reason,
+      span: [run.idxs[0], run.idxs[run.idxs.length - 1]], idxs: run.idxs.slice(),
+      prov: run.sentences.map(s => { try { return spanHash(s.t); } catch (e) { return null; } }).filter(Boolean),
+      sample, sentences: run.sentences.slice(),
+    });
+    run = null;
+  };
+  for (const i of idxs) {
+    const text = sents[i] || '';
+    removedChars += text.length;
+    const { reason, web: isWeb } = _dechromeLabel(text);
+    byReason[reason] = (byReason[reason] || 0) + 1;
+    if (isWeb) web = true;
+    if (run && i === run.next && reason === run.reason) {
+      run.idxs.push(i); run.next = i + 1; run.sentences.push({ i, t: text });
+    } else {
+      flush();
+      run = { reason, idxs: [i], next: i + 1, sentences: [{ i, t: text }] };
+    }
+  }
+  flush();
+  return {
+    present: idxs.length > 0,
+    web,
+    count: idxs.length,
+    total_sentences: sents.length,
+    removed_chars: removedChars,
+    by_reason: byReason,
+    spans: idxs,
+    segments,
+  };
 }
 
 // Is `name` the VEHICLE of a metaphor in this sentence ("the Jeff Bezos of
@@ -6344,6 +6442,11 @@ function projectGraph(events, frame = {}) {
       noteDocFriction(doc);
       coWitnessScan(doc);
     } catch (e) { /* the provenance layer never blocks a parse */ }
+    // The document-level de-chroming verdict over the chrome gate: a non-
+    // destructive record of what was set aside (kept verbatim in the spine and
+    // queryable on demand). Pure addition — never an event — so parity holds.
+    try { doc._dechrome = computeDechrome(doc); }
+    catch (e) { doc._dechrome = { present: false, web: false, count: 0, total_sentences: (doc.sentenceTexts || []).length, removed_chars: 0, by_reason: {}, spans: [], segments: [] }; }
     return doc;
   }
 
@@ -6751,13 +6854,22 @@ function projectGraph(events, frame = {}) {
     if (body === undefined) { body = (doc.sentenceTexts || []).join(' ').toLowerCase(); _bodyLCCache.set(doc, body); }
     return body;
   }
-  function retrieve(doc, query, k = 6) {
+  function retrieve(doc, query, k = 6, opts = {}) {
     const qt = new Set(tok(query));
     if (!qt.size) return [];
     const sets = sentTokSets(doc);
     const scored = [];
     const sents = doc.sentences;
+    // The de-chromed view is the default: lines the chrome gate set aside
+    // (doc._chrome) stay verbatim in the spine but read as page structure, not
+    // prose, so ordinary retrieval scores past them — no more "retrieval grabs
+    // page chrome". A turn about the html / the de-chroming itself opts back
+    // into the full content with { includeChrome: true }; that flag is the only
+    // place the stripped band is queried against. A doc with no chrome scores
+    // exactly as before (chromeSet is null), so golden parity holds.
+    const chromeSet = (!opts.includeChrome && doc && doc._chrome && doc._chrome.length) ? new Set(doc._chrome) : null;
     for (let n = 0; n < sents.length; n++) {
+      if (chromeSet && chromeSet.has(sents[n].i)) continue;
       const st = sets[n];
       let overlap = 0; for (const t of qt) if (st.has(t)) overlap++;
       if (!overlap) continue;
@@ -7571,6 +7683,7 @@ function projectGraph(events, frame = {}) {
         entityTerms: entTermCount,    // distinct index terms that are part of a name
       },
       coverage: { sentences: sents.length, withEvents: sents.length - dark, dark },
+      dechrome: doc._dechrome || computeDechrome(doc),
       counts: { events: events.length, ops: opCounts, entities: entities.length },
       spans: sents,                   // the verbatim span texts (so an export is self-contained)
       lexicon: termList,              // the inverted index actually built
@@ -8326,9 +8439,91 @@ function projectGraph(events, frame = {}) {
     return null;
   }
 
+  // ── About the html / the de-chroming ────────────────────────────────────
+  // The chrome vocabulary itself — stripped from a query before it drives the
+  // full-content retrieval, so "what does the footer say about the Bugle" lands
+  // on the masthead line, not on the words "footer"/"say" as content.
+  const ABOUT_CHROME_STOP = new Set(['html','markup','tag','tags','chrome','dechrome','boilerplate','nav','navigation','navbar','menu','footer','header','headers','byline','bylines','copyright','masthead','furniture','apparatus','page','raw','strip','stripped','remove','removed','removing','cut','gate','gated','exclude','excluded','what','did','you','the','from','about','this','that','show','list','tell','was','were','are','set','aside','left','out']);
+  const _DECHROME_REASON_LABEL = {
+    'chrome:share': 'share / social row', 'chrome:subscribe': 'subscription appeal',
+    'chrome:meta': 'article meta', 'chrome:nav': 'navigation / menu', 'chrome:signin': 'sign-in / account',
+    'chrome:copyright': 'copyright line', 'chrome:byline': 'byline', 'chrome:rule': 'horizontal rule',
+    'chrome:frontmatter': 'front-matter heading', 'chrome:numbering': 'page / section number',
+    'chrome:transcriber': 'transcriber note', 'chrome:heading': 'heading', 'chrome:apparatus': 'apparatus',
+  };
+  // Is this turn about the page's html / chrome / the de-chroming itself? A
+  // standalone predicate (NOT one of classifyIntent's four), so the intent enum
+  // and its consumers are untouched. Conservative: it only ever fires a route
+  // when a loaded source actually carries chrome (answerAboutChrome returns
+  // null otherwise), so it can never hijack an ordinary turn.
+  function aboutChrome(query) {
+    const t = ' ' + String(query == null ? '' : query).toLowerCase().replace(/[’']/g, "'") + ' ';
+    return /\b(de-?chrom\w*|boilerplate|page chrome|page furniture|raw (?:page|html|markup|source)|the html|html (?:tags?|markup|source)|nav(?:igation)?(?: bar)?|navbar|footer|header|masthead|byline|share (?:buttons?|row|links?)|cookie banner)\b/.test(t)
+        || /\bwhat (?:did you|was|got|have you) (?:strip\w*|remov\w*|cut|set aside|gate\w*|exclud\w*|le[fd]t out)\b/.test(t)
+        || /\b(?:show|list|what'?s in)\b[^?]*\b(chrome|boilerplate|footer|header|nav\w*|byline|apparatus|stripped)\b/.test(t);
+  }
+  // Answer a turn about the chrome mechanically, from the document's structure
+  // band — never phrased by the model. Two moves: (1) query the FULL content
+  // (the stripped band included) for any substantive term the question carries
+  // beyond the chrome vocabulary — the "full content gets queried against" path,
+  // landing cited on the actual chrome line; then (2) the de-chroming report —
+  // what was set aside, block by block, each cited to its first line. Null on a
+  // doc with no chrome, so it never claims an ordinary turn.
+  function answerAboutChrome(doc, query, opts = {}) {
+    if (!doc || doc.kind !== 'prose') return null;
+    const dc = doc._dechrome || computeDechrome(doc);
+    if (!dc || !dc.present) return null;
+    const texts = doc.sentenceTexts || [];
+    const cites = [];
+    const cite = (i) => { if (i != null && texts[i] != null) { cites.push({ docId: doc.id, idx: i }); return ` {{cite:${doc.id}:${i}:s${i}}}`; } return ''; };
+    const lines = [];
+    const chromeSet = new Set(dc.spans);
+    const qTerms = [...new Set(tok(query))].filter(t => t.length > 2 && !ABOUT_CHROME_STOP.has(t));
+    let hits = [];
+    if (qTerms.length) {
+      try { hits = retrieve(doc, qTerms.join(' '), 4, { includeChrome: true }).filter(h => chromeSet.has(h.i)); } catch (e) {}
+    }
+    if (hits.length) {
+      lines.push('From the page’s chrome (set aside as structure, kept verbatim and queried here against your question):');
+      for (const h of hits) lines.push(`• “${texts[h.i]}”${cite(h.i)}`);
+      lines.push('');
+    }
+    const nBlocks = dc.segments.length;
+    lines.push(dc.web
+      ? `This page came in wrapped in web chrome. I read past it — it stays in the page, but it minted no people, places, or claims. ${dc.count} line${dc.count === 1 ? '' : 's'} across ${nBlocks} block${nBlocks === 1 ? '' : 's'} were set aside:`
+      : `I kept ${dc.count} line${dc.count === 1 ? '' : 's'} of apparatus in the page but read ${dc.count === 1 ? 'it' : 'them'} as structure, not prose:`);
+    for (const seg of dc.segments) {
+      const label = _DECHROME_REASON_LABEL[seg.reason] || seg.reason.replace(/^chrome:/, '');
+      lines.push(`• ${label}: “${seg.sample}”${cite(seg.idxs[0])}`);
+    }
+    return {
+      text: lines.join('\n'),
+      cites,
+      audit: {
+        status: 'clean', grounded: true, covers: `${dc.count}/${dc.count}`, stable: true,
+        note: 'A de-chroming report read mechanically from the document’s structure band — the lines the chrome gate set aside, kept verbatim in the page (non-destructive) and queried here against the full content. No model involved.',
+      },
+    };
+  }
+  // About-the-chrome over the scope: the first source that carries a de-chroming
+  // verdict answers. Null when none does — the caller keeps its path.
+  function answerDechromeScope(docs, query, opts) {
+    for (const d of scopeDocs(docs)) {
+      if (d.kind === 'table') continue;
+      let r = null; try { r = answerAboutChrome(d, query, opts); } catch (e) {}
+      if (r) return r;
+    }
+    return null;
+  }
+
   function answer(doc, query, opts) {
     if (!doc) return { text: 'Load a document or spreadsheet first — drop a file or paste text, and I’ll read it locally.', audit: null };
     if (doc.kind === 'table') return answerTable(doc, query);
+    // A turn about the page's html / chrome / the de-chroming itself is read
+    // against the full content (the stripped band included) and answered
+    // mechanically from the structure band, never phrased by the model. Inert on
+    // a doc with no chrome (returns null → falls through), so parity holds.
+    if (aboutChrome(query)) { const dc = answerAboutChrome(doc, query, opts); if (dc) return dc; }
     const intent = classifyIntent(query);
     if (intent === 'who') return answerWho(doc);
     if (intent === 'summary') return answerSummary(doc);
@@ -9455,7 +9650,13 @@ function projectGraph(events, frame = {}) {
         if (d.kind === 'table') continue;
         const vecs = await docSentVectors(d);
         if (!vecs) continue;
+        // the de-chromed view holds on the semantic reader too: skip the lines
+        // the chrome gate set aside, so embedding recall never resurfaces the
+        // share bar or the byline that lexical retrieval just scored past. A
+        // turn about the chrome takes the mechanical de-chrome route instead.
+        const chromeSet = (d._chrome && d._chrome.length) ? new Set(d._chrome) : null;
         for (let i = 0; i < vecs.length; i++) {
+          if (chromeSet && chromeSet.has(i)) continue;
           const s = _cosineNorm(qv, vecs[i]);
           if (s >= SEM_FLOOR) sem.push({ i, t: (d.sentenceTexts || [])[i], score: s, overlap: 0, docId: d.id, semantic: true });
         }
@@ -9702,6 +9903,10 @@ function projectGraph(events, frame = {}) {
     // the layer ladder: the essay's 1-2-1 force-count test, made live + falsifiable,
     // and the transmuting-DEF classifier (the significance-layer "weak" law)
     layerLadder, isTransmutingDef,
+    // de-chroming: the document-level verdict over the chrome gate (non-
+    // destructive — the stripped band stays in the spine), the about-the-html /
+    // about-the-de-chroming route, and the full-content query that backs it
+    computeDechrome, aboutChrome, answerAboutChrome, answerDechromeScope,
     // expose the raw graph engine for future operator-void / shape work
     _extractEoGraph: extractEoGraph, _projectGraph: projectGraph,
     // per-language reading mode: Original (shipped-only, frozen) vs Self-learning

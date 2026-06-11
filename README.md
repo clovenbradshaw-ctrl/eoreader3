@@ -261,6 +261,35 @@ reply is **retracted**: flagged in the chat, re-tagged in the model's history
 ("…RETRACTED — do not repeat or defend it"), and the retraction said out loud
 in the new answer — a correction the user deposits actually lands somewhere.
 
+### De-chroming (the page, minus its chrome)
+
+A web article arrives wrapped in **chrome** — the nav row, the share buttons,
+the byline, the cookie banner, the "5 min read", the copyright tail. The reader
+already gates each such line as it ingests (the `chrome_patterns` convention:
+nav menus, share/social rows, subscription appeals, bylines, copyright, a
+line-leading `©`, book front matter): a chrome line stays verbatim in the spine
+so it re-displays, but it reaches no operator emitter, so it mints no phantom
+people, places, or claims. What's new is reading that verdict **at the scale of
+the whole document**. A non-destructive **de-chroming pass** (`computeDechrome`)
+groups the gated lines into contiguous blocks, labels each by what it is
+(navigation, share row, subscription appeal, byline, copyright, article meta…),
+and records a **SEG-shaped boundary decision** per block carrying the raw span's
+content hash as provenance. Nothing is removed — the full page is still in the
+spine — so a wrong strip is recoverable, because the raw given was registered
+before the strip. The summary rides the document (`doc._dechrome`) and the
+ingestion report (`ingestionReport(...).dechrome`).
+
+The de-chroming then **steers retrieval**. Ordinary questions read the
+**de-chromed view**: `retrieve` scores past the gated lines, so a summary no
+longer grabs the share bar and "who's in this" no longer mints the byline as a
+character. But a turn **about the html / the chrome / the de-chroming itself** —
+"what did you strip?", "what does the footer say?", "show me the page chrome" —
+is detected mechanically (`aboutChrome`) and answered against the **full
+content** (the stripped band included, `retrieve(..., { includeChrome: true })`).
+Like CONFIRM/DENY, it's a first-class **mechanical route**: the report is read
+straight off the structure band, every line cited to its span, the model never
+phrasing it. The page keeps its chrome; you just have to ask for it.
+
 ### Transcripts
 
 A transcript declares itself through its own typography — timecode lines

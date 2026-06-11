@@ -1264,6 +1264,20 @@ function App() {
       catch (e) { eoWarn('confirm', e); }
       if (checked) { AUD('step', 'route', { detour: 'confirm → graph-check (mechanical)' }); runMechanicalScope(scope, q, checked); return; }
     }
+    // ABOUT THE HTML / DE-CHROMING: a turn about the page chrome itself — what
+    // was stripped, what the footer/byline/masthead holds — is read against the
+    // FULL content (the de-chromed band included) and answered mechanically from
+    // the structure band, never phrased by the model. Mechanical-primary like
+    // CONFIRM; inert unless a loaded source actually carries chrome (the scope
+    // answer is null, and the turn falls through to the ordinary path).
+    let aboutChromeTurn = false;
+    try { aboutChromeTurn = window.EOEngine.aboutChrome && window.EOEngine.aboutChrome(q); } catch (e) {}
+    if (aboutChromeTurn) {
+      let stripped = null;
+      try { stripped = window.EOEngine.answerDechromeScope(scope, q, { hotEntity: hotEntity() }); }
+      catch (e) { eoWarn('dechrome', e); }
+      if (stripped) { AUD('step', 'route', { detour: 'about-html → de-chrome report (mechanical)' }); runMechanicalScope(scope, q, stripped); return; }
+    }
     // The deterministic reading of this turn — the cast-list count for a "who"
     // ask, the best mechanical answer otherwise. It is NO LONGER the primary
     // reply for a document question (the model phrases it with citations); it
