@@ -281,7 +281,7 @@
 {"seq":280,"op":"SYN","s":"/^[ivxlcdm]+[.)]?$/i","v":"member-of","o":"core:chrome_patterns"}
 {"seq":281,"op":"SYN","s":"/^\\d+[.)]?$/","v":"member-of","o":"core:chrome_patterns"}
 {"seq":282,"op":"SYN","s":"/^\\[(illustration|footnote|sidenote|frontispiece)/i","v":"member-of","o":"core:chrome_patterns"}
-{"seq":283,"op":"SYN","s":"/^(produced|prepared|transcribed|digitized) by\\b/i","v":"member-of","o":"core:chrome_patterns"}
+{"seq":283,"op":"SYN","s":"/^(produced|prepared|transcribed|digitized|translated|edited|illustrated|compiled|adapted|annotated) by\\b/i","v":"member-of","o":"core:chrome_patterns"}
 {"seq":284,"op":"SYN","s":"/^transcriber/i","v":"member-of","o":"core:chrome_patterns"}
 {"seq":285,"op":"SYN","s":"/^\\*\\*\\*/","v":"member-of","o":"core:chrome_patterns"}
 {"seq":286,"op":"SYN","s":"/^[A-Z0-9][A-Z0-9 ,;:.’'&()-]{5,}$/","v":"member-of","o":"core:chrome_patterns"}

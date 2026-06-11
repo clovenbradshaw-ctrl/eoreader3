@@ -765,7 +765,7 @@ group('traversal — scope fold and the reading context (the graph speaking)', (
   const base = '[s8] Steven Watts recorded the event.';
   const ctx = E.readingContext([meeting], trav, base);
   ok(/What the reading holds/.test(ctx), 'the context opens with the reading, not a span dump');
-  ok(/The page asserts: Amos Dresser is white minister/.test(ctx), 'the page\'s assertion is presented as the page\'s');
+  ok(/The page asserts: Amos Dresser is a white minister/.test(ctx), 'the page\'s assertion is presented as the page\'s');
   ok(ctx.includes(base), 'the retrieval passages survive underneath');
   ok(/\[s5\]/.test(ctx), 'evidence the walk reached that retrieval missed is appended in citation format');
   eq((ctx.match(/\[s8\]/g) || []).length, 1, 'a span already in the context is not duplicated');

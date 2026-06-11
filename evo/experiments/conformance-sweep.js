@@ -88,10 +88,12 @@ function fmt(rows, cols) {
   console.log(`conformance sweep · cap ${CAP} chars · packs: ${BARE ? 'BARE (default web pack)' : 'per-register (tools/packs)'} · conventions: ${hydrated ? 'hydrated' : 'bare engine'}\n`);
 
   const rows = [];
+  const workspace = [];   // prior docs: frames meet as the corpus accumulates (EVA)
   for (const d of BATTERY) {
     if (ONLY.length && !ONLY.includes(d.id)) continue;
     const text = strip(fs.readFileSync(path.join(CORPUS, d.file), 'utf8')).slice(0, CAP);
     const doc = await E.parseDocument(d.id + '.txt', text, d.id);
+    if (!has('--no-workspace') && E.evaAcrossDocs) { E.evaAcrossDocs(doc, workspace); workspace.push(doc); }
     const report = E.ingestionReport(doc);
     if (!report) { console.log(`${d.id}: no prose report (kind=${doc && doc.kind})`); continue; }
     const res = C.checkDump(report, { pack: loadPack(d.pack) || undefined });

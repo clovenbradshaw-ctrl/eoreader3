@@ -704,7 +704,7 @@ const READING_RULES = {
       '/^[ivxlcdm]+[.)]?$/i',
       '/^\\d+[.)]?$/',
       '/^\\[(illustration|footnote|sidenote|frontispiece)/i',
-      '/^(produced|prepared|transcribed|digitized) by\\b/i',
+      '/^(produced|prepared|transcribed|digitized|translated|edited|illustrated|compiled|adapted|annotated) by\\b/i',
       '/^transcriber/i',
       '/^\\*\\*\\*/',
       // an ALL-CAPS heading line (case-sensitive on purpose: no flags)
@@ -3922,11 +3922,17 @@ async function extractEoGraph(text, onProgress) {
     // matching — same compatibility reason as CON.
     sentDoc.clauses().forEach(clause => {
       const text = clause.text();
-      // Look for "<noun phrase> (is|was|are|were|am) (a|an|the)? <noun phrase>"
-      const m = text.match(/^(.+?)\s+(is|was|are|were|am|been|becomes?|became|remains?|remained)\s+(?:(?:a|an|the)\s+)?(.+?)\.?$/i);
+      // Look for "<noun phrase> (is|was|are|were|am) (a|an|the) <noun phrase>".
+      // The determiner is REQUIRED and kept: a definition is a det-headed
+      // predicate nominal ("a white minister", "the chief engineer"). A
+      // det-less tail ("worth a fraction of that", "arrested in Amsterdam",
+      // "his") is a clause fragment, not the company a thing keeps — it
+      // deposits nothing here.
+      const m = text.match(/^(.+?)\s+(is|was|are|were|am|been|becomes?|became|remains?|remained)\s+((?:(?:a|an|the)\s+)?)(.+?)\.?$/i);
       if (!m) return;
       const targetRaw = m[1].trim();
-      const value = m[3].trim().replace(/[.,;:!?]+$/, '');
+      const det = m[3] || '';
+      const value = (det + m[4]).trim().replace(/[.,;:!?]+$/, '');
       if (!targetRaw || !value) return;
       const target = trimNounSpan(targetRaw) || targetRaw;
       if (target === value) return;
@@ -3949,14 +3955,17 @@ async function extractEoGraph(text, onProgress) {
       } else if (!isAdmittedSurface(target) && !looksProper(target)) {
         return;
       }
+      // A det-headed predicate nominal is a definition (class); a det-less
+      // tail ("worth a fraction of that", "seized by the committee") is a
+      // recorded STATE — checkable predication, never what the thing IS.
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
-        target, path: 'class', value,
+        target, path: det ? 'class' : 'state', value,
         targetHint: hint,
         targetRaw,
         ...sentMeta, src: 'copular',
       });
-      maybeRetypeFromGloss(target, hint, value);
+      if (det) maybeRetypeFromGloss(target, hint, value);
     });
 
     // ── DEF (Dissecting): deferred demonstrative naming ───────
@@ -4728,6 +4737,23 @@ async function extractEoGraph(text, onProgress) {
         delete ev.source_ref; delete ev.target_ref; delete ev.sourceName; delete ev.targetName;
       }
     }
+    // DEFs settle the same way: a definition or state recorded against a
+    // surface that never became (or did not remain) a referent defines
+    // nothing — it leaves the log before commit. Admitted non-site referents
+    // (zh grams, voices) still count as targets.
+    const insAlive = new Set();
+    for (const ev of events) {
+      if (ev.op === 'INS' && !retired.has(ev.referent_id)) insAlive.add(normSurface(ev.target));
+    }
+    for (let k = events.length - 1; k >= 0; k--) {
+      const ev = events[k];
+      if (ev.op !== 'DEF' || ev.src === 'frame-mint' || ev.src === 'csv-schema' || ev.src === 'csv-cell') continue;
+      const hintRef = ev.targetHint && ev.targetHint.referent_id;
+      if (hintRef && byRef.has(hintRef)) continue;
+      if (resolveSettled(ev.target, ev.targetHint)) continue;
+      if (insAlive.has(normSurface(ev.target))) continue;
+      events.splice(k, 1);
+    }
   }
 
   // ── Site face: stamp every event with the phenomenological address it
@@ -4747,6 +4773,34 @@ async function extractEoGraph(text, onProgress) {
   const retiredNames = new Set(events.filter(e => e.op === 'SEG' && e.src === 'admission-gate').map(e => normSurface(e.target)));
   const entities = allEntities.filter(e => !retiredRefs.has(e.referent_id) && !retiredNames.has(normSurface(e.name)));
   const edges = allEdges.filter(e => !retiredNames.has(normSurface(e.s != null ? e.s : e.source || '')) && !retiredNames.has(normSurface(e.o != null ? e.o : e.target || '')));
+
+  // ── Company, written ────────────────────────────────────────
+  // The neighbors are the definition: every surviving referent carries a
+  // frame — the hash of its CON neighborhood — stored as its DEF. An empty
+  // neighborhood still frames (the proposition "keeps no company"), and a
+  // second document's frame can now meet it (EVA, evaAcrossDocs).
+  {
+    const neigh = new Map();
+    const add = (ref, edge) => { if (!neigh.has(ref)) neigh.set(ref, []); neigh.get(ref).push(edge); };
+    for (const ev of events) {
+      if (ev.op !== 'CON' || !ev.source_ref || !ev.target_ref) continue;
+      const rel = String(ev.relation || ev.v || '').toLowerCase();
+      add(ev.source_ref, '>' + rel + '>' + normSurface(ev.targetName || ev.o || ''));
+      add(ev.target_ref, '<' + rel + '<' + normSurface(ev.sourceName || ev.s || ''));
+    }
+    for (const e of entities) {
+      if (!e.referent_id) continue;
+      const frameEdges = [...new Set(neigh.get(e.referent_id) || [])].sort();
+      events.push({
+        id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
+        target: e.name, path: 'frame',
+        value: 'frame:' + sha256Hex(JSON.stringify(frameEdges)).slice(0, 16),
+        targetHint: { referent_id: e.referent_id },
+        basis: { edges: frameEdges.length },
+        sentence_idx: null, sentence: null, src: 'frame-mint',
+      });
+    }
+  }
 
   const t1 = performance.now();
   // Serialize READING_RULES to plain JSON. Each entry carries its module
@@ -5001,7 +5055,9 @@ function projectGraph(events, frame = {}) {
       { surface: ev.s, hint: ev.sHint },
       { surface: ev.o, hint: ev.oHint },
     ];
-    if (ev.op === 'DEF') return [{ surface: ev.target, hint: ev.targetHint }];
+    // a frame DEF is settlement bookkeeping ABOUT a referent, not a
+    // sighting OF it — it carries no mention weight
+    if (ev.op === 'DEF') return ev.src === 'frame-mint' ? [] : [{ surface: ev.target, hint: ev.targetHint }];
     if (ev.op === 'SIG') return [{ surface: ev.speaker, hint: ev.speakerHint }];
     if (ev.op === 'INS') return [{ surface: ev.target, hint: null }];
     return [];
@@ -6050,6 +6106,61 @@ function projectGraph(events, frame = {}) {
     const view = { entities, byType };
     _projCache.set(doc, { rev: RULES_REV, view });
     return view;
+  }
+
+  /* ---------- EVA: frames meet across documents ----------
+     Every admitted referent carries a frame DEF (the hash of its CON
+     neighborhood). When a second document names the same referent (fold-
+     matched), the frames are compared and the verdict lands as an EVA
+     event in the newer document's log: satisfies (same company), extends
+     (this reading adds neighbors), contracts (it holds fewer), conflicts
+     (different company). Pure over the logs; deterministic; no model. */
+  function _frameTable(doc) {
+    const out = new Map();   // fold(name) -> { name, frame, edges:Set }
+    const events = (doc && doc._events) || [];
+    const conByRef = new Map();
+    for (const ev of events) {
+      if (ev.op !== 'CON' || !ev.source_ref || !ev.target_ref) continue;
+      const rel = String(ev.relation || ev.v || '').toLowerCase();
+      if (!conByRef.has(ev.source_ref)) conByRef.set(ev.source_ref, new Set());
+      if (!conByRef.has(ev.target_ref)) conByRef.set(ev.target_ref, new Set());
+      conByRef.get(ev.source_ref).add('>' + rel + '>' + normSurface(ev.targetName || ev.o || ''));
+      conByRef.get(ev.target_ref).add('<' + rel + '<' + normSurface(ev.sourceName || ev.s || ''));
+    }
+    for (const ev of events) {
+      if (ev.op !== 'DEF' || ev.path !== 'frame') continue;
+      const ref = ev.targetHint && ev.targetHint.referent_id;
+      out.set(normSurface(ev.target), { name: ev.target, frame: ev.value, edges: (ref && conByRef.get(ref)) || new Set() });
+    }
+    return out;
+  }
+  function evaAcrossDocs(doc, priorDocs) {
+    if (!doc || !Array.isArray(doc._events)) return 0;
+    const mine = _frameTable(doc);
+    if (!mine.size) return 0;
+    let seq = doc._events.length ? ((doc._events[doc._events.length - 1].seq || 0) + 1) : 0;
+    let fired = 0;
+    for (const prior of (priorDocs || [])) {
+      if (!prior || prior === doc || !Array.isArray(prior._events)) continue;
+      const theirs = _frameTable(prior);
+      for (const [key, a] of mine) {
+        const b = theirs.get(key);
+        if (!b) continue;
+        const aInB = [...a.edges].every(x => b.edges.has(x));
+        const bInA = [...b.edges].every(x => a.edges.has(x));
+        const verdict = (aInB && bInA) ? 'satisfies' : (bInA ? 'extends' : (aInB ? 'contracts' : 'conflicts'));
+        doc._events.push({
+          id: 'ev-' + seq, seq: seq++, op: 'EVA', stance: 'Tracing',
+          target: a.name, path: 'frame',
+          value: { mine: a.frame, theirs: b.frame, other_doc: (prior.id != null ? prior.id : null), verdict },
+          basis: { shared_name: key, mine_edges: a.edges.size, their_edges: b.edges.size },
+          sentence_idx: null, sentence: null, src: 'frame-meet',
+        });
+        fired++;
+      }
+    }
+    if (fired) _projCache.delete(doc);
+    return fired;
   }
 
   function entityDetail(doc, name) {
@@ -8130,7 +8241,7 @@ function projectGraph(events, frame = {}) {
     const { entities } = projectEntities(doc);
     const out = [], seen = new Set();
     for (const ev of doc._events) {
-      if (ev.op !== 'DEF' || (ev.path !== 'class' && ev.path !== 'role') || !ev.value || !ev.target) continue;
+      if (ev.op !== 'DEF' || (ev.path !== 'class' && ev.path !== 'role' && ev.path !== 'state') || !ev.value || !ev.target) continue;
       if (_TRANSMUTE_SRC.has(ev.src)) continue;
       // a pronoun subject only counts through its resolved binding — an
       // unbound "He is …" is not an assertion ABOUT anyone
@@ -8979,7 +9090,7 @@ function projectGraph(events, frame = {}) {
     // ingestion audit: every word's fate (indexed / stopword / dropped), the
     // inverted index actually built, and per-span coverage — the glass box over
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
-    ingestionReport, classifyTokens,
+    ingestionReport, classifyTokens, evaAcrossDocs,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
     contextScope, bindCitationsScope, supportProbeTerms,

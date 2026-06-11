@@ -85,7 +85,7 @@ async function main() {
     // and the naming bridge can suddenly distill a role DEF it could not
     // before. Pure convention→regex→reading; no NER anywhere in the path.
     records.push({ seq: 99990, op: 'SYN', s: 'zonkmaster', v: 'member-of', o: 'en-narrative-v1:role_title_heads' });
-    const TXT = 'The Appointment\n\nThe contract was arranged by the same person who is the zonkmaster of the docks. That person is Tom Turner.';
+    const TXT = 'The Appointment\n\nThe contract was arranged by the same person who is the zonkmaster of the docks. That person is Tom Turner. Turner has held the docks for a decade.';
     const roleOf = async (id) => {
       const d = await E.parseDocument(id + '.txt', TXT, id);
       return (E.assertionsOf(d) || []).some(a => a.path === 'role' && /zonkmaster/i.test(a.is));

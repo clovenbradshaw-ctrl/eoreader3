@@ -73,6 +73,8 @@ const DEFAULT_PACK = {
   speechless_types: ['place', 'org', 'organization'],
   // DEF(class) values that are legitimate type transmutations, not fragments
   type_lexicon: ['person', 'place', 'org', 'organization', 'thing', 'voice', 'record'],
+  // a det-headed predicate nominal is a definition, not a fragment
+  class_gloss: '^(a|an|the)\\s+\\S',
   // what a frame reference looks like when stored as a DEF value
   frame_ref: '^frame:[0-9a-f]{8,}$',
   // DEF targets that are document structure, not referents
@@ -144,12 +146,21 @@ function buildContext(report, pack) {
 
   // referent table: INS mints names for referent ids; mergers chain them
   const refName = new Map();
+  const canonicalOf = new Map();
   for (const ev of events) if (ev.op === 'INS' && ev.referent_id) refName.set(ev.referent_id, ev.target);
   for (const ev of events) {
     if (ev.op !== 'SYN' || !Array.isArray(ev.referent_ids) || !ev.canonical_referent_id) continue;
     const canonical = ev.canonical || refName.get(ev.canonical_referent_id);
-    for (const r of ev.referent_ids) if (canonical) refName.set(r, canonical);
+    for (const r of ev.referent_ids) {
+      if (canonical) refName.set(r, canonical);
+      if (r !== ev.canonical_referent_id) canonicalOf.set(r, ev.canonical_referent_id);
+    }
   }
+  const chaseCanonical = (ref) => {
+    let cur = ref, hops = 0;
+    while (canonicalOf.has(cur) && hops++ < 6) cur = canonicalOf.get(cur);
+    return cur;
+  };
 
   // entity lookup by folded surface: exact name/key, then token containment
   const byFold = new Map();
@@ -190,7 +201,7 @@ function buildContext(report, pack) {
     return e ? { entity: e, via: 'surface' } : null;
   }
 
-  return { report, pack, events, spans, entities, evBySent, chromeSents, refName, resolveSurface, resolveEnd };
+  return { report, pack, events, spans, entities, evBySent, chromeSents, refName, chaseCanonical, resolveSurface, resolveEnd };
 }
 
 const substantiveOps = (evs) => (evs || []).filter(e => e.op !== 'NUL');
@@ -218,8 +229,11 @@ function checkAdmission(ctx) {
     if (ev.op !== 'INS' || ev.src !== 'first-sighting') continue;
     const e = ctx.resolveSurface(ev.target);
     if (e) continue;
+    const canonical = ev.referent_id ? ctx.chaseCanonical(ev.referent_id) : null;
     const retired = ctx.events.some(sg => sg.op === 'SEG'
-      && ((ev.referent_id && sg.referent_id === ev.referent_id) || fold(sg.target) === fold(ev.target)));
+      && ((ev.referent_id && sg.referent_id === ev.referent_id)
+        || (canonical && sg.referent_id === canonical)
+        || fold(sg.target) === fold(ev.target)));
     if (!retired) findings.push(finding('first-sighting-unretired', `INS "${ev.target}" (src first-sighting) has no surviving referent and no retirement`, [ev]));
   }
   return { bit: findings.length === 0 ? 1 : 0, findings, stats: { entities: ctx.entities.length, single_sighting_count: singles } };
@@ -318,6 +332,7 @@ function checkSpeech(ctx) {
 function checkCompany(ctx, allReports) {
   const findings = [];
   const frameRef = new RegExp(ctx.pack.frame_ref, 'i');
+  const classGloss = new RegExp(ctx.pack.class_gloss, 'i');
   const isFrameVal = (v) => (typeof v === 'string' && frameRef.test(v)) || (v && typeof v === 'object' && (v.frame || v.frame_ref));
   const typeLex = new Set(ctx.pack.type_lexicon.map(fold));
   const structural = new Set(ctx.pack.structural_def_targets.map(fold));
@@ -329,7 +344,12 @@ function checkCompany(ctx, allReports) {
       findings.push(finding('def-target-not-referent', `DEF defines "${ev.target}" (${ev.path || 'class'}) — not an admitted referent`, [ev]));
       continue;
     }
-    if ((ev.path === 'class' || ev.path === 'frame') && !isFrameVal(ev.value) && !typeLex.has(fold(ev.value))) {
+    // a frame DEF's value is a frame ref, strictly; a class DEF may also be
+    // a closed-vocabulary type transmutation or a det-headed predicate
+    // nominal — anything else is a copied fragment
+    if (ev.path === 'frame' && !isFrameVal(ev.value)) {
+      findings.push(finding('def-value-fragment', `"${ent.name}" framed as "${String(ev.value).slice(0, 50)}" — not a frame ref`, [ev]));
+    } else if (ev.path === 'class' && !isFrameVal(ev.value) && !typeLex.has(fold(ev.value)) && !(typeof ev.value === 'string' && classGloss.test(ev.value))) {
       findings.push(finding('def-value-fragment', `"${ent.name}" defined as "${String(ev.value).slice(0, 50)}" — a copied fragment, not a frame`, [ev]));
     }
   }

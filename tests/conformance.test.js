@@ -367,7 +367,23 @@ async function main() {
     ok(report.entities.some(e => e.name === 'Tse'), 'the protagonist survives — sightings are counted from the page, not from tagger luck');
     eq(res.bits.BINDING.bit, 1, 'BINDING holds: deeds settle with admission — both endpoints surviving and distinct makes the bond CON');
     ok(report.events.some(e => e.op === 'CON' && /sam gor/i.test(e.targetName || e.o)), 'the witness bond lands: Tse —known→ Sam Gor is CON, written between the names');
-    eq(res.bits.COMPANY.bit, 0, 'COMPANY fails today: copular fragments, no frames (flip me when frames land)');
+    eq(res.bits.COMPANY.bit, 1, 'COMPANY holds: every surviving referent carries a frame DEF; det-less copular tails land as states, not definitions');
+    ok(report.events.some(e => e.op === 'DEF' && e.path === 'frame' && /^frame:[0-9a-f]+$/.test(e.value)), 'frames are minted as hashes of the CON neighborhood');
+    ok(!report.events.some(e => e.op === 'DEF' && e.path === 'class' && /worth a fraction/.test(String(e.value))), 'the witness fragment ("worth a fraction of that") no longer defines anything');
+    ok(report.events.some(e => e.op === 'DEF' && e.path === 'state' && /worth a fraction/.test(String(e.value))), '…but survives as a checkable state record for the veto');
+
+    // EVA: a second document naming the same referent makes the frames meet
+    const doc2 = await E.parseDocument('web2.txt', [
+      'The Syndicate Files', '',
+      'Sam Gor operated casinos across Asia. Sam Gor laundered the proceeds in Vancouver.',
+      'Interpol mapped the network for years. Interpol never named a leader.',
+    ].join('\n'), 'web2');
+    const fired = E.evaAcrossDocs(doc2, [doc]);
+    ok(fired > 0, 'EVA fires when frames meet across documents');
+    const r2 = E.ingestionReport(doc2);
+    ok(r2.events.some(e => e.op === 'EVA' && e.src === 'frame-meet' && e.value && e.value.verdict), 'the EVA event carries both frames and a verdict');
+    const both = C.checkDump(report, { reports: [report, r2] });
+    eq(both.bits.COMPANY.bit, 1, 'with two documents and EVA fired, COMPANY holds across the set');
     eq(res.bits.CUSTOM.bit, 1, 'CUSTOM holds: footer link-rows, bylines, and book apparatus are admitted chrome customs — furniture deposits nothing');
     ok(!report.entities.some(e => /latest issue|advertisement/i.test(e.name)), 'the footer mints no referents');
   }
