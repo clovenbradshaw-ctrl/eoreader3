@@ -365,7 +365,8 @@ async function main() {
     eq(res.bits.ADMISSION.bit, 0, 'ADMISSION fails today: one-mention names (title words, fragments) are still minted (flip me when the gate lands)');
     eq(res.bits.BINDING.bit, 0, 'BINDING fails today: deeds the fold can resolve are still filed as SYN — fragmentation starves the CON path (flip me when bonds land)');
     eq(res.bits.COMPANY.bit, 0, 'COMPANY fails today: copular fragments, no frames (flip me when frames land)');
-    eq(res.bits.CUSTOM.bit, 0, 'CUSTOM fails today: footer link-runs are read with no admitted chrome custom for them (flip me when the custom is admitted)');
+    eq(res.bits.CUSTOM.bit, 1, 'CUSTOM holds: footer link-rows, bylines, and book apparatus are admitted chrome customs — furniture deposits nothing');
+    ok(!report.entities.some(e => /latest issue|advertisement/i.test(e.name)), 'the footer mints no referents');
   }
 
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

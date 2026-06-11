@@ -688,13 +688,43 @@ const READING_RULES = {
       '/^-{6,}$/',
       // byline: "By <Name> <Name> | <Month> <Day>, <Year>"
       '/\\bBy\\s+[A-Z][a-z]+\\s+[A-Z][a-z]+\\s*\\|\\s*\\w+\\s+\\d+,?\\s+\\d{4}\\b/',
+      // byline: "By <Name> [and <Name>…]" alone on its line (no date needed)
+      "/^[Bb]y(( and| &)? [A-Z][\\w.’'-]+){1,8}$/",
       // share/social chrome
       '/^(Share|Tweet|Facebook|Email|Print)(\\s+[•|]\\s+\\w+)*\\s*$/i',
       // subscription appeals
       '/\\bSubscribe\\b.*\\$\\d+/i',
+      // web nav/footer link rows: an enumerated menu vocabulary, nothing else on the line
+      '/^(about us|contact|submit|advertise|advertisement( this)?|renew|manage|terms|privacy|subscribe|sign in|log ?in|newsletter|latest issue)( (about us|contact|submit|advertise|advertisement|renew|manage|terms|privacy|subscribe|sign in|log ?in|newsletter|latest issue))*$/i',
+      // book apparatus: front-matter heads, numbered chapter/section heads,
+      // roman-numeral and bare-number lines, bracketed plates, transcriber
+      // boilerplate, and the Gutenberg wrapper
+      '/^(contents|index|preface|introduction|appendix|notes?|footnotes?|bibliography|glossary|errata|epilogue|prologue|dedication|illustrations?)\\b.{0,60}$/i',
+      '/^(chapter|book|volume|part|section|canto|act|scene|letter|essay|no)\\.?\\s+[ivxlcdm0-9]+[.:)]?\\s*$/i',
+      '/^[ivxlcdm]+[.)]?$/i',
+      '/^\\d+[.)]?$/',
+      '/^\\[(illustration|footnote|sidenote|frontispiece)/i',
+      '/^(produced|prepared|transcribed|digitized) by\\b/i',
+      '/^transcriber/i',
+      '/^\\*\\*\\*/',
+      // an ALL-CAPS heading line (case-sensitive on purpose: no flags)
+      "/^[A-Z0-9][A-Z0-9 ,;:.’'&()-]{5,}$/",
+      // es apparatus: chapter heads and Golden-Age front matter
+      '/^cap[ií]tulo\\b/i',
+      '/^(índice|pr[óo]logo|prefacio|ap[ée]ndice|dedicatoria|tasa|privilegio|aprobaci[óo]n|advertencia|al lector|fe de erratas|tabla)\\b.{0,60}$/i',
+      '/^(primera|segunda|tercera|cuarta|quinta) parte\\b/i',
+      // zh apparatus: chapter/scroll heads and bracketed editorial notes
+      '/^第[一二三四五六七八九十百千零〇0-9]+[回章卷折節节出]/',
+      '/^卷之?[一二三四五六七八九十上中下]/',
+      '/^【[^】]*】/',
+      '/^〔[^〕]*〕$/',
+      // Aozora bunko colophon and editorial marks
+      '/^底本[：:]/',
+      '/^(入力|校正|初出)[：:]/',
+      '/^※/',
     ],
     mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
-    desc: 'Page chrome (regex sources, /pattern/flags form): navigation menus, copyright/trademark boilerplate, horizontal rules, bylines, share/social rows, subscription appeals. A line matching one is structure, not prose — it stays in the spine for re-display but reaches no operator emitter, so it goes dark honestly instead of minting phantom entities. Document apparatus, like structure_labels and gutenberg_boilerplate; English/contemporary-journalism register.',
+    desc: 'Page chrome (regex sources, /pattern/flags form): navigation menus, footer link rows, copyright/trademark boilerplate, horizontal rules, bylines, share/social rows, subscription appeals, book front matter and chapter heads, roman-numeral/pagination lines, bracketed plates, transcriber boilerplate, zh chapter heads, Aozora colophons. A line matching one is structure, not prose — it stays in the spine for re-display but reaches no operator emitter, so it goes dark honestly instead of minting phantom entities. Document apparatus, like structure_labels and gutenberg_boilerplate; register-specific entries disable per register like any convention.',
   },
   metaphor_frames: {
     value: [
@@ -3101,6 +3131,8 @@ async function extractEoGraph(text, onProgress) {
     // grams claim their positions first; shorter grams only count free
     // occurrences, so \u590d\u751f never survives inside \u9648\u590d\u751f.
     const runsBySent = sentStrs.map(s => {
+      // chrome (chapter heads, colophons) is structure: mine no names from it
+      if (isChrome(s)) return [];
       const runs = []; let mm; const re = /[\u4e00-\u9fff]+/g;
       while ((mm = re.exec(s)) !== null) runs.push({ at: mm.index, text: mm[0] });
       return runs;
@@ -3150,6 +3182,7 @@ async function extractEoGraph(text, onProgress) {
     const zhVerbTally = new Map();
     const nameAt = (si) => admitted.flatMap(a => a.positions.filter(p => p.si === si).map(p => ({ name: a.name, at: p.at })));
     sentStrs.forEach((s, si) => {
+      if (isChrome(s)) return;
       const qm = s.match(/^(.*?)[\uFF1A:]\s*[\u201C\u300C\u300E"\u2018\u300A]([^\u201D\u300D\u300F"\u2019\u300B]+)/u);
       if (!qm) return;
       const pre = qm[1], quote = qm[2];
