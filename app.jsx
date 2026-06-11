@@ -1159,16 +1159,23 @@ function App() {
           onToken: streamInto({ mode: 'grounded' }), depth: turnBudgetRef.current && turnBudgetRef.current.level,
         });
         full = E.dedupeSentences(full);
-        const declined = modelDeclined(full);
+        const declined = modelDeclined(full) || echoesShapeNote(full, shapeNote);
         if (!declined && !E.echoesPriorReply(full, priorReplies)) {
           const perDoc = scope.map(d => new Set(E.inventedTerms(d, full)));
           const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
           const bound = E.bindCitationsScope(scope, full, probe, 'factual', { hotEntity: hotEntity() });
-          if (bound.audit.grounded && !invented.length) {
+          // The kin-subject veto runs here too: a repair that re-serves the
+          // possessor wearing the kin's role would pass the bind check again.
+          let kinMismatches = [];
+          try { kinMismatches = E.checkKinSubjectsScope(scope, full) || []; } catch (e) {}
+          if (bound.audit.grounded && !invented.length && !kinMismatches.length) {
             AUD('step', 'veto', { decision: 'model', invented: [], boundGrounded: true, boundCovers: bound.audit.covers });
             return settleRepair(bound, 'model + mechanical cite (repair)');
           }
-          AUD('step', 'veto', { decision: 'mechanical', reason: !bound.audit.grounded ? 'unbound' : 'invented terms', invented, boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
+          AUD('step', 'veto', { decision: 'mechanical',
+            reason: !bound.audit.grounded ? 'unbound' : kinMismatches.length ? 'kin-subject-mismatch' : 'invented terms',
+            invented, kinMismatches: kinMismatches.map(m => ({ possessor: m.possessor, kin: m.kin, sent: m.sent, claim: m.claim, docId: m.docId })),
+            boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
         } else {
           AUD('step', 'veto', { decision: 'mechanical', reason: declined ? 'model declined / empty' : 'the model reproduced a rejected reply' });
         }
@@ -1244,6 +1251,25 @@ function App() {
     if (/(passages?|spans?|notes?|document)\s+(?:do|does)\s?n.?t\s+(?:say|mention|cover|answer)/i.test(t)) return true;
     try { if (window.EOEngine.looksLeakedReasoning && window.EOEngine.looksLeakedReasoning(t)) return true; } catch (e) {}
     return false;
+  };
+
+  // The grounded pass parroting the director's note back ("The user is
+  // asking about…") is a non-answer in the note's voice — meta about the
+  // question, never a claim from the page. It costs a full bind-and-fail
+  // round downstream and a misleading 'unbound' trace; catch it here by
+  // overlap with the note itself and decline it by name.
+  const echoesShapeNote = (full, note) => {
+    try {
+      const t = String(full == null ? '' : full).trim(), n = String(note == null ? '' : note).trim();
+      if (!t || !n) return false;
+      const tt = new Set(window.EOEngine.tok(t));
+      const nt = new Set(window.EOEngine.tok(n));
+      if (!tt.size || nt.size < 4) return false;
+      let hit = 0; for (const x of nt) if (tt.has(x)) hit++;
+      // most of the note's vocabulary, in a reply no bigger than the note's
+      // register — a real answer subsumes note words inside page content
+      return hit / nt.size >= 0.7 && tt.size <= nt.size * 2;
+    } catch (e) { return false; }
   };
 
   // Document-referencing turn: feed the model the relevant passages and bind
@@ -1436,6 +1462,9 @@ function App() {
       if (modelDeclined(full)) {
         AUD('step', 'veto', { decision: 'mechanical', reason: 'model declined / empty / leaked reasoning' });
         settle(window.EOEngine.answerScope(scope, q), 'mechanical (model declined)');
+      } else if (echoesShapeNote(full, shapeNote)) {
+        AUD('step', 'veto', { decision: 'mechanical', reason: 'echoed the director’s note — meta about the question, not an answer' });
+        settle(window.EOEngine.answerScope(scope, q), 'mechanical (note echo)');
       } else {
         // DEGENERACY VETO (audit-reject retry, ported from eo-extractor.html):
         // a near-verbatim copy of one retrieved span binds and audits clean but
@@ -1501,6 +1530,15 @@ function App() {
         const perDoc = scope.map(d => new Set(window.EOEngine.inventedTerms(d, full)));
         const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
         const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent, { hotEntity: hotEntity() });
+        // KIN-SUBJECT VETO (every depth — binding is not correctness): a
+        // claim can bind cleanly to a kin sentence ("…his son served as
+        // Director…") while hanging the kin's role on the POSSESSOR — the
+        // citation is faithful to a real sentence and still misattributes
+        // its subject. The parse recorded who the possessive resolves to;
+        // check the draft's subjects against it, claim against record.
+        let kinMismatches = [];
+        try { kinMismatches = window.EOEngine.checkKinSubjectsScope(scope, full) || []; }
+        catch (e) { eoWarn('kin-subject-check', e); }
         // PROPOSITIONAL VETO (every depth — promoted from behind the dial):
         // the string-layer checks above wave through a draft that NEGATES what
         // the page itself asserted — "X was not Y" binds cleanly while the
@@ -1525,6 +1563,11 @@ function App() {
             contradictions: contradictions.map(c => ({ subject: c.subject, is: c.is, sent: c.sent, claim: c.claim, docId: c.docId })),
             boundGrounded: true, boundCovers: bound.audit.covers });
           settle(window.EOEngine.answerScope(scope, q), 'mechanical (contradicted the page)');
+        } else if (kinMismatches.length) {
+          AUD('step', 'veto', { decision: 'mechanical', reason: 'kin-subject-mismatch',
+            kinMismatches: kinMismatches.map(m => ({ possessor: m.possessor, kin: m.kin, sent: m.sent, claim: m.claim, docId: m.docId })),
+            boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
+          settle(window.EOEngine.answerScope(scope, q), 'mechanical (kin subject mismatch)');
         } else if (invented.length) {
           // Grounded, but names term(s) the page doesn't contain: KEEP the draft,
           // strike those terms as voids, downgrade the badge to an honest caveat.
