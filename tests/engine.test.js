@@ -117,9 +117,15 @@ group('intent — classification', () => {
   eq(E.classifyIntent('write the essay'), 'summary', 'write-the-essay → summary');
   eq(E.classifyIntent('give me a rundown'), 'summary', 'give-me-a-rundown → summary');
   eq(E.classifyIntent('write about this document'), 'summary', 'write-about-this-document → summary');
+  // "what's the book/story/novel about" is a whole-document overview — the noun
+  // forms, not just the "what's it/this about" pronoun forms.
+  eq(E.classifyIntent("what's the book about?"), 'summary', '"what\'s the book about" → summary');
+  eq(E.classifyIntent('what is the story about'), 'summary', '"what is the story about" → summary');
+  eq(E.classifyIntent("what's the novel about"), 'summary', '"what\'s the novel about" → summary');
   // Specific factual asks (and table-style queries) must stay factual.
   eq(E.classifyIntent('what colour is the lamp'), 'factual', 'specific question stays factual');
   eq(E.classifyIntent('write down what Edith said'), 'factual', 'write-down-a-quote stays factual');
+  eq(E.classifyIntent("what's the deal"), 'factual', '"what\'s the deal" (no overview noun) stays factual');
 });
 
 group('answer — grounded paths', () => {
@@ -416,6 +422,27 @@ group('repair — pushback routes to repair, not retrieval', () => {
   ok(E.repairSignal('ugh') && E.repairSignal('ugh').kind === 'frustration', 'a bare "ugh" is frustration');
   eq(E.repairSignal('where is Voss Point'), null, 'an ordinary question is not repair');
   eq(E.repairSignal('thanks that really helps'), null, 'gratitude is not repair');
+  // NON-UNDERSTANDING / NON-ANSWER — the reply itself didn't land. About the
+  // exchange, not the page (the observed trace answered "i don't understand
+  // your answer" with three unrelated lines that merely contained "understand").
+  eq(band("i don't understand your answer").reason, 'repair:frustration', 'non-understanding of the reply → frustration');
+  eq(band("i don't get it").reason, 'repair:frustration', '"i don\'t get it" → frustration');
+  eq(band("that doesn't make sense").reason, 'repair:frustration', '"that doesn\'t make sense" → frustration');
+  eq(band("that's not an answer").reason, 'repair:frustration', '"that\'s not an answer" → frustration');
+  eq(band("you didn't answer my question").reason, 'repair:frustration', 'a dodge complaint → frustration');
+  eq(E.repairSignal("i don't understand the ending"), null, '"…understand the ending" is a content question, not repair');
+  eq(E.repairSignal("i'm confused about the company"), null, '"…confused about X" is a content question, not repair');
+  // SUPPORT / EVIDENCE — asking what in the text backs the prior claim. Re-read
+  // the reply's substance; don't lexically dump on a shared word (the observed
+  // trace answered "what parts gave you that impression specifically?" with
+  // three lines that merely contained "gave").
+  eq(band('what parts gave you that impression specifically?').reason, 'repair:support', 'evidence request → support repair');
+  eq(band('what makes you say that').reason, 'repair:support', '"what makes you say that" → support');
+  eq(band('where does it say that?').reason, 'repair:support', '"where does it say that?" → support');
+  eq(band('how do you know that?').reason, 'repair:support', '"how do you know that?" → support');
+  ok(band('what parts gave you that impression').repair.content === false, 'a support turn carries no content of its own');
+  eq(E.repairSignal('where does it say the war ended'), null, '"where does it say <clause>" is a lookup, not repair');
+  eq(E.repairSignal('how do you know the password'), null, '"how do you know <noun>" is a lookup, not repair');
 });
 
 // Gutenberg texts: header metadata is parsed mechanically (even when the
@@ -458,6 +485,19 @@ group('gutenberg — header metadata + a cleaned cast', () => {
   const who = E.answer(gbook, 'who are the main characters?');
   ok(/Raskolnikov/.test(who.text) && /Sonia/.test(who.text), 'the who-answer names the real characters');
   ok(!/Gutenberg/i.test(who.text), '…and no boilerplate');
+  // The spoken summary reads the portrait, but the apparatus — boilerplate, the
+  // author/translator named in the header, the language — are not the figures the
+  // book "turns most on". Routed via the summary intent ("what's the book about").
+  const about = E.answer(gbook, "what's the book about?");
+  ok(/Raskolnikov/.test(about.text) && /Sonia/.test(about.text), 'the summary names the real figures');
+  ok(!/Gutenberg|Dostoyevsky|Garnett|English/i.test(about.text), '…and not the apparatus (boilerplate, author, translator, language)');
+  // supportProbeTerms: an evidence re-read's probe is the reply's substance, with
+  // markup, the document's title/author tokens, and generic book-words stripped —
+  // so it pins the passages instead of the title-page chrome.
+  const sterms = E.supportProbeTerms([gbook], 'This novel by Fyodor Dostoyevsky follows Raskolnikov and Sonia near the bridge {{void:Petersburg}}.');
+  ok(sterms.includes('raskolnikov') && sterms.includes('sonia') && sterms.includes('bridge'), 'support terms keep the discriminating words');
+  ok(!sterms.includes('novel') && !sterms.includes('fyodor') && !sterms.includes('dostoyevsky') && !sterms.includes('petersburg'),
+    '…and drop biblio words, the author tokens, and stripped void terms');
   // A non-Gutenberg document is untouched by the cleanup.
   const vossMeta = E.docMetadata(voss);
   ok(!vossMeta.isGutenberg && !vossMeta.any, 'VOSS carries no header metadata');

@@ -5643,7 +5643,11 @@ function projectGraph(events, frame = {}) {
   function classifyIntent(q) {
     const t = ' ' + String(q).toLowerCase().replace(/[’']/g, "'") + ' ';
     if (/\b(who(\s+all)?\s+(appears?|is in|are in|shows? up|features?)|who are the|characters?|the cast|people (in|who)|list (the )?(people|characters|names|figures)|main characters?|dramatis|everyone (in|who))\b/.test(t)) return 'who';
-    if (/\b(summar|overview|tl;?dr|gist|recap|in short|main (idea|point|points|theme)|what'?s (it|this)( about)?|what is (this|it|the document|the text|the story|the file)|describe (this|the|it)|the document about|what kind of (document|text)|what am i (looking at|reading))/.test(t)) return 'summary';
+    // "what's the book about?" is a whole-document overview, but the older
+    // "what's (it|this) about" branch only caught the pronoun forms — "the book"
+    // fell through to factual and retrieved a single line that merely shared the
+    // word "book" ("I slipped the book into my pocket"). Catch the noun forms too.
+    if (/\b(summar|overview|tl;?dr|gist|recap|in short|main (idea|point|points|theme)|what'?s (it|this)( about)?|what is (this|it|the document|the text|the story|the file)|what(?:'?s| is) (?:the|this) (?:book|story|novel|novella|tale|memoir|document|text|file|piece|poem|play|essay|article|report|paper|thing|whole thing) about|describe (this|the|it)|the document about|what kind of (document|text)|what am i (looking at|reading))/.test(t)) return 'summary';
     // "what happens to NAME?" names a specific referent — a factual ask about
     // NAME, not a whole-document overview; without the guard the summary path
     // hands the model passages sampled with no knowledge of NAME. The guard
@@ -5725,6 +5729,46 @@ function projectGraph(events, frame = {}) {
     if (/\b(?:you'?re? (?:not|n'?t) (?:listening|hearing|getting|reading|understanding)|you are not (?:listening|hearing|getting|reading|understanding)|not what i asked|not what i'?m asking|not what i (?:said|meant|mean)|that'?s not what i|you'?re? missing (?:the|my) point|you keep (?:saying|repeating|giving|missing)|listen to (?:me|what i)|read (?:it|that|my (?:question|message)) again|are you (?:even )?(?:listening|reading)|i'?m getting (?:annoyed|frustrated|nowhere)|this is (?:useless|pointless|frustrating|annoying|not working)|wtf|ffs)\b/.test(t)
         || /^\s*(?:ugh|come on|seriously)\W*$/.test(raw))
       return { kind: 'frustration', content: false };
+    // NON-UNDERSTANDING / NON-ANSWER — the previous REPLY didn't land: the user
+    // can't parse it, or it dodged the ask. Still about the exchange, so it must
+    // not be dragged onto the page by the shared word ("i don't understand your
+    // answer" was answered with three unrelated lines that merely contained
+    // "understand"). Anchored to the reply — bare, or "it/that/this/you/your
+    // answer/what you said" — so a genuine content ask ("i don't understand the
+    // ending") still routes to the text.
+    if (/^(?:but |so |sorry,? |wait,? |um,? |uh,? )?i (?:do|did)?\s*n'?t (?:understand|get|follow|parse|see)(?: it| that| this| you| your (?:answer|reply|response|point)| what you (?:said|mean|meant|wrote)| the (?:answer|reply|response|point)| any of (?:it|that|this))?[.!? ]*$/.test(raw)
+        || /^(?:but |so )?i'?m (?:confused|lost|not following)[.!? ]*$/.test(raw)
+        || /\b(?:that|this|it|none of (?:this|that|it)|your (?:answer|reply|response))\s+(?:does|did)?\s*n'?t make (?:any )?sense\b/.test(t)
+        || /\bmakes no sense\b/.test(t)
+        || /^(?:but |so |wait,? )?what (?:do|did) you mean(?: by that)?[.!? ]*$/.test(raw)
+        || /^(?:but |so )?what (?:are|were) you (?:talking|going on) about[.!? ]*$/.test(raw)
+        || /\b(?:that'?s|this is) (?:not (?:an?|a real|really an) answer|no answer|not answering)\b/.test(t)
+        || /\b(?:that|this|you)\s+(?:does|did)?\s*n'?t (?:actually |even )?answer (?:my|the|that|anything)\b/.test(t)
+        || /\byou (?:do|did)?\s*n'?t (?:actually |even )?answer(?:ed)?(?: (?:my|the|that))?\b/.test(t)
+        || /\byou'?re not (?:really )?answering\b/.test(t)
+        || /\b(?:that'?s|this is|it'?s) (?:just )?(?:gibberish|nonsense|word salad|incoherent|confusing|meaningless|garbled|nonsensical)\b/.test(t)
+        || /^(?:huh|wat|come again|i'?m sorry,? what)\s*\?*$/.test(raw))
+      return { kind: 'frustration', content: false };
+    // SUPPORT / EVIDENCE — the user takes the previous reply seriously enough to
+    // ask what in the text BACKS it ("what parts gave you that impression", "what
+    // makes you say that", "where does it say that", "how do you know"). The
+    // phrasing is anaphoric to the prior claim ("that/this/so/you"), so it carries
+    // no retrievable content of its own — fed to lexical retrieval it lands on
+    // whatever shares a word with the complaint ("what parts gave you that
+    // impression specifically?" was answered with three lines containing "gave").
+    // Routed to repair so the re-read happens on the SUBSTANCE of the reply, not
+    // on the question about it; content:false because the probe is rebuilt from
+    // the reply. Anaphors that could open a content clause ("where does it say
+    // that <X>") are kept terminal so a real lookup still reaches the page.
+    if (/\bwhat (?:parts?|passages?|lines?|bits?|sections?|evidence|in the text)\b[^?]*\b(?:gave|made|make|makes|led|lead|leads) you\b/.test(t)
+        || /\bwhat (?:makes?|made) you (?:say|think|believe|conclude|feel|so sure)\b/.test(t)
+        || /\bwhere does it (?:actually |even )?say (?:that|this|so)\s*[.!?]*$/.test(raw)
+        || /\bwhere(?:'?s| is) (?:that|this) (?:in the (?:text|book|document|story)|said|written|stated|mentioned|coming from)\b/.test(t)
+        || /\bhow (?:do|did|would|can) you know (?:that|this)?\s*[.!?]*$/.test(raw)
+        || /\b(?:what(?:'?s| is) (?:that|this|it|your) (?:based on|evidence|basis|source|reasoning)|based on what|on what basis)\b/.test(t)
+        || /\b(?:why|how) (?:do|did) you (?:say|think|conclude|figure|reckon) (?:that|so|this)\b/.test(t)
+        || /^says? who\s*\??$/.test(raw))
+      return { kind: 'support', content: false };
     // CONTRADICTION — disputing the previous reply, with nothing new to add.
     if (/^(?:no|yes|yeah|yep|nope|nah|wrong|incorrect)[,!. ]*(?:(?:it|that|there|the (?:page|document|doc|text|article)) (?:does|did|do|is|was|are|were|can|could)(?:n'?t| not)?)?[.! ]*$/.test(raw)
         || /^(?:it|that|there)('s| is| does| did| was)? (?:right there|in there|literally (?:says|there)|mentioned)[.! ]*$/.test(raw))
@@ -5739,6 +5783,31 @@ function projectGraph(events, frame = {}) {
     if (/\b(?:is|are|was|were)\s+(?:mentioned|in (?:there|the (?:text|document|doc|page|article)))\b/.test(t) && !/\?/.test(raw))
       return { kind: 'refinement', content: true };
     return null;
+  }
+  // The discriminating content terms of a prior REPLY, for a SUPPORT/EVIDENCE
+  // repair ("what makes you say that?") — the probe that re-reads the page for
+  // what BACKS the reply, since the question itself is anaphoric and carries
+  // nothing to retrieve on. Markup and void terms are stripped; the document's
+  // own bibliographic apparatus (its title/author/credits tokens) and generic
+  // book-words are removed, because those match the title-page chrome and pull
+  // retrieval onto the header instead of the substance — a reseed that kept
+  // "book heart darkness joseph conrad" landed on the Gutenberg boilerplate, not
+  // the passages about the ivory and the Company. Returns up to `max` terms.
+  const BIBLIO_STOP = new Set(('book books novel novella story stories tale tales text texts '
+    + 'document documents file page pages chapter chapters author authors title titled ebook '
+    + 'gutenberg poem play essay article work works writer writing read reading prose '
+    + 'protagonist character characters narrator theme themes plot setting').split(/\s+/));
+  function supportProbeTerms(docs, replyText, max = 20) {
+    const reply = String(replyText == null ? '' : replyText).replace(/\{\{[^}]*\}\}/g, ' ');
+    const drop = new Set(BIBLIO_STOP);
+    for (const d of scopeDocs(docs)) {
+      if (!d || d.kind === 'table') continue;
+      const meta = docMetadata(d);
+      for (const v of Object.values(meta.fields || {})) for (const tk of tok(v)) drop.add(tk);
+    }
+    const out = [];
+    for (const tk of tok(reply)) { if (drop.has(tk) || out.includes(tk)) continue; out.push(tk); if (out.length >= max) break; }
+    return out;
   }
   /* Across-turn repetition guard: does a draft repeat a reply already sent?
      The within-answer twin of dedupeSentences. Normalizes away cite/void
@@ -6487,22 +6556,50 @@ function projectGraph(events, frame = {}) {
     }
     // Read the portrait in words. Heaviest figures (with anchor citations),
     // what the text asserts about them, the relations between them, the spine.
+    // On a Gutenberg text the apparatus (the boilerplate, the author named in
+    // the header, the language) is dropped from the figures via the same cast
+    // the cast view uses, and the metadata header lines drop from the spine; the
+    // keep-set then also filters the assertions and relations so a dropped name
+    // can't return as "X is English". Off the Gutenberg path keep === null and
+    // every branch reads p.* unchanged — byte-identical to before (parity floor).
+    const meta = docMetadata(doc);
+    let heavy = p.heavy, spine = p.spine, keep = null;
+    if (meta.isGutenberg) {
+      // The cast view's filter (boilerplate + header/licence-only names), plus a
+      // figure whose name IS the declared author or language — "Joseph Conrad",
+      // "English" recur in the body, so the cast keeps them, but as the figures a
+      // book "turns most on" they are apparatus. Exact match only, so a character
+      // who merely shares a word with the credits is never dropped.
+      const identity = new Set();
+      for (const k of ['author', 'editor', 'translator', 'illustrator', 'language']) {
+        const v = meta.fields && meta.fields[k];
+        if (v) identity.add(String(v).toLowerCase().trim());
+      }
+      keep = new Set(castEntities(doc).map(e => String(e.name)));
+      for (const nm of [...keep]) if (identity.has(String(nm).toLowerCase().trim())) keep.delete(nm);
+      const trimmed = p.heavy.filter(e => keep.has(String(e.name)));
+      if (trimmed.length) heavy = trimmed;
+      spine = p.spine.filter(s => !/^\s*(?:Title|Author|Editor|Translator|Illustrator|Release date|Posting date|Language|Credits|Other information|Updated|Most recently updated|Original publication)\b\s*:?/i.test(String(s)));
+      if (!spine.length) spine = p.spine;
+    }
     const cites = [];
-    const figs = p.heavy.map(e => {
+    const figs = heavy.map(e => {
       cites.push({ docId: doc.id, idx: e.sents[0] });
       return `${e.name} {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`;
     });
     const parts = [];
     const kindWord = doc._genre === 'transcript' ? 'transcript' : 'document';
     parts.push(`This ${doc._lang && doc._lang !== 'en' ? doc._lang + ' ' : ''}${kindWord} turns most on ${figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]}.`);
-    if (p.assertions.length) {
-      parts.push('It says ' + p.assertions.map(a => `${a.name} is ${a.is}`).join('; ') + '.');
+    const assertions = keep ? p.assertions.filter(a => keep.has(String(a.name))) : p.assertions;
+    const heavyEdges = keep ? p.heavyEdges.filter(ed => keep.has(String(ed.aName)) && keep.has(String(ed.bName))) : p.heavyEdges;
+    if (assertions.length) {
+      parts.push('It says ' + assertions.map(a => `${a.name} is ${a.is}`).join('; ') + '.');
     }
-    if (p.heavyEdges.length) {
-      parts.push('The relations it draws: ' + p.heavyEdges.map(ed => `${ed.aName} ${ed.verb} ${ed.bName}`).join('; ') + '.');
+    if (heavyEdges.length) {
+      parts.push('The relations it draws: ' + heavyEdges.map(ed => `${ed.aName} ${ed.verb} ${ed.bName}`).join('; ') + '.');
     }
-    if (p.spine.length > 1) {
-      parts.push('Its sections: ' + p.spine.join(' · ') + '.');
+    if (spine.length > 1) {
+      parts.push('Its sections: ' + spine.join(' · ') + '.');
     }
     return {
       text: parts.join(' '),
@@ -8123,7 +8220,7 @@ function projectGraph(events, frame = {}) {
     graphPortrait, graphSnapshot, talkerPortrait, groundTalkerOutput, evaDraft,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
-    contextScope, bindCitationsScope,
+    contextScope, bindCitationsScope, supportProbeTerms,
     // tiered context for the notes-and-spans grounded prompt
     contextParts, contextPartsScope, partsFromHits, readingNotes,
     // document metadata (Gutenberg headers) + the presentation-cleaned cast

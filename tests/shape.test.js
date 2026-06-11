@@ -61,24 +61,35 @@ group('parseExemplars — defensive JSONL, weight defaults, ids assigned', () =>
     '{"intent":"lookup"}',                 // no response → skipped
     '{"response":"orphan"}',               // no intent → skipped
     '{"id":"keep-me","intent":"synthesis","response":"A reading.","weight":2.5}',
+    '{"id":"with-axes","intent":"dry","response":"Noted.","anchor_axes":["pole:short","pole:dry"]}',
   ].join('\n');
   const ex = S.parseExemplars(text);
-  eq(ex.length, 2, 'only the two well-formed records survive');
+  eq(ex.length, 3, 'only the well-formed records survive');
   eq(ex[0].weight, 1, 'weight defaults to 1 (the Hebbian field, §11)');
   ok(/^ex-/.test(ex[0].id), 'a missing id is assigned');
   eq(ex[1].id, 'keep-me', 'an explicit id is kept');
   eq(ex[1].weight, 2.5, 'an explicit weight is kept');
   ok(Array.isArray(ex[0].shape_tags), 'shape_tags is always an array');
+  ok(Array.isArray(ex[0].anchor_axes) && ex[0].anchor_axes.length === 0, 'anchor_axes defaults to an empty array');
+  eq(JSON.stringify(ex[2].anchor_axes), JSON.stringify(['pole:short', 'pole:dry']), 'declared anchor_axes are carried through');
 });
 
-group('the seed exemplars.jsonl parses and spans the core intents', () => {
+// The real shape-steering library (merged from PR #58) — 373 exemplars across
+// 22 intents, every line valid JSON, ids unique, both poles of every axis
+// anchored via anchor_axes. The shape layer pulls from THIS, not a placeholder.
+group('the merged exemplars.jsonl parses and spans the real intent range', () => {
   const text = fs.readFileSync(path.join(ROOT, 'exemplars.jsonl'), 'utf8');
   const ex = S.parseExemplars(text);
-  ok(ex.length >= 15, 'the seed library has a couple dozen exemplars (got ' + ex.length + ')');
+  ok(ex.length >= 300, 'the full library has hundreds of exemplars (got ' + ex.length + ')');
   const intents = new Set(ex.map(e => e.intent));
-  for (const want of ['lookup', 'synthesis', 'summary', 'pushback-repair', 'acknowledgment', 'refusal-without-condescension'])
+  ok(intents.size >= 20, 'it spans the full intent range (got ' + intents.size + ' intents)');
+  for (const want of ['lookup', 'synthesis', 'clarify-question', 'connect-passages',
+    'pushback-repair', 'refusal-without-condescension', 'hedge-uncertain', 'disagree-with-source'])
     ok(intents.has(want), 'intent present: ' + want);
-  ok(ex.every(e => typeof e.weight === 'number'), 'every exemplar carries a numeric weight');
+  eq(new Set(ex.map(e => e.id)).size, ex.length, 'all ids are unique');
+  ok(ex.every(e => typeof e.weight === 'number'), 'every exemplar carries a numeric weight (defaulted; §11)');
+  ok(ex.every(e => Array.isArray(e.anchor_axes)), 'every exemplar carries anchor_axes');
+  ok(ex.some(e => e.anchor_axes.length > 0), 'the library declares axis poles');
   ok(ex.every(e => e.response && e.response.length), 'every exemplar has a response');
 });
 
@@ -304,13 +315,17 @@ group('pca (§7 proper) — recovers the dominant axis', () => {
     ok(a.drafts[0].drift !== undefined, 'structured drift axes are logged per draft, not just scores');
   });
 
-  await group('load() convenience — parse + build + embed the real seed file', async () => {
+  await group('load() convenience — parse + build + embed the real merged library', async () => {
     const text = fs.readFileSync(path.join(ROOT, 'exemplars.jsonl'), 'utf8');
     const lib = await S.load(text, fakeEmbed);
-    ok(lib.ready(), 'the real seed library loads and embeds');
-    const target = lib.select({ intent: 'summary', shapeNote: 'draw it together' });
-    ok(target && target.intent === 'summary', 'a real intent selects a real cluster');
+    ok(lib.ready(), 'the real library loads and embeds');
+    const target = lib.select({ intent: 'connect-passages', shapeNote: 'draw the link the page leaves implicit' });
+    ok(target && target.intent === 'connect-passages', 'a real intent selects a real cluster');
+    ok(target.target_exemplar_ids.length >= 1, 'targets are drawn from the cluster');
     ok(target.competitorExemplars.length > 0, 'real competitors exist for the discriminative score');
+    // The merged library declares poles, so the axis hints come from its own
+    // anchor_axes rather than the structural fallback.
+    ok(target.axes_to_emphasize.length > 0, 'axis hints are drawn from the library\'s declared poles');
   });
 
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

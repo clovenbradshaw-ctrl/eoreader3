@@ -87,6 +87,11 @@
         id: rec.id || ('ex-' + (out.length + 1)),
         intent: String(rec.intent),
         shape_tags: Array.isArray(rec.shape_tags) ? rec.shape_tags : [],
+        // The library declares each exemplar's anchored poles ("pole:short",
+        // "pole:committed", …) — both ends of every interpretable axis, so the
+        // axes survive an embedder swap as centroid differences (§7). Carried
+        // through and used for axis hints below.
+        anchor_axes: Array.isArray(rec.anchor_axes) ? rec.anchor_axes : [],
         user_turn: rec.user_turn || '',
         context_sketch: rec.context_sketch || '',
         response: String(rec.response),
@@ -313,11 +318,22 @@
   }
 
   /* ---- which axes most distinguish this cluster (§8 axes_to_emphasize) ----
-     A hint for the FIRST draft: the structural axes on which the target
-     cluster departs most from the library as a whole. "lookup" exemplars come
-     out short + committal; "synthesis" come out longer + warmer. Computed from
-     data so it tracks the library rather than a hardcoded table. */
+     A hint for the FIRST draft. When the library declares poles (anchor_axes),
+     use the cluster's OWN declared poles — the library knows what shape it's
+     anchoring better than a structural guess ("pole:short", "pole:committed").
+     Otherwise fall back to the structural axes on which the cluster departs
+     most from the library as a whole ("lookup" comes out short + committal;
+     "synthesis" longer + warmer), computed from data so it still tracks a
+     library that ships no pole labels. */
   function axesToEmphasize(targetExemplars, allExemplars) {
+    const poleCounts = {};
+    for (const e of targetExemplars || [])
+      for (const a of e.anchor_axes || []) {
+        const p = String(a).replace(/^pole:/, '').trim();
+        if (p) poleCounts[p] = (poleCounts[p] || 0) + 1;
+      }
+    const declared = Object.keys(poleCounts).sort((a, b) => poleCounts[b] - poleCounts[a]);
+    if (declared.length) return declared.slice(0, 4);
     const t = avgFeatures((targetExemplars || []).map(e => e.response));
     const g = avgFeatures((allExemplars || []).map(e => e.response));
     const tags = [];
