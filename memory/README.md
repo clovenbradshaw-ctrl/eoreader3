@@ -64,6 +64,13 @@ well-formedness, opacity, independence, seed falsifiability, register
 weighting + per-source cap, SEG splitting, the proposal grammar, friction
 nomination, all corroboration paths, and the live reading change.
 
+Per-register **convention packs** live in `memory/packs/` (one JSONL fragment per
+pack — the first resident is `el-classical-v1`, a Classical Greek draft), with
+candidates in `memory/drafts/`, their external sources in `sources/`, and the
+row-level audit trail in `provenance/`. See `docs/packs-and-sources.md` for how
+bulk external conventions enter the ledger as assertions through the witness gate
+— and `memory/packs/README.md` for why the engine does not read those packs yet.
+
 Future residents: serialized learned-ledger deltas (the speech verbs a session
-induces), per-register convention packs, and the embedding-affinity index that
-connects conventions to content types.
+induces) and the embedding-affinity index that connects conventions to content
+types.

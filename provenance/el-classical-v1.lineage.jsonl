@@ -1,0 +1,22 @@
+# provenance/el-classical-v1.lineage.jsonl — row-level bridge between pack RECs
+# and their basis, plus the witness events that admit them. See provenance/README.md.
+# el-classical-v1 is HAND-AUTHORED from reference grammars (not source-compiled),
+# so `source` names a reference work and `witnesses` is empty until Greek text
+# the reader reads supplies the second sighting.
+{"pack_id":"el-classical-v1:article_paradigm","pack_seq":2008,"source":"reference-grammar","basis":"Smyth, Greek Grammar §332–334 (the article)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:decl_1","pack_seq":2011,"source":"reference-grammar","basis":"Smyth §211–232 (first declension)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:decl_2","pack_seq":2013,"source":"reference-grammar","basis":"Smyth §230–237 (second declension)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:decl_3","pack_seq":2015,"source":"reference-grammar","basis":"Smyth §238–292 (third declension; consonant-stem sigma interactions)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:verb_endings_primary_active","pack_seq":2018,"source":"reference-grammar","basis":"Smyth §383–384, 463 (primary active endings)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:verb_endings_secondary_active","pack_seq":2020,"source":"reference-grammar","basis":"Smyth §463 (secondary active endings; imperfect/aorist)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:verb_endings_first_aorist","pack_seq":2022,"source":"reference-grammar","basis":"Smyth §542–544 (first/sigmatic aorist)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:verb_endings_primary_middle","pack_seq":2024,"source":"reference-grammar","basis":"Smyth §463 (primary middle/passive endings)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:verb_endings_secondary_middle","pack_seq":2026,"source":"reference-grammar","basis":"Smyth §463 (secondary middle/passive endings)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:verb_endings_aorist_passive","pack_seq":2028,"source":"reference-grammar","basis":"Smyth §564–565 (aorist passive)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:augment","pack_seq":2030,"source":"reference-grammar","basis":"Smyth §428–449 (syllabic and temporal augment)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:case_roles","pack_seq":2032,"source":"reference-grammar","basis":"Smyth §1279–1635 (syntax of the cases); genitive absolute §2070","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:attribution_verbs","pack_seq":2035,"source":"reference-grammar","basis":"Cambridge Grammar of Classical Greek §41 (verbs of speaking; indirect discourse) — distributional; confirm against a UD ccomp/parataxis query","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:postpositive_particles","pack_seq":2049,"source":"reference-grammar","basis":"Denniston, The Greek Particles (2nd ed.) — the canonical inventory","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:pronouns","pack_seq":2063,"source":"reference-grammar","basis":"Smyth §325–340 (personal, demonstrative, reflexive pronouns)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:crasis_elision","pack_seq":2105,"source":"reference-grammar","basis":"Smyth §62–77 (crasis, elision, movable nu)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
+{"pack_id":"el-classical-v1:orthographic_fold","pack_seq":2110,"source":"reference-grammar","basis":"Smyth §1–34 (letters, breathings, accents, iota subscript)","compiled_at":"2026-06-11","compiler":"hand-authored","witnesses":[]}
