@@ -1,0 +1,3 @@
+# sources/unimorph/MANIFEST.jsonl — one row per fetched file. Schema:
+# {"path","sha256","source","version","license","retrieved_at","retrieval_url"}
+# Empty until a UniMorph pull lands here (network-gated; see sources/README.md).

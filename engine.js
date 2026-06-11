@@ -168,12 +168,20 @@ const LANG_PACKS = {
   },
 };
 let ACTIVE_LANG = 'en';
+// el-classical-v1 organ tables, built from the Greek pack when it loads (see
+// loadConventionPacks / buildGreekOrgans). Null ⇒ every Greek organ is a no-op,
+// so nothing here touches a non-Greek reading.
+let GREEK = null;
 function detectLanguage(text) {
   const s = String(text);
   const sample = s.slice(0, 6000);
-  let han = 0, total = 0;
-  for (const ch of sample) { if (/\s/.test(ch)) continue; total++; if (/[\u4e00-\u9fff]/.test(ch)) han++; }
+  let han = 0, grk = 0, total = 0;
+  for (const ch of sample) { if (/\s/.test(ch)) continue; total++; if (/[\u4e00-\u9fff]/.test(ch)) han++; else if (/[\u0370-\u03ff\u1f00-\u1fff]/.test(ch)) grk++; }
   if (total > 0 && han / total > 0.05) return 'zh';
+  // Greek script (Greek+Coptic and the polytonic Greek Extended block) selects
+  // the el-classical-v1 pack. Disjoint from Latin/Han, so this never fires on
+  // the en/es/zh/code corpora \u2014 the Greek organs stay inert for them.
+  if (total > 0 && grk / total > 0.05) return 'grc';
   const lines = sample.split('\n');
   const codey = lines.filter(l => /[{};]\s*$|^\s*(function|const|let|var|class|def|import|return|if\s*\(|for\s*\()\b|=>/.test(l)).length;
   if (codey >= 3 && codey / Math.max(1, lines.filter(l => l.trim()).length) > 0.25) return 'code';
@@ -908,6 +916,10 @@ function applyLanguageModule(lang) {
     };
   }
   ENABLED_PACKS.clear(); ENABLED_PACKS.add('core'); ENABLED_PACKS.add(pid);
+  // External-pack modules (loaded from memory/packs/, not LANG_PACKS — e.g.
+  // el-classical-v1) toggle their enabled flag here so the UI's active-module
+  // list is honest. Their reading organs read their own tables, not the rule sets.
+  if (LANGUAGE_MODULES['el-classical-v1']) LANGUAGE_MODULES['el-classical-v1'].enabled = (pid === 'el-classical-v1');
   deriveSets(projectRules(RULES_LEDGER, currentFrame()));
 }
 function moduleEnabledForLang(modId) { return modId === 'core' || (LANGUAGE_MODULES[modId] && LANGUAGE_MODULES[modId].enabled); }
@@ -959,6 +971,11 @@ function projectConventions(records) {
       members.get(ev.o).push(ev.s);
     } else if (ev.op === 'DEF' && ev.path === 'value' && conventions.has(ev.target)) {
       conventions.get(ev.target).value = ev.value;
+    } else if (ev.op === 'DEF' && ev.property != null && conventions.has(ev.target)) {
+      // Structured pack data (paradigm tables, case→role maps, fold rules):
+      // a DEF that names a `property` slot rather than path:'value'. Collected
+      // under the convention's `data`, keyed by property, for the organs to read.
+      const c = conventions.get(ev.target); if (!c.data) c.data = {}; c.data[ev.property] = ev.value;
     } else if (ev.op === 'DEF' && ev.path && ev.module && ev.kind === 'module-prop') {
       if (!moduleProps.has(ev.module)) moduleProps.set(ev.module, {});
       moduleProps.get(ev.module)[ev.path] = ev.value;
@@ -1080,6 +1097,33 @@ function loadConventions(input) {
   _projMemo = null;
   deriveSets(projectRules(RULES_LEDGER, currentFrame()));
   return { records: records.length, applied, packApplied, deltas };
+}
+
+// loadConventionPacks: load one or more pack fragments from memory/packs/ as an
+// ADDITIVE channel, kept separate from memory/conventions.jsonl so the file ≡
+// seeds drift contract is untouched. Registers each pack's module and builds its
+// reading organs from the projected conventions. Today only el-classical-v1
+// carries organs (the Greek stem-fold / case→role / bound-pronoun tables, read
+// by extractGreekGraph); any other pack registers its module and stays inert
+// until an organ consumes it. Pure projection — never lands seed deltas.
+function loadConventionPacks(input) {
+  const records = typeof input === 'string' ? parseConventionsJSONL(input) : (input || []);
+  if (!records.length) return { records: 0, modules: [] };
+  const proj = projectConventions(records);
+  const modules = [];
+  for (const ev of records) {
+    if (ev && ev.op === 'INS' && ev.kind === 'module' && ev.id) {
+      modules.push(ev.id);
+      if (!LANGUAGE_MODULES[ev.id]) LANGUAGE_MODULES[ev.id] = {
+        id: ev.id, name: ev.id, version: '1.0',
+        applies_to: { language: ev.language || '*', mode: 'narrative' },
+        enabled: false, provides: [], desc: ev.affinity || '',
+      };
+    }
+    if (ev && ev.op === 'INS' && ev.id) KNOWN_NODE_IDS.add(ev.id);
+  }
+  if (modules.includes('el-classical-v1')) buildGreekOrgans(proj.conventions);
+  return { records: records.length, modules };
 }
 
 // Read-only introspection: every convention the semantics graph covers, with
@@ -1933,7 +1977,7 @@ let _LEDGER_LID = 0;
 // cursor, toggle a pack, append an event — same log, different rev.
 let RULES_REV = 0;
 const ENABLED_PACKS = new Set(['core', 'en-narrative-v1']);
-const PACK_FOR_LANG = { en: 'en-narrative-v1', es: 'es-narrative-v1', zh: 'zh-narrative-v1', code: 'code-v1' };
+const PACK_FOR_LANG = { en: 'en-narrative-v1', es: 'es-narrative-v1', zh: 'zh-narrative-v1', code: 'code-v1', grc: 'el-classical-v1' };
 const PACK_LANG = Object.fromEntries(Object.entries(PACK_FOR_LANG).map(([l, p]) => [p, l]));
 // ── Per-language reading mode ────────────────────────────────────────
 // A language can read in one of two modes. SELF-LEARNING (default, the
@@ -2843,6 +2887,319 @@ function extractCodeGraph(text, t0) {
     ms: Math.round(t1 - t0),
   };
 }
+
+/* ============================================================
+   el-classical-v1 ORGANS + the Greek reading pass.
+
+   The mechanisms here are general — a stem fold, a case→role deed-finder, a
+   bound-pronoun (pro-drop) resolver; every piece of Greek-specific knowledge is
+   DATA read from the GREEK tables, which buildGreekOrgans fills from the pack.
+   With no pack loaded GREEK is null and extractGreekGraph degrades to a bare
+   tokenization, and nothing in this section runs for any other language (it is
+   reached only when detectLanguage ⇒ 'grc'). So the 152 parity snapshots can't
+   move: en/es/zh/code never enter here.
+   ============================================================ */
+
+// Fold for STEM KEYS and ENDING matching: strip the three accents (acute U+0301,
+// grave U+0300, circumflex U+0342) but KEEP breathing and iota-subscript —
+// rough/smooth and the subscript distinguish stems (ὅρος ≠ ὄρος). ς→σ; lower-
+// cased (capitalization is editorial in this register). The admission gate's
+// diacritic fold, one level down.
+function gfold(s) {
+  return String(s).normalize('NFD').replace(/[̀́͂]/g, '')
+    .normalize('NFC').replace(/ς/g, 'σ').toLowerCase();
+}
+// Fold for FUNCTION WORDS (articles, particles, prepositions): acute ≡ grave
+// (the grave is positional), keeping circumflex/breathing so the accent-minimal
+// pairs survive (τίς ≠ τις). ς→σ.
+function gword(s) {
+  return String(s).normalize('NFD').replace(/̀/g, '́')
+    .normalize('NFC').replace(/ς/g, 'σ');
+}
+function greekStemKey(s) { return gfold(s); }
+
+// "(ν)" optional and "a / b" alternates → concrete ending strings.
+function endVariants(raw) {
+  const out = new Set();
+  for (let p of String(raw).split('/').map(x => x.trim()).filter(Boolean)) {
+    const m = p.match(/^(.*)\(ν\)$/);
+    if (m) { out.add(m[1]); out.add(m[1] + 'ν'); } else out.add(p);
+  }
+  return [...out];
+}
+// Remove a leading syllabic augment ε(+breathing) from a secondary-tense stem.
+function stripAugment(stem) {
+  const d = stem.normalize('NFD');
+  if (d.charCodeAt(0) === 0x03b5) {   // ε
+    let i = 1; while (i < d.length && d.charCodeAt(i) >= 0x0300 && d.charCodeAt(i) <= 0x036f) i++;
+    const rest = d.slice(i).normalize('NFC');
+    if (rest.length >= 1) return rest;
+  }
+  return stem;
+}
+function genderOfDeclSub(cls, sub) {
+  if (cls === 'first') return sub === 'masc' ? 'm' : 'f';
+  if (sub === 'neut') return 'n';
+  return 'm';   // 2nd/3rd masc_fem default masculine (revisable; the article settles it)
+}
+// Reverse the article paradigm into surface → [{case,number,gender}]. The
+// article is the cheapest agreement evidence the matcher gets.
+function greekArticleIndex(table) {
+  const idx = new Map();
+  if (!table) return idx;
+  for (const g of ['m', 'f', 'n']) {
+    const gt = table[g]; if (!gt) continue;
+    for (const num of ['sg', 'pl']) {
+      const nt = gt[num]; if (!nt) continue;
+      for (const [cse, form] of Object.entries(nt)) {
+        const k = gword(form); if (!idx.has(k)) idx.set(k, []);
+        idx.get(k).push({ case: cse, number: num, gender: g });
+      }
+    }
+  }
+  return idx;
+}
+// Build the GREEK organ tables from the projected pack conventions (keyed by id).
+function buildGreekOrgans(conv) {
+  if (!conv) { GREEK = null; return null; }
+  const C = (id) => conv.get('el-classical-v1:' + id) || null;
+  const data = (id) => { const c = C(id); return (c && c.data) || {}; };
+  const list = (id) => { const c = C(id); return Array.isArray(c && c.value) ? c.value : []; };
+  const ce = data('crasis_elision');
+  GREEK = {
+    articleIdx: greekArticleIndex(data('article_paradigm').table),
+    decl: ['decl_1', 'decl_2', 'decl_3'].map(id => data(id).table).filter(Boolean),
+    conj: ['verb_endings_primary_active', 'verb_endings_secondary_active', 'verb_endings_first_aorist',
+      'verb_endings_primary_middle', 'verb_endings_secondary_middle', 'verb_endings_aorist_passive']
+      .map(id => data(id).table).filter(Boolean),
+    caseRoles: data('case_roles').map || null,
+    augment: data('augment').rules || null,
+    crasis: ce.crasis_pairs || {},
+    elision: ce.elision_restorations || {},
+    particles: new Set(list('postpositive_particles').map(gword)),
+    stopwords: new Set(list('base_stopwords').map(gword)),
+    pronouns: new Set(list('pronouns').map(gword)),
+    attribVerbs: new Set(list('attribution_verbs').map(gword)),
+  };
+  return GREEK;
+}
+
+// A finite verb is a bound pronoun: strip movable-ν, the σ(α) aorist mark and a
+// syllabic augment, then match the conjugation endings → {person,number,voice}.
+function greekVerbAnalyses(tok) {
+  if (!GREEK || !GREEK.conj.length) return [];
+  const out = [];
+  const base = gfold(tok);
+  const bodies = base.endsWith('ν') ? [base, base.slice(0, -1)] : [base];
+  for (const b of bodies) {
+    for (const table of GREEK.conj) {
+      const secondary = (table.tense_family === 'secondary');
+      const sigma = table.stem_mark ? gfold(table.stem_mark)[0] : null;   // 'σ' of 'σα'
+      for (const row of (table.rows || [])) {
+        for (const e of endVariants(row.ending).map(gfold)) {
+          if (!e || !b.endsWith(e) || b.length <= e.length) continue;
+          let stem = b.slice(0, b.length - e.length);
+          if (sigma) { if (!stem.endsWith(sigma)) continue; stem = stem.slice(0, -1); }   // a σ-marked aorist needs its σ
+          if (secondary) stem = stripAugment(stem);
+          if (stem.length < 1) continue;
+          out.push({
+            pos: 'verb', finite: true, stemKey: greekStemKey(stem),
+            person: row.person, number: row.number, voice: table.voice,
+            tenseFamily: table.tense_family, aorist: !!table.stem_mark,
+            grainHint: table.grain_hint || null, surface: tok,
+          });
+        }
+      }
+    }
+  }
+  return out;
+}
+// A noun/adjective is stem + case-ending. Strip each declension ending; the
+// over-generation is settled by article agreement and the two-sighting gate.
+function greekNounAnalyses(tok) {
+  if (!GREEK || !GREEK.decl.length) return [];
+  const out = [];
+  const base = gfold(tok);
+  for (const table of GREEK.decl) {
+    for (const [sub, paradigm] of Object.entries(table)) {
+      if (sub === 'class' || sub === 'note' || !paradigm || typeof paradigm !== 'object') continue;
+      const gender = genderOfDeclSub(table.class, sub);
+      for (const num of ['sg', 'pl']) {
+        const nt = paradigm[num]; if (!nt) continue;
+        for (const [cse, end] of Object.entries(nt)) {
+          for (let e0 of (Array.isArray(end) ? end : [end])) {
+            if (e0 === '∅' || e0 === '') {   // ∅ ending (3rd-decl neuter nom/acc)
+              out.push({ pos: 'noun', stemKey: greekStemKey(base), case: cse, number: num, gender, declClass: table.class, endLen: 0, surface: tok });
+              continue;
+            }
+            const e = gfold(e0); if (!e || !base.endsWith(e) || base.length <= e.length) continue;
+            out.push({ pos: 'noun', stemKey: greekStemKey(base.slice(0, base.length - e.length)), case: cse, number: num, gender, declClass: table.class, endLen: e.length, surface: tok });
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+function analyzeGreekToken(rawTok) {
+  const out = { raw: rawTok, article: null, function: false, particle: false, pronoun: false, attrib: false, nouns: [], verbs: [] };
+  if (!GREEK) return out;
+  const w = gword(rawTok);
+  const arts = GREEK.articleIdx.get(w);
+  if (arts) out.article = arts;
+  if (GREEK.particles.has(w)) out.particle = true;
+  if (GREEK.stopwords.has(w)) out.function = true;
+  if (GREEK.pronouns.has(w)) out.pronoun = true;
+  if (GREEK.attribVerbs.has(w)) out.attrib = true;
+  // An article / particle / preposition is grammar, never a referent — its fate
+  // is 'grammar', so it is not also analyzed as a noun or verb.
+  if (out.article || out.function || out.particle) return out;
+  out.verbs = greekVerbAnalyses(rawTok);
+  out.nouns = greekNounAnalyses(rawTok);
+  return out;
+}
+// Crasis-expand / elision-restore one token BEFORE the sub-word split.
+function greekExpand(tok) {
+  if (!GREEK) return [tok];
+  const w = gword(tok);
+  for (const [k, v] of Object.entries(GREEK.crasis)) if (gword(k) === w) return v.split(/\s+/);
+  if (/[’'ʼ]$/.test(tok)) {
+    const stripped = tok.replace(/[’'ʼ]+$/, '');
+    for (const [k, v] of Object.entries(GREEK.elision)) {
+      if (gword(k.replace(/[’'ʼ]+$/, '')) === gword(stripped)) return [v];
+    }
+    return [stripped];
+  }
+  return [tok];
+}
+function tokenizeGreek(sentText) {
+  const raw = sentText.match(/[\p{L}̀-ͯ][\p{L}̀-ͯ’'ʼ]*/gu) || [];
+  const toks = [];
+  for (const r of raw) for (const t of greekExpand(r)) toks.push(t);
+  return toks;
+}
+
+// The Greek reading pass — a self-contained extractor (the extractCodeGraph
+// pattern). Stem-fold admission, case→role deed-finding, pro-drop subjects;
+// emits the same INS/CON events the rest of the pipeline projects.
+function extractGreekGraph(text, t0) {
+  const norm = String(text).replace(/\r\n?/g, '\n').replace(/([^\n])\n(?!\n)/g, '$1 ');
+  const sentTexts = [];
+  for (const para of norm.split(/\n{2,}/)) {
+    const p = para.trim(); if (!p) continue;
+    // Greek sentence punctuation: . ! · (ano teleia) and ; (erotimatiko U+037E / U+003B).
+    for (const s of p.split(/(?<=[.!;;··])\s+/)) { const st = s.trim(); if (st) sentTexts.push(st); }
+  }
+  const events = []; let seq = 0, refn = 0;
+  const mintRef = () => 'r-grc-' + (refn++);
+  const perSent = sentTexts.map((s, i) => ({ idx: i, text: s, toks: tokenizeGreek(s).map(analyzeGreekToken) }));
+
+  // ── article agreement + noun/verb resolution per token (the matcher) ──
+  // The clause's finite verb is the rightmost token carrying a verb reading
+  // (Greek tends verb-final, and an ambiguous earlier token like ἵππον — which
+  // also matches a secondary ending — is then read as the noun it is). An
+  // article governing a noun broadcasts {case,number,gender}; the noun keeps
+  // only the agreeing reading. With no article the most specific (longest)
+  // ending wins. Postpositive particles may sit between (ὁ δὲ Κῦρος). A σ-marked
+  // aorist reading is preferred when present (ἔλυσε is aorist, not imperfect).
+  for (const sent of perSent) {
+    sent.nouns = []; sent.verb = null;
+    let verbIdx = -1;
+    for (let i = 0; i < sent.toks.length; i++) if (sent.toks[i].verbs && sent.toks[i].verbs.length) verbIdx = i;
+    if (verbIdx >= 0) { const vs = sent.toks[verbIdx].verbs; sent.verb = vs.find(v => v.aorist) || vs[0]; }
+    let pendingArt = null;
+    for (let i = 0; i < sent.toks.length; i++) {
+      const a = sent.toks[i];
+      if (a.article) { pendingArt = a.article; continue; }
+      if (a.particle || a.function) continue;           // grammar; keep pendingArt across postpositives
+      if (i === verbIdx) { pendingArt = null; continue; }   // the finite verb is not a noun
+      if (!a.nouns || !a.nouns.length) continue;
+      let cands = a.nouns;
+      if (pendingArt) {
+        const byCN = cands.filter(n => pendingArt.some(f => f.case === n.case && f.number === n.number));
+        const byCNG = byCN.filter(n => pendingArt.some(f => f.case === n.case && f.number === n.number && f.gender === n.gender));
+        cands = byCNG.length ? byCNG : (byCN.length ? byCN : cands);
+      }
+      sent.nouns.push(cands.slice().sort((x, y) => (y.endLen || 0) - (x.endLen || 0))[0]);
+      pendingArt = null;
+    }
+  }
+
+  // ── stem-fold admission: a noun stem seen in ≥ two distinct sentences ──
+  const TWO = (READING_RULES.two_sighting_admission && READING_RULES.two_sighting_admission.value) || 2;
+  const stemSent = new Map(), stemSurf = new Map();
+  for (const sent of perSent) for (const n of sent.nouns) {
+    if (!stemSent.has(n.stemKey)) { stemSent.set(n.stemKey, new Set()); stemSurf.set(n.stemKey, new Map()); }
+    stemSent.get(n.stemKey).add(sent.idx);
+    const sm = stemSurf.get(n.stemKey); sm.set(n.surface, (sm.get(n.surface) || 0) + 1);
+  }
+  const sites = new Map(), firstSent = new Map();
+  for (const [stem, sents] of stemSent) {
+    if (sents.size < TWO) continue;
+    const surf = stemSurf.get(stem);
+    const name = [...surf.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    sites.set(stem, { key: stem, referent_id: mintRef(), name, count: [...surf.values()].reduce((x, y) => x + y, 0) });
+  }
+  for (const sent of perSent) for (const n of sent.nouns) {
+    if (sites.has(n.stemKey) && !firstSent.has(n.stemKey)) firstSent.set(n.stemKey, sent.idx);
+  }
+  for (const [stem, site] of sites) {
+    const si = firstSent.has(stem) ? firstSent.get(stem) : 0;
+    events.push({
+      id: 'ev-' + seq, seq: seq++, op: 'INS', stance: 'Instantiating',
+      target: site.name, targetRaw: site.name, entityType: 'thing', referent_id: site.referent_id,
+      in_quote: false, sentence_idx: si, sentence: sentTexts[si],
+      basis: { stem, sightings: stemSent.get(stem).size }, src: 'greek-stem-fold',
+    });
+  }
+
+  // ── per-clause deed-finding: CASE IS THE HINT, NOT THE ORDER ──
+  for (const sent of perSent) {
+    const verb = sent.verb;
+    if (!verb) continue;
+    const nomN = sent.nouns.find(n => n.case === 'nom' && sites.has(n.stemKey));
+    const accN = sent.nouns.find(n => n.case === 'acc' && sites.has(n.stemKey));
+    const negated = sent.toks.some(a => { const w = gword(a.raw); return ['οὐ', 'οὐκ', 'οὐχ', 'μή'].map(gword).includes(w); });
+    const obj = accN ? sites.get(accN.stemKey) : null;
+    let source = nomN ? sites.get(nomN.stemKey) : null, bound = false;
+    // BOUND PRONOUN: no overt nominative → the subject lives in the ending;
+    // resolve it to the most active admitted site OTHER than the object
+    // (momentum proxy = sightings).
+    if (!source) {
+      const cands = [...sites.values()].filter(s => !obj || s.referent_id !== obj.referent_id).sort((a, b) => b.count - a.count);
+      source = cands[0] || null; bound = true;
+    }
+    if (!source || !obj || source.referent_id === obj.referent_id) continue;
+    const stance = {
+      grain: verb.aorist ? 'Figure' : (verb.tenseFamily === 'secondary' ? 'Pattern' : 'Figure'),
+      voice: verb.voice === 'middle_passive' ? 'middle' : (verb.voice || 'active'),
+      mood: 'indicative', polarity: negated ? 'negated' : 'asserted',
+    };
+    events.push({
+      id: 'ev-' + seq, seq: seq++, op: 'CON', stance: 'Connecting',
+      s: source.name, v: verb.stemKey, o: obj.name, relation: verb.stemKey,
+      source_ref: source.referent_id, target_ref: obj.referent_id,
+      sourceName: source.name, targetName: obj.name,
+      stance_face: stance, bound_subject: bound,
+      sentence_idx: sent.idx, sentence: sent.text, src: 'greek-case-role',
+    });
+  }
+
+  const { entities, edges } = projectGraph(events);
+  const t1 = performance.now();
+  const rulesJson = {}; for (const [id, r] of Object.entries(READING_RULES)) rulesJson[id] = { value: r.value, mass: r.mass === Infinity ? 'Infinity' : r.mass, layer: r.layer, src: r.src, module: r.module || 'core', desc: r.desc };
+  const modulesJson = { active: Object.values(LANGUAGE_MODULES).filter(m => m.enabled).map(m => m.id), available: Object.keys(LANGUAGE_MODULES), details: { ...LANGUAGE_MODULES } };
+  const readersJson = {}; for (const [id, r] of Object.entries(READER_REGISTRY)) readersJson[id] = { kind: r.kind, coupling: r.coupling, adjustable: r.adjustable };
+  return {
+    lang: 'grc', mode: 'unstructured',
+    input_chars: text.length, sentences: sentTexts.length, events, entities, edges,
+    verb_slot_tally: {}, sections: [], sentence_texts: sentTexts,
+    open_signals: [], signal_collapses: {}, rules: rulesJson, language_modules: modulesJson, readers: readersJson,
+    counts: { INS: events.filter(e => e.op === 'INS').length, SYN: 0, DEF: 0, SIG: events.filter(e => e.op === 'SIG').length, NUL: 0, SEG: 0, CON: events.filter(e => e.op === 'CON').length, EVA: 0, REC: 0, RULES: Object.keys(READING_RULES).length },
+    ms: Math.round(t1 - t0),
+  };
+}
+
 // Cooperative yield: hand the main thread back to the browser between chunks
 // of a long ingest. Two things happen in that gap that keep a big document
 // from crashing the tab: the page stays responsive (it can paint and accept
@@ -2877,6 +3234,7 @@ async function extractEoGraph(text, onProgress) {
   TRANSCRIPT_ACTIVE = false;
   if (LANG === 'code') return extractCodeGraph(text, t0);
   if (LANG === 'csv') return extractCsvGraph(text, t0);
+  if (LANG === 'grc') return extractGreekGraph(text, t0);
   // A transcript is a GENRE the page declares through its own typography —
   // timecodes and turn labels. The genre pack normalizes that typography into
   // structure (cues → boundaries, labels → attribution) and the shared
@@ -9199,7 +9557,10 @@ function projectGraph(events, frame = {}) {
     setLanguageModes, languageModes,
     // the semantics graph (conventions.jsonl): human-language conventions as an
     // eo-operation log, projected like any other event log
-    loadConventions, projectConventions, _conventionsExport,
+    loadConventions, loadConventionPacks, projectConventions, _conventionsExport,
+    // el-classical-v1 Greek organs — test/introspection handles
+    _detectLanguage: detectLanguage, _analyzeGreekToken: analyzeGreekToken,
+    _buildGreekOrgans: buildGreekOrgans, _extractGreekGraph: extractGreekGraph, _greekTables: () => GREEK,
     // the Site face — the 9 phenomenological addresses (EO Space × Time): the
     // grid, the operator→Domain map, and the classifiers. The Act face is the
     // event `op`; the Site face is `event.site` / `entity.site`.
