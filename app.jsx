@@ -118,6 +118,7 @@ function App() {
   // Ingestion audit: a glass box over the BUILD — the graph word by word, in
   // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
   const [graphAuditOpen, setGraphAuditOpen] = useState(false);
+  const [promptsOpen, setPromptsOpen] = useState(false);
   const [sandboxOpen, setSandboxOpen] = useState(false);
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
   const [auditCount, setAuditCount] = useState(0);
@@ -1735,6 +1736,7 @@ function App() {
             </button>
           )}
           <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> {enabledRules} rules on</button>
+          <button className="tb-pill" onClick={() => setPromptsOpen(true)} title="Prompt book — every prompt the model can be handed, verbatim, and the IF→THEN routing that picks one"><Icon name="read" size={15} /> Prompts</button>
           {window.EVO_SANDBOX && <button className="tb-pill" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> Sandbox</button>}
         </header>
 
@@ -1765,6 +1767,7 @@ function App() {
       {rulesOpen && <RulesDrawer rules={rules} langModes={langModes}
         learnedByLang={window.EOEngine && window.EOEngine.learnedVerbsByLang ? window.EOEngine.learnedVerbsByLang() : {}}
         onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
+      {promptsOpen && <PromptsDrawer onClose={() => setPromptsOpen(false)} />}
       {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}

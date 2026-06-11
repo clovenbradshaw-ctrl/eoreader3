@@ -163,13 +163,13 @@
       // degeneracy guard (don't hand back a single span as the summary),
       // which is faithfulness, not length.
       const lines = [
-        'You\'re Cleon, a helpful assistant running locally in the user\'s browser. You\'re in the middle of a conversation with them about a document you\'ve been reading together.',
+        'You\'re Cleon, a helpful assistant running locally in the user\'s browser. You\'re in the middle of a conversation with them about a document you\'ve been reading together. Respond to the user appropriately — read what they\'re actually asking this turn and answer that, in your own words.',
         '',
-        'Two kinds of context come with each turn:',
-        '- Spans — exact sentences quoted verbatim from the document. Trust them; lean on them whenever a fact is in there.',
-        '- Your notes — your own understanding from reading the document. Usually right, sometimes wrong. Good for shape, connections, and who-is-who.',
+        'Some context comes with each turn, and it may or may not be relevant — use what helps, ignore what doesn\'t:',
+        '- Spans are exact sentences quoted verbatim from the document. Trust them; lean on them whenever a fact is in there. If a span carries the name, date, or title they\'re after, use it directly — don\'t echo the question\'s wording back.',
+        '- Your notes are your own understanding from reading the document — usually right, sometimes wrong, good for shape, connections, and who-is-who. If a span and a note disagree, the span wins.',
         '',
-        'If a span and a note disagree, the span wins. If a span contains a name, date, or title that answers the question, use it directly — don\'t echo the question\'s wording back. Don\'t add facts that are in neither the spans nor your notes. If neither covers the question, say plainly that the document doesn\'t say, rather than guessing — you don\'t have the whole document, just what you were handed.',
+        'Don\'t state facts that are in neither the spans nor your notes. If nothing here covers what they asked, say plainly that the document doesn\'t say, rather than guessing — you only have what you were handed, not the whole document.',
       ];
       if (task === 'summary') {
         lines.push('');
@@ -345,42 +345,40 @@
     return note;
   }
 
-  // The grounded user message, tiered: the question first (orientation), the
-  // shape note (the director's read of what this turn wants), the spans
-  // quoted exactly, the notes as their own epistemic level, and the question
-  // again as the closing instruction — without the second occurrence, long
-  // context pushes the question out of the model's recency window and
-  // answers drift. Non-grounded callers (plain chat, creative) keep their
-  // old shapes; a grounded caller that still passes a prebuilt blob (the
-  // summary sample) gets the same frame around the blob.
+  // The grounded user message, in the "respond to the user" frame: a plain
+  // instruction, the user's message, then everything the engine surfaced offered
+  // as AMBIENT context — "things on my mind that may or may not be relevant,"
+  // not a brief to fill. The old frame labelled the shape note "What this turn
+  // wants:" and closed with "Answer the user's question:", which a small model
+  // read as the answer itself and parroted straight back (the observed quote-dump
+  // traces). Order inside the context block: what they seem to be after (the
+  // shape note, if any) · the spans, word for word · the reader's own notes. The
+  // question is restated once in the closing line, so a long context block can't
+  // push it out of the model's recency window and drift the answer. Non-grounded
+  // callers (plain chat, creative) keep their old shapes; a grounded caller that
+  // passes a prebuilt blob (the summary sample) gets the same frame around it.
   function buildUserContent({ question, docTitle, spans, notesProse, contextText, grounded, shapeNote }) {
     if (!grounded) return contextText ? `Passages:\n${contextText}\n\n${question}` : question;
     const hasSpans = Array.isArray(spans) && spans.length > 0;
     if (!hasSpans && !notesProse && !contextText && !shapeNote) return question;
-    const parts = [`The user just asked: ${question}`, ''];
-    if (shapeNote) {
-      parts.push('What this turn wants:');
-      parts.push(String(shapeNote).trim());
-      parts.push('');
-    }
-    parts.push('Context for this turn:');
-    if (docTitle) parts.push(`You've been reading a document called "${docTitle}".`);
-    parts.push('');
+    const indent = (s) => String(s).split('\n').map(l => '    ' + l).join('\n');
+    const src = docTitle ? `"${docTitle}"` : 'the document';
+    const parts = ['Respond to the user.', '', `User: ${question}`, '',
+      'Things on my mind that may or may not be relevant, based on what they said:', ''];
+    if (shapeNote) parts.push(`· What they seem to be after: ${String(shapeNote).trim()}`);
     if (hasSpans) {
-      parts.push('Sentences from the document that look relevant, quoted exactly:');
-      for (const s of spans) parts.push(`  [${s.tag != null ? s.tag : 's' + s.idx}] ${s.text}`);
-      parts.push('');
+      parts.push(`· From ${src}, word for word:`);
+      for (const s of spans) parts.push(`    [${s.tag != null ? s.tag : 's' + s.idx}] ${s.text}`);
     } else if (contextText) {
-      parts.push('Material from the document:');
-      parts.push(contextText);
-      parts.push('');
+      parts.push(`· From ${src}:`);
+      parts.push(indent(contextText));
     }
     if (notesProse) {
-      parts.push('Your notes on the document (your understanding from reading it — usually right, sometimes wrong):');
-      parts.push(notesProse);
-      parts.push('');
+      parts.push('· What I remember about it (my own read — usually right, sometimes wrong):');
+      parts.push(indent(notesProse));
     }
-    parts.push(`Answer the user's question: ${question}`);
+    parts.push('');
+    parts.push(`Now write your reply to the user. They asked: ${question}`);
     return parts.join('\n');
   }
 
