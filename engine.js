@@ -2508,6 +2508,81 @@ function depictedAct(verb, ctx) {
   return { op: best, obj: 'figure', w: +bw.toFixed(3) };
 }
 
+// ── The model-backed evaluator (the autonomous consumer of the local model) ──
+// depictedAct runs SYNCHRONOUSLY inside the parse, but a model call is async, so
+// the model cannot be consulted inline. Instead a background classifier fills a
+// cache the synchronous evaluator reads. The autonomous loop: parse → list the
+// unclassified relation verbs → ask the model to name each one's depicted act →
+// cache the answers at the model's coupling → the next projection reads them.
+// The model is still the weakest reader (its weight is capped in depictedAct),
+// so it only ever tips an unclassified verb — never overrides the lexicon, and
+// never needs a human in the loop.
+const DEPICTS_MODEL_CACHE = new Map();           // verb head → { op, weight }
+const _DEPICTS_LABEL_OP = { SEVER: 'SEG', FUSE: 'SYN', RELATE: 'CON', STATE: 'STATE' };
+function _depictsHead(verb) {
+  return (normalizeRelation(verb) || String(verb || '').toLowerCase()).split(/\s+/)[0] || '';
+}
+// The closed-grammar classification prompt for a batch of verbs (human labels
+// the small model handles better than the raw op codes; mapped back below).
+function depictsClassifyPrompt(verbs) {
+  return [
+    'You label what kind of change each verb makes to the link between two things.',
+    'Reply with exactly one line per verb, in the form "verb: LABEL". LABEL is one of:',
+    '  SEVER  — a separation or a cut (the link is broken)',
+    '  FUSE   — a joining into one new unit (marry, merge)',
+    '  RELATE — a plain connection; nothing is transformed',
+    '  STATE  — a standing condition; no event happens (own, resemble)',
+    'No other words, no explanation. Verbs:',
+    verbs.map(v => '- ' + v).join('\n'),
+  ].join('\n');
+}
+// Parse "verb: LABEL" lines into head → op, dropping anything off-grammar.
+function parseDepictsReply(text, verbs) {
+  const want = new Set(verbs);
+  const out = new Map();
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.match(/^\s*[-*]?\s*([\p{L}'’-]+)\s*[:=\-]\s*([A-Za-z]+)/u);
+    if (!m) continue;
+    const head = _depictsHead(m[1]);
+    const op = _DEPICTS_LABEL_OP[m[2].toUpperCase()];
+    if (op && want.has(head) && !out.has(head)) out.set(head, op);
+  }
+  return out;
+}
+// Autonomous classifier: ask the model to name the depicted act of each
+// UNclassified verb and cache it. askFn: (prompt) => Promise<string>. Skips
+// lexicon-known and already-cached verbs; batches to one call; never throws.
+async function classifyDepictedActs(verbs, askFn, opts = {}) {
+  const cap = opts.max || 24;
+  const todo = [...new Set((verbs || []).map(_depictsHead).filter(Boolean))]
+    .filter(h => !DEPICTS_MODEL_CACHE.has(h) && !depictedAct(h))   // unclassified only
+    .slice(0, cap);
+  if (!todo.length || typeof askFn !== 'function') return { classified: 0, asked: 0 };
+  let reply = '';
+  try { reply = await askFn(depictsClassifyPrompt(todo)); }
+  catch (e) { return { classified: 0, asked: todo.length, error: String((e && e.message) || e) }; }
+  const got = parseDepictsReply(reply, todo);
+  for (const [head, op] of got) DEPICTS_MODEL_CACHE.set(head, { op, weight: DEPICTS_EVAL_COUPLING });
+  return { classified: got.size, asked: todo.length };
+}
+// Register the cache-reading evaluator (what depictedAct consults). After this,
+// a model-classified verb tips its bond's depicted act at the model's coupling.
+function enableModelDepicts() {
+  setDepictsEvaluator((head) => DEPICTS_MODEL_CACHE.get(head) || null);
+}
+// The unclassified relation verbs in a parsed doc, by frequency — the queue the
+// autonomous classifier works (highest-leverage first).
+function unclassifiedDepictsVerbs(doc, limit = 24) {
+  const freq = new Map();
+  for (const ev of ((doc && doc._events) || [])) {
+    if ((ev.op === 'CON' || ev.op === 'SYN') && ev.v) {
+      const h = _depictsHead(ev.v);
+      if (h && !depictedAct(h)) freq.set(h, (freq.get(h) || 0) + 1);
+    }
+  }
+  return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(e => e[0]);
+}
+
 // Page chrome: a line that is structure (nav, boilerplate, byline, rule),
 // not prose. Stays in the spine; reaches no operator emitter.
 function isChrome(text) {
@@ -9929,6 +10004,9 @@ function projectGraph(events, frame = {}) {
     // depicted-act content on CON bonds, and the autonomous-evaluator seam (the
     // local model as a soft, capped weighting — never a gate)
     depictedAct, setDepictsEvaluator,
+    // the model-backed depicted-act evaluator — autonomous, the model as a capped weighting
+    classifyDepictedActs, enableModelDepicts, unclassifiedDepictsVerbs,
+    _depictsClassifyPrompt: depictsClassifyPrompt, _parseDepictsReply: parseDepictsReply,
     // the Site face — the 9 phenomenological addresses (EO Space × Time): the
     // grid, the operator→Domain map, and the classifiers. The Act face is the
     // event `op`; the Site face is `event.site` / `entity.site`.
