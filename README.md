@@ -151,6 +151,60 @@ hand instead of competing with content retrieval. On Gutenberg texts the
 cast is also cleaned: boilerplate names ("Project Gutenberg") and names
 living only in the header or license tail are not characters.
 
+### The shape layer (shape-steered generation)
+
+The shape pass above is the seed of a larger split: **content** (what's true
+and relevant) and **shape** (how to say it) are handled by independent
+subsystems, so neither prompt has to encode both. The content layer
+(`engine.js`) owns spans, notes, citations, and the verifier; the **shape
+layer** (`shape.js`, published as `window.EOShape`) owns the form — length,
+register, commitment, structure — and steers the model toward it. The model
+does the linguistic work of joining them.
+
+Form is measured against a library of pre-written **exemplars**
+(`exemplars.jsonl` — 373 exemplars across 22 intents: lookup, synthesis,
+connect-passages, clarify-question, pushback-repair, hedge-uncertain,
+disagree-with-source, refusal-without-condescension, out-of-scope-offer,
+name-tension, meta-about-cleon, and the rest). Their *content* is incidental
+and their *shape* is the signal — full length range (two-word answers to
+essay-length syntheses, plus a few ASCII diagrams), and **both poles of every
+interpretable axis** anchored via each line's `anchor_axes` (short↔long,
+committed↔hedged, warm↔dry, prose↔structured, …) so the axes survive an
+embedder swap as centroid differences. Each exemplar's response is embedded
+once (the resident MiniLM, borrowed lazily so an exemplar vector never triggers
+a download) and cached. A draft is scored not by raw cosine to its target but **discriminatively**
+(§5): `s_t − s_c`, its similarity to the target shape minus its similarity to
+the nearest *competing* shape — positive means it sits unambiguously in the
+target's basin. The bar is **adaptive**: higher where shapes crowd together
+(more to be confused with), lower where the target is isolated.
+
+"Thinking," then, is the iterative search for the right shape for an answer
+whose content is already settled. The **drafting controller** (`runDraftingLoop`)
+re-asks the same model with the content held fixed and only a shape-revision
+instruction varying between drafts. Revisions are natural language the model
+can act on — "more concise," "less hedging," "as prose, not a list" — derived
+from the draft's drift along interpretable axes (the library's declared poles
+where it has them, else structural features: length, hedging, structure,
+first-person warmth), never a numeric score (showing the model its own cosine
+would make a worse objective). The loop exits on three conditions
+(§10): **landed** (score clears the threshold), **converged-and-failed**
+(drafts stop improving), or **budget** (four drafts). A non-landing turn
+returns its best draft, honestly marked `soft_fail`, with a full audit trail —
+every instruction, draft, score, and drift axis — structured from day one to
+feed a later Hebbian update over the exemplar weights (§11; the update itself
+is deferred).
+
+Everything in the shape layer is pure and dependency-injected — generation
+(`EOLLM.phrase`) and embedding (`EOEmbed`) are passed *in*, never imported — so
+the whole thing is exercised in Node with fakes (`tests/shape.test.js`) and no
+WebGPU. It ships as the measurement substrate plus the controller, exposed
+(`window.EOShape`) and pulling from the full merged library; replacing the live
+single-call phrasing with the loop is the remaining forward step (it has open
+UX questions — how to surface drafting and soft-fails), and is parity-safe until
+then (the answer path is unchanged, and the golden snapshots are byte-identical).
+The reasoning-model `<think>`-leak filter the loop depends on — drafts must be
+think-clean before they reach the embedder — already ships in `llm.js`.
+
 ### Checking a claim (CONFIRM/DENY)
 
 Not every turn is a question. "Is Amos Dresser the white minister…?", "but it

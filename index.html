@@ -66,6 +66,35 @@
       (window.EOEmbed && window.EOEmbed.ready()) ? window.EOEmbed.embedSentences(texts) : null);
   }
 </script>
+<!-- the shape layer (shape-steered generation): the exemplar library + the
+     drafting controller, discriminative score, and interpretable axes. -->
+<script src="shape.js"></script>
+<script>
+  // The shape library is fetched once and embedded LAZILY on first request,
+  // borrowing the resident MiniLM (the same embedder used for recall) so an
+  // exemplar vector never triggers a model download and startup pays nothing
+  // until something asks. Returns a memoized Promise<library|null>; absent or
+  // unreachable (file://, no embedder) it resolves null and callers fall back
+  // to the single-call phrasing path (parity).
+  (function () {
+    let p = null;
+    window.EOShapeLibrary = function () {
+      if (p) return p;
+      p = (async () => {
+        try {
+          if (!window.EOShape) return null;
+          const res = await fetch('exemplars.jsonl');
+          if (!res.ok) return null;
+          const text = await res.text();
+          const embed = (texts) => (window.EOEmbed && window.EOEmbed.embedSentences)
+            ? window.EOEmbed.embedSentences(texts) : null;
+          return await window.EOShape.load(text, embed);
+        } catch (e) { return null; }
+      })();
+      return p;
+    };
+  })();
+</script>
 <script src="store.js"></script>
 <script src="audit.js"></script>
 

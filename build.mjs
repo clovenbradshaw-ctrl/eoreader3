@@ -44,6 +44,10 @@ const result = await esbuild.build({
 // are copied verbatim.
 copyFileSync(join(ROOT, 'llm.js'), join(DIST, 'llm.js'));
 copyFileSync(join(ROOT, 'embed.js'), join(DIST, 'embed.js'));
+// shape.js is a plain script too (it imports nothing — generation and embedding
+// are injected); the exemplar library it scores against rides alongside.
+copyFileSync(join(ROOT, 'shape.js'), join(DIST, 'shape.js'));
+copyFileSync(join(ROOT, 'exemplars.jsonl'), join(DIST, 'exemplars.jsonl'));
 copyFileSync(join(ROOT, 'styles.css'), join(DIST, 'styles.css'));
 
 const HTML = `<!doctype html>
@@ -62,6 +66,28 @@ const HTML = `<!doctype html>
 <!-- optional local model (dynamic-imports WebLLM from a CDN on demand) -->
 <script src="llm.js"></script>
 <script src="embed.js"></script>
+<!-- the shape layer + its lazily-embedded exemplar library -->
+<script src="shape.js"></script>
+<script>
+  (function () {
+    let p = null;
+    window.EOShapeLibrary = function () {
+      if (p) return p;
+      p = (async () => {
+        try {
+          if (!window.EOShape) return null;
+          const res = await fetch('exemplars.jsonl');
+          if (!res.ok) return null;
+          const text = await res.text();
+          const embed = (texts) => (window.EOEmbed && window.EOEmbed.embedSentences)
+            ? window.EOEmbed.embedSentences(texts) : null;
+          return await window.EOShape.load(text, embed);
+        } catch (e) { return null; }
+      })();
+      return p;
+    };
+  })();
+</script>
 <!-- everything else: React (production) + compromise + engine + UI, prebuilt -->
 <script src="app.bundle.js"></script>
 </body>
