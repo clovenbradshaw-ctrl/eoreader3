@@ -445,6 +445,29 @@ function App() {
       } catch (e) { eoWarn('proposer', e); }
     });
   };
+  // The model also names the depicted act of unclassified relation verbs —
+  // autonomously, off the hot path, as a soft weighting (capped at the model's
+  // coupling). It fills the engine's depicts cache for subsequent reads; it
+  // never blocks the parse and never asks the user.
+  const depictsArmed = useRef(false);
+  const maybeClassifyDepicts = (doc) => {
+    const E = window.EOEngine;
+    if (!E || !E.classifyDepictedActs || !doc || depictsArmed.current) return;
+    if (!(window.EOLLM && window.EOLLM.ask && window.EOLLM.isLoaded(model.mlc))) return;
+    let verbs; try { verbs = E.unclassifiedDepictsVerbs(doc); } catch (e) { return; }
+    if (!verbs || !verbs.length) return;
+    depictsArmed.current = true;
+    const idle = (fn) => (typeof requestIdleCallback === 'function')
+      ? requestIdleCallback(fn, { timeout: 30000 }) : setTimeout(fn, 4000);
+    idle(async () => {
+      depictsArmed.current = false;
+      try {
+        if (busyRef.current) return;
+        try { E.enableModelDepicts(); } catch (e) {}
+        await E.classifyDepictedActs(verbs, (prompt) => window.EOLLM.ask(prompt, { mlcKey: model.mlc }));
+      } catch (e) { eoWarn('depicts', e); }
+    });
+  };
   // a model finishing its load may unlock proposals for already-read docs
   useEffect(() => { if (modelStatus === 'ready') maybeProposeConventions(); }, [modelStatus]);
 
@@ -493,7 +516,7 @@ function App() {
     if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
     // the parse may have registered friction (or co-witnessed a pending
     // proposal); give the proposer its idle slot
-    if (doc.kind === 'prose') maybeProposeConventions();
+    if (doc.kind === 'prose') { maybeProposeConventions(); maybeClassifyDepicts(doc); }
     return doc;
   };
   // Read files into memory ONE AT A TIME, then ingest. Serial on purpose: two

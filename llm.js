@@ -452,6 +452,22 @@
     return note;
   }
 
+  // Generic single-prompt completion — the primitive the autonomous depicted-act
+  // classifier (engine.classifyDepictedActs) calls to name a verb's depicted act.
+  // No streaming UI, no history: ask the loaded model and return its text. Used
+  // off the hot path; a caller that has no model loaded simply never calls it.
+  async function ask(prompt, opts = {}) {
+    const eng = await load(opts.mlcKey || opts.model);
+    const messages = [{ role: 'user', content: String(prompt || '') }];
+    const res = await eng.chat.completions.create({
+      messages, temperature: opts.temperature ?? 0,
+      max_tokens: opts.max_tokens ?? 256, stop: STOP_SEQUENCES, stream: true,
+    });
+    let full = '';
+    for await (const chunk of res) full += chunk.choices?.[0]?.delta?.content || '';
+    return stripThink(full);
+  }
+
   // The grounded user message, tiered: the question first (orientation), the
   // shape note (the director's read of what this turn wants), the spans
   // quoted exactly, the notes as their own epistemic level, and the question
@@ -670,5 +686,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, cancelLoad, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, load, cancelLoad, isLoaded, clearCache, phrase, shapePass, ask, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
