@@ -73,8 +73,8 @@ async function main() {
     // the aorist clause (ἔλυσεν → stem λυ) carries Figure grain; the imperfect
     // εἶχεν clause in the same passage carries Pattern — the grain split is real
     const aor = con.find(e => e.relation === 'λυ');
-    ok(aor && aor.stance_face && aor.stance_face.voice === 'active' && aor.stance_face.grain === 'Figure',
-      'the aorist bond carries Stance: active voice, Figure grain');
+    ok(aor && aor.depicts && aor.depicts.voice === 'active' && aor.depicts.obj === 'figure',
+      'the aorist bond carries its depicted address: active voice, Figure-grain obj');
   }
 
   group('pro-drop — the verb ending is a bound pronoun');
