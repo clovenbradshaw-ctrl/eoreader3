@@ -29,30 +29,37 @@ The last two must never blur: a pattern needed to *read* a register is a
 convention here; a pattern needed to *judge* a dump of that register lives in
 `tools/packs/`.
 
-## Status: not yet on the engine's reading path
+## Status: on the reading path for Greek
 
-Today the engine fetches exactly one file — `memory/conventions.jsonl`
-(`index.html:34`, and the Node tools). **`memory/packs/*.jsonl` is not loaded
-yet.** `el-classical-v1` is therefore stored as an *asserted pack* but is inert
-with respect to reading behavior, for two reasons the architecture itself
-predicts:
+The engine now loads `memory/packs/*.jsonl` as an **additive channel** alongside
+`memory/conventions.jsonl` — `loadConventionPacks` in the Node tools, and
+`index.html` (via `INDEX.jsonl`) in the browser. `conventions.jsonl` stays ≡
+seeds (the drift test is untouched; packs never land seed deltas).
 
-1. **No consuming organs.** `loadConventions` silently skips any convention
-   whose `rule` is not in `READING_RULES` (`engine.js:1010`), and
-   `projectConventions` only reads `DEF path:"value"`, not the pack's
-   `DEF property:"table"` (`engine.js:960`). Nothing folds `case_roles`,
-   `declension_endings`, `conjugation_endings`, the stem fold, … — they don't
-   exist as organs yet (the deed-finder is hardcoded positional,
-   `engine.js:4210`).
-2. **No witnesses.** A bulk/curated import is the *first* sighting (the source's
-   claim). Promotion waits on the *second* — the same surface confirmed against
-   real text the reader encounters. Until then a pack sits as `draft`, never
-   promoted to ground truth.
+`el-classical-v1` carries **reading organs**, built table-driven in the engine
+and exercised by `tests/greek.test.js`:
 
-This is the charter working as designed: a pack is an **assertion**, admitted by
-witnesses, revisable, with provenance — not imported as fact. See
-`docs/packs-and-sources.md` for the full architecture and the engine-integration
-plan (what "wire pack-loading" and "build the organs" actually entail).
+- a **stem fold** at admission — crasis/elision expand, movable-ν and augment
+  strip, declension/conjugation endings strip → the site key is the stem, so
+  Κῦρος / Κύρου / Κῦρον fold to one site (`greek-stem-fold`);
+- **article agreement** — an article governing a noun constrains its
+  case/number/gender;
+- a **case→role deed-finder** — CON endpoints from morphology, not position
+  (nominative → source, accusative → target), `greek-case-role`;
+- a **bound-pronoun resolver** — pro-drop: a finite verb with no overt
+  nominative still mints a subject;
+- the **Stance face** on every Greek bond — `{grain, voice, mood, polarity}`,
+  with the aorist/imperfect split landing Figure vs Pattern grain.
+
+Every organ is **inert when its tables are empty**, and the whole Greek path is
+reached only when `detectLanguage ⇒ 'grc'` — so the 152 parity snapshots
+(en/es/zh/code) are byte-identical.
+
+It is still `status: draft`: confirmed by a synthetic test rather than a real
+Greek corpus (no text **witnesses** yet — the source/grammar claim is only the
+first sighting), and deeper morphology remains open (3rd-declension σ-stems,
+dual, mood beyond indicative, genitive absolute, switch-reference, indirect
+discourse). See `docs/packs-and-sources.md` for the full picture.
 
 Validate any pack against the same contracts the ledger obeys:
 

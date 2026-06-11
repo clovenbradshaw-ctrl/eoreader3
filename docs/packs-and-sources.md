@@ -84,64 +84,60 @@ truth.
 
 ## Engine-integration status — the honest part
 
-The directory architecture above is **data + dev tooling**: it stores the
-assertion and is genuinely "no code into the engine." But making a pack actually
-*read* is a separate question, and an audit of `engine.js` against the
-`el-classical-v1` design found a gap worth stating plainly.
+Storing the assertion was genuinely "no code into the engine." Making Greek
+*read* was not — an audit found that **none** of the organs the design assumed
+("inert universal organs with a table bolted on") actually existed: the
+deed-finder was hardcoded positional (`engine.js:4210`), there was no stem fold
+(only a fixed diacritic normalizer, `:2366`), no pro-drop path, and
+`loadConventions` silently skipped any rule it didn't know (`:1010`). They have
+now been **built** — table-driven and inert by default — across three layers.
 
-**Today the engine reads exactly one file** — `memory/conventions.jsonl`
-(`index.html:34`, and the Node tools). `memory/packs/*.jsonl` is **not on the
-reading path**. And even if it were, the pack's rules have no consumers:
+**Layer A — data + architecture.** The pack file, the three trees, lineage,
+INDEX, the validator. No engine change.
 
-| Capability the pack assumes | Reality in engine.js | Verdict |
+**Layer B — the engine reads packs.** `loadConventionPacks` loads
+`memory/packs/*.jsonl` as an **additive channel** (the Node tools; `index.html`
+via `INDEX.jsonl`); `projectConventions` carries `DEF property:…` structured
+tables into a convention's `data`; a pack registers its module. `conventions.jsonl`
+stays ≡ seeds — packs never land seed deltas, so the drift test is untouched.
+
+**Layer C — the organs.** `extractGreekGraph` (a self-contained extractor on the
+`extractCodeGraph` pattern, reached only when `detectLanguage ⇒ 'grc'`) reads the
+`GREEK` tables that `buildGreekOrgans` fills from the pack:
+
+| Capability | Built | Where |
 |---|---|---|
-| Table-driven **stem fold** off the paradigm | only fixed diacritic/case fold, `foldDiacritics()` `:2366` | **absent** |
-| **`case_roles`** deed-finder | endpoints hardcoded positional — `// first noun = subject, last verb = main verb, last noun = object` `:4210` | **absent** |
-| **Bound-pronoun** / pro-drop subject from a verb suffix | subject signals only from overt pronouns/names | **absent** |
-| `postpositive_particles`, `switch_reference`, `augment_fold`, `crasis/elision`, `orthographic_fold` | no consumer of any | **absent** |
-| Unknown `rule` handling | `loadConventions` silently skips any `rule` not in `READING_RULES` `:1010` | confirmed |
-| `DEF property:"table"` | `projectConventions` reads only `DEF path:"value"` `:960` | confirmed (table data dropped) |
+| table-driven **stem fold** (crasis/elision, movable-ν, augment, ending strip → stem key) | ✓ | `gfold` / `greekNounAnalyses` / `greekVerbAnalyses` |
+| **article agreement** (case/number/gender constrains the noun) | ✓ | the agreement pass |
+| **case→role deed-finder** (nom → source, acc → target; order-blind) | ✓ | the deed loop |
+| **bound-pronoun** / pro-drop subject from the verb ending | ✓ | the deed loop (`bound_subject`) |
+| **Stance face** on every Greek bond `{grain, voice, mood, polarity}`; aorist/imperfect → Figure/Pattern | ✓ | `stance_face` |
+| postpositive particles / function words as `grammar` (never indexed) | ✓ | `analyzeGreekToken` |
 
-The `zh` sub-word gram-mining (`:3124–3166`, driven by `pack.function_chars`) is
-the one structural precedent for a table-driven split, but it is fixed-shape
-(2–4 char CJK grams), not a configurable ending-strip.
+`tests/greek.test.js` exercises all of it; the 152 parity snapshots are
+byte-identical (the organs never run for en/es/zh/code). Each organ is inert
+when its table is empty, so the next inflected pack (Latin, Russian, Sanskrit) is
+tables, not new engine code — the first richly-inflected pack paid to build them.
 
-So the charter line *"tables into a pack, no code into the engine"* holds for
-**storing** the assertion (done) but **not** for making Greek read. That is a
-three-layer job:
-
-- **Layer A — data + architecture (this change).** The pack file, the three
-  trees, lineage, INDEX, the validator. No engine change; tests stay green.
-  `el-classical-v1` is an admitted assertion, inert by design until B and C.
-- **Layer B — the engine reads packs.** Wire `loadConventions` / `index.html` /
-  the Node tools to load `memory/packs/*.jsonl` alongside `conventions.jsonl`
-  (with enable/disable), and extend `projectConventions` to carry
-  `DEF property:…` structured tables into convention values. Adjust
-  `tests/conventions.test.js` so packs are an additive channel and the
-  `conventions.jsonl ≡ seeds ⇒ zero deltas` contract still holds. Medium; still
-  no new *reading* behavior.
-- **Layer C — the organs.** Build the table-driven stem fold at the admission
-  gate, the `case_roles`-consuming deed-finder, and the bound-pronoun resolver
-  that mints a subject SIG from a `conjugation_endings` table — plus the
-  crasis/elision/orthographic folds and switch-reference. This is real new
-  engine code. It is *universal* (English bonds get the same defaulted slots),
-  but it is new: the organs are not currently "inert and waiting," they are
-  absent.
-
-Each Layer-C organ is meant to stay register-agnostic and inert when its tables
-are empty (like the chrome gate), so adding Welsh or Sanskrit later is writing
-tables, not extending the engine again — but the **first** richly-inflected pack
-pays to build the organs.
+**Still open (revisable, not yet built).** Third-declension consonant+σ
+interactions (γ/κ/χ+σ→ξ …); the dual; dative/genitive/vocative role edges (only
+nominative/accusative deeds today); the genitive absolute; ὁ δέ switch-reference
+resolution; middle-voice self-benefit nuance; mood beyond a defaulted indicative
+(optative/subjunctive/imperative detection); indirect discourse (ὅτι/infinitive);
+attribution-verb speech CONs; agreement at a distance (only adjacent article
+agreement today). These stay as the pack's open assertions (`seq 2006`, 2033,
+2034, 2062) — the honest edge of what reads.
 
 ## Open questions
 
-- **Stance face.** The design argues every CON should carry
-  `{grain, voice, mood, polarity}`, populated from morphology where a register
-  marks it and defaulted where it doesn't (English → `{Figure, active,
-  indicative, asserted}`). Greek forces this (aorist vs imperfect grain; middle
-  voice; the optative/subjunctive moods). This is a Layer-C+ change to the bond
-  schema and the appendix's "Stance face stops being op-fixed" note; `seq 2006`
-  holds it as an open assertion. Tracked, not yet built.
+- **Stance face.** Every Greek CON now carries `{grain, voice, mood, polarity}`,
+  populated from the verb's morphology (`stance_face` in `extractGreekGraph`),
+  with the aorist/imperfect split landing Figure vs Pattern grain. What is *not*
+  yet done is making the slots first-class on **every** language's bonds
+  (English bonds would carry the defaults `{Figure, active, indicative,
+  asserted}` explicitly) and reading the moods beyond a defaulted indicative —
+  the broader "Stance face stops being op-fixed" change. `seq 2006` holds the
+  grain rule as a revisable assertion.
 - **Compiler language.** The source→pack compilers were sketched in Python
   (`compile_unimorph_to_pack.py`). This repo is pure Node/JS (`tools/*.js`,
   `*.mjs`); the validator added here is Node to match. Recommendation: Node
