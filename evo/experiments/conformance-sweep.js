@@ -19,7 +19,8 @@
      node evo/experiments/conformance-sweep.js
      node evo/experiments/conformance-sweep.js --docs hod,quijote --verbose
      node evo/experiments/conformance-sweep.js --cap 40000 --json out.json
-     node evo/experiments/conformance-sweep.js --bare
+     node evo/experiments/conformance-sweep.js --bare              # default web pack everywhere
+     node evo/experiments/conformance-sweep.js --no-conventions    # bare engine (no conventions.jsonl)
    ============================================================ */
 'use strict';
 const fs = require('fs');
@@ -76,7 +77,15 @@ function fmt(rows, cols) {
 
 (async () => {
   const E = loadEngine().EOEngine;
-  console.log(`conformance sweep · cap ${CAP} chars · packs: ${BARE ? 'BARE (default web pack)' : 'per-register (tools/packs)'}\n`);
+  // Score the engine as deployed: the app hydrates memory/conventions.jsonl
+  // on load (chrome gate, metaphor frames, type keywords are inert without
+  // it), so the sweep does too. --no-conventions measures the bare engine.
+  let hydrated = false;
+  if (!has('--no-conventions')) {
+    const conv = path.join(__dirname, '..', '..', 'memory', 'conventions.jsonl');
+    try { if (fs.existsSync(conv)) { E.loadConventions(fs.readFileSync(conv, 'utf8')); hydrated = true; } } catch (e) {}
+  }
+  console.log(`conformance sweep · cap ${CAP} chars · packs: ${BARE ? 'BARE (default web pack)' : 'per-register (tools/packs)'} · conventions: ${hydrated ? 'hydrated' : 'bare engine'}\n`);
 
   const rows = [];
   for (const d of BATTERY) {

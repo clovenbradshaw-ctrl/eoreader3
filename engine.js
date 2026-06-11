@@ -3121,21 +3121,28 @@ async function extractEoGraph(text, onProgress) {
         }
       });
       for (const [g, poss] of [...occ.entries()].sort((a, b) => b[1].length - a[1].length)) {
-        if (poss.length < READING_RULES.two_sighting_admission.value) continue;
+        // The gate counts distinct SENTENCES, not occurrences — a gram twice
+        // in one line has not "returned"; the two-sighting law, generalized,
+        // is two distinct sightings.
+        if (new Set(poss.map(p => p.si)).size < READING_RULES.two_sighting_admission.value) continue;
         const free = poss.filter(p => { for (let k = 0; k < n; k++) if (occupied[p.si].has(p.at + k)) return false; return true; });
-        if (free.length < READING_RULES.two_sighting_admission.value) continue;
+        if (new Set(free.map(p => p.si)).size < READING_RULES.two_sighting_admission.value) continue;
         admitted.push({ name: g, positions: free });
         for (const p of free) for (let k = 0; k < n; k++) occupied[p.si].add(p.at + k);
       }
     }
     zhNamePositions = new Map(admitted.map(a => [a.name, a.positions]));
     for (const a of admitted) {
-      const first = a.positions.reduce((m, p) => Math.min(m, p.si), Infinity);
+      const sis = [...new Set(a.positions.map(p => p.si))].sort((x, y) => x - y);
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'INS', stance: 'Instantiating',
         target: a.name, targetRaw: a.name, entityType: 'thing',
         referent_id: mintReferent(), in_quote: false,
-        sentence_idx: first, sentence: sentStrs[first],
+        sentence_idx: sis[0], sentence: sentStrs[sis[0]],
+        // the admission's evidence, written down: the distinct sentences
+        // that cleared the gate (the same basis vocabulary REC uses) —
+        // the projection unions these into the referent's sightings
+        basis: { slot_sightings: sis.length, sightings: sis },
         src: 'gram-mining',
       });
     }
@@ -5613,6 +5620,7 @@ function projectGraph(events, frame = {}) {
       _lang: result.lang || 'en',
       _genre: result.genre || null,
       _voices: result.voices || null,
+      _chrome: result.chrome || [],
       _seqToSent: seqToSent,
     };
     // Provenance substrate, pure addition (parity holds): hash every sentence
@@ -5837,8 +5845,17 @@ function projectGraph(events, frame = {}) {
 
     const proj = projectGraph(doc._events);
     const seqToSent = doc._seqToSent || new Map();
+    // sightings written into an INS's admission basis (gram-mining) are part
+    // of the referent's sentence record, not just the depositing sentence
+    const basisByRef = new Map();
+    for (const ev of doc._events) {
+      if (ev.op === 'INS' && ev.referent_id && ev.basis && Array.isArray(ev.basis.sightings)) basisByRef.set(ev.referent_id, ev.basis.sightings);
+    }
     const entities = proj.entities.map(e => {
-      const sents = [...new Set((e.eventSeqs || []).map(s => seqToSent.get(s)).filter(x => x != null))].sort((a, b) => a - b);
+      const sents = [...new Set([
+        ...(e.eventSeqs || []).map(s => seqToSent.get(s)).filter(x => x != null),
+        ...(basisByRef.get(e.referent_id) || []),
+      ])].sort((a, b) => a - b);
       const mass = e.physics && e.physics.mass != null ? Math.round(e.physics.mass * 10) / 10 : (e.mentions || sents.length || 1);
       return {
         name: e.name, key: e.key,
@@ -6630,6 +6647,7 @@ function projectGraph(events, frame = {}) {
     const events = doc._events || [];
 
     // events grouped by the span they were deposited on (the join key is sentence_idx)
+    const chromeSet = new Set(doc._chrome || []);
     const evBySent = new Map();
     const opCounts = {};
     for (let k = 0; k < events.length; k++) {
@@ -6681,6 +6699,11 @@ function projectGraph(events, frame = {}) {
       for (const k of evIdx) { const op = events[k].op; ops[op] = (ops[op] || 0) + 1; }
       perSent[i] = { i, chars: sents[i].length, words: toks.length, terms: nTerm,
                      events: evIdx.length, ops, ents: entsBySent.get(i) || [] };
+      // A dark span carries its reason — written-down absence, never a guess:
+      // 'chrome' when the chrome gate kept it from the emitters, 'no-event'
+      // when it was read as prose and deposited nothing. (A span whose only
+      // events are NULs keeps the NUL's own richer reason instead.)
+      if (!evIdx.length) perSent[i].reason = chromeSet.has(i) ? 'chrome' : 'no-event';
     }
 
     const termList = [...terms.values()].sort((a, b) => b.count - a.count || (a.token < b.token ? -1 : 1));

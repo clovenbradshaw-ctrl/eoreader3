@@ -231,7 +231,7 @@ async function main() {
     }
     ok(res.bits.BINDING.findings.some(f => f.law === 'deed-misfiled' && f.events.includes('ev-25')), 'BINDING witnesses ev-25: Tse—Sam Gor filed as SYN, not CON');
     eq(res.bits.BINDING.stats.con, 0, 'zero bonds in the graph');
-    ok(res.bits.SPEECH.findings.some(f => f.law === 'fallback-attribution' && f.events.includes('ev-76')), 'SPEECH witnesses ev-76: the title handed to Jeff Bezos by fallback');
+    ok(res.bits.SPEECH.findings.some(f => f.law === 'fallback-without-agency' && f.events.includes('ev-76')), 'SPEECH witnesses ev-76: the title handed to Jeff Bezos by fallback, no agency in the log');
     ok(res.bits.COMPANY.findings.some(f => f.law === 'def-target-not-referent' && f.events.includes('ev-370')), 'COMPANY witnesses ev-370: "Often" defined though it is no referent');
     ok(res.bits.COMPANY.findings.some(f => f.law === 'def-value-fragment' && f.events.includes('ev-37')), 'COMPANY witnesses ev-37: El Chapo defined as a copied fragment');
     ok(res.bits.COMPANY.findings.some(f => f.law === 'def-value-fragment' && f.events.includes('ev-41')), 'COMPANY witnesses ev-41: Toronto defined as "his"');
@@ -249,7 +249,8 @@ async function main() {
     };
     eq(flip(d => { d.entities[2].sents = [3]; }), '0 1 1 1 1 1 1', 'a single-sighting referent fails ADMISSION alone');
     eq(flip(d => { d.events.find(e => e.id === 'ev-6').op = 'SYN'; }), '1 0 1 1 1 1 1', 'a resolved deed filed as SYN fails BINDING alone');
-    eq(flip(d => { d.events.find(e => e.id === 'ev-7').attributed = 'fallback'; }), '1 1 0 1 1 1 1', 'fallback attribution fails SPEECH alone');
+    eq(flip(d => { Object.assign(d.events.find(e => e.id === 'ev-8'), { speaker: 'Jeff Bezos', attributed: 'fallback' }); }), '1 1 0 1 1 1 1', 'fallback onto a name with no agency in the log fails SPEECH alone');
+    eq(flip(d => { d.events.find(e => e.id === 'ev-7').attributed = 'fallback'; }), '1 1 1 1 1 1 1', 'fallback onto proven agency (Voss is subject of a deed) satisfies the law');
     eq(flip(d => { d.events.find(e => e.id === 'ev-11').target = 'Often'; }), '1 1 1 0 1 1 1', 'a DEF on a non-referent fails COMPANY alone');
     eq(flip(d => { delete d.events.find(e => e.id === 'ev-12').reason; }), '1 1 1 1 0 1 1', 'an unmarked dark span fails DARK alone');
     eq(flip(d => { d.events.find(e => e.id === 'ev-10').confidence = 0.97; }), '1 1 1 1 1 0 1', 'confidence stored on an event fails WEIGHT alone');
@@ -323,32 +324,48 @@ async function main() {
     fs.unlinkSync(tmp); fs.unlinkSync(out);
   });
 
-  /* ---- the live engine, scored. This is the rebuild's scoreboard: these
-     pins record what the engine does TODAY (the spec's premise), and each
-     one is meant to flip as its invariant is fixed — left to right, test
-     after each bit. Update the expectation when a bit lands; never delete it. */
-  console.log('• live engine — the checker reads a real ingestion dump');
+  /* ---- the live engine, scored AS DEPLOYED (conventions hydrated, the way
+     the app loads). This is the rebuild's scoreboard: these pins record what
+     the engine does TODAY, and each one is meant to flip as its invariant is
+     fixed — left to right, test after each bit. Update the expectation when a
+     bit lands; never delete it.
+       Already flipped: DARK (the chrome gate + ingestionReport write every
+     dark span's reason); WEIGHT (stall measurements live under observed). */
+  console.log('• live engine — the checker reads a real ingestion dump (hydrated)');
   {
     const { loadEngine } = require('./harness');
     const E = loadEngine().EOEngine;
+    E.loadConventions(fs.readFileSync(path.join(__dirname, '..', 'memory', 'conventions.jsonl'), 'utf8'));
     const WEB = [
-      'Terror in the Streets', '', 'Subscribe', 'Latest Issue', '',
-      'By Anna Chen And Toronto Life', '',
+      'Terror in the Streets', '',
+      '* About us * Contact * Advertise * Subscribe *', '',
+      'By Anna Chen | June 11, 2026', '',
+      'Subscribe now for just $5 a month.', '',
       'Tse Chi Lop ran a syndicate known as Sam Gor. The syndicate moved methamphetamine across five countries.',
-      'Tse Chi Lop was arrested in Amsterdam. Investigators compared him to El Chapo.',
-      '"We never lose," Tse told an associate. Sam Gor earned seventeen billion dollars in a year.',
-      'El Chapo was worth a fraction of that. Often the money moved through casinos.', '',
-      'Advertisement This', '', 'Contact', 'Submit', 'Advertise', 'Renew', 'Manage', 'Terms',
+      'Tse was arrested in Amsterdam last year. Investigators compared Tse to El Chapo more than once.',
+      'Reporters called him the Jeff Bezos of the drug trade. "We never lose," Tse told an associate.',
+      'Sam Gor earned seventeen billion dollars in a year. El Chapo was worth a fraction of that.',
+      'Often the money moved through casinos.', '',
+      'Advertisement This', '', 'Latest Issue',
+      'Contact Submit Advertise Renew Manage Terms',
     ].join('\n');
     const doc = await E.parseDocument('web.txt', WEB, 'web');
-    const res = C.checkDump(E.ingestionReport(doc));
+    const report = E.ingestionReport(doc);
+    const res = C.checkDump(report);
     eq(res.vector.length, 7, 'a live dump scores as seven bits');
-    eq(res.bits.WEIGHT.bit, 1, 'WEIGHT holds on a live dump — the engine keeps measurements inside observed.frame');
-    eq(res.bits.ADMISSION.bit, 0, 'ADMISSION fails today: one-mention chrome is minted as referents (flip me when the gate lands)');
-    eq(res.bits.BINDING.bit, 0, 'BINDING fails today: resolved deeds are filed as SYN, no CON (flip me when bonds land)');
-    eq(res.bits.BINDING.stats.con, 0, 'the live parse deposits zero CON events');
-    eq(res.bits.DARK.bit, 0, 'DARK fails today: dark spans carry no reasons (flip me when absence is written down)');
-    eq(res.bits.CUSTOM.bit, 0, 'CUSTOM fails today: web furniture is read with no chrome pack (flip me when chrome becomes a custom)');
+    // the chrome gate → report → checker seam: gated spans deposit nothing
+    // and carry their reason, which the checker reads as the dump's own mark
+    const reasons = Object.fromEntries(report.sentences.filter(s => s.reason).map(s => [report.spans[s.i].slice(0, 12), s.reason]));
+    eq(reasons['* About us *'], 'chrome', 'an asterisk nav row is gated and carries reason chrome');
+    eq(reasons['By Anna Chen'], 'chrome', 'a pipe-dated byline is gated and carries reason chrome');
+    ok(!report.entities.some(e => /anna chen/i.test(e.name)), 'the gated byline mints no referent');
+    eq(res.bits.DARK.bit, 1, 'DARK holds: every dark span carries its written reason (chrome / no-event)');
+    eq(res.bits.WEIGHT.bit, 1, 'WEIGHT holds: the engine keeps measurements inside observed.frame');
+    eq(res.bits.SPEECH.bit, 1, 'SPEECH holds here: the metaphor sentence mints no Bezos attribution');
+    eq(res.bits.ADMISSION.bit, 0, 'ADMISSION fails today: one-mention names (title words, fragments) are still minted (flip me when the gate lands)');
+    eq(res.bits.BINDING.bit, 0, 'BINDING fails today: deeds the fold can resolve are still filed as SYN — fragmentation starves the CON path (flip me when bonds land)');
+    eq(res.bits.COMPANY.bit, 0, 'COMPANY fails today: copular fragments, no frames (flip me when frames land)');
+    eq(res.bits.CUSTOM.bit, 0, 'CUSTOM fails today: footer link-runs are read with no admitted chrome custom for them (flip me when the custom is admitted)');
   }
 
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

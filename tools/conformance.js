@@ -77,6 +77,10 @@ const DEFAULT_PACK = {
   frame_ref: '^frame:[0-9a-f]{8,}$',
   // DEF targets that are document structure, not referents
   structural_def_targets: ['(schema)', '(header)', '(doc)'],
+  // where an SVO event may carry its resolved referent ids (spec name first,
+  // then the engine's CON field names)
+  s_ref_fields: ['sRef', 'source_ref'],
+  o_ref_fields: ['oRef', 'target_ref'],
   // REC actions that admit a rule (and so need a ledger lid + 2 sightings)
   rule_admitting_actions: ['add-token', 'admit'],
   // event fields that are weights and may live only inside observed.*
@@ -169,8 +173,9 @@ function buildContext(report, pack) {
     return best;
   }
   // an SVO endpoint resolves through an explicit ref, a hint, or its surface
-  function resolveEnd(ev, refField, hintField, surfField) {
-    const ref = ev[refField];
+  function resolveEnd(ev, refFields, hintField, surfField) {
+    const refField = refFields.find(f => ev[f] != null);
+    const ref = refField ? ev[refField] : null;
     if (ref != null) {
       const nm = refName.get(ref);
       return { entity: nm ? resolveSurface(nm) || { name: nm } : { name: String(ref) }, via: refField };
@@ -225,8 +230,8 @@ function checkBinding(ctx) {
   const mergers = ctx.events.filter(ev => ev.op === 'SYN' && Array.isArray(ev.sites));
   let resolvedPairs = 0, conBonds = 0;
   for (const ev of svos) {
-    const s = ctx.resolveEnd(ev, 'sRef', 'sHint', 's');
-    const o = ctx.resolveEnd(ev, 'oRef', 'oHint', 'o');
+    const s = ctx.resolveEnd(ev, ctx.pack.s_ref_fields, 'sHint', 's');
+    const o = ctx.resolveEnd(ev, ctx.pack.o_ref_fields, 'oHint', 'o');
     const resolved = s && o && fold(s.entity.name) !== fold(o.entity.name);
     if (!resolved) {
       if (ev.op === 'CON') findings.push(finding('bond-without-referents', `CON "${ev.s}" —${ev.v}→ "${ev.o}" does not carry two resolved referents — the bond was written near the names, not between them`, [ev]));
@@ -243,24 +248,47 @@ function checkBinding(ctx) {
   };
 }
 
-/* 3 — SPEECH: speech belongs only to one who has acted; never a metaphor,
-   never a fallback to the nearest capitalized name. */
+/* 3 — SPEECH: speech belongs only to one who has acted — subject of a deed,
+   target of a prior pronoun binding, or a prior named attribution. Never a
+   metaphor; a fallback binding is legitimate only onto proven agency. */
 function checkSpeech(ctx) {
   const findings = [];
   const sigs = ctx.events.filter(ev => ev.op === 'SIG' && ('speaker' in ev || 'quote' in ev));
   const earned = new Set(ctx.pack.attributed_earned);
   const honest = new Set(ctx.pack.attributed_honest);
   const speechless = new Set(ctx.pack.speechless_types);
+  // agency(speaker) at a point in the log: the three prongs of the law,
+  // computed from marks that were written, never from proximity
+  const seqOf = (ev) => (ev.seq == null ? Infinity : ev.seq);
+  function agency(speakerFold, beforeSeq) {
+    for (const ev of ctx.events) {
+      if (seqOf(ev) >= beforeSeq) continue;
+      if (ev.s != null && ev.v != null && ev.o != null) {            // subject of a deed
+        const s = ctx.resolveEnd(ev, ctx.pack.s_ref_fields, 'sHint', 's');
+        if (s && fold(s.entity.name) === speakerFold) return true;
+      }
+      if (ev.op === 'DEF' && /pronoun/.test(String(ev.src || '')) && fold(ev.target) === speakerFold) return true;   // target of a pronoun binding
+      if (ev.op === 'SIG' && fold(ev.speaker) === speakerFold) {     // a prior named attribution
+        const a = ev.attributed || 'named';
+        if (a === 'named' || a === 'pronoun') return true;
+      }
+    }
+    return false;
+  }
   const priorConfident = new Map();   // folded speaker -> first confident SIG seq
   for (const ev of sigs) {
     const att = ev.attributed || (ev.speaker && ev.speaker !== '?' ? 'named' : 'none');
     const sf = fold(ev.speaker);
     if (att === 'fallback') {
-      findings.push(finding('fallback-attribution', `"${(ev.quote || '').slice(0, 60)}" handed to "${ev.speaker}" by fallback — proximity is not agency`, [ev]));
-      continue;
+      if (!agency(sf, seqOf(ev))) {
+        findings.push(finding('fallback-without-agency', `"${(ev.quote || '').slice(0, 60)}" handed to "${ev.speaker}" by fallback with no agency evidence in the log — proximity is not agency`, [ev]));
+        continue;
+      }
+      // fallback onto proven agency satisfies the law; the metaphor and
+      // type checks below still apply to it
     }
     if (honest.has(att) || !ev.speaker || ev.speaker === '?') continue;
-    if (!earned.has(att)) {
+    if (!earned.has(att) && att !== 'fallback') {
       findings.push(finding('unknown-attribution', `SIG carries attributed:"${att}" — not an earned binding or an honest absence`, [ev]));
       continue;
     }
@@ -505,6 +533,7 @@ async function main(argv) {
   const floorArg = opt('--floor');
   const jsonOut = opt('--json');
   const quiet = flag('--quiet');
+  const noConventions = flag('--no-conventions');
   const parseFile = opt('--parse');
 
   const pack = packFile ? Object.assign({}, DEFAULT_PACK, loadJSON(packFile)) : DEFAULT_PACK;
@@ -515,6 +544,12 @@ async function main(argv) {
     if (parseFile) {
       const { loadEngine } = require(path.join(__dirname, '..', 'tests', 'harness'));
       const E = loadEngine().EOEngine;
+      // score the engine as deployed: the app hydrates the conventions file
+      // on load, so the instrument does too (opt out with --no-conventions)
+      if (!noConventions) {
+        const conv = path.join(__dirname, '..', 'memory', 'conventions.jsonl');
+        try { if (fs.existsSync(conv)) E.loadConventions(fs.readFileSync(conv, 'utf8')); } catch (e) { /* an unreadable file never blocks a score */ }
+      }
       const doc = await E.parseDocument(path.basename(parseFile), fs.readFileSync(parseFile, 'utf8'), 'conformance-doc');
       const r = E.ingestionReport(doc);
       if (!r) throw new Error('the engine produced no ingestion report (not prose?)');
