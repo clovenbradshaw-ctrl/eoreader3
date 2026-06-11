@@ -3603,6 +3603,26 @@ async function extractEoGraph(text, onProgress) {
   // Indices the chrome gate dropped — spine sentences that deposited no
   // operator event by construction (page apparatus, not prose).
   const chromeIdx = [];
+  // ── Gutenberg wrapper boundaries ──
+  // A Project Gutenberg ebook wraps the work in apparatus: a header (the
+  // title page, "Author:"/"Translator:" credits, the license preamble) before
+  // the "*** START OF THE PROJECT GUTENBERG EBOOK … ***" line, and the full
+  // license + donation boilerplate after the matching "*** END … ***". Left
+  // ungated this apparatus mints phantom entities — the author's byline becomes
+  // a high-salience site that captures pronoun coref (every body "he" pooling
+  // onto "Franz Kafka"), and the license tail mints "Literary Archive
+  // Foundation" / "Internal Revenue Service" / "General Terms". The markers
+  // bound the actual work; only sentences between them reach an emitter. The
+  // header/footer still record into sentenceTexts (indices preserved, header
+  // metadata stays readable by docMetadata) but mint nothing — the same
+  // transparency the chrome gate already gives a byline.
+  const GUTENBERG_START_RE = /\*{3}\s*START OF TH(?:E|IS) PROJECT GUTENBERG/i;
+  const GUTENBERG_END_RE = /\*{3}\s*END OF TH(?:E|IS) PROJECT GUTENBERG/i;
+  const _gutenbergWrapped = GUTENBERG_START_RE.test(text);   // only gate a doc that carries the marker
+  const _gutenbergHasEnd = _gutenbergWrapped && GUTENBERG_END_RE.test(text);
+  // 'header' until START, 'body' through the work, 'footer' after END. A
+  // non-Gutenberg paste starts in 'body' and is never gated (parity).
+  let gutenbergPhase = _gutenbergWrapped ? 'header' : 'body';
   // The PERSONS the previous sentence named — the local field the possessive-
   // kin reader resolves against (a possessive determiner is a local anaphor).
   let prevSentencePersons = new Set();
@@ -3636,6 +3656,20 @@ async function extractEoGraph(text, onProgress) {
     // ticked; the local-anaphor field (prevSentencePersons) is left intact,
     // so chrome is transparent to narrative continuity. It deposits nothing,
     // so it goes dark honestly instead of minting phantom entities.
+    // ── Gutenberg wrapper gate (before the chrome gate) ──────
+    // Header and footer are apparatus, not the work: gate them like chrome so
+    // they mint nothing. The START/END marker lines are apparatus too.
+    if (gutenbergPhase === 'header') {
+      const wasStart = GUTENBERG_START_RE.test(sentText);
+      chromeIdx.push(i);
+      if (wasStart) gutenbergPhase = 'body';
+      return;
+    }
+    if (gutenbergPhase === 'footer') { chromeIdx.push(i); return; }
+    if (_gutenbergHasEnd && GUTENBERG_END_RE.test(sentText)) {
+      gutenbergPhase = 'footer'; chromeIdx.push(i); return;
+    }
+
     if (isChrome(sentText)) { chromeIdx.push(i); return; }
 
     // ── Entity extraction via compromise POS tags ─────────────
