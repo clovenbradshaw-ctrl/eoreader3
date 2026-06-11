@@ -115,6 +115,9 @@ function App() {
   // Auditing mode: a glass box over the chat pipeline (window.EOAudit), inspected
   // in a drawer and exportable as JSONL. Recording is on by default.
   const [auditOpen, setAuditOpen] = useState(false);
+  // Ingestion audit: a glass box over the BUILD — the graph word by word, in
+  // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
+  const [graphAuditOpen, setGraphAuditOpen] = useState(false);
   const [sandboxOpen, setSandboxOpen] = useState(false);
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
   const [auditCount, setAuditCount] = useState(0);
@@ -1717,6 +1720,11 @@ function App() {
             <Icon name="activity" size={15} /> Glass box{auditCount ? ' · ' + auditCount : ''}
             {auditEnabled && <span className="dot rec" title="Recording" />}
           </button>
+          {docs.some(d => d.kind === 'prose') && (
+            <button className="tb-pill" onClick={() => setGraphAuditOpen(true)} title="Ingestion audit — the graph as it is built, word by word, in reading order, with full provenance">
+              <Icon name="book" size={15} /> Ingestion
+            </button>
+          )}
           <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> {enabledRules} rules on</button>
           {window.EVO_SANDBOX && <button className="tb-pill" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> Sandbox</button>}
         </header>
@@ -1752,6 +1760,7 @@ function App() {
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
+      {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
       {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
                      status={modelStatus} progress={modelProgress} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (

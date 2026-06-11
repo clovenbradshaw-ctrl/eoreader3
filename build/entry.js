@@ -14,4 +14,5 @@ import '../chat.jsx';
 import '../docview.jsx';
 import '../rulesets.jsx';
 import '../auditview.jsx';
+import '../graphaudit.jsx';
 import '../app.jsx';
