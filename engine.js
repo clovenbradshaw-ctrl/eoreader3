@@ -4588,6 +4588,15 @@ async function extractEoGraph(text, onProgress) {
           }
           if (desc && desc.length <= 200 && normSurface(desc) !== nameKey) {
             const site = sites.get(nameKey);
+            // The antecedent sentence is a real sighting of THIS referent —
+            // the bridge just proved the description and the name are one
+            // person. Credit it, so a figure the page describes at length and
+            // names once ("That person is Tom Turner") clears the two-sighting
+            // gate on salience rather than being retired as a lone appearance
+            // (which would also strand these very DEFs in the settle pass). The
+            // name's own sentence is recorded by addEnts; this adds the
+            // description's.
+            noteSight(nameKey, srcSent);
             events.push({
               id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
               target: name, path: 'class', value: desc,
