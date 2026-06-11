@@ -4511,7 +4511,11 @@ async function extractEoGraph(text, onProgress) {
           // this very sentence (often the vocative — "Good morning, Mr.
           // Samsa" — the ADDRESSEE) may not be guessed onto the quote.
           if (!speakerEligible(v)) { gatedCandidate = true; continue; }
-          speaker = a; break;
+          // Record the BODY that cleared the gate (the canonical site), not
+          // the raw surface — the eligibility judged and the speaker written
+          // must be the same referent.
+          speaker = { surface: v.name, type: 'person', key: rk, referent_id: v.referent_id };
+          break;
         }
       }
       // Fallback: highest mass-weighted person candidate. The candidate
