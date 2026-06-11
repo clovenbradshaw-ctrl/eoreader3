@@ -296,6 +296,7 @@ function Message({ msg, onCite }) {
           ? <div className="model-loading">
               <div className="ml-row"><span className="ml-spin" /> Loading {msg.loadName || 'local model'}… <b>{Math.round((msg.loadPct || 0) * 100)}%</b></div>
               <div className="ml-bar"><div className="ml-fill" style={{ width: Math.round((msg.loadPct || 0) * 100) + '%' }} /></div>
+              {msg.loadText && <div className="ml-status">{msg.loadText}</div>}
               <div className="ml-note">First time only — the model downloads once, then runs on your GPU and is cached.</div>
             </div>
           : msg.typing ? <div className="typing"><span /><span /><span /></div>

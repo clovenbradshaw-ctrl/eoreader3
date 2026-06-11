@@ -631,6 +631,9 @@ table.grid .member td:first-child { padding-left: 30px; }
 .pop-item .pi-state.ok { color: var(--good-fg); border-color: var(--good-bd); background: var(--good-bg); display: inline-flex; align-items: center; gap: 4px; }
 .pop-bar { height: 4px; background: var(--bg-subtle); border-radius: 999px; margin: 6px 8px 2px; overflow: hidden; }
 .pop-fill { height: 100%; background: var(--evidence); border-radius: 999px; transition: width .25s; }
+.pop-status { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); padding: 2px 10px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop-reset { display: block; width: calc(100% - 12px); margin: 4px 6px 2px; padding: 7px 10px; font-size: 11.5px; color: var(--text-2); background: var(--bg-subtle); border: 1px solid var(--border); border-radius: var(--r-sm); cursor: pointer; text-align: center; }
+.pop-reset:hover { border-color: var(--accent); color: var(--accent); }
 
 .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--text); color: #fff; font-size: 13px; padding: 10px 16px; border-radius: var(--r-pill); box-shadow: var(--sh-lg); z-index: 200; animation: fade .2s ease; display: flex; align-items: center; gap: 9px; }
 .toast .tk { color: #8fd49d; }
@@ -781,6 +784,7 @@ table.grid .member td:first-child { padding-left: 30px; }
 @keyframes mlspin { to { transform: rotate(360deg); } }
 .model-loading .ml-bar { height: 5px; background: var(--bg-subtle); border-radius: 999px; margin: 9px 0 6px; overflow: hidden; }
 .model-loading .ml-fill { height: 100%; background: var(--evidence); border-radius: 999px; transition: width .25s; }
+.model-loading .ml-status { font-family: var(--mono); font-size: 11px; color: var(--text-2); margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-loading .ml-note { font-size: 11.5px; color: var(--text-3); }
 
 /* staged-ingest progress banner (existence → structure → significance) */
