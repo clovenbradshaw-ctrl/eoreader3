@@ -443,6 +443,26 @@ group('repair — pushback routes to repair, not retrieval', () => {
   ok(band('what parts gave you that impression').repair.content === false, 'a support turn carries no content of its own');
   eq(E.repairSignal('where does it say the war ended'), null, '"where does it say <clause>" is a lookup, not repair');
   eq(E.repairSignal('how do you know the password'), null, '"how do you know <noun>" is a lookup, not repair');
+  // OUTPUT-FORM / META — pushing back on HOW the reply came out (the mechanical
+  // span-dump), not the page. The observed trace answered "why did you switch to
+  // direct quotes…" with three MORE unrelated quotes; the complaint must route to
+  // repair, not lexical retrieval on the shared word.
+  eq(band('why did you switch to direct quotes i saw you trying to answer the question correctly?').reason, 'repair:frustration', 'output-form complaint → frustration');
+  eq(band("you're just quoting the book").reason, 'repair:frustration', '"you\'re just quoting" → frustration');
+  eq(band('you keep pasting random lines').reason, 'repair:frustration', '"you keep pasting lines" → frustration');
+  eq(band('stop quoting and answer the question').reason, 'repair:frustration', '"stop quoting" → frustration');
+  eq(band('those are just random lines, not an answer').reason, 'repair:frustration', '"those are just lines, not an answer" → frustration');
+  eq(E.repairSignal('can you quote the part about ivory'), null, 'a request to quote a passage is a lookup, not a complaint');
+  eq(E.repairSignal('what lines does Kurtz speak'), null, '"what lines does X speak" is a content question, not repair');
+  // IMPATIENCE / PROMPTING — a contentless nudge. "well" peppers any prose, so
+  // lexical retrieval drags "well?" onto the page and badges filler quotes CLEAN;
+  // route it to repair instead. Whole-utterance only — a real clause still reads.
+  eq(band('well?').reason, 'repair:frustration', '"well?" impatience → frustration');
+  eq(band('so?').reason, 'repair:frustration', '"so?" impatience → frustration');
+  eq(band('go on').reason, 'repair:frustration', '"go on" → frustration');
+  eq(band('just answer the question').reason, 'repair:frustration', '"just answer the question" → frustration');
+  eq(E.repairSignal('well, who is Kurtz?'), null, '"well, <clause>" carries content — reaches the text');
+  eq(E.repairSignal('so what happens to the helmsman?'), null, '"so <clause>" carries content — reaches the text');
 });
 
 // Gutenberg texts: header metadata is parsed mechanically (even when the

@@ -5749,6 +5749,32 @@ function projectGraph(events, frame = {}) {
         || /\b(?:that'?s|this is|it'?s) (?:just )?(?:gibberish|nonsense|word salad|incoherent|confusing|meaningless|garbled|nonsensical)\b/.test(t)
         || /^(?:huh|wat|come again|i'?m sorry,? what)\s*\?*$/.test(raw))
       return { kind: 'frustration', content: false };
+    // OUTPUT-FORM / META — the user is objecting to HOW the reply came out, not
+    // asking about the page: the answer pass failed to bind, the turn fell to the
+    // mechanical span-dump, and the user is now pushing back on THAT ("why did you
+    // switch to direct quotes", "you're just quoting the book", "stop pasting
+    // lines", "those are just random lines, not an answer"). Anchored to the
+    // assistant ("you") doing the quoting/pasting, or to the reply's shape named
+    // as not-an-answer — so a content ask that merely contains "quote/line" ("can
+    // you quote the part about ivory", "what lines does Kurtz speak") still
+    // reaches the text. Fed to lexical retrieval the complaint lands on whatever
+    // shares "quote/line/answer" with it — the very failure being objected to,
+    // re-served (the observed trace answered "why did you switch to direct
+    // quotes…" with three more unrelated quotes).
+    if (/\byou(?:'?re| are| keep| keeps| just| only| simply| merely| again| now)\b[^?]*\b(?:quot|past|copy|regurgitat|repeat|spit)/.test(t)
+        || /\b(?:why|how come)\b[^?]*\byou\b[^?]*\b(?:switch|chang|revert|default|jump|resort|go(?:ing)? back|back to|just)\b[^?]*\b(?:quot|past|line|copy|verbatim|fragment|snippet)/.test(t)
+        || /\bi (?:saw|see|noticed|can see|watched) you\b[^?]*\b(?:switch|try|trying|answer|quot|past|copy)/.test(t)
+        || /\b(?:stop|quit|enough (?:of|with)|cut out)\b[^?]*\b(?:quot|past|copy|the lines?|giving me (?:quotes|lines)|the random)/.test(t)
+        || /\b(?:those|these|that'?s|this is|it'?s|they'?re)\b[^?]*\b(?:just |only |random |disconnected )*(?:quotes?|lines?|fragments?|sentences?|snippets?)\b[^?]*\b(?:not (?:an?|a real|really an)? ?answer|aren'?t (?:an )?answer|isn'?t (?:an )?answer|don'?t (?:answer|help|make sense)|doesn'?t (?:answer|help|make sense))/.test(t))
+      return { kind: 'frustration', content: false };
+    // IMPATIENCE / PROMPTING — a contentless nudge to get on with it ("well?",
+    // "so?", "go on", "just answer the question"). It carries nothing to retrieve,
+    // but the filler word peppers any prose ("well" → "Very well." / "Well, I
+    // do." / "‘Well, and you?’"), so lexical retrieval drags it onto the page and
+    // the mechanical answer badges the filler quotes CLEAN (covers 1/1). Matched
+    // only as the WHOLE utterance, so "well, who is Kurtz?" still reaches the text.
+    if (/^(?:well|so|and|and then|and so|go on|go ahead|keep going|carry on|continue|proceed|answer me|just answer(?: me| it| this| that| the question)?|answer the question|out with it|spit it out|come on then|i'?m waiting)\s*[?!.…]*$/.test(raw))
+      return { kind: 'frustration', content: false };
     // SUPPORT / EVIDENCE — the user takes the previous reply seriously enough to
     // ask what in the text BACKS it ("what parts gave you that impression", "what
     // makes you say that", "where does it say that", "how do you know"). The
