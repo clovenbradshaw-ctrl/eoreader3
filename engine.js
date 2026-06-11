@@ -4175,12 +4175,19 @@ async function extractEoGraph(text, onProgress) {
         // momentum is the kinetic boost from recent mentions.
         const candTokens = tokenSetOf(cleaned);
         const substCandTokens = [...candTokens].filter(t => t.length >= 3 && !STOP.has(t));
+        // Gender of the arriving surface, read from a leading gendered title.
+        // The title is a STOP token for the index, but it is identity evidence
+        // here: "Mrs. Samsa" (f) and "Mr. Samsa" / "Gregor Samsa" (m) share only
+        // the surname once the title is stripped — a known gender conflict means
+        // they are different people, and must never fuse into one site.
+        const candGender = genderFromName(cleaned);
         const pulls = [];
         if (substCandTokens.length > 0) {
           for (const [siteKey, site] of sites) {
             const shared = [...candTokens].filter(t => site.tokens.has(t));
             const substShared = shared.filter(t => t.length >= 3 && !STOP.has(t));
             if (substShared.length === 0) continue;
+            if (candGender && site.gender && candGender !== site.gender) continue;
             // Substring-merge guard: a single shared content token is too weak
             // to fuse two surfaces into one referent ("South America" / "South
             // Korea" share only "south"; "Alex Chung" / "Lee Chung Chak" share
@@ -4298,6 +4305,11 @@ async function extractEoGraph(text, onProgress) {
           targetSite.surfaceMass = (targetSite.surfaceMass || 0) + mentionW;
           targetSite.momentum += mentionW;
           noteMetaphorSighting(targetSite, cleaned);
+          // Absorb the surface's gender evidence too (sticky, first-known), so a
+          // later gender-conflicting surface is kept apart: once this site has
+          // absorbed "Mr. Samsa" it reads male, and "Mrs. Samsa" can no longer
+          // fuse into it. Without this the gender guard above never has a gender.
+          if (!targetSite.gender) targetSite.gender = genderFromName(cleaned);
           // Match tokens accumulate (recall never shrinks); display name is
           // the mentions-first canonical.
           for (const t of tokenSetOf(cleaned)) targetSite.tokens.add(t);
