@@ -4507,7 +4507,10 @@ async function extractEoGraph(text, onProgress) {
           if (a.type !== 'person') continue;
           const rk = resolveSiteKey(a.key);
           const v = rk ? sites.get(rk) : null;
-          if (v && !speakerEligible(v)) { gatedCandidate = true; continue; }
+          // No site yet means no agency evidence either: a name admitted in
+          // this very sentence (often the vocative — "Good morning, Mr.
+          // Samsa" — the ADDRESSEE) may not be guessed onto the quote.
+          if (!speakerEligible(v)) { gatedCandidate = true; continue; }
           speaker = a; break;
         }
       }
