@@ -561,9 +561,19 @@ function App() {
     try {
       await window.EOLLM.load(m.mlc, (p, text) => { setModelProgress(p); if (text) setModelLoadText(text); });
       setModelStatus('ready'); setModelLoadText(''); return true;
-    } catch (e) { setModelStatus('idle'); setModelLoadText(''); showToast(e.message || 'Model failed to load'); return false; }
+    } catch (e) {
+      setModelStatus('idle'); setModelLoadText('');
+      if (!(e && e.code === 'CANCEL')) showToast(e.message || 'Model failed to load');  // a user cancel is not an error
+      return false;
+    }
   };
   const pickModel = (m) => { setModel(m); setModelStatus('idle'); loadModel(m); };
+  // Stop an in-flight download. Terminates the worker so it halts immediately
+  // rather than running on in the background.
+  const cancelModel = () => {
+    try { if (window.EOLLM && window.EOLLM.cancelLoad) window.EOLLM.cancelLoad(); } catch (e) {}
+    setModelStatus('idle'); setModelProgress(0); setModelLoadText('');
+  };
   // Escape hatch for a download that keeps stalling on a corrupt half-written
   // cache: wipe the cached shards, then re-download from scratch.
   const resetModel = async () => {
@@ -1809,7 +1819,7 @@ function App() {
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
       {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
       {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
-                     status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} />}
+                     status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (
         <EntityModal doc={d} name={entityModal.name} onCite={flashCitation} onEntity={(n) => setEntityModal({ docId: d.id, name: n })}
           onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />

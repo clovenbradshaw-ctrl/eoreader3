@@ -9,6 +9,10 @@
   let loadedModel = null;
   let mod = null;
   let loadToken = 0;   // bumped per load(); a superseded in-flight build goes inert
+  let activeWorker = null;   // the Web Worker hosting the in-flight/resident engine
+  let activeCancel = null;   // call to reject the in-flight build promptly (user cancel)
+  let loadingActive = false; // a load is genuinely in flight (gates cancelLoad)
+  let workerBroken = false;  // the worker path failed to establish once — stop retrying it
 
   const hasWebGPU = () => typeof navigator !== 'undefined' && !!navigator.gpu;
 
@@ -32,8 +36,87 @@
     return mod;
   }
 
+  // Host the engine in a Web Worker so the multi-GB download + WASM/shader
+  // compile run OFF the main thread — the UI stays responsive during a load
+  // instead of freezing (worst on the 7–8B models, which the unload-before-load
+  // fix lets you reach but which then locked the page while compiling). The
+  // worker imports the SAME pinned WebLLM build; it's a blob so the app needs no
+  // extra file (index.html ships no CSP, so blob workers are allowed).
+  function spawnWorker() {
+    const src =
+      'import { WebWorkerMLCEngineHandler } from "https://esm.run/@mlc-ai/web-llm@0.2.79";' +
+      'const h = new WebWorkerMLCEngineHandler();' +
+      'self.onmessage = (m) => h.onmessage(m);';
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    const w = new Worker(url, { type: 'module' });
+    URL.revokeObjectURL(url);
+    return w;
+  }
+
+  // Terminating a worker frees its WebGPU device along with the thread, so wrap
+  // unload() to also kill the worker. Every existing eng.unload() call site (the
+  // model-switch release, the superseded-build cleanup) then frees the worker
+  // for free, with no other code needing to know a worker is involved.
+  function bindWorker(eng, worker) {
+    activeWorker = worker;
+    const origUnload = (eng.unload && eng.unload.bind(eng)) || (async () => {});
+    eng.unload = async () => {
+      try { await origUnload(); }
+      finally { if (activeWorker === worker) activeWorker = null; try { worker.terminate(); } catch (_) {} }
+    };
+    return eng;
+  }
+
+  // Prefer a worker engine; fall back to a main-thread engine ONLY if the worker
+  // fails to even establish (blocked, unsupported, dead CDN). A cancel/terminate
+  // or a genuine load error is NOT a reason to abandon the worker path for the
+  // session — those propagate so the caller (buildOnce) handles them.
+  const WORKER_HANDSHAKE_MS = 20000;
   async function createEngine(mlcKey, opts) {
     const webllm = await importWebLLM();
+    if (!workerBroken && typeof Worker !== 'undefined' && typeof webllm.CreateWebWorkerMLCEngine === 'function') {
+      let worker = null, sawProgress = false;
+      try {
+        worker = spawnWorker();
+        activeWorker = worker;
+        const userCb = opts && opts.initProgressCallback;
+        const wrapped = Object.assign({}, opts, {
+          initProgressCallback: (r) => { sawProgress = true; if (userCb) userCb(r); },
+        });
+        // A worker whose module import is blocked would otherwise leave the
+        // engine handshake pending forever; surface that as a rejection.
+        const failed = new Promise((_, rej) => {
+          worker.onerror = () => rej(Object.assign(new Error('worker failed to start'), { _establish: true }));
+          worker.onmessageerror = () => rej(Object.assign(new Error('worker message error'), { _establish: true }));
+        });
+        failed.catch(() => {});
+        let hsTimer = null;
+        const handshake = new Promise((_, rej) => {
+          hsTimer = setTimeout(() => {
+            if (!sawProgress) rej(Object.assign(new Error('worker handshake timeout'), { _establish: true }));
+          }, WORKER_HANDSHAKE_MS);
+          if (hsTimer && hsTimer.unref) hsTimer.unref();   // the watchdog must never itself hold the page/process open
+        });
+        try {
+          const eng = await Promise.race([
+            webllm.CreateWebWorkerMLCEngine(worker, mlcKey, wrapped),
+            failed, handshake,
+          ]);
+          return bindWorker(eng, worker);
+        } finally { clearTimeout(hsTimer); }
+      } catch (e) {
+        try { worker && worker.terminate(); } catch (_) {}
+        if (activeWorker === worker) activeWorker = null;
+        // Only blame (and disable) the worker path if it never got going.
+        if (e && e._establish && !sawProgress) {
+          workerBroken = true;
+          if (typeof console !== 'undefined') console.warn('Worker engine unavailable; loading on the main thread instead.', e);
+          // fall through to the main-thread engine below
+        } else {
+          throw e;   // cancel or a real load error — let buildOnce deal with it
+        }
+      }
+    }
     return webllm.CreateMLCEngine(mlcKey, opts);
   }
 
@@ -52,7 +135,11 @@
   function buildOnce(mlcKey, onProgress, myToken) {
     return new Promise((resolve, reject) => {
       let settled = false, timer = null;
-      const finish = (fn, val) => { if (settled) return; settled = true; clearTimeout(timer); fn(val); };
+      const finish = (fn, val) => { if (settled) return; settled = true; clearTimeout(timer); if (activeCancel === cancelThis) activeCancel = null; fn(val); };
+      // Registered so cancelLoad() can reject THIS build immediately (with a
+      // distinct code) instead of waiting out the stall watchdog.
+      const cancelThis = () => finish(reject, Object.assign(new Error('Model load canceled'), { code: 'CANCEL' }));
+      activeCancel = cancelThis;
       const arm = () => {
         clearTimeout(timer);
         timer = setTimeout(() => finish(reject, Object.assign(new Error('Model download stalled'), { code: 'STALL' })), STALL_MS);
@@ -88,6 +175,7 @@
     }
     loadedModel = mlcKey;
     const myToken = ++loadToken;
+    loadingActive = true;
     const attempt = (async () => {
       try {
         return await buildOnce(mlcKey, onProgress, myToken);
@@ -108,8 +196,27 @@
     } catch (e) {
       if (myToken === loadToken) { enginePromise = null; loadedModel = null; }   // honest isLoaded(); allow retry. Don't clobber a newer load.
       throw friendlyError(e);
+    } finally {
+      if (myToken === loadToken) loadingActive = false;   // a newer load keeps its own flag
     }
     return enginePromise;
+  }
+
+  // User-facing cancel for an in-flight load. Bumps the load token so the build
+  // goes inert, hard-terminates the worker so a wedged/slow download stops NOW
+  // (not after the stall timeout), and rejects the in-flight build with
+  // code:'CANCEL' so the caller can fail quietly. No-op once a load has settled,
+  // so it can never tear down a model that's already loaded and running.
+  function cancelLoad() {
+    if (!loadingActive) return false;
+    loadingActive = false;
+    loadToken++;
+    enginePromise = null; loadedModel = null;
+    const c = activeCancel; activeCancel = null;
+    if (c) c();                                        // settle the in-flight build as CANCEL first
+    const w = activeWorker; activeWorker = null;
+    if (w) { try { w.terminate(); } catch (_) {} }     // then hard-stop the worker so the download halts now
+    return true;
   }
 
   function friendlyError(e) {
@@ -563,5 +670,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, load, cancelLoad, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
