@@ -453,6 +453,28 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Kinship nouns. A possessive pronoun + kin noun ("his son", "her mother") names a relation the page never states as a copula — the possessor is resolved by activation and the relation recorded as a kin DEF, so "whose son is mentioned?" is answerable from the graph instead of stranding on an unresolved pronoun.',
   },
+  // ── Depicted acts — the story-world transformation a clause REPORTS, carried
+  //    as content on the reader's CON bond. The bond's own op is always CON (the
+  //    reading act of binding two referents); the verb may report a SEG (a cut),
+  //    a SYN (a fusion: marry/merge), or no transformation at all (a stative
+  //    relation is a pure Site-face fact). A verb in none of these classes stays
+  //    unclassified — the reader hasn't committed to a depicted address.
+  depict_seg_verbs: {
+    value: ['cut','sever','break','split','divide','separate','tear','slice','snap','shatter','smash','cleave','rip','sunder','detach','dissect','fracture','dissolve','scatter','crack','chop','carve','breach','rupture','partition','kill','destroy'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Verbs whose depicted act is a SEG — differentiation applied to structure: a connection severed. The bond stays op:CON (the reader connects); depicts:{op:"SEG",obj:"figure"} is the content it carries.',
+  },
+  depict_syn_verbs: {
+    value: ['marry','wed','merge','unite','fuse','weld','combine','blend','amalgamate','join','assemble','unify','incorporate','integrate','annex','absorb','knit','bind','bond','couple'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Verbs whose depicted act is a SYN — a fusion producing a new unit (marry, merge, unite). Distinct from the reader\'s own SYN (coreference); this is the story\'s. depicts:{op:"SYN",obj:"figure"}.',
+  },
+  depict_state_verbs: {
+    value: ['own','possess','contain','hold','include','comprise','belong','resemble','equal','know','believe','love','hate','want','need','fear','understand','mean','represent','constitute','consist','involve','concern','regard'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Verbs reporting a STATE, not an event: a standing relation with no transformation. States get a terrain (Site) address and no operator — depicts:{state:true}. (Copulas and have/be are filtered before CON, so these are the non-copular statives that still reach a bond.)',
+  },
+
   // ── Production guards — conventions of the reading's own hygiene ──
   // Assertions, contextual and revisable: each is what THIS reader currently
   // takes a class of surfaces to mean, not a fact about language.
@@ -818,6 +840,7 @@ function getAttribVerbs() {
   return rule.value[ACTIVE_LANG];
 }
 let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
+    SEG_VERBS, SYN_VERBS, STATE_VERBS,
     MALE_PRONOUNS, NEUTRAL_PERSON_PRONOUNS, FEMALE_TITLES, MALE_TITLES, TITLE_TOKENS, CLITIC_SUFFIXES, ADVERB_HEADS,
     NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS,
     ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
@@ -840,6 +863,10 @@ function rebuildLangSets() {
   MALE_PRONOUNS = new Set(mod_values('male_pronouns'));
   NEUTRAL_PERSON_PRONOUNS = new Set(mod_values('neutral_person_pronouns'));
   KIN_TERMS = new Set(mod_values('kin_terms'));
+  // depicted-act verb classes (the story-world transformation a clause reports)
+  SEG_VERBS = new Set(mod_values('depict_seg_verbs'));
+  SYN_VERBS = new Set(mod_values('depict_syn_verbs'));
+  STATE_VERBS = new Set(mod_values('depict_state_verbs'));
   // "his/her (own|late|elder…) <kin-noun>" — the possessive-kin shape the
   // extractor reads. Empty inventory (a language without it yet) disables it.
   KIN_POSS_RE = KIN_TERMS.size
@@ -2421,6 +2448,52 @@ function normalizeRelation(verb) {
     .replace(/\s+/g, ' ').trim();
 }
 
+// ── Depicted act of a relation verb ──────────────────────────────────────────
+// The story-world transformation a clause REPORTS, returned as content for the
+// reader's CON bond — never the bond's own op (that is always CON). Returns
+// { op, obj } for an event-verb, { state:true } for a stative relation (a pure
+// Site-face fact, no operator), or null when the verb is unclassified (the
+// reader hasn't committed). The verb-class lexicon votes at full weight; an
+// optional EVALUATOR — the autonomous local model — adds a soft weight CAPPED at
+// its coupling, so it can tip an unclassified verb but never override a
+// classified one. That is the whole of "a little evaluative consciousness, just
+// a weighting": the model is the weakest reader in the room, never a gate.
+let DEPICTS_EVALUATOR = null;
+const DEPICTS_EVAL_COUPLING = 0.6;   // the local model's coupling — below the lexicon's 1.0
+function setDepictsEvaluator(fn) { DEPICTS_EVALUATOR = typeof fn === 'function' ? fn : null; }
+function verbLemmas(w) {
+  const out = new Set([w]);
+  if (w.endsWith('ies') || w.endsWith('ied')) out.add(w.slice(0, -3) + 'y');
+  if (w.endsWith('es')) out.add(w.slice(0, -2));
+  if (w.endsWith('s') && !w.endsWith('ss')) out.add(w.slice(0, -1));
+  if (w.endsWith('ed')) { out.add(w.slice(0, -2)); out.add(w.slice(0, -1)); if (w.length > 4 && w[w.length - 3] === w[w.length - 4]) out.add(w.slice(0, -3)); }
+  if (w.endsWith('ing')) { out.add(w.slice(0, -3)); out.add(w.slice(0, -3) + 'e'); if (w.length > 5 && w[w.length - 4] === w[w.length - 5]) out.add(w.slice(0, -4)); }
+  return out;
+}
+function depictedAct(verb, ctx) {
+  const head = (normalizeRelation(verb) || String(verb || '').toLowerCase()).split(/\s+/)[0];
+  if (!head) return null;
+  const lemmas = verbLemmas(head);
+  const votes = new Map();
+  const add = (op, w) => votes.set(op, (votes.get(op) || 0) + w);
+  for (const l of lemmas) {
+    if (SEG_VERBS && SEG_VERBS.has(l)) add('SEG', 1);
+    if (SYN_VERBS && SYN_VERBS.has(l)) add('SYN', 1);
+    if (STATE_VERBS && STATE_VERBS.has(l)) add('STATE', 1);
+  }
+  if (DEPICTS_EVALUATOR) {
+    try {
+      const e = DEPICTS_EVALUATOR(head, ctx);
+      if (e && e.op) add(e.op, Math.min(Math.max(e.weight || 0, 0), DEPICTS_EVAL_COUPLING));
+    } catch (err) { /* an evaluator error never breaks the reading */ }
+  }
+  if (!votes.size) return null;
+  let best = null, bw = -Infinity;
+  for (const [op, w] of votes) if (w > bw) { bw = w; best = op; }
+  if (best === 'STATE') return { state: true, w: +bw.toFixed(3) };
+  return { op: best, obj: 'figure', w: +bw.toFixed(3) };
+}
+
 // Page chrome: a line that is structure (nav, boilerplate, byline, rule),
 // not prose. Stays in the spine; reaches no operator emitter.
 function isChrome(text) {
@@ -3170,8 +3243,15 @@ function extractGreekGraph(text, t0) {
       source = cands[0] || null; bound = true;
     }
     if (!source || !obj || source.referent_id === obj.referent_id) continue;
-    const stance = {
-      grain: verb.aorist ? 'Figure' : (verb.tenseFamily === 'secondary' ? 'Pattern' : 'Figure'),
+    // The depicted act, carried as content on the bond. Its obj is the Time
+    // column — the grain the aorist/imperfect contrast marks (Figure vs Pattern);
+    // voice/mood/polarity complete the depicted address. The bond's own op stays
+    // CON (the reader connects); depicts.op is the depicted operator when the verb
+    // is classified (Greek stems aren't in the English lexicon yet, so usually none).
+    const gdep = depictedAct(verb.stemKey) || {};
+    const depicts = {
+      ...(gdep.op ? { op: gdep.op } : {}),
+      obj: verb.aorist ? 'figure' : (verb.tenseFamily === 'secondary' ? 'pattern' : 'figure'),
       voice: verb.voice === 'middle_passive' ? 'middle' : (verb.voice || 'active'),
       mood: 'indicative', polarity: negated ? 'negated' : 'asserted',
     };
@@ -3180,7 +3260,7 @@ function extractGreekGraph(text, t0) {
       s: source.name, v: verb.stemKey, o: obj.name, relation: verb.stemKey,
       source_ref: source.referent_id, target_ref: obj.referent_id,
       sourceName: source.name, targetName: obj.name,
-      stance_face: stance, bound_subject: bound,
+      depicts, bound_subject: bound,
       sentence_idx: sent.idx, sentence: sent.text, src: 'greek-case-role',
     });
   }
@@ -4095,12 +4175,19 @@ async function extractEoGraph(text, onProgress) {
         // momentum is the kinetic boost from recent mentions.
         const candTokens = tokenSetOf(cleaned);
         const substCandTokens = [...candTokens].filter(t => t.length >= 3 && !STOP.has(t));
+        // Gender of the arriving surface, read from a leading gendered title.
+        // The title is a STOP token for the index, but it is identity evidence
+        // here: "Mrs. Samsa" (f) and "Mr. Samsa" / "Gregor Samsa" (m) share only
+        // the surname once the title is stripped — a known gender conflict means
+        // they are different people, and must never fuse into one site.
+        const candGender = genderFromName(cleaned);
         const pulls = [];
         if (substCandTokens.length > 0) {
           for (const [siteKey, site] of sites) {
             const shared = [...candTokens].filter(t => site.tokens.has(t));
             const substShared = shared.filter(t => t.length >= 3 && !STOP.has(t));
             if (substShared.length === 0) continue;
+            if (candGender && site.gender && candGender !== site.gender) continue;
             // Substring-merge guard: a single shared content token is too weak
             // to fuse two surfaces into one referent ("South America" / "South
             // Korea" share only "south"; "Alex Chung" / "Lee Chung Chak" share
@@ -4218,6 +4305,11 @@ async function extractEoGraph(text, onProgress) {
           targetSite.surfaceMass = (targetSite.surfaceMass || 0) + mentionW;
           targetSite.momentum += mentionW;
           noteMetaphorSighting(targetSite, cleaned);
+          // Absorb the surface's gender evidence too (sticky, first-known), so a
+          // later gender-conflicting surface is kept apart: once this site has
+          // absorbed "Mr. Samsa" it reads male, and "Mrs. Samsa" can no longer
+          // fuse into it. Without this the gender guard above never has a gender.
+          if (!targetSite.gender) targetSite.gender = genderFromName(cleaned);
           // Match tokens accumulate (recall never shrinks); display name is
           // the mentions-first canonical.
           for (const t of tokenSetOf(cleaned)) targetSite.tokens.add(t);
@@ -4649,6 +4741,8 @@ async function extractEoGraph(text, onProgress) {
         sRaw, oRaw,
         ...sentMeta, src: 'svo',
       };
+      // The depicted act the verb reports (SEG/SYN/state/…), content on the bond.
+      const dep = depictedAct(v);
       if (sRef && oRef && sRef.id !== oRef.id) {
         // Subject and object resolve to DISTINCT referents: this is a relation
         // ASSERTED between two things — CON (Connecting), by the operator
@@ -4664,6 +4758,7 @@ async function extractEoGraph(text, onProgress) {
           relation: normalizeRelation(v),
           source_ref: sRef.id, target_ref: oRef.id,
           sourceName: nameOfKey(sRef.key) || s, targetName: nameOfKey(oRef.key) || oTrim,
+          ...(dep ? { depicts: dep } : {}),
         });
       } else {
         // One or both arguments unbound (a common-noun object, a pronoun still
@@ -9595,6 +9690,9 @@ function projectGraph(events, frame = {}) {
     // el-classical-v1 Greek organs — test/introspection handles
     _detectLanguage: detectLanguage, _analyzeGreekToken: analyzeGreekToken,
     _buildGreekOrgans: buildGreekOrgans, _extractGreekGraph: extractGreekGraph, _greekTables: () => GREEK,
+    // depicted-act content on CON bonds, and the autonomous-evaluator seam (the
+    // local model as a soft, capped weighting — never a gate)
+    depictedAct, setDepictsEvaluator,
     // the Site face — the 9 phenomenological addresses (EO Space × Time): the
     // grid, the operator→Domain map, and the classifiers. The Act face is the
     // event `op`; the Site face is `event.site` / `entity.site`.
