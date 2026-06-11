@@ -307,6 +307,10 @@
      the nearest competitor sits to the target centroid. Returned as part of
      target_shape so the loop carries its own bar. */
   const THRESHOLD = { base: 0.02, k: 0.30, lo: 0.04, hi: 0.30 };
+  // How much select() leans on prompt-to-prompt similarity vs. the shape note's
+  // fit to the response space when both signals are present (§9). The prompt
+  // match is the requested signal, so it carries the majority of the weight.
+  const PROMPT_RANK_W = 0.6;
   function adaptiveThreshold(targetExemplars, competitorExemplars, opts) {
     const o = Object.assign({}, THRESHOLD, opts || {});
     const tc = centroid((targetExemplars || []).map(e => e.responseVec).filter(Boolean),
@@ -357,6 +361,7 @@
     const lib = (exemplars || []).slice();
     const embed = deps && deps.embed;        // (texts:string[]) => Promise<vec[]|null>
     let embedded = false;
+    let promptsEmbedded = false;
 
     async function load() {
       if (embedded || !embed || !lib.length) return self;
@@ -367,31 +372,113 @@
           embedded = true;
         }
       } catch (e) { /* degraded: no vectors, scoring disabled */ }
+      // Embed the PROMPTS too (each exemplar's user_turn), so an incoming prompt
+      // can be matched against the prompts the archetypes answer — the "what
+      // shape does THIS prompt want?" signal (§9). Best-effort and SEPARATE from
+      // the response embedding: a prompt-embed failure never disturbs
+      // responseVec or ready(), and exemplars with no user_turn simply carry no
+      // promptVec (matchPrompt skips them). With no prompt vectors the library
+      // still scores drafts exactly as before — prompt matching just stays off.
+      if (embedded) {
+        const idx = [], prompts = [];
+        for (let i = 0; i < lib.length; i++) {
+          const u = String(lib[i].user_turn || '').trim();
+          if (u) { idx.push(i); prompts.push(u); }
+        }
+        if (prompts.length) {
+          try {
+            const pv = await embed(prompts);
+            if (pv && pv.length === prompts.length) {
+              for (let j = 0; j < idx.length; j++) lib[idx[j]].promptVec = pv[j];
+              promptsEmbedded = true;
+            }
+          } catch (e) { /* prompt matching degrades to off; responses unaffected */ }
+        }
+      }
       return self;
     }
 
     function byIntent(intent) { return lib.filter(e => e.intent === intent); }
     function ready() { return embedded; }
+    function readyPrompts() { return promptsEmbedded; }
+
+    /* ---- prompt → archetype matching (§9) --------------------------------
+       The complement to response scoring. Response scoring asks "does this
+       DRAFT sit in the target shape's basin?"; this asks "what shape does this
+       PROMPT call for?" — by comparing the incoming prompt to the prompts the
+       archetypes answer (user_turn → promptVec). It returns the nearest
+       archetypes by prompt similarity, an inferred intent (a weighted vote over
+       the nearest prompts), and a discriminative confidence: s_top minus the
+       nearest prompt of a DIFFERENT intent (the same in-basin idea as §5, on
+       the prompt side), so a prompt sitting between two shapes reads as
+       low-confidence rather than forced. This is the learning/feedback loop —
+       a given prompt now names the response type it wants, and the match is
+       carried into the audit so the choice is inspectable. Null when no prompts
+       are embedded (the caller falls back to today's note/weight ranking). */
+    function matchPrompt(queryVec, opts) {
+      if (!promptsEmbedded || !queryVec) return null;
+      const o = opts || {};
+      const k = o.k || 5;
+      const scored = [];
+      for (const e of lib) if (e.promptVec) scored.push({ e, sim: cosine(queryVec, e.promptVec) });
+      if (!scored.length) return null;
+      scored.sort((a, b) => b.sim - a.sim);
+      const top = scored.slice(0, k);
+      // Weighted intent vote over the nearest prompts (similarity × Hebbian
+      // weight), clamped at 0 so an anti-correlated neighbor can't cast a vote.
+      const votes = {};
+      for (const { e, sim } of top) {
+        const w = Math.max(0, sim) * (e.weight || 1);
+        votes[e.intent] = (votes[e.intent] || 0) + w;
+      }
+      let intent = top[0].e.intent, best = -Infinity;
+      for (const key of Object.keys(votes)) if (votes[key] > best) { best = votes[key]; intent = key; }
+      // Discriminative confidence: nearest prompt minus the nearest prompt of a
+      // DIFFERENT (from the winning) intent. scored is sorted desc, so the first
+      // off-intent neighbor is the strongest competitor.
+      const sTop = top[0].sim;
+      let sOther = 0;
+      for (const { e, sim } of scored) if (e.intent !== intent) { sOther = sim; break; }
+      return {
+        intent,
+        confidence: sTop - sOther,
+        best: { id: top[0].e.id, intent: top[0].e.intent, sim: sTop, user_turn: top[0].e.user_turn, response: top[0].e.response },
+        matches: top.map(({ e, sim }) => ({ id: e.id, intent: e.intent, sim, user_turn: e.user_turn })),
+      };
+    }
 
     // Build the structured target_shape (§8) from the shape pass's output. The
     // shape pass (a small LLM call, in llm.js) supplies intent + a free-prose
     // note; HERE we attach the library physics: the nearest exemplars in the
     // intent cluster, the competitor set, the adaptive threshold, and the
-    // first-draft axis hints. noteVec (the embedded shape note) ranks the
-    // target cluster — §6 v1's "embed the shape-pass output against the
-    // response space". Returns null if no exemplars match (caller falls back).
+    // first-draft axis hints. Ranking blends two signals: the shape note's fit
+    // to the response space (noteVec, §6 v1) and — when the caller passes the
+    // incoming prompt's embedding (queryVec) — its prompt-to-prompt similarity
+    // to the archetypes (§9). queryVec also INFERS the intent when the caller
+    // doesn't supply one. Returns null if no exemplars match (caller falls back).
     function select(opts) {
       const o = opts || {};
-      const intent = o.intent || null;
+      const promptMatch = (o.queryVec && promptsEmbedded) ? matchPrompt(o.queryVec, { k: o.k || 5 }) : null;
+      const intent = o.intent || (promptMatch ? promptMatch.intent : null);
       let cluster = intent ? byIntent(intent) : lib.slice();
       if (!cluster.length) cluster = lib.slice();              // unknown intent ⇒ whole library
       if (!cluster.length) return null;
       const k = o.k || 5;
-      // Rank by the shape note's embedding when we have it; else keep weight order.
-      let ranked = cluster;
-      if (o.noteVec && embedded) {
-        ranked = cluster.map(e => ({ e, s: cosine(o.noteVec, e.responseVec) }))
-          .sort((a, b) => b.s - a.s).map(x => x.e);
+      // Prefer prompt-to-prompt similarity (the requested signal) when we have
+      // the query embedding, blended with the shape note's fit where both exist;
+      // else note-only; else weight order.
+      const usePrompt = o.queryVec && promptsEmbedded;
+      const useNote = o.noteVec && embedded;
+      let ranked;
+      if (usePrompt || useNote) {
+        ranked = cluster.map(e => {
+          const sp = (usePrompt && e.promptVec) ? cosine(o.queryVec, e.promptVec) : null;
+          const sn = (useNote && e.responseVec) ? cosine(o.noteVec, e.responseVec) : null;
+          let s;
+          if (sp != null && sn != null) s = PROMPT_RANK_W * sp + (1 - PROMPT_RANK_W) * sn;
+          else s = sp != null ? sp : (sn != null ? sn : (e.weight || 1));
+          return { e, s };
+        }).sort((a, b) => b.s - a.s).map(x => x.e);
       } else {
         ranked = cluster.slice().sort((a, b) => (b.weight || 1) - (a.weight || 1));
       }
@@ -400,6 +487,12 @@
       return {
         intent,
         shape_note: o.shapeNote || '',
+        prompt_match: promptMatch ? {
+          intent: promptMatch.intent,
+          confidence: round(promptMatch.confidence),
+          best_id: promptMatch.best.id,
+          best_sim: round(promptMatch.best.sim),
+        } : null,
         target_exemplar_ids: targetExemplars.map(e => e.id),
         targetExemplars,
         competitorExemplars,
@@ -413,8 +506,36 @@
       return discriminativeScore(vec, targetShape);
     }
 
-    const self = { load, ready, select, score, byIntent, exemplars: lib };
+    const self = { load, ready, readyPrompts, select, score, matchPrompt, byIntent, exemplars: lib };
     return self;
+  }
+
+  /* ---- length → token budget (§9) ----------------------------------------
+     "Error-correcting to the proper shape" includes the answer's LENGTH. Once
+     the prompt has been matched to its archetype, the best-fit answer's own
+     length becomes the generation bound: a one-word lookup archetype yields a
+     tight budget (which keeps a small model from rambling past the shape), an
+     essay-length synthesis archetype a generous one. The exemplar length is the
+     CENTRE of the shape, not a hard cap, so it is padded for headroom and
+     clamped to a safe window (≤ ceil so the prompt always has room in a
+     4096-token prebuild). Pure: estimates tokens from the response TEXT
+     (chars/4, matching llm.js's estimator), needs no embeddings — so it works
+     even on a degraded library — and returns the basis so the budget is
+     auditable like every other decision. */
+  function estTokens(s) {
+    return Math.ceil(String(s == null ? '' : s).length / 4);
+  }
+  const TOKEN_BUDGET = { pad: 1.5, headroom: 16, floor: 24, ceil: 520 };
+  function tokenBudgetFor(targetShape, opts) {
+    const o = Object.assign({}, TOKEN_BUDGET, opts || {});
+    const exs = (targetShape && targetShape.targetExemplars) || [];
+    if (!exs.length) return null;
+    const bestFit = estTokens(exs[0].response);      // exs[0] is the best-fit archetype (ranked)
+    const maxTokens = Math.max(o.floor, Math.min(o.ceil, Math.ceil(bestFit * o.pad) + o.headroom));
+    return {
+      maxTokens,
+      basis: { exemplar_id: exs[0].id || null, best_fit_tokens: bestFit, pad: o.pad, headroom: o.headroom, floor: o.floor, ceil: o.ceil },
+    };
   }
 
   /* ---- the drafting controller (§4) -------------------------------------
@@ -535,6 +656,8 @@
     pca, projectError,
     // scoring
     discriminativeScore, adaptiveThreshold, axesToEmphasize, THRESHOLD,
+    // prompt → archetype matching + length budget (§9)
+    estTokens, tokenBudgetFor, TOKEN_BUDGET, PROMPT_RANK_W,
     // the loop
     runDraftingLoop, bestOf,
   };

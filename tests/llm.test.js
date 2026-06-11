@@ -186,6 +186,29 @@ group('the grounded prompt: notes-and-spans framing, no length prescriptions', (
   }
 });
 
+// resolveMaxTokens: depth scales the grounded caps; the shape layer's best-fit
+// budget (override) wins when present, clamped to the safe window. With no
+// override the result is byte-identical to the old inline formula (parity).
+group('resolveMaxTokens — depth-scaled default, shape override wins, clamped', () => {
+  const R = (a) => LLM.resolveMaxTokens(a);
+  // Parity: the exact ceilings the old inline formula produced.
+  eq(R({ grounded: true, task: 'answer', depth: 1 }), 180, 'grounded answer @ depth 1 == 180 (today)');
+  eq(R({ grounded: true, task: 'answer', depth: 3 }), 420, 'grounded answer @ depth 3 == 420');
+  eq(R({ grounded: true, task: 'summary', depth: 1 }), 260, 'grounded summary @ depth 1 == 260');
+  eq(R({ grounded: true, task: 'summary', depth: 3 }), 520, 'grounded summary @ depth 3 == 520');
+  eq(R({ mode: 'creative' }), 320, 'creative == 320');
+  eq(R({ grounded: false }), 360, 'plain chat == 360');
+  eq(R({ grounded: true, task: 'answer' }), 180, 'absent depth is treated as depth 1 (parity)');
+  // Override: the shape layer's best-fit budget takes over, clamped to [24, 520].
+  eq(R({ grounded: true, task: 'answer', depth: 1, override: 64 }), 64, 'a shape budget overrides the default cap');
+  eq(R({ grounded: true, task: 'answer', depth: 3, override: 40 }), 40, 'the override wins regardless of depth');
+  eq(R({ grounded: true, task: 'answer', override: 5 }), 24, 'a tiny override is floored at 24');
+  eq(R({ grounded: true, task: 'answer', override: 9000 }), 520, 'a huge override is capped at 520');
+  eq(R({ grounded: true, task: 'answer', override: 0 }), 180, 'a non-positive override is ignored (default applies)');
+  eq(R({ grounded: true, task: 'answer', override: 'x' }), 180, 'a non-numeric override is ignored (parity)');
+  eq(R({ grounded: true, task: 'answer', override: 99.6 }), 100, 'a fractional override is rounded');
+});
+
 // The tiered user message: question first (orientation), spans quoted
 // exactly, notes as their own level, the question again as the closing
 // instruction. A grounded caller without spans (the summary sample) gets the

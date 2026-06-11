@@ -170,9 +170,11 @@ and their *shape* is the signal — full length range (two-word answers to
 essay-length syntheses, plus a few ASCII diagrams), and **both poles of every
 interpretable axis** anchored via each line's `anchor_axes` (short↔long,
 committed↔hedged, warm↔dry, prose↔structured, …) so the axes survive an
-embedder swap as centroid differences. Each exemplar's response is embedded
-once (the resident MiniLM, borrowed lazily so an exemplar vector never triggers
-a download) and cached. A draft is scored not by raw cosine to its target but **discriminatively**
+embedder swap as centroid differences. Each exemplar's response **and its
+prompt** (`user_turn`) are embedded once (the resident MiniLM, borrowed lazily
+so an exemplar vector never triggers a download) and cached — the response
+vectors score drafts, the prompt vectors match incoming questions (§9 below).
+A draft is scored not by raw cosine to its target but **discriminatively**
 (§5): `s_t − s_c`, its similarity to the target shape minus its similarity to
 the nearest *competing* shape — positive means it sits unambiguously in the
 target's basin. The bar is **adaptive**: higher where shapes crowd together
@@ -204,6 +206,35 @@ UX questions — how to surface drafting and soft-fails), and is parity-safe unt
 then (the answer path is unchanged, and the golden snapshots are byte-identical).
 The reasoning-model `<think>`-leak filter the loop depends on — drafts must be
 think-clean before they reach the embedder — already ships in `llm.js`.
+
+### Prompt matching and length-shaped tokens (§9)
+
+The exemplars carry both halves of an exchange — the archetype answer *and* the
+prompt it answers — so the shape layer reads the incoming turn against the
+**prompts** the archetypes answer, not only the responses they produce. Each
+`user_turn` is embedded alongside its response, and `lib.matchPrompt(queryVec)`
+returns the nearest archetype prompts, an **inferred intent** (a similarity-
+weighted vote over the neighbours), and a **discriminative confidence** —
+`s_top` minus the nearest prompt of a *different* intent — so a question that
+sits between two shapes reads as low-confidence rather than forced. `select()`
+takes the question's embedding (`queryVec`), infers the intent when the caller
+didn't supply one, and ranks the cluster by prompt-to-prompt similarity (blended
+with the shape note's fit where both are present). This is the learning/feedback
+loop: a given prompt now names the response *type* it wants, and the match rides
+the audit (`shape-tokens` step) so the choice is inspectable.
+
+Matching the prompt to its archetype also settles the answer's **length**.
+`tokenBudgetFor(target)` sizes `max_tokens` from the best-fit archetype's own
+length — a one-line lookup archetype yields a tight budget (which keeps a small
+model from rambling past the shape), an essay-length synthesis a generous one —
+padded for headroom and clamped to a safe window (≤ 520, so a 4096-token
+prebuild always has room for the prompt). The bound stays a *bound*: there are
+still no length prescriptions in the prompt, and the model answers as it sees
+fit beneath the cap. `EOLLM.resolveMaxTokens` applies the budget as an opt-in
+override — absent it, the depth-scaled caps are byte-identical to before, so a
+session with no embedder or no loaded library answers exactly as it did
+(`app.jsx` only reaches for a shaped budget once MiniLM is already resident and
+the library has loaded, warming it in the background and never blocking a turn).
 
 ### Checking a claim (CONFIRM/DENY)
 
