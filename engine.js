@@ -3414,7 +3414,18 @@ async function extractEoGraph(text, onProgress) {
     return sites.has(cur) ? cur : null;
   };
 
-  function recordSiteSurface(key, surface, type, weight = 1) {
+  // Distinct prose sentences each site's NAME was sighted in (chrome never
+  // reaches the emitters, so these are prose by construction; pronoun binds
+  // are inferred mentions and never counted). The admission gate settles on
+  // this at end of parse: only what returns keeps its name.
+  const sightSents = new Map();
+  function noteSight(key, si) {
+    if (si == null) return;
+    if (!sightSents.has(key)) sightSents.set(key, new Set());
+    sightSents.get(key).add(si);
+  }
+  function recordSiteSurface(key, surface, type, weight = 1, si = null) {
+    noteSight(key, si);
     let cur = sites.get(key);
     if (!cur) {
       cur = { name: surface, type, gender: genderFromName(surface), mass: 0, surfaceMass: 0, momentum: 0, tokens: tokenSetOf(surface), referent_id: mintReferent(), forms: new Map() };
@@ -3677,7 +3688,7 @@ async function extractEoGraph(text, onProgress) {
         // ("Rostov" inside a line of dialogue) silently drops its touch.
         if (sites.has(key)) {
           seen.add(key);
-          recordSiteSurface(key, cleaned, type, mentionW);
+          recordSiteSurface(key, cleaned, type, mentionW, i);
           continue;
         }
         const singleInQuote = !/\s/.test(cleaned) && inQuote;
@@ -3741,7 +3752,7 @@ async function extractEoGraph(text, onProgress) {
           // character mentioning a name is not the narrator revealing
           // who "she" was.
           const matchingSignal = inQuote ? null : findMatchingSignalForName(cleaned, type);
-          recordSiteSurface(key, cleaned, type, mentionW);
+          recordSiteSurface(key, cleaned, type, mentionW, i);
           const site = sites.get(key);
           let fromSignal = null;
           if (matchingSignal) {
@@ -3785,6 +3796,7 @@ async function extractEoGraph(text, onProgress) {
           // Record the absorbed surface as a sighting of the target, then pick
           // the canonical mentions-first (the form named most), not the longer
           // string — see pickCanonicalForm.
+          noteSight(target.siteKey, i);
           bumpForm(targetSite, cleaned);
           const canonical = pickCanonicalForm(targetSite.forms, target.siteName);
           events.push({
@@ -4608,6 +4620,59 @@ async function extractEoGraph(text, onProgress) {
     }
   }
 
+  // ── Admission gate, settled ─────────────────────────────────
+  // Only what returns keeps its name: the gate is two sightings, counted as
+  // distinct prose sentences (a voice's attributed turns count — speaking is
+  // being sighted). A site that never returned is retired by SEG — its INS
+  // stays in the log, answered, and the projection drops the referent. The
+  // log stays append-only: nothing is unwritten, the retirement is written.
+  {
+    const GATE = READING_RULES.two_sighting_admission.value;
+    const chromeSet = new Set(chromeIdx);
+    const sigSents = new Map();
+    for (const ev of events) {
+      if (ev.op !== 'SIG' || !ev.speaker || ev.speaker === '?' || ev.sentence_idx == null) continue;
+      const k = normSurface(ev.speaker);
+      if (!sigSents.has(k)) sigSents.set(k, new Set());
+      sigSents.get(k).add(ev.sentence_idx);
+    }
+    const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const insByRef = new Map();
+    for (const ev of events) if (ev.op === 'INS' && ev.referent_id) insByRef.set(ev.referent_id, ev);
+    for (const [key, site] of sites) {
+      if (surfaceAlias.has(key)) continue;                    // absorbed into another body
+      const sighted = new Set(sightSents.get(key) || []);
+      for (const si of (sigSents.get(key) || [])) sighted.add(si);
+      // Capture has recall holes (a tagger missing a bare surname is not the
+      // name failing to return). The evidence of record is the page: scan the
+      // prose spans for any sighted FORM of the name, whole-word.
+      {
+        const forms = [...new Set([site.name, ...(site.forms ? site.forms.keys() : [])])].filter(Boolean);
+        const res = forms.map(f => new RegExp('(^|[^A-Za-z0-9_])' + escRe(f) + '($|[^A-Za-z0-9_])'));
+        for (let si = 0; si < sentenceTexts.length; si++) {
+          if (chromeSet.has(si) || sighted.has(si)) continue;
+          if (res.some(re => re.test(sentenceTexts[si]))) sighted.add(si);
+        }
+      }
+      const sis = [...sighted].sort((a, b) => a - b);
+      if (sighted.size >= GATE) {
+        // Survivor: write the settled evidence onto its INS (the same basis
+        // vocabulary the zh miner and REC use), so the projection and any
+        // auditor read the admission's grounds, not capture luck.
+        const ins = insByRef.get(site.referent_id);
+        if (ins) ins.basis = Object.assign({}, ins.basis, { slot_sightings: sis.length, sightings: sis });
+        continue;
+      }
+      events.push({
+        id: 'ev-' + seq, seq: seq++, op: 'SEG', stance: 'Dissecting',
+        target: site.name, referent_id: site.referent_id,
+        reason: 'single-sighting', basis: { sightings: sis },
+        sentence_idx: sis.length ? sis[0] : null,
+        src: 'admission-gate',
+      });
+    }
+  }
+
   // ── Site face: stamp every event with the phenomenological address it
   // touches (Space × Time). The operator already fixes the Domain; the target
   // noun fixes the Time column through the site cues. This is the Site
@@ -4620,7 +4685,11 @@ async function extractEoGraph(text, onProgress) {
   // No batch reconciliation: gravity resolution happened inline per sentence.
   // The embedding reconciler and the LLM tiebreak run automatically after
   // this warm pass — cold pass first, then EVA deposits on whatever stalled.
-  const { entities, edges } = projectGraph(events);
+  const { entities: allEntities, edges: allEdges } = projectGraph(events);
+  const retiredRefs = new Set(events.filter(e => e.op === 'SEG' && e.src === 'admission-gate').map(e => e.referent_id));
+  const retiredNames = new Set(events.filter(e => e.op === 'SEG' && e.src === 'admission-gate').map(e => normSurface(e.target)));
+  const entities = allEntities.filter(e => !retiredRefs.has(e.referent_id) && !retiredNames.has(normSurface(e.name)));
+  const edges = allEdges.filter(e => !retiredNames.has(normSurface(e.s != null ? e.s : e.source || '')) && !retiredNames.has(normSurface(e.o != null ? e.o : e.target || '')));
 
   const t1 = performance.now();
   // Serialize READING_RULES to plain JSON. Each entry carries its module
@@ -5884,7 +5953,10 @@ function projectGraph(events, frame = {}) {
     for (const ev of doc._events) {
       if (ev.op === 'INS' && ev.referent_id && ev.basis && Array.isArray(ev.basis.sightings)) basisByRef.set(ev.referent_id, ev.basis.sightings);
     }
-    const entities = proj.entities.map(e => {
+    // a referent the admission gate retired (SEG single-sighting) never
+    // projects: its INS is in the log, answered, but it is not a name
+    const retired = new Set(doc._events.filter(ev => ev.op === 'SEG' && ev.src === 'admission-gate').map(ev => ev.referent_id));
+    const entities = proj.entities.filter(e => !retired.has(e.referent_id)).map(e => {
       const sents = [...new Set([
         ...(e.eventSeqs || []).map(s => seqToSent.get(s)).filter(x => x != null),
         ...(basisByRef.get(e.referent_id) || []),

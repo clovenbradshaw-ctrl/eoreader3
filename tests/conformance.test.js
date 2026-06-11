@@ -362,7 +362,9 @@ async function main() {
     eq(res.bits.DARK.bit, 1, 'DARK holds: every dark span carries its written reason (chrome / no-event)');
     eq(res.bits.WEIGHT.bit, 1, 'WEIGHT holds: the engine keeps measurements inside observed.frame');
     eq(res.bits.SPEECH.bit, 1, 'SPEECH holds here: the metaphor sentence mints no Bezos attribution');
-    eq(res.bits.ADMISSION.bit, 0, 'ADMISSION fails today: one-mention names (title words, fragments) are still minted (flip me when the gate lands)');
+    eq(res.bits.ADMISSION.bit, 1, 'ADMISSION holds: the gate settles at end of parse — what never returned is retired by SEG, on the page\'s own evidence');
+    ok(report.events.some(e => e.op === 'SEG' && e.src === 'admission-gate' && /jeff bezos/i.test(e.target)), 'the metaphor vehicle is retired with a receipt');
+    ok(report.entities.some(e => e.name === 'Tse'), 'the protagonist survives — sightings are counted from the page, not from tagger luck');
     eq(res.bits.BINDING.bit, 0, 'BINDING fails today: deeds the fold can resolve are still filed as SYN — fragmentation starves the CON path (flip me when bonds land)');
     eq(res.bits.COMPANY.bit, 0, 'COMPANY fails today: copular fragments, no frames (flip me when frames land)');
     eq(res.bits.CUSTOM.bit, 1, 'CUSTOM holds: footer link-rows, bylines, and book apparatus are admitted chrome customs — furniture deposits nothing');

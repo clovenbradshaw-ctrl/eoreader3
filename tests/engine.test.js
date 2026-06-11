@@ -356,7 +356,7 @@ group('routing — cost-ordered bands (existence → structure → significance)
 // "the passages don't say" — the pronoun was never resolved into the graph.
 const KIN_DOC = `The Partnership
 
-If you own a business downtown, you pay the partnership. A significant share of that money funds the private security operation. The contract was created by the same person who runs the DMC and who then hires his own firm, NDP, to manage it. That person is Tom Turner. The council never approved a budget.
+If you own a business downtown, you pay the partnership. A significant share of that money funds the private security operation. The contract was created by the same person who runs the DMC and who then hires his own firm, NDP, to manage it. That person is Tom Turner. Turner never sought the council's approval for the budget.
 
 NDP's Director of Safety Services is David Corman, a former precinct commander, who earned a large salary directing the private policing operation. Until recently, his son served as Director of Administration at Solaren Risk Management, overseeing payroll and compliance. The younger Corman graduated college in 2022 with a degree in geology.
 
@@ -703,14 +703,14 @@ Speaker 4: Amos Dresser was a white minister who came south. Amos Dresser was se
 0:00:22.000,0:00:25.000
 Speaker 4: He was whipped in the public square. Steven Watts recorded the event.
 0:00:26.000,0:00:28.000
-Speaker 3: Thank you. The motion passes.
+Speaker 3: Thank you, Steven Watts. The motion passes.
 `;
 const meeting = await E.parseDocument('meeting.txt', MEETING, 'meet');
 // Deferred demonstrative naming: a role-bearing actor described first, named a
 // beat later. The copular reader refuses "That person is …" (bare demonstrative
 // subject), so without the naming bridge the role is stranded on a phrase that
 // was never instantiated and the name lands empty.
-const NAMING = 'The Setup\n\nThe contract is run through a shell company created by the same person who runs the DMC and who then hires his own firm, NDP, to manage operations. That person is Tom Turner.';
+const NAMING = 'The Setup\n\nThe contract is run through a shell company created by the same person who runs the DMC and who then hires his own firm, NDP, to manage operations. That person is Tom Turner. Turner also chairs the council board.';
 const naming = await E.parseDocument('naming.txt', NAMING, 'nm');
 group('transcript pack — the page declares the genre, the reader adapts', () => {
   eq(meeting.kind, 'prose', 'timecode commas do not misread as a CSV table');
@@ -1034,7 +1034,7 @@ await group('talker grounder — mechanical, deterministic', async () => {
 await group('definitional asks — answered from the graph\'s own assertions', async () => {
   const ndp = await E.parseDocument('ndp.txt',
     'Downtown security has changed hands.\n\n' +
-    'The new contract is unusual. It is run through a recently created entity called NDMC PSO LLC — a shell company of the District Management Corporation (the DMC), created by the same person who runs the DMC and who then hires his own firm, NDP, to manage the downtown security operations through it. That person is Tom Turner.\n\n' +
+    'The new contract is unusual. It is run through a recently created entity called NDMC PSO LLC — a shell company of the District Management Corporation (the DMC), created by the same person who runs the DMC and who then hires his own firm, NDP, to manage the downtown security operations through it. That person is Tom Turner. Turner declined to comment.\n\n' +
     'The council will vote next month. Business owners paying the assessment were not consulted about the arrangement.', 'ndp');
 
   // the bridge emits BOTH the class gloss and a distilled role DEF
@@ -1071,6 +1071,7 @@ await group('typing — richer & more consistent person evidence', async () => {
   // Quthring then holds the speaker slot.
   const td = await E.parseDocument('typing2.txt',
     'The Hearing\n\nMr. Calloway reviewed the contract. Senator Alexander spoke first. Chief Drake declined to comment. ' +
+    'Mr. Calloway nodded at Alexander, and Drake followed. ' +
     '"I have nothing to add," said Quthring. "Nothing at all," said Quthring.', 'typing2');
   const ents = E.graphSnapshot(td).entities;
   const typeOf = (re) => (ents.find(e => re.test(e.name)) || {}).type;

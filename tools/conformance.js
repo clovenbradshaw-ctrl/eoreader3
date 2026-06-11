@@ -217,7 +217,10 @@ function checkAdmission(ctx) {
   for (const ev of ctx.events) {
     if (ev.op !== 'INS' || ev.src !== 'first-sighting') continue;
     const e = ctx.resolveSurface(ev.target);
-    if (!e) findings.push(finding('first-sighting-unretired', `INS "${ev.target}" (src first-sighting) has no surviving referent and no retirement`, [ev]));
+    if (e) continue;
+    const retired = ctx.events.some(sg => sg.op === 'SEG'
+      && ((ev.referent_id && sg.referent_id === ev.referent_id) || fold(sg.target) === fold(ev.target)));
+    if (!retired) findings.push(finding('first-sighting-unretired', `INS "${ev.target}" (src first-sighting) has no surviving referent and no retirement`, [ev]));
   }
   return { bit: findings.length === 0 ? 1 : 0, findings, stats: { entities: ctx.entities.length, single_sighting_count: singles } };
 }
