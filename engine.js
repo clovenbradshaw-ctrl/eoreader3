@@ -677,6 +677,78 @@ const READING_RULES = {
     value: [], mass: 0, layer: 'structure', src: 'learned', module: 'core',
     desc: 'Grown, never seeded: line shapes (regex sources) that are section separators, not sentences (a *** line between dated entries). Admitted members are recorded as exceptions to the sentence-boundary mechanism in the conventions graph; live consumption by the segmenter is staged work — the inventory accumulates witnesses meanwhile.',
   },
+  chrome_patterns: {
+    value: [
+      // navigation/menu: 3+ asterisk-delimited items ("* About us * Contact *")
+      '/^\\s*(\\*\\s+[^*]+){3,}/',
+      // copyright/trademark boilerplate
+      '/\\b(©|copyright|all rights reserved|registered trademark)\\b/i',
+      // standalone horizontal rules
+      '/^_{6,}$/',
+      '/^-{6,}$/',
+      // byline: "By <Name> <Name> | <Month> <Day>, <Year>"
+      '/\\bBy\\s+[A-Z][a-z]+\\s+[A-Z][a-z]+\\s*\\|\\s*\\w+\\s+\\d+,?\\s+\\d{4}\\b/',
+      // share/social chrome
+      '/^(Share|Tweet|Facebook|Email|Print)(\\s+[•|]\\s+\\w+)*\\s*$/i',
+      // subscription appeals
+      '/\\bSubscribe\\b.*\\$\\d+/i',
+    ],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Page chrome (regex sources, /pattern/flags form): navigation menus, copyright/trademark boilerplate, horizontal rules, bylines, share/social rows, subscription appeals. A line matching one is structure, not prose — it stays in the spine for re-display but reaches no operator emitter, so it goes dark honestly instead of minting phantom entities. Document apparatus, like structure_labels and gutenberg_boilerplate; English/contemporary-journalism register.',
+  },
+  metaphor_frames: {
+    value: [
+      // "the X of the Y" where Y is a domain noun, allowing a short modifier
+      // run before the noun ("the Jeff Bezos of the international drug trade")
+      '/\\bthe\\s+(\\w+(?:\\s+\\w+){0,2})\\s+of\\s+(?:the\\s+|his\\s+|her\\s+|its\\s+)?(?:\\w+\\s+){0,3}(?:trade|world|game|industry|business|market|scene|underworld)\\b/i',
+      // simile vehicle ("like Bezos", "just like Capone")
+      '/\\b(?:like|just\\s+like|sort\\s+of\\s+like)\\s+(\\w+(?:\\s+\\w+){0,2})\\b/i',
+    ],
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Figurative-framing shapes (regex sources, /pattern/flags form): capture 1 is the metaphor VEHICLE — the named entity invoked by comparison, not by participation ("the Jeff Bezos of the international drug trade"). A name sighted only inside such a frame accrues no agency and must not be drafted as a speaker. Feeds the speaker-plausibility gate; English/contemporary-journalism register.',
+  },
+  type_keywords_org: {
+    value: ['syndicate','organization','organisation','company','cartel','group','gang','agency',
+      'bureau','department','team','union','firm','institution','corporation','collective','network','coalition'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Class nouns that, as the predicate of a copular definition ("Sam Gor is a drug syndicate"), retype a default thing-referent to an organization. English class-noun inventory; conservative by design — better to leave a referent untyped than to retype it wrongly.',
+  },
+  type_keywords_place: {
+    value: ['city','country','town','state','province','region','neighbourhood','neighborhood',
+      'district','island','sea','mountain','airport','village','county','harbour','harbor','port'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Class nouns that, as the predicate of a copular definition, retype a default thing-referent to a place. English class-noun inventory; conservative by design.',
+  },
+  type_keywords_person: {
+    value: ['man','woman','detective','officer','lecturer','lawyer','chief',
+      'leader','boss','dealer','smuggler','kingpin','trafficker','informant'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Class nouns that, as the predicate of a copular definition, retype a default thing-referent to a person. English class-noun inventory; conservative by design.',
+  },
+  // ── Site face cues (EO Space × Time) ──
+  // The 9 sites are the phenomenological addresses every referent/relation
+  // occupies — Space (Existence/Structure/Interpretation) × Time (Ground/
+  // Figure/Pattern). The GRID and the operator→Space(Domain) mapping are
+  // universal (engine); the Time character of a target — whether a noun reads
+  // as an ambient Ground, a specific Figure, or a recurring Pattern — turns on
+  // language-specific lexical cues, which live here. Figure is the default
+  // (a specific existent); these two inventories pull a target off it.
+  site_ground_cues: {
+    value: ['confidence','chemistry','tension','morale','momentum','fear','trust','sentiment',
+      'mood','climate','consensus','atmosphere','silence','chaos','panic','uncertainty','optimism',
+      'pessimism','market','scene','underworld','environment','ecosystem','landscape','terrain',
+      'culture','energy','pressure','stability','instability','turmoil','unrest','calm','zeitgeist'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Ambient mass nouns that read as a GROUND target — a condition that multiplies when measured, not a thing that holds still. Crossed with the operator\'s Domain they name the Ground column: Existence→Void, Structure→Field, Interpretation→Atmosphere. English register cue.',
+  },
+  site_pattern_cues: {
+    value: ['kind','type','category','class','species','genre','sort','variety',
+      'network','system','web','grid','infrastructure','apparatus',
+      'framework','doctrine','ideology','theory','paradigm','model','philosophy','worldview',
+      'school','movement','tradition','pattern','archetype'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Category / architecture / framework nouns that read as a PATTERN target — a regularity across moments, not a single moment. Crossed with the operator\'s Domain they name the Pattern column: Existence→Kind, Structure→Network, Interpretation→Paradigm. English register cue.',
+  },
 };
 
 // Helper: is a language module enabled?
@@ -713,7 +785,9 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
     DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
     GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS,
-    KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE;
+    KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE,
+    CHROME_RES, METAPHOR_RES, TYPE_KW_ORG, TYPE_KW_PLACE, TYPE_KW_PERSON,
+    SITE_GROUND_CUES, SITE_PATTERN_CUES;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -772,6 +846,16 @@ function rebuildLangSets() {
   for (const src of mod_values('speaker_label_patterns')) {
     try { SPEAKER_LABEL_RES.push(new RegExp(src, 'u')); } catch (e) { /* skip */ }
   }
+  // Production-guard pattern conventions (the language-specific DATA; the
+  // mechanisms that consume them are universal). Empty inventory ⇒ the guard
+  // is simply inert, never throws.
+  CHROME_RES = compileConventionRegexes(mod_values('chrome_patterns'));
+  METAPHOR_RES = compileConventionRegexes(mod_values('metaphor_frames'));
+  TYPE_KW_ORG = new Set(mod_values('type_keywords_org'));
+  TYPE_KW_PLACE = new Set(mod_values('type_keywords_place'));
+  TYPE_KW_PERSON = new Set(mod_values('type_keywords_person'));
+  SITE_GROUND_CUES = new Set(mod_values('site_ground_cues'));
+  SITE_PATTERN_CUES = new Set(mod_values('site_pattern_cues'));
 }
 // Apply a language pack: write its detectors into the rules with
 // provenance, register the module, rebuild the lexical sets. English
@@ -979,7 +1063,10 @@ function _conventionsExport() {
   // core production-guard conventions — register-agnostic assertions
   const CORE_IDS = ['discourse_junk', 'answer_discourse', 'structure_labels', 'transcript_formula',
     'generic_voice_heads', 'place_org_cues', 'eva_machinery_terms', 'eva_veto_lexicon',
-    'speaker_label_patterns', 'separator_lines'];
+    'speaker_label_patterns', 'separator_lines',
+    'chrome_patterns', 'metaphor_frames',
+    'type_keywords_org', 'type_keywords_place', 'type_keywords_person',
+    'site_ground_cues', 'site_pattern_cues'];
   const coreConventions = {};
   for (const id of CORE_IDS) if (READING_RULES[id]) coreConventions[id] = READING_RULES[id].value;
   const modules = {
@@ -2212,7 +2299,148 @@ function tokenSetOf(name) {
     else if (t.endsWith('s') && !t.endsWith('ss') && !t.endsWith('us') && !t.endsWith('is')) stem = t.slice(0, -1);
     if (stem && stem.length >= 3 && !STOP.has(stem)) expanded.add(stem);
   }
+  // Diacritic-folded variant of each token, so accented and unaccented forms
+  // of one name share a token under gravity ("Joaquín" ↔ "Joaquin", "Guzmán" ↔
+  // "Guzman"). Additive only (the accented token stays), and scoped to the
+  // entity-gravity token space — the retrieval index tokenizes separately.
+  for (const t of [...expanded]) {
+    const f = foldDiacritics(t);
+    if (f !== t && f.length >= 2) expanded.add(f);
+  }
   return expanded;
+}
+
+// ── Universal mechanisms that consume the production-guard pattern
+//    conventions (chrome_patterns / metaphor_frames / type_keywords_*).
+//    The DATA is a convention (language-specific, lives in the conventions
+//    graph); the MACHINERY here is register-agnostic. ──
+
+// Compile a convention member into a RegExp. Members may be bare sources
+// (compiled with the unicode flag, like separator_lines/speaker_label_patterns)
+// or self-describing /pattern/flags literals (so each pattern carries its own
+// case-sensitivity). A malformed member is skipped, never thrown.
+function compileConventionRegexes(sources) {
+  const out = [];
+  for (const src of (sources || [])) {
+    const s = String(src);
+    const lit = s.match(/^\/(.*)\/([a-z]*)$/is);   // /pattern/flags
+    try { out.push(lit ? new RegExp(lit[1], lit[2]) : new RegExp(s, 'u')); }
+    catch (e) { /* a bad pattern never breaks the reading */ }
+  }
+  return out;
+}
+
+// Diacritic fold: "Guzmán" → "guzman", "Joaquín" → "joaquin". Lets a
+// merge/seek treat accented and unaccented forms of one name as equal.
+function foldDiacritics(s) {
+  return String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+// Normalize a CON relation verb: drop auxiliaries/copulas and punctuation so
+// "is running" and "runs," both read as "running"/"runs". The same auxiliary
+// set the SVO extractor already rejects inline — relation extraction, not a
+// new lexical convention.
+function normalizeRelation(verb) {
+  return String(verb).toLowerCase()
+    .replace(/[,.;:]/g, '')
+    .replace(/\b(is|are|was|were|be|been|being|has|have|had|do|does|did)\b/g, '')
+    .replace(/\s+/g, ' ').trim();
+}
+
+// Page chrome: a line that is structure (nav, boilerplate, byline, rule),
+// not prose. Stays in the spine; reaches no operator emitter.
+function isChrome(text) {
+  if (!CHROME_RES || !CHROME_RES.length) return false;
+  const trimmed = String(text).trim();
+  if (!trimmed) return false;
+  for (const rx of CHROME_RES) { rx.lastIndex = 0; if (rx.test(trimmed)) return true; }
+  return false;
+}
+
+// Is `name` the VEHICLE of a metaphor in this sentence ("the Jeff Bezos of
+// the drug trade")? Capture 1 of a metaphor frame is the invoked name.
+function isMetaphorMention(name, sentence) {
+  if (!METAPHOR_RES || !METAPHOR_RES.length) return false;
+  const n = String(name).toLowerCase();
+  for (const rx of METAPHOR_RES) {
+    rx.lastIndex = 0;
+    const m = String(sentence).match(rx);
+    if (m && m[1]) { const v = m[1].toLowerCase(); if (v.includes(n) || n.includes(v)) return true; }
+  }
+  return false;
+}
+
+// Infer an entity type from the predicate of a copular definition — the
+// class noun in "X is a <syndicate|city|man>". Returns 'org'/'place'/'person'
+// or null. Conservative: only a recognized class noun retypes.
+function inferTypeFromGloss(gloss) {
+  const toks = String(gloss).toLowerCase().match(/[\p{L}][\p{L}'’-]*/gu) || [];
+  for (const t of toks) {
+    if (TYPE_KW_ORG && TYPE_KW_ORG.has(t)) return 'org';
+    if (TYPE_KW_PLACE && TYPE_KW_PLACE.has(t)) return 'place';
+    if (TYPE_KW_PERSON && TYPE_KW_PERSON.has(t)) return 'person';
+  }
+  return null;
+}
+
+/* ============================================================
+   THE SITE FACE — the 9 phenomenological addresses (EO Space × Time).
+
+   Every operator names an ACT (Identity × Space); the engine already carries
+   those as `op` (the nine: NUL/SEG/DEF · SIG/CON/EVA · INS/SYN/REC). The SITE
+   a referent or relation occupies is the OTHER projection of the same cube:
+   Space (Domain) × Time (Object). The two faces share the Space axis, so an
+   operator already fixes the Domain row; only the Time column (Ground/Figure/
+   Pattern of the target) remains, and that is read from the language cues
+   above (Figure is the default — a specific existent).
+
+   The grid and the operator→Domain map are UNIVERSAL (here). The cues that
+   move a target off the Figure default are CONVENTIONS (site_*_cues).
+   ============================================================ */
+const EO_SITE_GRID = {
+  Existence:      { Ground: 'Void',       Figure: 'Thing', Pattern: 'Kind' },
+  Structure:      { Ground: 'Field',      Figure: 'Link',  Pattern: 'Network' },
+  Interpretation: { Ground: 'Atmosphere', Figure: 'Lens',  Pattern: 'Paradigm' },
+};
+// Identity × Space for each operator → its Space (Domain) row. Mode (the
+// Identity column: Differentiate/Relate/Generate) is the operator's other
+// coordinate and does not bear on the Site face.
+const EO_DOMAIN_OF_OP = {
+  NUL: 'Existence', SIG: 'Existence', INS: 'Existence',
+  SEG: 'Structure', CON: 'Structure', SYN: 'Structure',
+  DEF: 'Interpretation', EVA: 'Interpretation', REC: 'Interpretation',
+};
+// All nine site names, in grid order — for tallies and introspection.
+const EO_SITES = Object.values(EO_SITE_GRID).flatMap(row => Object.values(row));
+
+// The Time character (Ground/Figure/Pattern) of a target surface. Figure is
+// the default: a specific existent that holds still when named. A head noun in
+// the ambient-cue inventory reads as Ground (multiplies when measured); one in
+// the category/architecture inventory reads as Pattern (recurs across moments).
+function objectOf(surface, type) {
+  const toks = String(surface || '').toLowerCase().match(/[\p{L}][\p{L}'’-]*/gu) || [];
+  for (const t of toks) {
+    if (SITE_GROUND_CUES && SITE_GROUND_CUES.has(t)) return 'Ground';
+    if (SITE_PATTERN_CUES && SITE_PATTERN_CUES.has(t)) return 'Pattern';
+  }
+  return 'Figure';
+}
+// The Site (phenomenological address) for a (Domain, target) pair.
+function eoSite(domain, surface, type) {
+  const row = EO_SITE_GRID[domain] || EO_SITE_GRID.Existence;
+  return row[objectOf(surface, type)];
+}
+// The Site an EVENT touches: its operator fixes the Domain; its target fixes
+// the Time column. A CON to a specific referent is a Link; a DEF about a
+// doctrine is a Paradigm; an INS of an ambient mass is a Void.
+function eoSiteOfEvent(ev) {
+  if (!ev || !ev.op) return null;
+  const domain = EO_DOMAIN_OF_OP[ev.op];
+  if (!domain) return null;
+  const target = ev.op === 'SIG' ? ev.speaker
+    : (ev.op === 'CON' || ev.op === 'SYN') ? (ev.o != null ? ev.o : ev.targetName)
+    : (ev.target != null ? ev.target : ev.targetName);
+  return eoSite(domain, target, ev.entityType || null);
 }
 
 function aliasRelation(aTok, bTok) {
@@ -3149,7 +3377,7 @@ async function extractEoGraph(text, onProgress) {
   function recordSiteSurface(key, surface, type, weight = 1) {
     let cur = sites.get(key);
     if (!cur) {
-      cur = { name: surface, type, gender: genderFromName(surface), mass: 0, surfaceMass: 0, momentum: 0, tokens: tokenSetOf(surface), referent_id: mintReferent() };
+      cur = { name: surface, type, gender: genderFromName(surface), mass: 0, surfaceMass: 0, momentum: 0, tokens: tokenSetOf(surface), referent_id: mintReferent(), forms: new Map() };
     }
     // surfaceMass tracks weight earned from the NAME appearing on the page —
     // the honest evidence. Pronoun bindings add to mass but never here, so
@@ -3158,6 +3386,7 @@ async function extractEoGraph(text, onProgress) {
     cur.mass += weight;
     cur.surfaceMass = (cur.surfaceMass || 0) + weight;
     cur.momentum = cur.momentum * GAMMA + weight;
+    bumpForm(cur, surface);
     // Type is sticky after first assignment. Compromise NER produces
     // different types for the same surface in different sentences (Don as
     // 'thing' at first INS, then 'person' in the next sentence because the
@@ -3166,12 +3395,25 @@ async function extractEoGraph(text, onProgress) {
     // mentions only accumulate mass and momentum.
     if (!cur.type) cur.type = type;
     if (!cur.gender) cur.gender = genderFromName(surface);
-    if (surface.length > cur.name.length) {
-      cur.name = surface;
-      cur.tokens = tokenSetOf(surface);
-    }
+    noteMetaphorSighting(cur, surface);
+    // Match tokens accumulate across every sighted form, so merge recall
+    // never shrinks; the DISPLAY name is mentions-first (the form sighted
+    // most), not the longest string — see pickCanonicalForm.
+    for (const t of tokenSetOf(surface)) cur.tokens.add(t);
+    cur.name = pickCanonicalForm(cur.forms, cur.name);
     sites.set(key, cur);
     return cur;
+  }
+  // A site that has only ever been named inside a metaphor frame ("the Jeff
+  // Bezos of the drug trade") is metaphorOnly. The first metaphor sighting
+  // sets it; any sighting OUTSIDE a frame clears it. Feeds the speaker gate.
+  function noteMetaphorSighting(site, surface) {
+    if (!METAPHOR_RES.length) return;
+    if (isMetaphorMention(surface, currentSentText)) {
+      if (site.metaphorOnly === undefined) site.metaphorOnly = true;
+    } else {
+      site.metaphorOnly = false;
+    }
   }
 
   // Resolve a pronoun. For gendered pronouns: if any matching-gender real
@@ -3304,6 +3546,9 @@ async function extractEoGraph(text, onProgress) {
   // sentence_idx → sentence_texts, so carrying a full copy on every event was
   // pure retained weight (the main lever on a long document's memory).
   const sentenceTexts = new Array(sentenceDocs.length);
+  // Indices the chrome gate dropped — spine sentences that deposited no
+  // operator event by construction (page apparatus, not prose).
+  const chromeIdx = [];
   // The PERSONS the previous sentence named — the local field the possessive-
   // kin reader resolves against (a possessive determiner is a local anaphor).
   let prevSentencePersons = new Set();
@@ -3327,6 +3572,17 @@ async function extractEoGraph(text, onProgress) {
         signals.delete(sid);
       }
     }
+
+    // ── Chrome gate (before any emitter) ──────────────────────
+    // A line the chrome_patterns convention recognizes — a nav menu, a
+    // copyright/byline line, a horizontal rule, a share row — is structure,
+    // not prose. It stays in the spine (sentenceTexts[i], set above) so it
+    // re-displays, but it reaches no operator emitter: no INS for its
+    // capitalized nouns, no DEF, no SIG. The momentum clock has already
+    // ticked; the local-anaphor field (prevSentencePersons) is left intact,
+    // so chrome is transparent to narrative continuity. It deposits nothing,
+    // so it goes dark honestly instead of minting phantom entities.
+    if (isChrome(sentText)) { chromeIdx.push(i); return; }
 
     // ── Entity extraction via compromise POS tags ─────────────
     // Run on the full sentence so multi-word names like "Prince Andrew"
@@ -3399,6 +3655,19 @@ async function extractEoGraph(text, onProgress) {
             const shared = [...candTokens].filter(t => site.tokens.has(t));
             const substShared = shared.filter(t => t.length >= 3 && !STOP.has(t));
             if (substShared.length === 0) continue;
+            // Substring-merge guard: a single shared content token is too weak
+            // to fuse two surfaces into one referent ("South America" / "South
+            // Korea" share only "south"; "Alex Chung" / "Lee Chung Chak" share
+            // only "chung"). Require full containment of the smaller content-
+            // token set ("Tse" ⊂ "Tse Chi Lop"), ≥2 shared content tokens, or
+            // diacritic-equality ("Joaquín" ≡ "Joaquin"). Same token space the
+            // pull uses, so the guard can never disagree with the force it gates.
+            const substSiteTokens = [...site.tokens].filter(t => t.length >= 3 && !STOP.has(t));
+            const minContent = Math.min(substCandTokens.length, substSiteTokens.length);
+            const strongEvidence = substShared.length >= 2
+              || (minContent > 0 && substShared.length === minContent)
+              || foldDiacritics(cleaned) === foldDiacritics(site.name);
+            if (!strongEvidence) continue;
             const overlap = shared.length / Math.sqrt(Math.max(1, candTokens.size) * Math.max(1, site.tokens.size));
             const force = (site.mass + site.momentum) * overlap;
             if (force > 0) pulls.push({
@@ -3470,7 +3739,11 @@ async function extractEoGraph(text, onProgress) {
           const targetSite = sites.get(target.siteKey);
           surfaceAlias.set(key, target.siteKey);
           const absorbedReferentId = mintReferent();
-          const canonical = pickAbsorbCanonical(target.siteName, targetSite.mass, cleaned, 1);
+          // Record the absorbed surface as a sighting of the target, then pick
+          // the canonical mentions-first (the form named most), not the longer
+          // string — see pickCanonicalForm.
+          bumpForm(targetSite, cleaned);
+          const canonical = pickCanonicalForm(targetSite.forms, target.siteName);
           events.push({
             id: 'ev-' + seq, seq: seq++, op: 'SYN', stance: 'Joining',
             method: 'gravity',
@@ -3497,10 +3770,11 @@ async function extractEoGraph(text, onProgress) {
           targetSite.mass += mentionW;
           targetSite.surfaceMass = (targetSite.surfaceMass || 0) + mentionW;
           targetSite.momentum += mentionW;
-          if (canonical === cleaned && cleaned.length > target.siteName.length) {
-            targetSite.name = canonical;
-            targetSite.tokens = tokenSetOf(canonical);
-          }
+          noteMetaphorSighting(targetSite, cleaned);
+          // Match tokens accumulate (recall never shrinks); display name is
+          // the mentions-first canonical.
+          for (const t of tokenSetOf(cleaned)) targetSite.tokens.add(t);
+          targetSite.name = canonical;
         } else {
           // Comparable pulls — gravities stall. NUL fires: reader saw the
           // configuration, applied no transformation, prior partition stands.
@@ -3559,6 +3833,35 @@ async function extractEoGraph(text, onProgress) {
       });
     };
 
+    // Type inference from a copular gloss: a definition whose predicate names
+    // a class ("Sam Gor is a drug syndicate") retypes a default thing-referent
+    // to org/place/person via the type_keywords conventions. Conservative —
+    // only a recognized class noun retypes, and only from the 'thing' default,
+    // never overriding a person/place/org already established. Emitted as a DEF
+    // path:'type' (the same channel speech-induction uses), so projection
+    // believes it: the cluster's type carries the retype forward.
+    const maybeRetypeFromGloss = (targetSurface, hint, gloss) => {
+      const inferred = inferTypeFromGloss(gloss);
+      if (!inferred) return;
+      // Resolve to the site the same way admission keyed it (article/adverb
+      // heads stripped), so "The Black Hand" finds the "black hand" site.
+      const cleanedKey = normSurface(cleanEntitySurface(targetSurface) || targetSurface);
+      const k = (hint && hint.key)
+        || resolveSiteKey(cleanedKey)
+        || resolveSiteKey(normSurface(targetSurface));
+      const site = k ? sites.get(k) : null;
+      if (!site || site.type !== 'thing') return;
+      site.type = inferred;
+      events.push({
+        id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
+        target: site.name, path: 'type', value: inferred,
+        targetHint: { key: k, name: site.name, referent_id: site.referent_id },
+        basis: 'class noun in a copular definition',
+        reason: 'a named class retypes a default thing-referent',
+        ...sentMeta, src: 'gloss-retype',
+      });
+    };
+
     // ── DEF (Dissecting): copular "X is/was Y" ────────────────
     // Use clauses() + manual copula detection instead of named-capture
     // matching — same compatibility reason as CON.
@@ -3598,6 +3901,7 @@ async function extractEoGraph(text, onProgress) {
         targetRaw,
         ...sentMeta, src: 'copular',
       });
+      maybeRetypeFromGloss(target, hint, value);
     });
 
     // ── DEF (Dissecting): deferred demonstrative naming ───────
@@ -3866,16 +4170,49 @@ async function extractEoGraph(text, onProgress) {
       if (!oTrim || oTrim.length < 2) return;
       const sHint = isPronoun(s) ? resolvePronoun(s) : null;
       const oHint = isPronoun(o) ? resolvePronoun(o) : null;
-      events.push({
-        id: 'ev-' + seq, seq: seq++, op: 'SYN', stance: 'Joining',
-        s, v, o: oTrim,
-        sHint, oHint,
+      // Resolve each argument to a referent. A pronoun resolves through its
+      // hint; a surface resolves through the site table.
+      const resolveSvoRef = (surface, hint) => {
+        if (hint && hint.referent_id) return { id: hint.referent_id, key: hint.key || null };
+        const k = (hint && hint.key) || resolveSiteKey(normSurface(surface));
+        const site = k ? sites.get(k) : null;
+        return site ? { id: site.referent_id, key: k } : null;
+      };
+      const sRef = resolveSvoRef(s, sHint);
+      const oRef = resolveSvoRef(oTrim, oHint) || resolveSvoRef(o, oHint);
+      // The subject of an enacted action has agency evidence — it can later be
+      // a fallback speaker (a metaphor-only name never reaches this path).
+      if (sRef && sRef.key) { const sv = sites.get(sRef.key); if (sv) sv.hasAgencyEvidence = true; }
+      const base = {
+        s, v, o: oTrim, sHint, oHint,
         // Raw tokens for downstream reconciliation (embedding lookup, etc.)
         // The trimmed surfaces above may lose information; preserve the
         // original spans so the reconciler can decide what matters.
         sRaw, oRaw,
         ...sentMeta, src: 'svo',
-      });
+      };
+      if (sRef && oRef && sRef.id !== oRef.id) {
+        // Subject and object resolve to DISTINCT referents: this is a relation
+        // ASSERTED between two things — CON (Connecting), by the operator
+        // algebra — not SYN. SYN is reserved for identity-bearing joins
+        // (gravity merge, coreference, surface unification); a relation that
+        // connects two referents without fusing them is CON. The graph's
+        // edges become the projection of these (weight = co-occurrence count),
+        // and the propositional veto finally has assertions to check against.
+        const nameOfKey = (k) => (k && sites.get(k) ? sites.get(k).name : null);
+        events.push({
+          id: 'ev-' + seq, seq: seq++, op: 'CON', stance: 'Connecting',
+          ...base,
+          relation: normalizeRelation(v),
+          source_ref: sRef.id, target_ref: oRef.id,
+          sourceName: nameOfKey(sRef.key) || s, targetName: nameOfKey(oRef.key) || oTrim,
+        });
+      } else {
+        // One or both arguments unbound (a common-noun object, a pronoun still
+        // stalling), or both the same referent (reflexive): not an identity
+        // join and not yet a resolved connection. Kept as SYN, unchanged.
+        events.push({ id: 'ev-' + seq, seq: seq++, op: 'SYN', stance: 'Joining', ...base });
+      }
     });
 
     // ── SIG (Tending): quoted speech with REAL attribution ────
@@ -4049,9 +4386,12 @@ async function extractEoGraph(text, onProgress) {
                 src: 'speech-induction',
               });
             }
-            // Touch the bound site — attribution is a mention.
+            // Touch the bound site — attribution is a mention. A site that
+            // has spoken has agency evidence: it can be the fallback speaker
+            // for a later unattributed quote (a metaphor-only name cannot).
             v.mass += 1;
             v.momentum = v.momentum * GAMMA + 1;
+            v.hasAgencyEvidence = true;
             speaker = { surface: v.name, type: 'person', key: speakerKey, referent_id: v.referent_id };
             attributionConfident = true;
           } else {
@@ -4095,21 +4435,37 @@ async function extractEoGraph(text, onProgress) {
         speakerFromContinuation = true;
       }
 
+      // Speaker plausibility gate: a quote with no explicit attribution may
+      // only be guessed onto a person the page has shown to ACT or SPEAK — a
+      // referent with agency evidence that is not a metaphor-only mention. The
+      // fallback used to grab the nearest/heaviest named person regardless,
+      // attributing speech to a name that only appears in a figure ("the Jeff
+      // Bezos of the drug trade"). An ineligible candidate is declined, and the
+      // quote goes out honestly unattributed rather than wrongly bound.
+      const speakerEligible = (v) => !!v && v.type === 'person' && !v.metaphorOnly && v.hasAgencyEvidence === true;
+      let gatedCandidate = false;
       // Find speaker — clean leading/trailing junk from any admitted person
       if (!speaker) {
         for (const a of admitted) {
-          if (a.type === 'person') { speaker = a; break; }
+          if (a.type !== 'person') continue;
+          const rk = resolveSiteKey(a.key);
+          const v = rk ? sites.get(rk) : null;
+          if (v && !speakerEligible(v)) { gatedCandidate = true; continue; }
+          speaker = a; break;
         }
       }
       // Fallback: highest mass-weighted person candidate. The candidate
       // pool includes both real referents AND signals (pre-referent
       // expectations). A heavy female signal in a Princess-Mary scene can
       // outscore Marshal as the more likely speaker even though no name has
-      // been committed for her yet.
+      // been committed for her yet. Named sites must clear the plausibility
+      // gate; signals (an unnamed person tracked through narration pronouns)
+      // are inherently agentive and stay eligible.
       if (!speaker) {
         let bestKey = null, bestScore = -Infinity, bestSignal = null;
         for (const [k, v] of sites) {
           if (v.type !== 'person') continue;
+          if (!speakerEligible(v)) { gatedCandidate = true; continue; }
           const score = v.mass * MASS_WEIGHT + v.momentum;
           if (score > bestScore) { bestKey = k; bestScore = score; bestSignal = null; }
         }
@@ -4162,8 +4518,10 @@ async function extractEoGraph(text, onProgress) {
           : null,
         speakerRaw: speaker ? speaker.surface : null,
         // How the label was earned — the auditor and the tool layer
-        // report confidence from this, never reconstruct it.
-        attributed: !speaker ? 'none'
+        // report confidence from this, never reconstruct it. 'unattributed'
+        // means the plausibility gate declined the candidates it had (an
+        // implausible speaker held back) rather than finding none at all.
+        attributed: !speaker ? (gatedCandidate ? 'unattributed' : 'none')
           : isProvisional ? 'provisional'
           : attributionConfident
             ? ((attribution && attribution.type === 'pronoun') ? 'pronoun' : 'named')
@@ -4204,6 +4562,12 @@ async function extractEoGraph(text, onProgress) {
       }
     }
   }
+
+  // ── Site face: stamp every event with the phenomenological address it
+  // touches (Space × Time). The operator already fixes the Domain; the target
+  // noun fixes the Time column through the site cues. This is the Site
+  // projection of the same log the operators are the Act projection of. ──
+  for (const ev of events) { const s = eoSiteOfEvent(ev); if (s) ev.site = s; }
 
   // ── Significance: project mass, momentum and prominence over the settled
   // structure — only now, with existence and structure complete beneath it. ──
@@ -4285,6 +4649,7 @@ async function extractEoGraph(text, onProgress) {
     verb_slot_tally: typeof verbSlotTally !== 'undefined' ? verbSlotTally : {},
     sections,
     sentence_texts: sentenceTexts,
+    chrome: chromeIdx,
     open_signals: openSignals,
     signal_collapses: signalCollapses,
     rules: rulesJson,
@@ -4293,6 +4658,7 @@ async function extractEoGraph(text, onProgress) {
     counts: {
       INS: events.filter(e => e.op === 'INS').length,
       SYN: events.filter(e => e.op === 'SYN').length,
+      CON: events.filter(e => e.op === 'CON').length,
       DEF: events.filter(e => e.op === 'DEF').length,
       SIG: events.filter(e => e.op === 'SIG').length,
       NUL: events.filter(e => e.op === 'NUL').length,
@@ -4301,33 +4667,53 @@ async function extractEoGraph(text, onProgress) {
       REC: events.filter(e => e.op === 'REC').length,
       RULES: Object.keys(READING_RULES).length,
     },
+    // The Site face as a tally — how many acts landed on each of the nine
+    // phenomenological addresses. The Act counts above are Identity × Space;
+    // this is the Space × Time projection of the same log.
+    sites: (() => { const t = {}; for (const s of EO_SITES) t[s] = 0; for (const e of events) if (e.site) t[e.site]++; return t; })(),
     ms: Math.round(t1 - t0),
   };
 }
-function pickAbsorbCanonical(nameA, massA, nameB, massB) {
-  // Pick the better canonical between two candidates being joined.
-  // Prefer proper-noun-shaped, reasonable length, with more mass.
-  // Allow lowercase function words in middle (so "Lives of the Saints"
-  // counts as proper-noun-shaped).
-  const looksProperish = (s) => {
-    const words = String(s).trim().split(/\s+/);
-    if (words.length === 0) return false;
-    if (!/^\p{Lu}/u.test(words[0])) return false;
-    // First and last word must start uppercase; middle words can be lowercase
-    if (words.length > 1 && !/^\p{Lu}/u.test(words[words.length - 1])) return false;
-    return true;
-  };
-  const score = (name, mass) => {
-    let s = mass * 10;
-    if (looksProperish(name)) s += 50;
-    const len = name.length;
-    if (len > 4 && len < 30) s += 20;
-    if (len >= 30) s -= 40;
-    const wc = name.split(/\s+/).length;
-    if (wc > 6) s -= 40;
-    return s;
-  };
-  return score(nameA, massA) >= score(nameB, massB) ? nameA : nameB;
+
+// Shape score for a surface form (no mass) — proper-noun-shaped and a
+// reasonable length read as a better canonical. The tie-breaker under the
+// mentions-first rule below.
+function canonicalShapeScore(name) {
+  const words = String(name).trim().split(/\s+/);
+  let s = 0;
+  if (/^\p{Lu}/u.test(words[0] || '') && (words.length === 1 || /^\p{Lu}/u.test(words[words.length - 1]))) s += 50;
+  const len = String(name).length;
+  if (len > 4 && len < 30) s += 20;
+  if (len >= 30) s -= 40;
+  if (words.length > 6) s -= 40;
+  return s;
+}
+
+function bumpForm(site, surface) {
+  if (!site.forms) site.forms = new Map();
+  site.forms.set(surface, (site.forms.get(surface) || 0) + 1);
+}
+// Mentions-first canonical: the surface form a cluster was named by MOST
+// often is its canonical key, not the longest string. "Toronto" (sighted 20
+// times) wins over "Toronto International Film Festival" (sighted 3 times) —
+// the overlap formula used to reward the longer string and pick the rarer
+// one. Ties break on shape (proper-noun-shaped, reasonable length preferred —
+// which already demotes a 34-char festival name even at equal counts), then
+// on the FULLER name ("David Corman" over a bare "Corman"). `forms` is a
+// Map(surface → sighting count).
+function pickCanonicalForm(forms, fallback) {
+  if (!forms || forms.size === 0) return fallback;
+  let best = null, bestN = -Infinity, bestShape = -Infinity;
+  for (const [form, n] of forms) {
+    if (n > bestN) { best = form; bestN = n; bestShape = canonicalShapeScore(form); continue; }
+    if (n === bestN) {
+      const shape = canonicalShapeScore(form);
+      if (shape > bestShape || (shape === bestShape && form.length > best.length)) {
+        best = form; bestShape = shape;
+      }
+    }
+  }
+  return best != null ? best : fallback;
 }
 
 // Pronoun resolution under physics: pronouns have no substantive token
@@ -4400,6 +4786,10 @@ function resolveByActivation(pronoun, sites) {
   if (second && second.score > 0 && best.score < DELTA * second.score) {
     return { nul: true, reason: 'contested', competing: competing() };
   }
+  // The site a pronoun resolved to has been referred to as an agent — agency
+  // evidence the speaker-plausibility gate reads (a metaphor-only name never
+  // earns this, so it can never be drafted as a fallback speaker).
+  best.v.hasAgencyEvidence = true;
   return { key: best.key, name: best.v.name, referent_id: best.v.referent_id, momentum: +best.v.momentum.toFixed(2) };
 }
 
@@ -4429,9 +4819,14 @@ function projectGraph(events, frame = {}) {
   // site-layer (sites[], canonical from gravity resolution / reconciler).
   const isSiteSyn = (ev) => ev.op === 'SYN' && Array.isArray(ev.sites);
   const isTextSyn = (ev) => ev.op === 'SYN' && !Array.isArray(ev.sites);
+  // A CON event carries the same s/v/o/sHint/oHint shape as a text-layer SYN
+  // and is registered the same way for occurrences, mass, and edges — it only
+  // differs in the operator label (a relation between distinct referents, not
+  // an identity join), so every projection slot below treats them together.
+  const isRelationEdge = (ev) => isTextSyn(ev) || ev.op === 'CON';
 
   const slotsOf = (ev) => {
-    if (isTextSyn(ev)) return [
+    if (isRelationEdge(ev)) return [
       { surface: ev.s, hint: ev.sHint },
       { surface: ev.o, hint: ev.oHint },
     ];
@@ -4495,7 +4890,7 @@ function projectGraph(events, frame = {}) {
   const occ = new Map();
   for (const ev of events) {
     if (isSiteSyn(ev)) continue;
-    if (!['SYN', 'DEF', 'SIG', 'INS'].includes(ev.op)) continue;
+    if (!['SYN', 'CON', 'DEF', 'SIG', 'INS'].includes(ev.op)) continue;
     for (const slot of slotsOf(ev)) {
       let surf = slot.surface;
       if (!surf) continue;
@@ -4519,11 +4914,15 @@ function projectGraph(events, frame = {}) {
       if (!isPromotable(surf)) continue;
       const key = normSurface(surf);
       if (key.length < 2) continue;
-      const cur = occ.get(key) || { key, name: surf, mentions: 0, eventSeqs: [], surfaceForms: new Set() };
+      const cur = occ.get(key) || { key, name: surf, mentions: 0, eventSeqs: [], surfaceForms: new Set(), formCounts: new Map() };
       cur.mentions++;
       cur.eventSeqs.push(ev.seq);
       cur.surfaceForms.add(surf);
-      if (surf.length > cur.name.length) cur.name = surf;
+      cur.formCounts.set(surf, (cur.formCounts.get(surf) || 0) + 1);
+      // Display name is mentions-first (the form seen most), not the longest
+      // string — consistent with the site-layer canonical. A site-SYN
+      // `canonical` from a gravity merge still overrides this below.
+      cur.name = pickCanonicalForm(cur.formCounts, cur.name);
       occ.set(key, cur);
     }
   }
@@ -4740,8 +5139,8 @@ function projectGraph(events, frame = {}) {
         };
         for (const r of uniqueRoots) if (r !== newRoot) state.delete(r);
         state.set(newRoot, merged);
-      } else if (ev.op === 'SYN') {
-        // Text-layer SYN — touch sHint and oHint sites (via hint when
+      } else if (ev.op === 'SYN' || ev.op === 'CON') {
+        // Text-layer SYN or CON — touch sHint and oHint sites (via hint when
         // present, else by normalized raw surface if it's a known site).
         // Pronouns resolve via hints; direct references like "Lavrúshka"
         // come in as raw surfaces with no hint. Signal hints redirect to
@@ -5027,10 +5426,13 @@ function projectGraph(events, frame = {}) {
     return null;
   };
 
-  // ── Pass 4: build edges from text-layer SYN events ──
+  // ── Pass 4: build edges from text-layer SYN and CON events ──
+  // CON events are the resolved relations (both endpoints bound to distinct
+  // referents); text-layer SYN that resolved also contributes. An edge's
+  // weight is the co-occurrence count — the natural projection of CON.
   const edgeMap = new Map();
   for (const ev of events) {
-    if (!isTextSyn(ev)) continue;
+    if (!isRelationEdge(ev)) continue;
     const sSurf = isPronoun(ev.s) && ev.sHint ? ev.sHint.name : ev.s;
     const oSurf = isPronoun(ev.o) && ev.oHint ? ev.oHint.name : ev.o;
     const aKey = findClusterKey(sSurf);
@@ -5048,6 +5450,12 @@ function projectGraph(events, frame = {}) {
       key: c.key,
       name: c.name,
       type: c.type,
+      // The EO Site (phenomenological address) of the referent. A referent is
+      // an existent admitted into being, so it occupies the Existence row;
+      // its Time column is read from its name (a specific Thing by default, a
+      // Kind if its head is a category noun, a Void if an ambient mass noun).
+      // Orthogonal to `type` (person/place/org/thing), which sub-classes Thing.
+      site: eoSite('Existence', c.name, c.type),
       gender: genderFromName(c.name) || c.memberKeys.map(k => learnedGender.get(k)).find(Boolean) || null,
       referent_id: c.canonical_referent_id,
       member_referent_ids: c.member_referent_ids,
@@ -5065,6 +5473,9 @@ function projectGraph(events, frame = {}) {
         bName: clusters.find(c => c.key === e.b)?.name || e.b,
         verb: e.verb,
         weight: e.weight,
+        // A drawn relation is a Link (Structure × Figure) — or a Network when
+        // its endpoint reads as an architecture noun.
+        site: eoSite('Structure', e.bName || e.b, null),
         eventSeqs: e.eventSeqs,
       }))
       .sort((a, b) => b.weight - a.weight),
@@ -5431,6 +5842,10 @@ function projectGraph(events, frame = {}) {
         // never 'person' — coercing every residual capital to a person is what
         // turned places (Cádiz) and OCR section labels (Figure, Note) into people.
         type: (e.type === 'person' || e.type === 'place' || e.type === 'org') ? e.type : 'thing',
+        // EO Site (Space × Time): the referent's phenomenological address —
+        // Thing by default, Kind/Void if its name reads as a category/ambient
+        // noun. Orthogonal to `type` above (which sub-classes the Thing site).
+        site: e.site || eoSite('Existence', e.name, e.type),
         raw: e.mentions || sents.length || 1,
         mass, sents,
         // Additive surface for the talker-portrait composer (WI-5): these
@@ -8421,6 +8836,10 @@ function projectGraph(events, frame = {}) {
     // the semantics graph (conventions.jsonl): human-language conventions as an
     // eo-operation log, projected like any other event log
     loadConventions, projectConventions, _conventionsExport,
+    // the Site face — the 9 phenomenological addresses (EO Space × Time): the
+    // grid, the operator→Domain map, and the classifiers. The Act face is the
+    // event `op`; the Site face is `event.site` / `entity.site`.
+    EO_SITE_GRID, EO_DOMAIN_OF_OP, EO_SITES, eoSite, eoSiteOfEvent, objectOf,
     // EVA failures hydrate the conventions: the session's REC records,
     // JSONL-shaped and append-ready for memory/conventions.jsonl. A host may
     // set EOEngine.onConventionsRec = (rec) => … to ship each one out.
