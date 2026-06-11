@@ -4780,8 +4780,16 @@ async function extractEoGraph(text, onProgress) {
   // neighborhood still frames (the proposition "keeps no company"), and a
   // second document's frame can now meet it (EVA, evaAcrossDocs).
   {
+    // referents chain through gravity merges: a cluster's bonds belong to
+    // its canonical body, whichever referent id an event recorded
+    const canon = new Map();
+    for (const ev of events) {
+      if (ev.op !== 'SYN' || !Array.isArray(ev.referent_ids) || !ev.canonical_referent_id) continue;
+      for (const r of ev.referent_ids) if (r !== ev.canonical_referent_id) canon.set(r, ev.canonical_referent_id);
+    }
+    const chase = (r) => { let cur = r, hops = 0; while (canon.has(cur) && hops++ < 6) cur = canon.get(cur); return cur; };
     const neigh = new Map();
-    const add = (ref, edge) => { if (!neigh.has(ref)) neigh.set(ref, []); neigh.get(ref).push(edge); };
+    const add = (ref, edge) => { const k = chase(ref); if (!neigh.has(k)) neigh.set(k, []); neigh.get(k).push(edge); };
     for (const ev of events) {
       if (ev.op !== 'CON' || !ev.source_ref || !ev.target_ref) continue;
       const rel = String(ev.relation || ev.v || '').toLowerCase();
@@ -4790,7 +4798,7 @@ async function extractEoGraph(text, onProgress) {
     }
     for (const e of entities) {
       if (!e.referent_id) continue;
-      const frameEdges = [...new Set(neigh.get(e.referent_id) || [])].sort();
+      const frameEdges = [...new Set(neigh.get(chase(e.referent_id)) || [])].sort();
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
         target: e.name, path: 'frame',
@@ -6106,6 +6114,61 @@ function projectGraph(events, frame = {}) {
     const view = { entities, byType };
     _projCache.set(doc, { rev: RULES_REV, view });
     return view;
+  }
+
+  /* ---------- the text, whole, as a graph ----------
+     Nothing summarized away: every span is a node — lit (it deposited
+     marks), chrome (held back by an admitted custom, reason written), or
+     dark (read as prose, deposited nothing, reason written) — and every
+     span hangs on the referents sighted in it, the bonds and assertions
+     it deposited, and the speech it carries. Words are accounted by the
+     same lexicon retrieval indexes (indexed + stop + dropped = all).
+     Pure projection over the dump; deterministic; no model. */
+  function textGraph(doc) {
+    const r = ingestionReport(doc);
+    if (!r) return null;
+    const bySent = (pred) => {
+      const m = new Map();
+      for (const ev of r.events) {
+        if (ev.sentence_idx == null || !pred(ev)) continue;
+        if (!m.has(ev.sentence_idx)) m.set(ev.sentence_idx, []);
+        m.get(ev.sentence_idx).push(ev);
+      }
+      return m;
+    };
+    const bonds = bySent(ev => ev.op === 'CON');
+    const asserts = bySent(ev => ev.op === 'DEF' && (ev.path === 'class' || ev.path === 'state' || ev.path === 'role' || ev.path === 'kin'));
+    const speech = bySent(ev => ev.op === 'SIG');
+    const sightings = new Map();
+    for (const e of r.entities) for (const si of (e.sents || [])) {
+      if (!sightings.has(si)) sightings.set(si, []);
+      sightings.get(si).push(e.name);
+    }
+    const frames = new Map(r.events.filter(ev => ev.op === 'DEF' && ev.path === 'frame').map(ev => [ev.target, { frame: ev.value, edges: (ev.basis && ev.basis.edges) || 0 }]));
+    let lit = 0, chrome = 0, dark = 0;
+    const spans = r.spans.map((text, i) => {
+      const ps = r.sentences[i] || {};
+      const substantive = (ps.events || 0) - ((ps.ops && ps.ops.NUL) || 0);
+      const kind = substantive > 0 ? 'lit' : (ps.reason === 'chrome' ? 'chrome' : 'dark');
+      if (kind === 'lit') lit++; else if (kind === 'chrome') chrome++; else dark++;
+      return {
+        i, text, kind, reason: ps.reason || null,
+        events: ps.events || 0, ops: ps.ops || {},
+        referents: sightings.get(i) || [],
+        bonds: (bonds.get(i) || []).map(ev => ({ source: ev.sourceName, relation: ev.relation || ev.v, target: ev.targetName })),
+        assertions: (asserts.get(i) || []).map(ev => ({ path: ev.path, target: ev.target, value: ev.value })),
+        speech: (speech.get(i) || []).map(ev => ({ speaker: ev.speaker, attributed: ev.attributed })),
+        words: ps.words || 0, terms: ps.terms || 0,
+      };
+    });
+    return {
+      schema: 'cleon-textgraph/1',
+      doc: r.doc, words: r.words,
+      coverage: { spans: spans.length, lit, chrome, dark },
+      spans,
+      referents: r.entities.map(e => ({ name: e.name, type: e.type, mentions: e.mentions, sents: e.sents, frame: (frames.get(e.name) || {}).frame || null, frame_edges: (frames.get(e.name) || {}).edges || 0 })),
+      bonds: r.events.filter(ev => ev.op === 'CON').map(ev => ({ source: ev.sourceName, relation: ev.relation || ev.v, target: ev.targetName, s: ev.sentence_idx })),
+    };
   }
 
   /* ---------- EVA: frames meet across documents ----------
@@ -9090,7 +9153,7 @@ function projectGraph(events, frame = {}) {
     // ingestion audit: every word's fate (indexed / stopword / dropped), the
     // inverted index actually built, and per-span coverage — the glass box over
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
-    ingestionReport, classifyTokens, evaAcrossDocs,
+    ingestionReport, classifyTokens, evaAcrossDocs, textGraph,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
     contextScope, bindCitationsScope, supportProbeTerms,

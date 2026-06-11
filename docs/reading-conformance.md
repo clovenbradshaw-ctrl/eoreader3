@@ -261,6 +261,25 @@ mechanical: an event carrying `s`/`v`/`o` whose endpoints both resolve to
 distinct referents must be CON; an event carrying `sites`/`canonical` is
 synthesis and is exempt.
 
+### Propositions, not word order
+
+BINDING's law is about propositions — two referents joined by a deed — and
+never about position. "SVO" in the checks is shorthand for whatever shape a
+register's conventions use to *find* deeds. The shipped en-narrative reader
+finds them positionally (first noun as subject, last verb as deed), and that
+is an English convention, not core: Ancient Greek and Latin mark roles by
+case morphology under free word order, Japanese by particles, Chinese by
+topic chains — each register's deed-finder must enter through the same
+pack/ledger channel as every other custom, never as engine literals. The
+instrument is already order-blind: it reads emitted deeds (surfaces, hints,
+referent ids) however the register produced them, and the engine's positional
+finder runs only under the en frame. A register with no deed-finding
+convention yet deposits no deeds, and BINDING passes vacuously — honest, and
+visible in the sweep (es and zh today). The same lesson governs the word
+layer: tokenization and the index character class are conventions too, and a
+register they do not cover (zh terms today) shows up honestly in the
+every-word accounting rather than pretending coverage.
+
 ### The cube behind the log: sites and stances
 
 The seven invariants are laws over the **Act face** of the EO cube — the
