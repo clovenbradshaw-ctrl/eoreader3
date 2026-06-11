@@ -538,6 +538,40 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Qualifiers that may lead a title-of head without breaking it ("former president of …").',
   },
+  // ── Naming-bridge cues ─────────────────────────────────────────
+  // The bridge MECHANISM is universal (a described referent named a beat
+  // later is one returning referent; admit it on the antecedent sighting).
+  // HOW a language signals the delayed naming is particular: English marks
+  // it with a demonstrative subject + an identificational copula pointing
+  // back to a relative-clause description. These inventories are that cue,
+  // lifted out of the engine so a register that marks naming differently
+  // supplies its own (or, empty, disables the bridge). Regex fragments,
+  // joined verbatim like role_clause_verbs.
+  naming_subject_determiners: {
+    value: ['that','this','the'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Determiners that may head the naming clause\'s subject NP: "That person is …", "The man is …". Demonstratives are the strong anaphors; "the" carries a definite back-reference.',
+  },
+  identificational_copulas: {
+    value: ['is','was'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Copulas that equate the subject description with a name ("That person IS Tom Turner") — the identificational, not predicational, sense. English conflates them on the verb; other registers (ser/estar, verbless equatives) do not.',
+  },
+  naming_antecedent_determiners: {
+    value: ['the\\s+same','the','a','an','his','her','its','their','this','that'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Determiners that may head the ANTECEDENT description the naming points back to ("the same person who …", "a man who …"). Ordered: "the same" is tried before "the".',
+  },
+  naming_relativizers: {
+    value: ['who','whom','that','which'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Relativizers that open the description\'s defining clause ("the same person WHO runs the DMC"). English marks the relative clause with these; a case-marking register marks it morphologically instead.',
+  },
+  naming_clause_tails: {
+    value: ['to','so','which','where','while','in\\s+order'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Subordinator heads that end the role span so a trailing purpose/relative tail (", to manage …", ", which …") is not swept into the description.',
+  },
   neutral_person_pronouns: {
     value: ['they','them','their','theirs'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -844,6 +878,7 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     MALE_PRONOUNS, NEUTRAL_PERSON_PRONOUNS, FEMALE_TITLES, MALE_TITLES, TITLE_TOKENS, CLITIC_SUFFIXES, ADVERB_HEADS,
     NAME_CONNECTORS, PREP_LEAD_DISQUALIFY, ARTICLES, ATTRIB_VERB_LIST, ABBREVIATIONS,
     ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
+    NAMING_BRIDGE_SUBJECT_RE, NAMING_BRIDGE_ANTE_DET, NAMING_BRIDGE_REL, NAMING_BRIDGE_TAIL,
     DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
     GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS,
     KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE,
@@ -893,6 +928,24 @@ function rebuildLangSets() {
   TITLE_OF_RE = heads.length
     ? new RegExp('\\b((?:(?:' + (prefixes.length ? prefixes.join('|') : '$^') + ')\\s+)?(?:' + heads.join('|') + ')\\s+of\\s+[^,;.]+)', 'iu')
     : /$^/;
+  // Naming-bridge cues: the universal bridge mechanism (delayed naming →
+  // returning referent) reads its surface signals from these per-register
+  // inventories. Empty (a register that marks naming otherwise) ⇒ the
+  // subject pattern never matches and the bridge is inert, exactly as an
+  // empty role list disables the role shape. The antecedent determiners,
+  // relativizers, and tails are kept as joined fragments because the bridge
+  // assembles them around the head noun it captured.
+  const nsd = mod_values('naming_subject_determiners');
+  const icop = mod_values('identificational_copulas');
+  NAMING_BRIDGE_SUBJECT_RE = (nsd.length && icop.length)
+    ? new RegExp('^\\s*(?:' + nsd.join('|') + ')\\s+(\\p{Ll}[\\p{Ll}’\'-]*)\\s+(?:' + icop.join('|') + ')\\s+(.+?)\\.?\\s*$', 'iu')
+    : /$^/;
+  const nad = mod_values('naming_antecedent_determiners');
+  NAMING_BRIDGE_ANTE_DET = nad.length ? nad.join('|') : null;
+  const nrel = mod_values('naming_relativizers');
+  NAMING_BRIDGE_REL = nrel.length ? nrel.join('|') : null;
+  const ntail = mod_values('naming_clause_tails');
+  NAMING_BRIDGE_TAIL = ntail.length ? ntail.join('|') : '$^';
   // production-guard conventions (assertions, contextual and revisable)
   DISCOURSE_JUNK = new Set(mod_values('discourse_junk'));
   ANSWER_DISCOURSE = new Set(mod_values('answer_discourse'));
@@ -4466,8 +4519,10 @@ async function extractEoGraph(text, onProgress) {
     // to the ANTECEDENT sentence, where the description actually appears,
     // so the mechanical re-read binds it cleanly.
     {
-      const nm = sentText.match(/^\s*(?:that|this|the)\s+(\p{Ll}[\p{Ll}’'-]*)\s+(?:is|was)\s+(.+?)\.?\s*$/iu);
-      if (nm) {
+      // Surface cue is the register's (NAMING_BRIDGE_* built from the
+      // en-narrative naming inventories); the bridge below is the engine's.
+      const nm = sentText.match(NAMING_BRIDGE_SUBJECT_RE);
+      if (nm && NAMING_BRIDGE_ANTE_DET && NAMING_BRIDGE_REL) {
         const headNoun = nm[1].toLowerCase();
         const name = trimNounSpan(nm[2]) || nm[2].trim();
         const nameKey = normSurface(name);
@@ -4480,9 +4535,9 @@ async function extractEoGraph(text, onProgress) {
           // clause boundary so the role — not the surrounding sentence — is
           // what attaches.
           const antRe = new RegExp(
-            '((?:the\\s+same|the|a|an|his|her|its|their|this|that)\\s+' +
-            headNoun + '\\s+(?:who|whom|that|which)\\b.+?)' +
-            '(?=,\\s*(?:to|so|which|where|while|in\\s+order)\\b|[.;:]|$)', 'iu');
+            '((?:' + NAMING_BRIDGE_ANTE_DET + ')\\s+' +
+            headNoun + '\\s+(?:' + NAMING_BRIDGE_REL + ')\\b.+?)' +
+            '(?=,\\s*(?:' + NAMING_BRIDGE_TAIL + ')\\b|[.;:]|$)', 'iu');
           let desc = null, srcSent = -1;
           for (let back = 1; back <= 2 && i - back >= 0; back++) {
             const m = (sentenceTexts[i - back] || '').match(antRe);

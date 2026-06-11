@@ -136,6 +136,10 @@ const EN_WORD_PROPS = {
     op: 'REC', target: 'en-narrative-v1:role_clause_verbs', action: 'register-law',
     value: 'Journalism states roles relationally ("the same person who runs the DMC") where fiction uses appositives; the naming bridge distills these clauses into role DEFs so a role question can be answered from the graph.',
   });
+  emit({
+    op: 'REC', target: 'en-narrative-v1:identificational_copulas', action: 'register-law',
+    value: 'That a described-but-unnamed person, named a beat later, is one returning referent is UNIVERSAL — the engine credits the antecedent sighting and admits the figure on salience, not repetition. HOW the delayed naming is signalled is PARTICULAR: English marks it with a demonstrative subject and an identificational copula ("That person is Tom Turner") pointing back to a relative-clause description. These inventories (subject determiners, copulas, antecedent determiners, relativizers, clause tails) are that cue; a register that marks naming otherwise supplies its own, or leaves them empty and the bridge stays inert.',
+  });
 
   // ── the linkage layer: conventions are LINKED, not flat lists ──
   // "i before e except after c": a convention may qualify, except, subset, or
@@ -164,6 +168,12 @@ const EN_WORD_PROPS = {
   link(EN + 'role_clause_verbs', 'feeds', 'mechanics:naming-bridge');
   link(EN + 'role_title_heads', 'feeds', 'mechanics:naming-bridge');
   link(EN + 'role_title_prefixes', 'qualifies', EN + 'role_title_heads');
+  // the delayed-naming cue: how English signals "described here, named there"
+  link(EN + 'naming_subject_determiners', 'feeds', 'mechanics:naming-bridge');
+  link(EN + 'identificational_copulas', 'feeds', 'mechanics:naming-bridge');
+  link(EN + 'naming_antecedent_determiners', 'feeds', 'mechanics:naming-bridge');
+  link(EN + 'naming_relativizers', 'feeds', 'mechanics:naming-bridge');
+  link(EN + 'naming_clause_tails', 'qualifies', 'mechanics:naming-bridge');
   link('core:discourse_junk', 'qualifies', 'mechanics:admission');
   link('core:structure_labels', 'qualifies', 'mechanics:admission');
   link('core:transcript_formula', 'excepts', 'mechanics:admission');
