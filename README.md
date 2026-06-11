@@ -363,6 +363,34 @@ event log, ready for `jq` or a notebook. `tests/ingestion.test.js` pins the
 contract (tokenizer fidelity, total word accounting, honest coverage); the parse
 itself is untouched, so golden parity holds.
 
+### Conformance: the seven invariants
+
+What an ingestion log *should* hold is written down once, as law:
+`docs/reading-conformance.md` defines seven invariants over the append-only log
+(ADMISSION, BINDING, SPEECH, COMPANY, DARK, WEIGHT, CUSTOM), each with a
+mechanical check and a witness from the permanent failing corpus (the Toronto
+Life ingestion of 2026-06-11, which scores `0 0 0 0 0 1 0`).
+`tools/conformance.js` is the instrument: it scores any exported
+`cleon-ingestion/1` dump as the 7-bit vector, citing the exact events that earn
+each violation, with optional session-side advisory checks over a
+`cleon-audit/1` JSONL export.
+
+```sh
+npm run conformance -- dump.json            # score an exported dump
+node tools/conformance.js --parse some.txt  # parse with the live engine, then score
+```
+
+The checker honors invariant 7 itself: its check logic knows only the operator
+schema, and every surface criterion (chrome patterns, lexicons, thresholds)
+lives in a replaceable pack (`--pack`; register packs for Gutenberg books,
+Spanish, Chinese, and Aozora-Japanese live in `tools/packs/`).
+`tests/conformance.test.js` pins a conforming log at `1 1 1 1 1 1 1`, the
+failing corpus at `0 0 0 0 0 1 0`, and the live engine's current bits — the
+rebuild's scoreboard, meant to flip left to right.
+`npm run evo:conformance` sweeps the evo corpus (English and not) through the
+instrument under its per-register packs and reports the vectors, the
+violated-law histogram behind each 0, and sample witnesses.
+
 ## Reading rules
 
 The "reading rules" in the side panel are the toggleable parameters the engine

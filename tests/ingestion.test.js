@@ -74,6 +74,18 @@ async function main() {
     eq(JSON.stringify(r.counts.ops), JSON.stringify(ops), 'op tally matches the log');
   });
 
+  group('textGraph — the whole text is in the graph, every word meaningful', () => {
+    const g = E.textGraph(voss);
+    eq(g.schema, 'cleon-textgraph/1', 'schema stamped');
+    eq(g.coverage.lit + g.coverage.chrome + g.coverage.dark, g.coverage.spans, 'every span is exactly one of lit / chrome / dark');
+    eq(g.spans.length, voss.sentenceTexts.length, 'a node exists for every span — nothing summarized away');
+    ok(g.spans.every(s => s.kind !== 'dark' || s.reason != null), 'every dark span carries its written reason');
+    eq(g.words.indexed + g.words.stop + g.words.dropped, g.words.occurrences, 'every word is accounted: indexed + stop + dropped = all');
+    ok(g.spans.some(s => s.referents.length && s.kind === 'lit'), 'lit spans hang on the referents sighted in them');
+    ok(g.referents.every(r => r.frame && /^frame:/.test(r.frame)), 'every referent carries its frame');
+    eq(E.textGraph(deals), null, 'a table has no prose text graph');
+  });
+
   group('ingestionReport — tables carry no word graph', () => {
     eq(E.ingestionReport(deals), null, 'a table returns null (no prose graph)');
     eq(E.ingestionReport(null), null, 'a missing doc returns null');

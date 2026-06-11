@@ -96,7 +96,7 @@ async function traceDocument(EOEngine, { name, text, id }) {
       seq: e.seq, sentence_idx: e.sentence_idx,
       surface: e.surface || null,
       reason: e.reason || null,
-      competing: e.competing || (e.observed && e.observed.competing) || null,
+      competing: (e.observed && e.observed.competing) || e.competing || null,
     }));
 
   // SIG bindings — speech attribution. The `attributed` mode tells us HOW

@@ -688,13 +688,43 @@ const READING_RULES = {
       '/^-{6,}$/',
       // byline: "By <Name> <Name> | <Month> <Day>, <Year>"
       '/\\bBy\\s+[A-Z][a-z]+\\s+[A-Z][a-z]+\\s*\\|\\s*\\w+\\s+\\d+,?\\s+\\d{4}\\b/',
+      // byline: "By <Name> [and <Name>…]" alone on its line (no date needed)
+      "/^[Bb]y(( and| &)? [A-Z][\\w.’'-]+){1,8}$/",
       // share/social chrome
       '/^(Share|Tweet|Facebook|Email|Print)(\\s+[•|]\\s+\\w+)*\\s*$/i',
       // subscription appeals
       '/\\bSubscribe\\b.*\\$\\d+/i',
+      // web nav/footer link rows: an enumerated menu vocabulary, nothing else on the line
+      '/^(about us|contact|submit|advertise|advertisement( this)?|renew|manage|terms|privacy|subscribe|sign in|log ?in|newsletter|latest issue)( (about us|contact|submit|advertise|advertisement|renew|manage|terms|privacy|subscribe|sign in|log ?in|newsletter|latest issue))*$/i',
+      // book apparatus: front-matter heads, numbered chapter/section heads,
+      // roman-numeral and bare-number lines, bracketed plates, transcriber
+      // boilerplate, and the Gutenberg wrapper
+      '/^(contents|index|preface|introduction|appendix|notes?|footnotes?|bibliography|glossary|errata|epilogue|prologue|dedication|illustrations?)\\b.{0,60}$/i',
+      '/^(chapter|book|volume|part|section|canto|act|scene|letter|essay|no)\\.?\\s+[ivxlcdm0-9]+[.:)]?\\s*$/i',
+      '/^[ivxlcdm]+[.)]?$/i',
+      '/^\\d+[.)]?$/',
+      '/^\\[(illustration|footnote|sidenote|frontispiece)/i',
+      '/^(produced|prepared|transcribed|digitized|translated|edited|illustrated|compiled|adapted|annotated) by\\b/i',
+      '/^transcriber/i',
+      '/^\\*\\*\\*/',
+      // an ALL-CAPS heading line (case-sensitive on purpose: no flags)
+      "/^[A-Z0-9][A-Z0-9 ,;:.’'&()-]{5,}$/",
+      // es apparatus: chapter heads and Golden-Age front matter
+      '/^cap[ií]tulo\\b/i',
+      '/^(índice|pr[óo]logo|prefacio|ap[ée]ndice|dedicatoria|tasa|privilegio|aprobaci[óo]n|advertencia|al lector|fe de erratas|tabla)\\b.{0,60}$/i',
+      '/^(primera|segunda|tercera|cuarta|quinta) parte\\b/i',
+      // zh apparatus: chapter/scroll heads and bracketed editorial notes
+      '/^第[一二三四五六七八九十百千零〇0-9]+[回章卷折節节出]/',
+      '/^卷之?[一二三四五六七八九十上中下]/',
+      '/^【[^】]*】/',
+      '/^〔[^〕]*〕$/',
+      // Aozora bunko colophon and editorial marks
+      '/^底本[：:]/',
+      '/^(入力|校正|初出)[：:]/',
+      '/^※/',
     ],
     mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
-    desc: 'Page chrome (regex sources, /pattern/flags form): navigation menus, copyright/trademark boilerplate, horizontal rules, bylines, share/social rows, subscription appeals. A line matching one is structure, not prose — it stays in the spine for re-display but reaches no operator emitter, so it goes dark honestly instead of minting phantom entities. Document apparatus, like structure_labels and gutenberg_boilerplate; English/contemporary-journalism register.',
+    desc: 'Page chrome (regex sources, /pattern/flags form): navigation menus, footer link rows, copyright/trademark boilerplate, horizontal rules, bylines, share/social rows, subscription appeals, book front matter and chapter heads, roman-numeral/pagination lines, bracketed plates, transcriber boilerplate, zh chapter heads, Aozora colophons. A line matching one is structure, not prose — it stays in the spine for re-display but reaches no operator emitter, so it goes dark honestly instead of minting phantom entities. Document apparatus, like structure_labels and gutenberg_boilerplate; register-specific entries disable per register like any convention.',
   },
   metaphor_frames: {
     value: [
@@ -3101,6 +3131,8 @@ async function extractEoGraph(text, onProgress) {
     // grams claim their positions first; shorter grams only count free
     // occurrences, so \u590d\u751f never survives inside \u9648\u590d\u751f.
     const runsBySent = sentStrs.map(s => {
+      // chrome (chapter heads, colophons) is structure: mine no names from it
+      if (isChrome(s)) return [];
       const runs = []; let mm; const re = /[\u4e00-\u9fff]+/g;
       while ((mm = re.exec(s)) !== null) runs.push({ at: mm.index, text: mm[0] });
       return runs;
@@ -3121,21 +3153,28 @@ async function extractEoGraph(text, onProgress) {
         }
       });
       for (const [g, poss] of [...occ.entries()].sort((a, b) => b[1].length - a[1].length)) {
-        if (poss.length < READING_RULES.two_sighting_admission.value) continue;
+        // The gate counts distinct SENTENCES, not occurrences — a gram twice
+        // in one line has not "returned"; the two-sighting law, generalized,
+        // is two distinct sightings.
+        if (new Set(poss.map(p => p.si)).size < READING_RULES.two_sighting_admission.value) continue;
         const free = poss.filter(p => { for (let k = 0; k < n; k++) if (occupied[p.si].has(p.at + k)) return false; return true; });
-        if (free.length < READING_RULES.two_sighting_admission.value) continue;
+        if (new Set(free.map(p => p.si)).size < READING_RULES.two_sighting_admission.value) continue;
         admitted.push({ name: g, positions: free });
         for (const p of free) for (let k = 0; k < n; k++) occupied[p.si].add(p.at + k);
       }
     }
     zhNamePositions = new Map(admitted.map(a => [a.name, a.positions]));
     for (const a of admitted) {
-      const first = a.positions.reduce((m, p) => Math.min(m, p.si), Infinity);
+      const sis = [...new Set(a.positions.map(p => p.si))].sort((x, y) => x - y);
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'INS', stance: 'Instantiating',
         target: a.name, targetRaw: a.name, entityType: 'thing',
         referent_id: mintReferent(), in_quote: false,
-        sentence_idx: first, sentence: sentStrs[first],
+        sentence_idx: sis[0], sentence: sentStrs[sis[0]],
+        // the admission's evidence, written down: the distinct sentences
+        // that cleared the gate (the same basis vocabulary REC uses) —
+        // the projection unions these into the referent's sightings
+        basis: { slot_sightings: sis.length, sightings: sis },
         src: 'gram-mining',
       });
     }
@@ -3143,6 +3182,7 @@ async function extractEoGraph(text, onProgress) {
     const zhVerbTally = new Map();
     const nameAt = (si) => admitted.flatMap(a => a.positions.filter(p => p.si === si).map(p => ({ name: a.name, at: p.at })));
     sentStrs.forEach((s, si) => {
+      if (isChrome(s)) return;
       const qm = s.match(/^(.*?)[\uFF1A:]\s*[\u201C\u300C\u300E"\u2018\u300A]([^\u201D\u300D\u300F"\u2019\u300B]+)/u);
       if (!qm) return;
       const pre = qm[1], quote = qm[2];
@@ -3374,7 +3414,18 @@ async function extractEoGraph(text, onProgress) {
     return sites.has(cur) ? cur : null;
   };
 
-  function recordSiteSurface(key, surface, type, weight = 1) {
+  // Distinct prose sentences each site's NAME was sighted in (chrome never
+  // reaches the emitters, so these are prose by construction; pronoun binds
+  // are inferred mentions and never counted). The admission gate settles on
+  // this at end of parse: only what returns keeps its name.
+  const sightSents = new Map();
+  function noteSight(key, si) {
+    if (si == null) return;
+    if (!sightSents.has(key)) sightSents.set(key, new Set());
+    sightSents.get(key).add(si);
+  }
+  function recordSiteSurface(key, surface, type, weight = 1, si = null) {
+    noteSight(key, si);
     let cur = sites.get(key);
     if (!cur) {
       cur = { name: surface, type, gender: genderFromName(surface), mass: 0, surfaceMass: 0, momentum: 0, tokens: tokenSetOf(surface), referent_id: mintReferent(), forms: new Map() };
@@ -3479,7 +3530,10 @@ async function extractEoGraph(text, onProgress) {
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'NUL', stance: 'Preserving',
         surface: pronoun, reason: 'pronoun-stall:' + result.reason,
-        competing: result.competing,
+        // Identity only here; what each candidate WEIGHED at the stall is a
+        // measurement and lives under `observed`, stamped with its frame —
+        // same discipline the gravity stall already keeps.
+        competing: (result.competing || []).map(c => ({ site: c.site, siteName: c.siteName })),
         observed: { frame: frameStamp(currentSentIdx), competing: result.competing },
         sentence_idx: currentSentIdx, sentence: currentSentText, src: 'pronoun-activation',
       });
@@ -3634,7 +3688,7 @@ async function extractEoGraph(text, onProgress) {
         // ("Rostov" inside a line of dialogue) silently drops its touch.
         if (sites.has(key)) {
           seen.add(key);
-          recordSiteSurface(key, cleaned, type, mentionW);
+          recordSiteSurface(key, cleaned, type, mentionW, i);
           continue;
         }
         const singleInQuote = !/\s/.test(cleaned) && inQuote;
@@ -3698,7 +3752,7 @@ async function extractEoGraph(text, onProgress) {
           // character mentioning a name is not the narrator revealing
           // who "she" was.
           const matchingSignal = inQuote ? null : findMatchingSignalForName(cleaned, type);
-          recordSiteSurface(key, cleaned, type, mentionW);
+          recordSiteSurface(key, cleaned, type, mentionW, i);
           const site = sites.get(key);
           let fromSignal = null;
           if (matchingSignal) {
@@ -3742,6 +3796,7 @@ async function extractEoGraph(text, onProgress) {
           // Record the absorbed surface as a sighting of the target, then pick
           // the canonical mentions-first (the form named most), not the longer
           // string — see pickCanonicalForm.
+          noteSight(target.siteKey, i);
           bumpForm(targetSite, cleaned);
           const canonical = pickCanonicalForm(targetSite.forms, target.siteName);
           events.push({
@@ -3867,11 +3922,17 @@ async function extractEoGraph(text, onProgress) {
     // matching — same compatibility reason as CON.
     sentDoc.clauses().forEach(clause => {
       const text = clause.text();
-      // Look for "<noun phrase> (is|was|are|were|am) (a|an|the)? <noun phrase>"
-      const m = text.match(/^(.+?)\s+(is|was|are|were|am|been|becomes?|became|remains?|remained)\s+(?:(?:a|an|the)\s+)?(.+?)\.?$/i);
+      // Look for "<noun phrase> (is|was|are|were|am) (a|an|the) <noun phrase>".
+      // The determiner is REQUIRED and kept: a definition is a det-headed
+      // predicate nominal ("a white minister", "the chief engineer"). A
+      // det-less tail ("worth a fraction of that", "arrested in Amsterdam",
+      // "his") is a clause fragment, not the company a thing keeps — it
+      // deposits nothing here.
+      const m = text.match(/^(.+?)\s+(is|was|are|were|am|been|becomes?|became|remains?|remained)\s+((?:(?:a|an|the)\s+)?)(.+?)\.?$/i);
       if (!m) return;
       const targetRaw = m[1].trim();
-      const value = m[3].trim().replace(/[.,;:!?]+$/, '');
+      const det = m[3] || '';
+      const value = (det + m[4]).trim().replace(/[.,;:!?]+$/, '');
       if (!targetRaw || !value) return;
       const target = trimNounSpan(targetRaw) || targetRaw;
       if (target === value) return;
@@ -3894,14 +3955,17 @@ async function extractEoGraph(text, onProgress) {
       } else if (!isAdmittedSurface(target) && !looksProper(target)) {
         return;
       }
+      // A det-headed predicate nominal is a definition (class); a det-less
+      // tail ("worth a fraction of that", "seized by the committee") is a
+      // recorded STATE — checkable predication, never what the thing IS.
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
-        target, path: 'class', value,
+        target, path: det ? 'class' : 'state', value,
         targetHint: hint,
         targetRaw,
         ...sentMeta, src: 'copular',
       });
-      maybeRetypeFromGloss(target, hint, value);
+      if (det) maybeRetypeFromGloss(target, hint, value);
     });
 
     // ── DEF (Dissecting): deferred demonstrative naming ───────
@@ -4027,7 +4091,9 @@ async function extractEoGraph(text, onProgress) {
             events.push({
               id: 'ev-' + seq, seq: seq++, op: 'NUL', stance: 'Preserving',
               surface: poss + ' ' + kin, reason: 'pronoun-stall:' + r.reason,
-              competing: r.competing,
+              // Identity only; measurements under `observed` (see the
+              // pronoun-activation stall above).
+              competing: (r.competing || []).map(c => ({ site: c.site, siteName: c.siteName })),
               observed: { frame: frameStamp(currentSentIdx), competing: r.competing },
               sentence_idx: currentSentIdx, sentence: currentSentText, src: 'possessive-kin',
             });
@@ -4450,8 +4516,15 @@ async function extractEoGraph(text, onProgress) {
           if (a.type !== 'person') continue;
           const rk = resolveSiteKey(a.key);
           const v = rk ? sites.get(rk) : null;
-          if (v && !speakerEligible(v)) { gatedCandidate = true; continue; }
-          speaker = a; break;
+          // No site yet means no agency evidence either: a name admitted in
+          // this very sentence (often the vocative — "Good morning, Mr.
+          // Samsa" — the ADDRESSEE) may not be guessed onto the quote.
+          if (!speakerEligible(v)) { gatedCandidate = true; continue; }
+          // Record the BODY that cleared the gate (the canonical site), not
+          // the raw surface — the eligibility judged and the speaker written
+          // must be the same referent.
+          speaker = { surface: v.name, type: 'person', key: rk, referent_id: v.referent_id };
+          break;
         }
       }
       // Fallback: highest mass-weighted person candidate. The candidate
@@ -4563,6 +4636,126 @@ async function extractEoGraph(text, onProgress) {
     }
   }
 
+  // ── Admission gate, settled ─────────────────────────────────
+  // Only what returns keeps its name: the gate is two sightings, counted as
+  // distinct prose sentences (a voice's attributed turns count — speaking is
+  // being sighted). A site that never returned is retired by SEG — its INS
+  // stays in the log, answered, and the projection drops the referent. The
+  // log stays append-only: nothing is unwritten, the retirement is written.
+  {
+    const GATE = READING_RULES.two_sighting_admission.value;
+    const chromeSet = new Set(chromeIdx);
+    const sigSents = new Map();
+    for (const ev of events) {
+      if (ev.op !== 'SIG' || !ev.speaker || ev.speaker === '?' || ev.sentence_idx == null) continue;
+      const k = normSurface(ev.speaker);
+      if (!sigSents.has(k)) sigSents.set(k, new Set());
+      sigSents.get(k).add(ev.sentence_idx);
+    }
+    const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const insByRef = new Map();
+    for (const ev of events) if (ev.op === 'INS' && ev.referent_id) insByRef.set(ev.referent_id, ev);
+    for (const [key, site] of sites) {
+      if (surfaceAlias.has(key)) continue;                    // absorbed into another body
+      const sighted = new Set(sightSents.get(key) || []);
+      for (const si of (sigSents.get(key) || [])) sighted.add(si);
+      // Capture has recall holes (a tagger missing a bare surname is not the
+      // name failing to return). The evidence of record is the page: scan the
+      // prose spans for any sighted FORM of the name, whole-word.
+      {
+        const forms = [...new Set([site.name, ...(site.forms ? site.forms.keys() : [])])].filter(Boolean);
+        const res = forms.map(f => new RegExp('(^|[^A-Za-z0-9_])' + escRe(f) + '($|[^A-Za-z0-9_])'));
+        for (let si = 0; si < sentenceTexts.length; si++) {
+          if (chromeSet.has(si) || sighted.has(si)) continue;
+          if (res.some(re => re.test(sentenceTexts[si]))) sighted.add(si);
+        }
+      }
+      const sis = [...sighted].sort((a, b) => a - b);
+      if (sighted.size >= GATE) {
+        // Survivor: write the settled evidence onto its INS (the same basis
+        // vocabulary the zh miner and REC use), so the projection and any
+        // auditor read the admission's grounds, not capture luck.
+        const ins = insByRef.get(site.referent_id);
+        if (ins) ins.basis = Object.assign({}, ins.basis, { slot_sightings: sis.length, sightings: sis });
+        continue;
+      }
+      events.push({
+        id: 'ev-' + seq, seq: seq++, op: 'SEG', stance: 'Dissecting',
+        target: site.name, referent_id: site.referent_id,
+        reason: 'single-sighting', basis: { sightings: sis },
+        sentence_idx: sis.length ? sis[0] : null,
+        src: 'admission-gate',
+      });
+    }
+  }
+
+  // ── Binding, settled ────────────────────────────────────────
+  // Two names joined by a deed is a bond. Resolution completes only when
+  // admission settles, so the deed's operator settles here with it: an SVO
+  // whose subject and object both resolve to DISTINCT surviving referents is
+  // CON (the bond written between the names); a deed an endpoint of which
+  // was retired, or never resolved, stays SYN. Same parse, same log — the
+  // event's id, seq, and sentence keep their place; only the classification
+  // the algebra demands is settled.
+  {
+    const retired = new Set(events.filter(e => e.op === 'SEG' && e.src === 'admission-gate').map(e => e.referent_id));
+    const live = [];
+    for (const [key, site] of sites) {
+      if (surfaceAlias.has(key) || retired.has(site.referent_id)) continue;
+      live.push({ key, site, content: [...site.tokens].filter(t => t.length >= 3 && !STOP.has(t)) });
+    }
+    const byRef = new Map(live.map(L => [L.site.referent_id, L]));
+    const resolveSettled = (surface, hint) => {
+      if (hint && hint.referent_id && byRef.has(hint.referent_id)) return byRef.get(hint.referent_id);
+      if (surface == null || isPronoun(surface)) return null;
+      const rk = resolveSiteKey(normSurface(surface));
+      if (rk) { const s = sites.get(rk); if (s && byRef.has(s.referent_id)) return byRef.get(s.referent_id); }
+      const candTok = [...tokenSetOf(surface)].filter(t => t.length >= 3 && !STOP.has(t));
+      if (!candTok.length) return null;
+      const candSet = new Set(candTok);
+      let best = null, bestN = 0;
+      for (const L of live) {
+        if (!L.content.length) continue;
+        const siteInCand = L.content.every(t => candSet.has(t));
+        const candInSite = candTok.every(t => L.site.tokens.has(t));
+        if ((siteInCand || candInSite) && L.content.length > bestN) { best = L; bestN = L.content.length; }
+      }
+      return best;
+    };
+    for (const ev of events) {
+      if (ev.src !== 'svo' || ev.s == null || ev.o == null) continue;
+      const S = resolveSettled(ev.s, ev.sHint);
+      const O = resolveSettled(ev.o, ev.oHint);
+      if (S && O && S.site.referent_id !== O.site.referent_id) {
+        ev.op = 'CON'; ev.stance = 'Connecting';
+        ev.relation = normalizeRelation(ev.v);
+        ev.source_ref = S.site.referent_id; ev.target_ref = O.site.referent_id;
+        ev.sourceName = S.site.name; ev.targetName = O.site.name;
+      } else if (ev.op === 'CON') {
+        // a bond needs two surviving referents — this one lost an endpoint
+        ev.op = 'SYN'; ev.stance = 'Joining';
+        delete ev.source_ref; delete ev.target_ref; delete ev.sourceName; delete ev.targetName;
+      }
+    }
+    // DEFs settle the same way: a definition or state recorded against a
+    // surface that never became (or did not remain) a referent defines
+    // nothing — it leaves the log before commit. Admitted non-site referents
+    // (zh grams, voices) still count as targets.
+    const insAlive = new Set();
+    for (const ev of events) {
+      if (ev.op === 'INS' && !retired.has(ev.referent_id)) insAlive.add(normSurface(ev.target));
+    }
+    for (let k = events.length - 1; k >= 0; k--) {
+      const ev = events[k];
+      if (ev.op !== 'DEF' || ev.src === 'frame-mint' || ev.src === 'csv-schema' || ev.src === 'csv-cell') continue;
+      const hintRef = ev.targetHint && ev.targetHint.referent_id;
+      if (hintRef && byRef.has(hintRef)) continue;
+      if (resolveSettled(ev.target, ev.targetHint)) continue;
+      if (insAlive.has(normSurface(ev.target))) continue;
+      events.splice(k, 1);
+    }
+  }
+
   // ── Site face: stamp every event with the phenomenological address it
   // touches (Space × Time). The operator already fixes the Domain; the target
   // noun fixes the Time column through the site cues. This is the Site
@@ -4575,7 +4768,47 @@ async function extractEoGraph(text, onProgress) {
   // No batch reconciliation: gravity resolution happened inline per sentence.
   // The embedding reconciler and the LLM tiebreak run automatically after
   // this warm pass — cold pass first, then EVA deposits on whatever stalled.
-  const { entities, edges } = projectGraph(events);
+  const { entities: allEntities, edges: allEdges } = projectGraph(events);
+  const retiredRefs = new Set(events.filter(e => e.op === 'SEG' && e.src === 'admission-gate').map(e => e.referent_id));
+  const retiredNames = new Set(events.filter(e => e.op === 'SEG' && e.src === 'admission-gate').map(e => normSurface(e.target)));
+  const entities = allEntities.filter(e => !retiredRefs.has(e.referent_id) && !retiredNames.has(normSurface(e.name)));
+  const edges = allEdges.filter(e => !retiredNames.has(normSurface(e.s != null ? e.s : e.source || '')) && !retiredNames.has(normSurface(e.o != null ? e.o : e.target || '')));
+
+  // ── Company, written ────────────────────────────────────────
+  // The neighbors are the definition: every surviving referent carries a
+  // frame — the hash of its CON neighborhood — stored as its DEF. An empty
+  // neighborhood still frames (the proposition "keeps no company"), and a
+  // second document's frame can now meet it (EVA, evaAcrossDocs).
+  {
+    // referents chain through gravity merges: a cluster's bonds belong to
+    // its canonical body, whichever referent id an event recorded
+    const canon = new Map();
+    for (const ev of events) {
+      if (ev.op !== 'SYN' || !Array.isArray(ev.referent_ids) || !ev.canonical_referent_id) continue;
+      for (const r of ev.referent_ids) if (r !== ev.canonical_referent_id) canon.set(r, ev.canonical_referent_id);
+    }
+    const chase = (r) => { let cur = r, hops = 0; while (canon.has(cur) && hops++ < 6) cur = canon.get(cur); return cur; };
+    const neigh = new Map();
+    const add = (ref, edge) => { const k = chase(ref); if (!neigh.has(k)) neigh.set(k, []); neigh.get(k).push(edge); };
+    for (const ev of events) {
+      if (ev.op !== 'CON' || !ev.source_ref || !ev.target_ref) continue;
+      const rel = String(ev.relation || ev.v || '').toLowerCase();
+      add(ev.source_ref, '>' + rel + '>' + normSurface(ev.targetName || ev.o || ''));
+      add(ev.target_ref, '<' + rel + '<' + normSurface(ev.sourceName || ev.s || ''));
+    }
+    for (const e of entities) {
+      if (!e.referent_id) continue;
+      const frameEdges = [...new Set(neigh.get(chase(e.referent_id)) || [])].sort();
+      events.push({
+        id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
+        target: e.name, path: 'frame',
+        value: 'frame:' + sha256Hex(JSON.stringify(frameEdges)).slice(0, 16),
+        targetHint: { referent_id: e.referent_id },
+        basis: { edges: frameEdges.length },
+        sentence_idx: null, sentence: null, src: 'frame-mint',
+      });
+    }
+  }
 
   const t1 = performance.now();
   // Serialize READING_RULES to plain JSON. Each entry carries its module
@@ -4830,7 +5063,9 @@ function projectGraph(events, frame = {}) {
       { surface: ev.s, hint: ev.sHint },
       { surface: ev.o, hint: ev.oHint },
     ];
-    if (ev.op === 'DEF') return [{ surface: ev.target, hint: ev.targetHint }];
+    // a frame DEF is settlement bookkeeping ABOUT a referent, not a
+    // sighting OF it — it carries no mention weight
+    if (ev.op === 'DEF') return ev.src === 'frame-mint' ? [] : [{ surface: ev.target, hint: ev.targetHint }];
     if (ev.op === 'SIG') return [{ surface: ev.speaker, hint: ev.speakerHint }];
     if (ev.op === 'INS') return [{ surface: ev.target, hint: null }];
     return [];
@@ -5608,6 +5843,7 @@ function projectGraph(events, frame = {}) {
       _lang: result.lang || 'en',
       _genre: result.genre || null,
       _voices: result.voices || null,
+      _chrome: result.chrome || [],
       _seqToSent: seqToSent,
     };
     // Provenance substrate, pure addition (parity holds): hash every sentence
@@ -5832,8 +6068,20 @@ function projectGraph(events, frame = {}) {
 
     const proj = projectGraph(doc._events);
     const seqToSent = doc._seqToSent || new Map();
-    const entities = proj.entities.map(e => {
-      const sents = [...new Set((e.eventSeqs || []).map(s => seqToSent.get(s)).filter(x => x != null))].sort((a, b) => a - b);
+    // sightings written into an INS's admission basis (gram-mining) are part
+    // of the referent's sentence record, not just the depositing sentence
+    const basisByRef = new Map();
+    for (const ev of doc._events) {
+      if (ev.op === 'INS' && ev.referent_id && ev.basis && Array.isArray(ev.basis.sightings)) basisByRef.set(ev.referent_id, ev.basis.sightings);
+    }
+    // a referent the admission gate retired (SEG single-sighting) never
+    // projects: its INS is in the log, answered, but it is not a name
+    const retired = new Set(doc._events.filter(ev => ev.op === 'SEG' && ev.src === 'admission-gate').map(ev => ev.referent_id));
+    const entities = proj.entities.filter(e => !retired.has(e.referent_id)).map(e => {
+      const sents = [...new Set([
+        ...(e.eventSeqs || []).map(s => seqToSent.get(s)).filter(x => x != null),
+        ...(basisByRef.get(e.referent_id) || []),
+      ])].sort((a, b) => a - b);
       const mass = e.physics && e.physics.mass != null ? Math.round(e.physics.mass * 10) / 10 : (e.mentions || sents.length || 1);
       return {
         name: e.name, key: e.key,
@@ -5866,6 +6114,116 @@ function projectGraph(events, frame = {}) {
     const view = { entities, byType };
     _projCache.set(doc, { rev: RULES_REV, view });
     return view;
+  }
+
+  /* ---------- the text, whole, as a graph ----------
+     Nothing summarized away: every span is a node — lit (it deposited
+     marks), chrome (held back by an admitted custom, reason written), or
+     dark (read as prose, deposited nothing, reason written) — and every
+     span hangs on the referents sighted in it, the bonds and assertions
+     it deposited, and the speech it carries. Words are accounted by the
+     same lexicon retrieval indexes (indexed + stop + dropped = all).
+     Pure projection over the dump; deterministic; no model. */
+  function textGraph(doc) {
+    const r = ingestionReport(doc);
+    if (!r) return null;
+    const bySent = (pred) => {
+      const m = new Map();
+      for (const ev of r.events) {
+        if (ev.sentence_idx == null || !pred(ev)) continue;
+        if (!m.has(ev.sentence_idx)) m.set(ev.sentence_idx, []);
+        m.get(ev.sentence_idx).push(ev);
+      }
+      return m;
+    };
+    const bonds = bySent(ev => ev.op === 'CON');
+    const asserts = bySent(ev => ev.op === 'DEF' && (ev.path === 'class' || ev.path === 'state' || ev.path === 'role' || ev.path === 'kin'));
+    const speech = bySent(ev => ev.op === 'SIG');
+    const sightings = new Map();
+    for (const e of r.entities) for (const si of (e.sents || [])) {
+      if (!sightings.has(si)) sightings.set(si, []);
+      sightings.get(si).push(e.name);
+    }
+    const frames = new Map(r.events.filter(ev => ev.op === 'DEF' && ev.path === 'frame').map(ev => [ev.target, { frame: ev.value, edges: (ev.basis && ev.basis.edges) || 0 }]));
+    let lit = 0, chrome = 0, dark = 0;
+    const spans = r.spans.map((text, i) => {
+      const ps = r.sentences[i] || {};
+      const substantive = (ps.events || 0) - ((ps.ops && ps.ops.NUL) || 0);
+      const kind = substantive > 0 ? 'lit' : (ps.reason === 'chrome' ? 'chrome' : 'dark');
+      if (kind === 'lit') lit++; else if (kind === 'chrome') chrome++; else dark++;
+      return {
+        i, text, kind, reason: ps.reason || null,
+        events: ps.events || 0, ops: ps.ops || {},
+        referents: sightings.get(i) || [],
+        bonds: (bonds.get(i) || []).map(ev => ({ source: ev.sourceName, relation: ev.relation || ev.v, target: ev.targetName })),
+        assertions: (asserts.get(i) || []).map(ev => ({ path: ev.path, target: ev.target, value: ev.value })),
+        speech: (speech.get(i) || []).map(ev => ({ speaker: ev.speaker, attributed: ev.attributed })),
+        words: ps.words || 0, terms: ps.terms || 0,
+      };
+    });
+    return {
+      schema: 'cleon-textgraph/1',
+      doc: r.doc, words: r.words,
+      coverage: { spans: spans.length, lit, chrome, dark },
+      spans,
+      referents: r.entities.map(e => ({ name: e.name, type: e.type, mentions: e.mentions, sents: e.sents, frame: (frames.get(e.name) || {}).frame || null, frame_edges: (frames.get(e.name) || {}).edges || 0 })),
+      bonds: r.events.filter(ev => ev.op === 'CON').map(ev => ({ source: ev.sourceName, relation: ev.relation || ev.v, target: ev.targetName, s: ev.sentence_idx })),
+    };
+  }
+
+  /* ---------- EVA: frames meet across documents ----------
+     Every admitted referent carries a frame DEF (the hash of its CON
+     neighborhood). When a second document names the same referent (fold-
+     matched), the frames are compared and the verdict lands as an EVA
+     event in the newer document's log: satisfies (same company), extends
+     (this reading adds neighbors), contracts (it holds fewer), conflicts
+     (different company). Pure over the logs; deterministic; no model. */
+  function _frameTable(doc) {
+    const out = new Map();   // fold(name) -> { name, frame, edges:Set }
+    const events = (doc && doc._events) || [];
+    const conByRef = new Map();
+    for (const ev of events) {
+      if (ev.op !== 'CON' || !ev.source_ref || !ev.target_ref) continue;
+      const rel = String(ev.relation || ev.v || '').toLowerCase();
+      if (!conByRef.has(ev.source_ref)) conByRef.set(ev.source_ref, new Set());
+      if (!conByRef.has(ev.target_ref)) conByRef.set(ev.target_ref, new Set());
+      conByRef.get(ev.source_ref).add('>' + rel + '>' + normSurface(ev.targetName || ev.o || ''));
+      conByRef.get(ev.target_ref).add('<' + rel + '<' + normSurface(ev.sourceName || ev.s || ''));
+    }
+    for (const ev of events) {
+      if (ev.op !== 'DEF' || ev.path !== 'frame') continue;
+      const ref = ev.targetHint && ev.targetHint.referent_id;
+      out.set(normSurface(ev.target), { name: ev.target, frame: ev.value, edges: (ref && conByRef.get(ref)) || new Set() });
+    }
+    return out;
+  }
+  function evaAcrossDocs(doc, priorDocs) {
+    if (!doc || !Array.isArray(doc._events)) return 0;
+    const mine = _frameTable(doc);
+    if (!mine.size) return 0;
+    let seq = doc._events.length ? ((doc._events[doc._events.length - 1].seq || 0) + 1) : 0;
+    let fired = 0;
+    for (const prior of (priorDocs || [])) {
+      if (!prior || prior === doc || !Array.isArray(prior._events)) continue;
+      const theirs = _frameTable(prior);
+      for (const [key, a] of mine) {
+        const b = theirs.get(key);
+        if (!b) continue;
+        const aInB = [...a.edges].every(x => b.edges.has(x));
+        const bInA = [...b.edges].every(x => a.edges.has(x));
+        const verdict = (aInB && bInA) ? 'satisfies' : (bInA ? 'extends' : (aInB ? 'contracts' : 'conflicts'));
+        doc._events.push({
+          id: 'ev-' + seq, seq: seq++, op: 'EVA', stance: 'Tracing',
+          target: a.name, path: 'frame',
+          value: { mine: a.frame, theirs: b.frame, other_doc: (prior.id != null ? prior.id : null), verdict },
+          basis: { shared_name: key, mine_edges: a.edges.size, their_edges: b.edges.size },
+          sentence_idx: null, sentence: null, src: 'frame-meet',
+        });
+        fired++;
+      }
+    }
+    if (fired) _projCache.delete(doc);
+    return fired;
   }
 
   function entityDetail(doc, name) {
@@ -6625,6 +6983,7 @@ function projectGraph(events, frame = {}) {
     const events = doc._events || [];
 
     // events grouped by the span they were deposited on (the join key is sentence_idx)
+    const chromeSet = new Set(doc._chrome || []);
     const evBySent = new Map();
     const opCounts = {};
     for (let k = 0; k < events.length; k++) {
@@ -6676,6 +7035,11 @@ function projectGraph(events, frame = {}) {
       for (const k of evIdx) { const op = events[k].op; ops[op] = (ops[op] || 0) + 1; }
       perSent[i] = { i, chars: sents[i].length, words: toks.length, terms: nTerm,
                      events: evIdx.length, ops, ents: entsBySent.get(i) || [] };
+      // A dark span carries its reason — written-down absence, never a guess:
+      // 'chrome' when the chrome gate kept it from the emitters, 'no-event'
+      // when it was read as prose and deposited nothing. (A span whose only
+      // events are NULs keeps the NUL's own richer reason instead.)
+      if (!evIdx.length) perSent[i].reason = chromeSet.has(i) ? 'chrome' : 'no-event';
     }
 
     const termList = [...terms.values()].sort((a, b) => b.count - a.count || (a.token < b.token ? -1 : 1));
@@ -7940,7 +8304,7 @@ function projectGraph(events, frame = {}) {
     const { entities } = projectEntities(doc);
     const out = [], seen = new Set();
     for (const ev of doc._events) {
-      if (ev.op !== 'DEF' || (ev.path !== 'class' && ev.path !== 'role') || !ev.value || !ev.target) continue;
+      if (ev.op !== 'DEF' || (ev.path !== 'class' && ev.path !== 'role' && ev.path !== 'state') || !ev.value || !ev.target) continue;
       if (_TRANSMUTE_SRC.has(ev.src)) continue;
       // a pronoun subject only counts through its resolved binding — an
       // unbound "He is …" is not an assertion ABOUT anyone
@@ -8789,7 +9153,7 @@ function projectGraph(events, frame = {}) {
     // ingestion audit: every word's fate (indexed / stopword / dropped), the
     // inverted index actually built, and per-span coverage — the glass box over
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
-    ingestionReport, classifyTokens,
+    ingestionReport, classifyTokens, evaAcrossDocs, textGraph,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
     contextScope, bindCitationsScope, supportProbeTerms,

@@ -1,0 +1,16 @@
+{
+  "_register": "Chinese narrative (the engine's zh frame). Pronouns go Chinese so 他/她/它 never resolve as referent surfaces; chrome adds chapter heads (第N回/章/卷) and bracketed apparatus. The latin link-run heuristic is inert here (no whitespace), so chrome is pattern-borne.",
+  "pronouns": ["他", "她", "它", "他们", "她们", "它们", "我", "你", "您", "我们", "你们", "咱们", "自己", "這", "那", "这", "他們", "她們", "我們"],
+  "chrome_patterns": [
+    "^https?://",
+    "^(\\u00a9|\\(c\\)|copyright)\\b",
+    "^\\*\\*\\*",
+    "^(title|author|editor|translator|release date|language|credits|source)\\s*:",
+    "^第[一二三四五六七八九十百千零〇0-9]+[回章卷折節节出]",
+    "^卷[之]?[一二三四五六七八九十上中下]",
+    "^[一二三四五六七八九十]+$",
+    "^【[^】]*】$",
+    "^〔[^〕]*〕$",
+    "^\\d+[.)]?$"
+  ]
+}

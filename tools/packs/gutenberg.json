@@ -1,0 +1,19 @@
+{
+  "_register": "Project Gutenberg book apparatus (English). Chrome here is the book's furniture: title pages, contents, chapter/section heads, roman-numeral lines, illustration/footnote brackets, transcriber boilerplate.",
+  "chrome_patterns": [
+    "^by\\s+\\S",
+    "^https?://",
+    "^(\\u00a9|\\(c\\)|copyright)\\b",
+    "^page\\s+\\d+$", "^\\d+[.)]?$",
+    "^advertisement\\b",
+    "^(translated|edited|illustrated|compiled|produced|prepared|transcribed|digitized) by\\b",
+    "^transcriber",
+    "^\\*\\*\\*",
+    "^(title|author|editor|translator|illustrator|release date|language|original publication|credits|source)\\s*:",
+    "^(chapter|book|volume|part|section|canto|act|scene|letter|essay|no)\\b[\\s.:]*[ivxlcdm0-9]*[.:]?$",
+    "^(contents|index|preface|introduction|appendix|footnotes?|notes?|bibliography|glossary|errata|epilogue|prologue|dedication|argument|illustrations?)\\b.{0,60}$",
+    "^[ivxlcdm]+[.)]?$",
+    "^\\[(illustration|footnote|sidenote|frontispiece)\\b",
+    { "pattern": "^[A-Z0-9][A-Z0-9 ,;:.'&()\\u2019-]{5,}$", "flags": "" }
+  ]
+}

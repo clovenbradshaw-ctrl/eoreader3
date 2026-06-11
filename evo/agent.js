@@ -35,7 +35,7 @@ async function observe(EOEngine, loadFixtures) {
         counts: tr.counts,
         entities: tr.entities.filter(e => e.type === 'person').map(e => ({ name: e.name, gender: e.gender, mass: e.mass })),
         stalls: tr.nulls.filter(n => n.reason && n.reason.startsWith('pronoun-stall'))
-          .map(n => ({ at: n.sentence_idx, surface: n.surface, competing: (n.competing || []).slice(0, 3).map(c => c.siteName + ':' + c.score) })),
+          .map(n => ({ at: n.sentence_idx, surface: n.surface, competing: ((n.observed && n.observed.competing) || n.competing || []).slice(0, 3).map(c => c.siteName + ':' + c.score) })),
         sigs: tr.sigs.map(s => ({ at: s.sentence_idx, speaker: s.speaker, how: s.attributed })),
       });
     }

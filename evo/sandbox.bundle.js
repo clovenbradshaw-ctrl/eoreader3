@@ -723,7 +723,7 @@
           const speech = ev.filter((e) => e.op === "SIG" && e.speaker && e.speaker !== "?").map((e) => ({ at: e.sentence_idx, speaker: e.speaker, quote: (e.quote || "").replace(/\s+/g, " ").slice(0, 64), how: e.attributed }));
           const defs = ev.filter((e) => e.op === "DEF").map((e) => ({ at: e.sentence_idx, target: e.target, path: e.path, value: e.value, reason: e.reason }));
           const merges = ev.filter((e) => e.op === "SYN" && e.method === "gravity" && Array.isArray(e.sites)).map((e) => ({ sites: e.sites }));
-          const stalls = ev.filter((e) => e.op === "NUL" && e.reason && e.reason.indexOf("pronoun-stall") === 0).map((e) => ({ at: e.sentence_idx, surface: e.surface, competing: (e.competing || []).slice(0, 3).map((c) => c.siteName + " " + c.score) }));
+          const stalls = ev.filter((e) => e.op === "NUL" && e.reason && e.reason.indexOf("pronoun-stall") === 0).map((e) => ({ at: e.sentence_idx, surface: e.surface, competing: (e.observed && e.observed.competing || e.competing || []).slice(0, 3).map((c) => c.siteName + " " + c.score) }));
           const recs = ev.filter((e) => e.op === "REC").map((e) => ({ target: e.target, action: e.action, value: e.new_value != null ? e.new_value : e.value, reason: e.reason }));
           let learned = [];
           try {
@@ -782,7 +782,10 @@
                 people = (E.projectEntities(doc).entities || []).filter((e) => e.type === "person").map((e) => e.name + "(" + (e.gender || "?") + ")");
               } catch (e) {
               }
-              const stalls = ev.filter((e) => e.op === "NUL" && e.reason && e.reason.indexOf("pronoun-stall") === 0).map((e) => "s" + e.sentence_idx + ' "' + (e.surface || "") + '"' + (e.competing ? " {" + e.competing.slice(0, 3).map((c) => c.siteName + ":" + c.score).join(" ") + "}" : ""));
+              const stalls = ev.filter((e) => e.op === "NUL" && e.reason && e.reason.indexOf("pronoun-stall") === 0).map((e) => {
+                const comp = e.observed && e.observed.competing || e.competing;
+                return "s" + e.sentence_idx + ' "' + (e.surface || "") + '"' + (comp ? " {" + comp.slice(0, 3).map((c) => c.siteName + ":" + c.score).join(" ") + "}" : "");
+              });
               const sigs = ev.filter((e) => e.op === "SIG").map((e) => "s" + e.sentence_idx + "\u2192" + e.speaker + "<" + (e.attributed || "") + ">");
               out.push("- " + f.id + " [" + (f.genre || "") + "] people: " + people.join(", "));
               if (stalls.length) out.push("    stalls: " + stalls.join("; "));
