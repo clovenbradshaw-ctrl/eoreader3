@@ -365,7 +365,8 @@ async function main() {
     eq(res.bits.ADMISSION.bit, 1, 'ADMISSION holds: the gate settles at end of parse — what never returned is retired by SEG, on the page\'s own evidence');
     ok(report.events.some(e => e.op === 'SEG' && e.src === 'admission-gate' && /jeff bezos/i.test(e.target)), 'the metaphor vehicle is retired with a receipt');
     ok(report.entities.some(e => e.name === 'Tse'), 'the protagonist survives — sightings are counted from the page, not from tagger luck');
-    eq(res.bits.BINDING.bit, 0, 'BINDING fails today: deeds the fold can resolve are still filed as SYN — fragmentation starves the CON path (flip me when bonds land)');
+    eq(res.bits.BINDING.bit, 1, 'BINDING holds: deeds settle with admission — both endpoints surviving and distinct makes the bond CON');
+    ok(report.events.some(e => e.op === 'CON' && /sam gor/i.test(e.targetName || e.o)), 'the witness bond lands: Tse —known→ Sam Gor is CON, written between the names');
     eq(res.bits.COMPANY.bit, 0, 'COMPANY fails today: copular fragments, no frames (flip me when frames land)');
     eq(res.bits.CUSTOM.bit, 1, 'CUSTOM holds: footer link-rows, bylines, and book apparatus are admitted chrome customs — furniture deposits nothing');
     ok(!report.entities.some(e => /latest issue|advertisement/i.test(e.name)), 'the footer mints no referents');

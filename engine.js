@@ -4673,6 +4673,56 @@ async function extractEoGraph(text, onProgress) {
     }
   }
 
+  // ── Binding, settled ────────────────────────────────────────
+  // Two names joined by a deed is a bond. Resolution completes only when
+  // admission settles, so the deed's operator settles here with it: an SVO
+  // whose subject and object both resolve to DISTINCT surviving referents is
+  // CON (the bond written between the names); a deed an endpoint of which
+  // was retired, or never resolved, stays SYN. Same parse, same log — the
+  // event's id, seq, and sentence keep their place; only the classification
+  // the algebra demands is settled.
+  {
+    const retired = new Set(events.filter(e => e.op === 'SEG' && e.src === 'admission-gate').map(e => e.referent_id));
+    const live = [];
+    for (const [key, site] of sites) {
+      if (surfaceAlias.has(key) || retired.has(site.referent_id)) continue;
+      live.push({ key, site, content: [...site.tokens].filter(t => t.length >= 3 && !STOP.has(t)) });
+    }
+    const byRef = new Map(live.map(L => [L.site.referent_id, L]));
+    const resolveSettled = (surface, hint) => {
+      if (hint && hint.referent_id && byRef.has(hint.referent_id)) return byRef.get(hint.referent_id);
+      if (surface == null || isPronoun(surface)) return null;
+      const rk = resolveSiteKey(normSurface(surface));
+      if (rk) { const s = sites.get(rk); if (s && byRef.has(s.referent_id)) return byRef.get(s.referent_id); }
+      const candTok = [...tokenSetOf(surface)].filter(t => t.length >= 3 && !STOP.has(t));
+      if (!candTok.length) return null;
+      const candSet = new Set(candTok);
+      let best = null, bestN = 0;
+      for (const L of live) {
+        if (!L.content.length) continue;
+        const siteInCand = L.content.every(t => candSet.has(t));
+        const candInSite = candTok.every(t => L.site.tokens.has(t));
+        if ((siteInCand || candInSite) && L.content.length > bestN) { best = L; bestN = L.content.length; }
+      }
+      return best;
+    };
+    for (const ev of events) {
+      if (ev.src !== 'svo' || ev.s == null || ev.o == null) continue;
+      const S = resolveSettled(ev.s, ev.sHint);
+      const O = resolveSettled(ev.o, ev.oHint);
+      if (S && O && S.site.referent_id !== O.site.referent_id) {
+        ev.op = 'CON'; ev.stance = 'Connecting';
+        ev.relation = normalizeRelation(ev.v);
+        ev.source_ref = S.site.referent_id; ev.target_ref = O.site.referent_id;
+        ev.sourceName = S.site.name; ev.targetName = O.site.name;
+      } else if (ev.op === 'CON') {
+        // a bond needs two surviving referents — this one lost an endpoint
+        ev.op = 'SYN'; ev.stance = 'Joining';
+        delete ev.source_ref; delete ev.target_ref; delete ev.sourceName; delete ev.targetName;
+      }
+    }
+  }
+
   // ── Site face: stamp every event with the phenomenological address it
   // touches (Space × Time). The operator already fixes the Domain; the target
   // noun fixes the Time column through the site cues. This is the Site
