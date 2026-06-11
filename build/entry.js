@@ -6,6 +6,7 @@ import './globals.js';
 import '../engine.js';
 import '../store.js';
 import '../audit.js';
+import '../enrich.js';
 import '../data.jsx';
 import '../pivot.jsx';
 import '../icons.jsx';
