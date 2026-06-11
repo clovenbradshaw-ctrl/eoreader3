@@ -22,6 +22,7 @@
     "evo:prompts": "node evo/experiments/prompt-audit.js",
     "evo:questions": "node evo/experiments/question-probe.js",
     "evo:ingestion": "node evo/experiments/ingestion-quality.js",
+    "evo:conformance": "node evo/experiments/conformance-sweep.js",
     "conventions:gen": "node tools/gen-conventions.js",
     "conformance": "node tools/conformance.js"
   },

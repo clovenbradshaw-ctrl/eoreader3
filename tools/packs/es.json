@@ -1,0 +1,18 @@
+{
+  "_register": "Spanish narrative under Gutenberg apparatus. Pronouns and surface function words go Spanish so an SVO surface like 'ella' can never resolve as a referent by name; chrome adds the Spanish front-matter vocabulary (capítulo, índice, prólogo, tasa, privilegio...).",
+  "pronouns": ["él", "ella", "ellos", "ellas", "le", "les", "lo", "la", "los", "las", "se", "me", "te", "nos", "os", "yo", "tú", "usted", "ustedes", "quien", "quienes", "esto", "eso", "aquello", "éste", "ésta", "éstos", "éstas"],
+  "chrome_function_words": ["de", "del", "la", "el", "los", "las", "y", "e", "o", "u", "que", "en", "a", "al", "un", "una", "unos", "unas", "por", "para", "con", "sin", "sobre", "entre", "su", "sus", "se", "no", "si", "lo", "le", "les", "como", "más"],
+  "chrome_patterns": [
+    "^https?://",
+    "^(\\u00a9|\\(c\\)|copyright)\\b",
+    "^p[aá]gina\\s+\\d+$", "^\\d+[.)]?$",
+    "^\\*\\*\\*",
+    "^(title|author|editor|translator|release date|language|credits|source)\\s*:",
+    "^cap[ií]tulo\\b",
+    "^(índice|pr[oó]logo|prefacio|notas?|ap[eé]ndice|dedicatoria|tasa|privilegio|aprobaci[oó]n|advertencia|al lector|fe de erratas|tabla)\\b.{0,60}$",
+    "^(primera|segunda|tercera|cuarta|quinta) parte\\b",
+    "^[ivxlcdm]+[.)]?$",
+    "^\\[(ilustraci[oó]n|nota)\\b",
+    { "pattern": "^[A-ZÁÉÍÓÚÑÜ0-9][A-ZÁÉÍÓÚÑÜ0-9 ,;:.'&()\\u2019-]{5,}$", "flags": "" }
+  ]
+}

@@ -3237,7 +3237,10 @@ async function extractEoGraph(text, onProgress) {
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'NUL', stance: 'Preserving',
         surface: pronoun, reason: 'pronoun-stall:' + result.reason,
-        competing: result.competing,
+        // Identity only here; what each candidate WEIGHED at the stall is a
+        // measurement and lives under `observed`, stamped with its frame —
+        // same discipline the gravity stall already keeps.
+        competing: (result.competing || []).map(c => ({ site: c.site, siteName: c.siteName })),
         observed: { frame: frameStamp(currentSentIdx), competing: result.competing },
         sentence_idx: currentSentIdx, sentence: currentSentText, src: 'pronoun-activation',
       });
@@ -3723,7 +3726,9 @@ async function extractEoGraph(text, onProgress) {
             events.push({
               id: 'ev-' + seq, seq: seq++, op: 'NUL', stance: 'Preserving',
               surface: poss + ' ' + kin, reason: 'pronoun-stall:' + r.reason,
-              competing: r.competing,
+              // Identity only; measurements under `observed` (see the
+              // pronoun-activation stall above).
+              competing: (r.competing || []).map(c => ({ site: c.site, siteName: c.siteName })),
               observed: { frame: frameStamp(currentSentIdx), competing: r.competing },
               sentence_idx: currentSentIdx, sentence: currentSentText, src: 'possessive-kin',
             });

@@ -103,7 +103,12 @@ const foldTokens = (s) => fold(s).split(' ').filter(Boolean);
 function isChromeSpan(text, pack) {
   const t = String(text == null ? '' : text).trim();
   if (!t || /^["'“‘«—]/.test(t)) return false;   // speech is never furniture
-  for (const p of pack.chrome_patterns) if (new RegExp(p, 'i').test(t)) return true;
+  // a pattern is a string (case-folded) or { pattern, flags } — an ALL-CAPS
+  // convention needs case sensitivity, and that too is the pack's to say
+  for (const p of pack.chrome_patterns) {
+    const re = typeof p === 'string' ? new RegExp(p, 'i') : new RegExp(p.pattern, p.flags == null ? 'i' : p.flags);
+    if (re.test(t)) return true;
+  }
   if (/[.!?…]["')”’]*$/.test(t)) return false;        // a finished sentence
   const words = t.split(/\s+/);
   if (!words.length || words.length > pack.chrome_link_run_max_words) return false;

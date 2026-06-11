@@ -191,6 +191,27 @@ async function main() {
     ok(!C.isChromeSpan('"Marlow Is Waiting"', C.DEFAULT_PACK), 'quoted speech is never chrome');
   });
 
+  group('register packs — conventions live in JSON, never in the checks', () => {
+    const packsDir = path.join(__dirname, '..', 'tools', 'packs');
+    const load = (n) => Object.assign({}, C.DEFAULT_PACK, JSON.parse(fs.readFileSync(path.join(packsDir, n + '.json'), 'utf8')));
+    const g = load('gutenberg');
+    ok(C.isChromeSpan('CONTENTS', g), 'gutenberg: a contents head is chrome');
+    ok(C.isChromeSpan('Chapter II.', g), 'gutenberg: a chapter head is chrome');
+    ok(C.isChromeSpan('XIV', g), 'gutenberg: a roman-numeral line is chrome');
+    ok(C.isChromeSpan('[Illustration: The lamp at dusk.]', g), 'gutenberg: an illustration bracket is chrome');
+    ok(C.isChromeSpan('FATHER GORIOT', g), 'gutenberg: an all-caps title line is chrome');
+    ok(!C.isChromeSpan('The whale swam on, indifferent to the harpoon.', g), 'gutenberg: prose stays prose');
+    const es = load('es');
+    ok(C.isChromeSpan('Capítulo primero', es), 'es: a capítulo head is chrome');
+    ok(es.pronouns.includes('ella') && !es.pronouns.includes('he'), 'es: the pronoun inventory is Spanish');
+    const zh = load('zh');
+    ok(C.isChromeSpan('第一回', zh), 'zh: a chapter head (第一回) is chrome');
+    ok(zh.pronouns.includes('他'), 'zh: the pronoun inventory is Chinese');
+    const ja = load('ja');
+    ok(C.isChromeSpan('底本：青空文庫', ja), 'ja: an Aozora colophon line is chrome');
+    ok(C.isChromeSpan('一', ja), 'ja: a bare kanji-numeral section head is chrome');
+  });
+
   group('the conforming log scores 1 1 1 1 1 1 1', () => {
     const res = C.checkDump(makeConformingDump());
     eq(res.vectorString, '1 1 1 1 1 1 1', 'all seven invariants followed');

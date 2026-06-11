@@ -1,0 +1,18 @@
+{
+  "_register": "Japanese narrative (Aozora bunko). The engine currently reads Japanese under its zh frame (han-ratio detection), so this pack exists checker-side: Japanese pronouns never resolve as referents, and Aozora apparatus (底本/入力/校正 colophon lines, ※ notes, bare kanji-numeral section heads) is chrome.",
+  "pronouns": ["私", "僕", "俺", "彼", "彼女", "あなた", "君", "おれ", "わたし", "我々", "自分", "これ", "それ", "あれ", "彼ら", "彼女ら", "お前"],
+  "chrome_patterns": [
+    "^https?://",
+    "^(\\u00a9|\\(c\\)|copyright)\\b",
+    "^\\*\\*\\*",
+    "^(title|author|editor|translator|release date|language|credits|source)\\s*:",
+    "^底本[：:]",
+    "^(入力|校正|初出|発行所|発行者|編集)[：:]",
+    "^※",
+    "^〔[^〕]*〕$",
+    "^『[^』]*』$",
+    "^[一二三四五六七八九十]+$",
+    "^第[一二三四五六七八九十百0-9]+[回章節]",
+    "^\\d+[.)]?$"
+  ]
+}

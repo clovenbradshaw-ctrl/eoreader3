@@ -382,10 +382,14 @@ node tools/conformance.js --parse some.txt  # parse with the live engine, then s
 
 The checker honors invariant 7 itself: its check logic knows only the operator
 schema, and every surface criterion (chrome patterns, lexicons, thresholds)
-lives in a replaceable pack (`--pack`). `tests/conformance.test.js` pins a
-conforming log at `1 1 1 1 1 1 1`, the failing corpus at `0 0 0 0 0 1 0`, and
-the live engine's current bits — the rebuild's scoreboard, meant to flip
-left to right.
+lives in a replaceable pack (`--pack`; register packs for Gutenberg books,
+Spanish, Chinese, and Aozora-Japanese live in `tools/packs/`).
+`tests/conformance.test.js` pins a conforming log at `1 1 1 1 1 1 1`, the
+failing corpus at `0 0 0 0 0 1 0`, and the live engine's current bits — the
+rebuild's scoreboard, meant to flip left to right.
+`npm run evo:conformance` sweeps the evo corpus (English and not) through the
+instrument under its per-register packs and reports the vectors, the
+violated-law histogram behind each 0, and sample witnesses.
 
 ## Reading rules
 

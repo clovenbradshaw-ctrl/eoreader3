@@ -261,6 +261,31 @@ mechanical: an event carrying `s`/`v`/`o` whose endpoints both resolve to
 distinct referents must be CON; an event carrying `sites`/`canonical` is
 synthesis and is exempt.
 
+### The cube behind the log: sites and stances
+
+The seven invariants are laws over the **Act face** of the EO cube — the
+operator vocabulary, Identity ⤫ Space: NUL / SEG / DEF (Differentiate),
+SIG / CON / EVA (Relate), INS / SYN / REC (Generate), across Existence /
+Structure / Interpretation. The cube has two more faces the instrument does
+not yet score from a dump, and their vocabularies are pinned here so log
+shapes can grow into them:
+
+- **The Site face** (Space ⤫ Time) — *where* a mark lands: **Void, Thing,
+  Kind / Field, Link, Network / Atmosphere, Lens, Paradigm**. A CON bond
+  lives at a Link (Structure ⤫ Figure); a frame DEF reads a Network through
+  a Lens; chrome is Field-level furniture mistaken for Things.
+- **The Stance face** (Identity ⤫ Time) — *how* the engagement holds its
+  target: **Clearing, Dissecting, Unraveling / Tending, Binding, Tracing /
+  Cultivating, Making, Composing**. The stance of an operator varies with
+  the temporal grain of its target — a DEF on a Figure is Dissecting, on a
+  Pattern it is Unraveling — so the engine's current per-event `stance`
+  strings (one fixed label per op) are a flattening this spec does not yet
+  police.
+
+Full specification is `operator(Site, Resolution)`. When logs carry site and
+stance addresses, the instrument gains those columns; until then it scores
+the Act face only, and the seven bits are exactly the Act-face laws.
+
 ### The engine/conventions distinction is sacrosanct
 
 Invariant 7 binds the instrument as much as the engine. The check logic in
@@ -274,6 +299,13 @@ the same way a reading convention is disabled without touching the engine. A
 dump's own marks always outrank the pack's heuristics: a conforming log marks
 its chrome dark with `reason: chrome`, and the pack's furniture patterns exist
 only so an unmarked (nonconforming) dump can still be read.
+
+Register packs live in `tools/packs/` (gutenberg, es, zh, ja — see its
+README), merged key-wise over the default. `evo/experiments/conformance-sweep.js`
+(`npm run evo:conformance`) runs the corpus through the instrument under its
+per-register packs and reports vectors, the violated-law histogram behind
+each 0, and sample witnesses; `--bare` scores everything under the default
+web-shaped pack to show what the register conventions buy.
 
 ### What each bit reads, and what is not scored from a dump
 
