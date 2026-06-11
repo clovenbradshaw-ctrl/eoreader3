@@ -109,7 +109,7 @@ function narrateTurn(turn) {
         else if (s.primary) push('Focused on “' + s.primary.name + '” as the source to read.');
         break;
       case 'intent':
-        push(s.intent === 'who' ? 'Took it as a “who appears” question — answered by exact count, no model.'
+        push(s.intent === 'who' ? 'Took it as a “who appears” question — phrased by the model over the cast, with the exact mention-count kept as the mechanical reading.'
           : s.intent === 'summary' ? 'Took it as a request to summarize.'
           : 'Took it as a factual question.');
         break;
@@ -117,7 +117,7 @@ function narrateTurn(turn) {
         const named = (s.perDoc || []).filter(d => d.has).map(d => d.name);
         push(s.hasGround
           ? 'Found supporting passages' + (named.length ? ' in ' + named.join(', ') : '') + (s.viaSemantic ? ' (by meaning).' : '.')
-          : 'Found nothing in the document that answers this — fell back to the mechanical reading.');
+          : 'Found nothing in the document that answers this — answered it as conversation, keeping the page’s own mechanical reading to view.');
         break;
       }
       case 'referents':
@@ -282,6 +282,31 @@ function ThinkingBlock({ auditId }) {
   );
 }
 
+/* ── "Exact mechanical reading" disclosure ────────────────────────────────
+   The deterministic reading (the cast-list count, the best mechanical answer)
+   no longer fronts a document answer — the model phrases it with citations —
+   but it stays one click away here, so the grounded count is never lost, just
+   demoted. Same collapsible shape as the thinking block. */
+function MechanicalReading({ data, onCite }) {
+  const [open, setOpen] = React.useState(false);
+  if (!data || !data.text) return null;
+  return (
+    <div className={'mech' + (open ? ' open' : '')}>
+      <button type="button" className="mech-toggle" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <Icon name="table" size={13} className="mech-ico" />
+        <span className="mech-label">Exact mechanical reading</span>
+        <Icon name="chevron" size={13} className={'mech-chev' + (open ? ' open' : '')} />
+      </button>
+      {open && (
+        <div className="mech-body">
+          {renderAnswer(data.text, onCite)}
+          <AuditBadge audit={data.audit} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Message({ msg, onCite }) {
   if (msg.role === 'user') return <div className="msg-row user"><div className="bubble-user">{msg.text}</div></div>;
   return (
@@ -305,6 +330,7 @@ function Message({ msg, onCite }) {
               {/* a retraction outranks the badge the answer originally earned */}
               {msg.retracted && <div className="retract-note">⊘ Retracted — a later check against the page found a claim here unsupported.</div>}
               <AuditBadge audit={msg.audit} />
+              {msg.mechanical && <MechanicalReading data={msg.mechanical} onCite={onCite} />}
             </React.Fragment>}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
@@ -432,4 +458,4 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide }) {
   );
 }
 
-Object.assign(window, { ChatPane, Hero, Composer, Message, AuditBadge, renderAnswer, ThinkingBlock, narrateTurn });
+Object.assign(window, { ChatPane, Hero, Composer, Message, AuditBadge, MechanicalReading, renderAnswer, ThinkingBlock, narrateTurn });

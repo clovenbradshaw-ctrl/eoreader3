@@ -126,6 +126,16 @@ group('intent — classification', () => {
   eq(E.classifyIntent('what colour is the lamp'), 'factual', 'specific question stays factual');
   eq(E.classifyIntent('write down what Edith said'), 'factual', 'write-down-a-quote stays factual');
   eq(E.classifyIntent("what's the deal"), 'factual', '"what\'s the deal" (no overview noun) stays factual');
+  // A superlative/selective judgment about a cast member is NOT a request to
+  // enumerate the cast — the mention-count answerWho can't weigh "funniest", so
+  // these must reach the model (factual), not the 'who' path. Plain enumeration
+  // (and an -est word that lands elsewhere) is untouched.
+  eq(E.classifyIntent('who is the funniest character'), 'factual', 'superlative-on-character → factual, not who');
+  eq(E.classifyIntent('which character is the smartest'), 'factual', 'select-among-cast → factual, not who');
+  eq(E.classifyIntent('who is the most interesting person'), 'factual', 'most-X person → factual, not who');
+  eq(E.classifyIntent('who is the best character'), 'factual', '"best character" → factual, not who');
+  eq(E.classifyIntent('list the characters in the forest'), 'who', 'an -est word elsewhere doesn’t derail enumeration');
+  eq(E.classifyIntent('who is in this story'), 'who', 'plain enumeration stays who');
 });
 
 group('answer — grounded paths', () => {
