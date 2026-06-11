@@ -8,19 +8,72 @@
   let enginePromise = null;
   let loadedModel = null;
   let mod = null;
+  let loadToken = 0;   // bumped per load(); a superseded in-flight build goes inert
 
   const hasWebGPU = () => typeof navigator !== 'undefined' && !!navigator.gpu;
 
+  // The model runtime won't load forever: a dead/blocked CDN (esm.run) used to
+  // leave the import pending with no signal, which looked exactly like a frozen
+  // download. Race the import against a timeout so it fails loudly instead.
+  const IMPORT_TIMEOUT_MS = 30000;
   async function importWebLLM() {
     if (mod) return mod;
+    // A test seam (and an injection point for an alternate runtime): if a module
+    // is supplied on window, use it instead of reaching for the network.
+    if (typeof window !== 'undefined' && window.EO_WEBLLM) { mod = window.EO_WEBLLM; return mod; }
     // ESM CDN — loaded on demand so the app starts instantly without it.
     // Pinned to an exact version (was unversioned): a floating major could
     // change the loader API or model defaults under us with no warning.
-    mod = await import('https://esm.run/@mlc-ai/web-llm@0.2.79');
+    const imported = import('https://esm.run/@mlc-ai/web-llm@0.2.79');
+    let to;
+    const timeout = new Promise((_, rej) => { to = setTimeout(() => rej(Object.assign(new Error('Loading the model runtime from the CDN timed out — check your connection or any content blocker, then try again.'), { code: 'IMPORT_TIMEOUT' })), IMPORT_TIMEOUT_MS); });
+    try { mod = await Promise.race([imported, timeout]); }
+    finally { clearTimeout(to); }
     return mod;
   }
 
-  // Load (and cache) a model. onProgress(0..1, text).
+  async function createEngine(mlcKey, opts) {
+    const webllm = await importWebLLM();
+    return webllm.CreateMLCEngine(mlcKey, opts);
+  }
+
+  // No init-progress callback for this long ⇒ the download has stalled. WebLLM
+  // fires the callback per fetched chunk and per compiled shader, so a full
+  // minute of total silence is a genuine hang (a dropped connection, a blocked
+  // CDN, a corrupt cache entry), never just a slow-but-moving download — every
+  // callback re-arms the watchdog. Overridable for tests via window.EO_STALL_MS.
+  const STALL_MS = (typeof window !== 'undefined' && +window.EO_STALL_MS) || 60000;
+
+  // One build attempt, guarded by a stall watchdog. Resolves with the engine, or
+  // rejects with code:'STALL' if no progress arrives for STALL_MS — so a hung
+  // fetch surfaces as a recoverable error instead of an eternal spinner. A build
+  // that finishes after the watchdog gave up (or after a newer load superseded
+  // it) unloads itself so it can't leak GPU memory.
+  function buildOnce(mlcKey, onProgress, myToken) {
+    return new Promise((resolve, reject) => {
+      let settled = false, timer = null;
+      const finish = (fn, val) => { if (settled) return; settled = true; clearTimeout(timer); fn(val); };
+      const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => finish(reject, Object.assign(new Error('Model download stalled'), { code: 'STALL' })), STALL_MS);
+      };
+      arm();
+      Promise.resolve(createEngine(mlcKey, {
+        initProgressCallback: (r) => {
+          if (myToken !== loadToken) return;                       // superseded by a newer load → go inert
+          arm();                                                   // progress arrived → reset the stall clock
+          if (onProgress) onProgress((r && r.progress) || 0, (r && r.text) || '');
+        },
+      })).then(
+        (eng) => { if (settled) { try { eng && eng.unload && eng.unload(); } catch (_) {} return; } finish(resolve, eng); },
+        (err) => finish(reject, err),
+      );
+    });
+  }
+
+  // Load (and cache) a model. onProgress(0..1, text). A stalled download is
+  // retried once — resuming from the shards already cached, so only the missing
+  // bytes refetch — before the error surfaces.
   async function load(mlcKey, onProgress) {
     if (!hasWebGPU()) throw new Error('WebGPU is not available in this browser. Chrome/Edge 113+ or a WebGPU-enabled browser is required for the local model.');
     if (loadedModel === mlcKey && enginePromise) return enginePromise;
@@ -34,17 +87,50 @@
       try { const eng = await prev; if (eng && eng.unload) await eng.unload(); } catch (e) {}
     }
     loadedModel = mlcKey;
-    const webllm = await importWebLLM();
+    const myToken = ++loadToken;
+    const attempt = (async () => {
+      try {
+        return await buildOnce(mlcKey, onProgress, myToken);
+      } catch (e) {
+        // A stall is usually a transient drop. Retry once (cached shards make it
+        // quick — only the missing bytes refetch); only if THAT stalls too does
+        // the error propagate.
+        if (e && e.code === 'STALL' && myToken === loadToken) {
+          if (onProgress) onProgress(0, 'Download stalled — retrying…');
+          return await buildOnce(mlcKey, onProgress, myToken);
+        }
+        throw e;
+      }
+    })();
+    enginePromise = attempt;
     try {
-      enginePromise = webllm.CreateMLCEngine(mlcKey, {
-        initProgressCallback: (r) => { if (onProgress) onProgress(r.progress ?? 0, r.text || ''); },
-      });
-      await enginePromise;          // surface a build failure here, not on first turn
+      await attempt;          // surface a build failure here, not on first turn
     } catch (e) {
-      enginePromise = null; loadedModel = null;   // keep isLoaded() honest; allow retry
-      throw e;
+      if (myToken === loadToken) { enginePromise = null; loadedModel = null; }   // honest isLoaded(); allow retry. Don't clobber a newer load.
+      throw friendlyError(e);
     }
     return enginePromise;
+  }
+
+  function friendlyError(e) {
+    if (e && e.code === 'STALL')
+      return new Error('The model download stalled — the connection stopped responding. Already-downloaded parts are cached, so loading the model again resumes where it left off.');
+    return e;
+  }
+
+  // Wipe a model's cached weights/config so the next load re-downloads from
+  // scratch — the escape hatch when a half-finished download left a corrupt
+  // shard that keeps re-stalling on every reload. Best-effort and feature-
+  // detected across WebLLM versions; resolves false if nothing could be cleared.
+  async function clearCache(mlcKey) {
+    try {
+      const webllm = await importWebLLM();
+      if (typeof webllm.deleteModelAllInfoInCache === 'function') { await webllm.deleteModelAllInfoInCache(mlcKey); return true; }
+      let did = false;
+      for (const name of ['deleteModelInCache', 'deleteModelWasmInCache', 'deleteChatConfigInCache'])
+        if (typeof webllm[name] === 'function') { try { await webllm[name](mlcKey); did = true; } catch (_) {} }
+      return did;
+    } catch (_) { return false; }
   }
 
   function isLoaded(mlcKey) { return loadedModel === mlcKey && !!enginePromise; }
@@ -457,5 +543,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, isLoaded, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, load, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, stripThink, makeThinkFilter };
 })();

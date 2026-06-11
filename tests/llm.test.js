@@ -33,6 +33,22 @@ function loadLLM() {
   return sandbox.window.EOLLM;
 }
 
+// A fresh module wired to a fake WebGPU + a fake WebLLM runtime, so load()'s
+// download path (the stall watchdog, the resume-retry, cache-clearing) can be
+// exercised in Node without the CDN. `webllm` stands in for the imported module
+// (it needs CreateMLCEngine; optionally the delete* cache helpers); `stallMs`
+// shrinks the watchdog so a "stall" resolves in milliseconds.
+function loadLLMWith({ webllm, stallMs }) {
+  const window = { EO_WEBLLM: webllm };
+  if (stallMs != null) window.EO_STALL_MS = stallMs;
+  const sandbox = { window, console, performance, navigator: { gpu: {} }, setTimeout, clearTimeout };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'llm.js'), 'utf8'), sandbox, { filename: 'llm.js' });
+  return sandbox.window.EOLLM;
+}
+const fakeEngine = () => ({ unloaded: false, unload() { this.unloaded = true; } });
+
 let pass = 0, fail = 0; const fails = [];
 function ok(cond, msg) { if (cond) { pass++; } else { fail++; fails.push(msg); console.error('  ✗ ' + msg); } }
 function eq(a, b, msg) { ok(a === b, `${msg} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`); }
@@ -246,5 +262,81 @@ group('think gating — reasoning never reaches the user', () => {
   eq(seen3.join(''), 'no tags at all', 'tag-free streaming is unchanged');
 });
 
-console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
-if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
+// ---- the download path: stall watchdog + resume-retry + cache reset ----
+// The bug these pin down: load() used to await WebLLM's CreateMLCEngine with no
+// timeout, so a hung shard fetch (or a dead CDN) left the promise pending
+// forever — the progress bar froze and never recovered. Now a stall surfaces as
+// a recoverable error, a transient stall self-heals via one resume-retry, and a
+// genuinely moving (slow) download is never mistaken for a stall.
+async function groupA(name, fn) { console.log('• ' + name); await fn(); }
+
+(async () => {
+  await groupA('a stalled download rejects (does not hang) and isLoaded stays false', async () => {
+    // CreateMLCEngine that never resolves and never reports progress — the exact
+    // shape of a hung fetch. With a 20ms watchdog, load() retries once and then
+    // rejects in ~40ms instead of hanging.
+    const LLM = loadLLMWith({ stallMs: 20, webllm: { CreateMLCEngine: () => new Promise(() => {}) } });
+    let threw = false, msg = '';
+    const t0 = Date.now();
+    try { await LLM.load('Stuck-Model', () => {}); } catch (e) { threw = true; msg = e.message || ''; }
+    ok(threw, 'load() rejects on a stall rather than hanging forever');
+    ok(/stall/i.test(msg), 'the error explains the download stalled');
+    ok(/cached|resume/i.test(msg), 'the error tells the user a retry resumes from cache');
+    ok(Date.now() - t0 < 2000, 'it gives up promptly (watchdog fired) instead of blocking');
+    eq(LLM.isLoaded('Stuck-Model'), false, 'a stalled model never reports as loaded');
+  });
+
+  await groupA('a transient stall self-heals via one resume-retry', async () => {
+    // First build stalls (no progress, never resolves); the retry succeeds. The
+    // watchdog must abandon the first attempt and the second must win.
+    let calls = 0;
+    const eng = fakeEngine();
+    const LLM = loadLLMWith({ stallMs: 20, webllm: {
+      CreateMLCEngine: () => { calls++; return calls === 1 ? new Promise(() => {}) : Promise.resolve(eng); },
+    } });
+    const out = await LLM.load('Flaky-Model', () => {});
+    eq(calls, 2, 'the first (stalled) build is retried exactly once');
+    ok(out === eng, 'the resume-retry resolves to the engine');
+    eq(LLM.isLoaded('Flaky-Model'), true, 'after the retry the model reports loaded');
+  });
+
+  await groupA('a slow-but-moving download is never killed by the watchdog', async () => {
+    // Progress ticks every 10ms under a 40ms watchdog: each tick re-arms it, so
+    // a genuinely-downloading model resolves even though it takes longer than one
+    // watchdog window end-to-end. Progress text reaches the caller.
+    const eng = fakeEngine();
+    const seen = [];
+    const LLM = loadLLMWith({ stallMs: 40, webllm: {
+      CreateMLCEngine: (key, opts) => new Promise((resolve) => {
+        let n = 0;
+        const tick = () => {
+          n++;
+          opts.initProgressCallback({ progress: n / 4, text: 'Fetching shard ' + n });
+          if (n >= 4) resolve(eng); else setTimeout(tick, 10);
+        };
+        setTimeout(tick, 10);
+      }),
+    } });
+    const out = await LLM.load('Slow-Model', (p, text) => seen.push([p, text]));
+    ok(out === eng, 'a steadily-progressing download resolves');
+    ok(seen.length >= 4, 'every progress tick is forwarded to the caller');
+    ok(seen.some(([, t]) => /Fetching shard/.test(t || '')), 'WebLLM\'s live status text reaches the UI (so it reads as alive, not stuck)');
+    ok(Math.abs(seen[seen.length - 1][0] - 1) < 1e-9, 'progress reaches 100%');
+  });
+
+  await groupA('clearCache wipes a model\'s cached shards (the stuck-cache escape hatch)', async () => {
+    let cleared = null;
+    const LLM = loadLLMWith({ stallMs: 20, webllm: {
+      CreateMLCEngine: () => Promise.resolve(fakeEngine()),
+      deleteModelAllInfoInCache: async (k) => { cleared = k; },
+    } });
+    const did = await LLM.clearCache('Corrupt-Model');
+    eq(did, true, 'clearCache reports it cleared something');
+    eq(cleared, 'Corrupt-Model', 'the right model\'s cache is wiped');
+    const none = await loadLLMWith({ stallMs: 20, webllm: { CreateMLCEngine: () => Promise.resolve(fakeEngine()) } }).clearCache('X');
+    eq(none, false, 'clearCache is a no-op (false) when the runtime exposes no cache helpers');
+  });
+
+  console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
+  if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
+})();

@@ -321,7 +321,7 @@ function RulesDrawer({ rules, langModes, learnedByLang, onToggle, onInstall, onS
 }
 
 /* ============================================================ Model popover */
-function ModelPopover({ models, current, onPick, onClose, anchor, status, progress }) {
+function ModelPopover({ models, current, onPick, onClose, anchor, status, progress, loadText, onReset }) {
   const ref = window.useDialog(onClose);
   React.useEffect(() => {
     // Close only on a genuine outside press. A containment check on mousedown
@@ -363,11 +363,17 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
       {status === 'loading' && (
         <div className="pop-bar"><div className="pop-fill" style={{ width: pct + '%' }} /></div>
       )}
+      {status === 'loading' && loadText && <div className="pop-status">{loadText}</div>}
       <div className="ph" style={{ paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 4 }}>
         {status === 'loading' ? 'Downloading ' + current.name + ' — ' + pct + '% · first time only'
           : status === 'ready' ? current.name + ' is loaded and running on your GPU.'
           : 'Pick a model to download it (one-time, then cached). Grounded answers work without one.'}
       </div>
+      {onReset && status !== 'ready' && (
+        <button type="button" className="pop-reset" onClick={() => onReset()}>
+          Stuck downloading? Clear the cache &amp; retry
+        </button>
+      )}
     </div>
   );
 }

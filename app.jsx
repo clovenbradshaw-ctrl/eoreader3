@@ -126,6 +126,7 @@ function App() {
   const [modelOpen, setModelOpen] = useState(false);
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
   const [modelProgress, setModelProgress] = useState(0);
+  const [modelLoadText, setModelLoadText] = useState(''); // WebLLM's live status line ("12MB fetched…", "Loading GPU shaders…")
   // Staged-ingest progress: null when idle, else { phase, stage, pct, name }.
   const [ingestStatus, setIngestStatus] = useState(null);
 
@@ -550,13 +551,19 @@ function App() {
   const loadModel = async (m) => {
     if (!window.EOLLM) { showToast('Local model module unavailable.'); return false; }
     if (!window.EOLLM.hasWebGPU()) { setModelStatus('idle'); return false; }
-    setModelStatus('loading'); setModelProgress(0);
+    setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
     try {
-      await window.EOLLM.load(m.mlc, (p) => setModelProgress(p));
-      setModelStatus('ready'); return true;
-    } catch (e) { setModelStatus('idle'); showToast(e.message || 'Model failed to load'); return false; }
+      await window.EOLLM.load(m.mlc, (p, text) => { setModelProgress(p); if (text) setModelLoadText(text); });
+      setModelStatus('ready'); setModelLoadText(''); return true;
+    } catch (e) { setModelStatus('idle'); setModelLoadText(''); showToast(e.message || 'Model failed to load'); return false; }
   };
   const pickModel = (m) => { setModel(m); setModelStatus('idle'); loadModel(m); };
+  // Escape hatch for a download that keeps stalling on a corrupt half-written
+  // cache: wipe the cached shards, then re-download from scratch.
+  const resetModel = async () => {
+    try { if (window.EOLLM && window.EOLLM.clearCache) await window.EOLLM.clearCache(model.mlc); } catch (e) {}
+    loadModel(model);
+  };
 
   // auto-load on startup so the demo is live with the actual model. The default
   // (MODELS[0]) is the smallest, most mobile-friendly model, so it begins
@@ -616,14 +623,16 @@ function App() {
     };
   }, []);
 
-  // keep an in-chat "loading model" message in sync with download progress
+  // keep an in-chat "loading model" message in sync with download progress and
+  // WebLLM's live status line (so a slow-but-moving download reads as alive, not
+  // stuck, and a stall/retry is visible)
   useEffect(() => {
     setMessages(m => {
       if (!m.length) return m; const last = m[m.length - 1];
-      if (last && last.loading) { const c = m.slice(); c[c.length - 1] = { ...last, loadPct: modelProgress }; return c; }
+      if (last && last.loading) { const c = m.slice(); c[c.length - 1] = { ...last, loadPct: modelProgress, loadText: modelLoadText }; return c; }
       return m;
     });
-  }, [modelProgress]);
+  }, [modelProgress, modelLoadText]);
 
   // ---- chat ----
   const ensureChat = (q) => {
@@ -1753,7 +1762,7 @@ function App() {
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
       {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
-                     status={modelStatus} progress={modelProgress} />}
+                     status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (
         <EntityModal doc={d} name={entityModal.name} onCite={flashCitation} onEntity={(n) => setEntityModal({ docId: d.id, name: n })}
           onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />
