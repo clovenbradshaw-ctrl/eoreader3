@@ -6166,6 +6166,133 @@ function projectGraph(events, frame = {}) {
     };
   }
 
+  /* ============================================================ INGESTION AUDIT
+     The graph snapshot above is the proper-noun reading: entities, relations,
+     assertions. A skeptical auditor's first question is the one the entity view
+     can't answer — "what happened to EVERY word, not just the names?" These two
+     functions are the glass box over ingestion itself, word by word.
+
+     classifyTokens(sentence) walks one span left-to-right and reports, for every
+     word, exactly what the engine does with it. It is not a re-implementation of
+     the tokenizer — it CALLS tok() per word, so the 'term' verdict it shows is
+     bit-identical to what retrieval actually indexes. The audit cannot drift
+     from the engine because it asks the engine. A word is:
+       • 'term'  — survives tok(): indexed for retrieval (its index forms in .terms)
+       • 'stop'  — a stopword (QA_STOP): carried in the prose, dropped from the index
+       • 'drop'  — too short (≤2 chars) or outside the tokenizer's character class
+                   (e.g. accents/CJK the ASCII index can't hold) — also unindexed. */
+  function classifyTokens(s) {
+    const text = String(s == null ? '' : s);
+    // Unicode-aware word runs so the auditor sees the REAL word (accents, CJK),
+    // even where the ASCII index below cannot hold it — the gap is the point.
+    const surfaces = text.match(/[\p{L}\p{N}][\p{L}\p{N}'’\-]*/gu) || [];
+    const out = [];
+    for (const w of surfaces) {
+      const terms = tok(w);                                  // the engine's own verdict
+      const base = w.toLowerCase().replace(/['’]s$/, '');
+      const kind = terms.length ? 'term' : (QA_STOP.has(base) ? 'stop' : 'drop');
+      out.push({ w, base, kind, terms });
+    }
+    return out;
+  }
+
+  // The full ingestion audit for one prose document: every word's fate, the
+  // inverted index actually built, per-sentence coverage (which spans yielded
+  // graph events and which went dark), and the event/entity counts — compact
+  // enough to hold for a whole book, complete enough that nothing is hidden.
+  // Returns null for tables/empty texts (they carry no word graph), mirroring
+  // graphSnapshot. The heavy per-word render is left to the UI (computed lazily,
+  // span by span, via classifyTokens) so this stays O(n) and never spikes memory.
+  const _SENTS_CAP = 4000;   // per-term span list cap (count stays exact); huge docs
+  function ingestionReport(doc) {
+    if (!doc || doc.kind !== 'prose' || !doc._events) return null;
+    const sents = doc.sentenceTexts || [];
+    const events = doc._events || [];
+
+    // events grouped by the span they were deposited on (the join key is sentence_idx)
+    const evBySent = new Map();
+    const opCounts = {};
+    for (let k = 0; k < events.length; k++) {
+      const ev = events[k];
+      opCounts[ev.op] = (opCounts[ev.op] || 0) + 1;
+      const si = ev.sentence_idx;
+      if (si == null) continue;
+      (evBySent.get(si) || evBySent.set(si, []).get(si)).push(k);
+    }
+
+    // entities + which span each touches, and the token forms that became a name
+    const { entities } = projectEntities(doc);
+    const entKeyTokens = new Set();
+    const entsBySent = new Map();
+    for (const e of entities) {
+      for (const t of tok(e.name)) entKeyTokens.add(t);
+      for (const si of (e.sents || [])) (entsBySent.get(si) || entsBySent.set(si, []).get(si)).push(e.key);
+    }
+
+    // the inverted index, built word by word, in reading order
+    const terms = new Map();   // indexTerm -> { token, count, sents:[], entity }
+    const dropped = new Map();  // base -> { token, count, kind }  (stop / drop)
+    let occWords = 0, occTerm = 0, occStop = 0, occDrop = 0, occIndex = 0, dark = 0;
+    const perSent = new Array(sents.length);
+    for (let i = 0; i < sents.length; i++) {
+      const toks = classifyTokens(sents[i]);
+      let nTerm = 0;
+      for (const t of toks) {
+        occWords++;
+        if (t.kind === 'term') {
+          occTerm++; nTerm++;
+          for (const form of t.terms) {            // a word may yield several index forms (hyphen splits)
+            occIndex++;
+            let rec = terms.get(form);
+            if (!rec) terms.set(form, rec = { token: form, count: 0, sents: [], entity: entKeyTokens.has(form) });
+            rec.count++;
+            if (rec.sents.length < _SENTS_CAP && rec.sents[rec.sents.length - 1] !== i) rec.sents.push(i);
+          }
+        } else {
+          if (t.kind === 'stop') occStop++; else occDrop++;
+          let rec = dropped.get(t.base);
+          if (!rec) dropped.set(t.base, rec = { token: t.base, count: 0, kind: t.kind });
+          rec.count++;
+        }
+      }
+      const evIdx = evBySent.get(i) || [];
+      if (!evIdx.length) dark++;
+      const ops = {};
+      for (const k of evIdx) { const op = events[k].op; ops[op] = (ops[op] || 0) + 1; }
+      perSent[i] = { i, chars: sents[i].length, words: toks.length, terms: nTerm,
+                     events: evIdx.length, ops, ents: entsBySent.get(i) || [] };
+    }
+
+    const termList = [...terms.values()].sort((a, b) => b.count - a.count || (a.token < b.token ? -1 : 1));
+    const dropList = [...dropped.values()].sort((a, b) => b.count - a.count || (a.token < b.token ? -1 : 1));
+    const entTermCount = termList.filter(t => t.entity).length;
+    return {
+      schema: 'cleon-ingestion/1',
+      at: new Date().toISOString(),
+      doc: { id: doc.id, name: doc.name, kind: doc.kind, lang: doc._lang || 'en',
+             genre: doc._genre || null, sentences: sents.length,
+             blocks: (doc.blocks || []).length, chars: (doc._text || '').length },
+      words: {
+        occurrences: occWords,        // every word in the prose
+        indexed: occTerm,             // words that became one or more index terms
+        stop: occStop,                // words dropped as stopwords
+        dropped: occDrop,             // words dropped (too short / unindexable)
+        indexTerms: occIndex,         // total index-term postings (≥ indexed, hyphens split)
+        uniqueTerms: termList.length, // distinct index terms (the searchable vocabulary)
+        uniqueDropped: dropList.length,
+        entityTerms: entTermCount,    // distinct index terms that are part of a name
+      },
+      coverage: { sentences: sents.length, withEvents: sents.length - dark, dark },
+      counts: { events: events.length, ops: opCounts, entities: entities.length },
+      spans: sents,                   // the verbatim span texts (so an export is self-contained)
+      lexicon: termList,              // the inverted index actually built
+      stopwords: dropList,            // the words carried but not indexed
+      sentences: perSent,             // lightweight per-span summary (tokens computed lazily)
+      entities: entities.map(e => ({ name: e.name, key: e.key, type: e.type, mentions: e.raw, mass: e.mass, sents: e.sents })),
+      events,                         // the full append-only log (ground truth)
+    };
+  }
+
   /* ============================================================ TALKER PORTRAIT
      The talker reads what a reader would read — words on a page, nothing else.
      This composes the three EO triads as three labeled prose blocks
@@ -8244,6 +8371,10 @@ function projectGraph(events, frame = {}) {
     // Talker-facing prose composer: see talkerPortrait (WI-5) and
     // the mechanical grounder groundTalkerOutput (WI-6).
     graphPortrait, graphSnapshot, talkerPortrait, groundTalkerOutput, evaDraft,
+    // ingestion audit: every word's fate (indexed / stopword / dropped), the
+    // inverted index actually built, and per-span coverage — the glass box over
+    // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
+    ingestionReport, classifyTokens,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
     contextScope, bindCitationsScope, supportProbeTerms,

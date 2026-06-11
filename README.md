@@ -291,6 +291,47 @@ beside it, and recording can be paused. This is the tool for the question "why
 did it answer that?" — when a `summarize` returns raw opening lines, or a
 retrieval grabs page chrome, the trace shows exactly where.
 
+### Auditing the ingestion (every word, in reading order)
+
+The chat audit answers "why did it say that?"; the **Ingestion** drawer (its own
+topbar button, shown once a prose source is loaded) answers the prior, more
+skeptical question — **"what did it actually do to my text on the way in?"** The
+entity view shows the proper-noun cast, which makes it easy to assume the rest of
+the words were dropped. They weren't, and this is the glass box that proves it,
+word by word. It reads the document the way a person does — left to right, top to
+bottom — and refuses to summarize anything away:
+
+- **Overview** — the ingestion report card: every word's fate as a proportion bar
+  (**indexed** content word / **stopword**, carried but not searched / **dropped**,
+  too short or outside the index's character class), span coverage (how many
+  sentences deposited a graph event vs. went *dark*), and the event tally by kind.
+- **Reading** — the centrepiece: a walk through the source in reading order with
+  **every word classified inline** (indexed terms highlighted, names boxed,
+  stopwords dimmed, dropped words struck through), and beneath each span the events
+  it deposited. A ▶ **Read** control advances span by span, slowly, like a human;
+  the window *moves* rather than growing, so a whole book never lands in the DOM at
+  once. Each span carries its content hash (`sha256(span)[:16]`) as its anchor.
+- **Lexicon** — the inverted index actually built: every distinct word, its count,
+  its fate, and the spans it occurs in (click one to jump the reader to it).
+  Searchable; stopwords and dropped words shown alongside the index terms, not
+  hidden — filter them in or out.
+- **Entities / Graph** — the cast and the assertions/relations/kin, each one traced
+  to the **source span it came from** (the chat-side Graph tab shows the claim; this
+  shows the claim *and* the line, so you can check it). Bidirectional: every derived
+  fact links to its span, and every span shows what it produced.
+- **Events** — the full append-only log (`INS` / `DEF` / `SIG` / `SYN` / `NUL` /
+  `SEG` / `EVA` / `REC`), filterable by kind and searchable, each row expandable to
+  its raw fields and its source span. Nothing capped.
+
+The per-word classification is not a re-implementation of the tokenizer — it *calls*
+it (`EOEngine.classifyTokens`), so what the audit shows is bit-identical to what
+retrieval indexes; the audit cannot drift from the engine. The whole report is one
+self-contained JSON object (schema `cleon-ingestion/1`, `EOEngine.ingestionReport`)
+behind the **Export JSON** button — spans, lexicon, coverage, entities, and the
+event log, ready for `jq` or a notebook. `tests/ingestion.test.js` pins the
+contract (tokenizer fidelity, total word accounting, honest coverage); the parse
+itself is untouched, so golden parity holds.
+
 ## Reading rules
 
 The "reading rules" in the side panel are the toggleable parameters the engine
