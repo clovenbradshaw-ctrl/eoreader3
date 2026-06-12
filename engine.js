@@ -7837,8 +7837,11 @@ function projectGraph(events, frame = {}) {
       : entities.filter(e => e.type !== 'place' && e.type !== 'org');
     const list = (ppl.length ? ppl : entities).slice(0, 8);
     if (!list.length) return { text: 'I didn’t find any named people in this document.', audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'No entities surfaced under the current rules.' } };
-    const text = 'The figures who appear most often: ' + list.map(e => `${e.name} (${e.raw}) {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`).join(', ') + '.';
-    return { text, cites: list.map(e => ({ docId: doc.id, idx: e.sents[0] })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Counted directly from the document’s mentions — no model involved.' } };
+    // The prose renders the names plainly; the mention counts are bookkeeping,
+    // so they ride in the audit note (the receipt), never glued onto the names.
+    const figs = list.map(e => `${e.name} {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`);
+    const text = 'The figures who appear most often: ' + (figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]) + '.';
+    return { text, cites: list.map(e => ({ docId: doc.id, idx: e.sents[0] })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Counted directly from the document’s mentions (' + list.map(e => `${e.name} ×${e.raw}`).join(', ') + ') — no model involved.' } };
   }
   // ── The graph's portrait ──────────────────────────────────────────
   // A summary already exists in the graph, unstated: which sites carry the

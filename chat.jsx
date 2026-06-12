@@ -109,7 +109,7 @@ function narrateTurn(turn) {
         else if (s.primary) push('Focused on “' + s.primary.name + '” as the source to read.');
         break;
       case 'intent':
-        push(s.intent === 'who' ? 'Took it as a “who appears” question — phrased by the model over the cast, with the exact mention-count kept as the mechanical reading.'
+        push(s.intent === 'who' ? 'Took it as a “who appears” question — phrased by the model over the cast, with the exact mention-counts kept in the mechanical reading.'
           : s.intent === 'summary' ? 'Took it as a request to summarize.'
           : 'Took it as a factual question.');
         break;
