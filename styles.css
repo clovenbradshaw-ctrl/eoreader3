@@ -241,6 +241,13 @@ button { font-family: inherit; cursor: pointer; }
   color: #8a4b4b; background: #faf0f0; border: 1px solid #ecd8d8;
   border-radius: 6px; padding: 4px 9px; display: inline-block;
 }
+/* a user interrupt: a quiet, neutral marker under the partial reply */
+.stopped-note {
+  margin-top: 10px; font-size: 12px; font-family: var(--mono);
+  color: var(--text-2); background: var(--bg-subtle); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 9px; display: inline-block;
+}
+.stopped-empty { color: var(--text-2); font-style: italic; }
 
 /* audit badge */
 .audit { display: inline-flex; align-items: center; gap: 0; margin-top: 12px; }
@@ -411,6 +418,10 @@ button { font-family: inherit; cursor: pointer; }
 .send-btn:hover { background: var(--accent-hover); }
 .send-btn:active { transform: scale(.94); }
 .send-btn:disabled { background: #c8cdd5; cursor: not-allowed; }
+/* Stop replaces Send while a turn streams: a neutral, dark control so it reads
+   as "halt", not "submit", and never looks disabled. */
+.send-btn.stop { background: var(--text); cursor: pointer; }
+.send-btn.stop:hover { background: #000; }
 
 /* mode segmented */
 .mode-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-pill); padding: 2px; background: var(--bg-subtle); }
