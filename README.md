@@ -192,15 +192,32 @@ few turns, and the doc title — never the spans or notes, so it can't be
 lured into answering — and writes a one-breath director's note: what the
 user is actually after, what register fits, what a bad answer would look
 like ("Bibliographic lookup. They want the name. One line, never 'the
-author'…"). The answer pass then speaks freely with that note as guidance,
-not a leash: spans are verbatim quotes to trust and *use* ("if a span
-contains a name, date, or title that answers the question, use it directly —
-don't echo the question's wording back"), notes are the reader's own
-understanding, spans win conflicts, and there are no hardcoded length
-prescriptions — the model answers as it sees fit, bounded by `max_tokens`.
-The shape note is recorded as its own audit step; a failed or empty shape
-pass degrades to the bare answer pass, and with no model at all the
-mechanical paths answer as ever. Citations stay mechanical throughout.
+author'…"). The answer pass sees the spans first as factual material and
+the note last, as closing guidance about HOW to answer — labeled as such,
+so the grounded prompt can name it ("an editor's note may also arrive…
+treat it as guidance, not source material"). The reorder is a leak guard:
+the note used to ride between the question and the spans, where a small
+model read it as a synopsis and pre-framed the spans it hadn't reached yet;
+spans-before-note inverts that, so even a note that mistakenly states facts
+can't outweigh the spans below it. Spans are verbatim quotes to trust and
+*use*, notes are the reader's own understanding, spans win conflicts, and
+there are no hardcoded length prescriptions — the model answers as it sees
+fit, bounded by `max_tokens`. The shape note is recorded as its own audit
+step; a failed or empty shape pass degrades to the bare answer pass, and
+with no model at all the mechanical paths answer as ever. Citations stay
+mechanical throughout.
+
+When the answer pass itself fails in an egregious way — the model declines
+or comes back empty, parrots the director's note as if it were the answer,
+or echoes a single passage even after a stricter retry — the turn now
+**refuses** rather than substituting a mechanically-generated portrait. A
+mechanical fallback in those cases would land as if the model had answered,
+and the user reads the result as Cleon talking when in fact the draft was
+rejected; refusing names the failure plainly ("I drafted, but the model
+came back empty…") and emits an audit error step instead. The bind-failure
+paths (unbound, contradicts-assertion, kin-subject-mismatch) keep their
+mechanical fallback — those still have a grounded signal pointing at the
+page, just not the one the model tried to draft.
 
 Gutenberg-style header metadata (`Title:` / `Author:` / `Release date:`…)
 is parsed mechanically, cached on the document, and joined to the notes

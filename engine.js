@@ -7738,9 +7738,14 @@ function projectGraph(events, frame = {}) {
   }
   function prosifyFold({ figures, asserts, spine, opener }) {
     const sents = [];
-    // who/what it turns on, with what the text takes them to be folded in
+    // who/what it centers on, with what the text takes them to be folded in.
+    // The old verb was "turns mostly on" — literary in the legal-argument
+    // sense ("the case turns on") but bizarre as everyday register: a user
+    // reading "this document turns most on X" assumes a typo of "turns
+    // most[ly] on". "Centers on" preserves the present-tense fold rhythm
+    // ("It centers on… It runs from… It opens:…") without the awkwardness.
     if (figures && figures.length) {
-      let lead = `It turns mostly on ${_joinList(figures)}`;
+      let lead = `It mostly centers on ${_joinList(figures)}`;
       if (asserts && asserts.length) {
         lead += ` — it takes ${_joinList(asserts.map(a => `${a.name} to be ${a.is}`))}`;
       }
@@ -8442,7 +8447,7 @@ function projectGraph(events, frame = {}) {
     });
     const parts = [];
     const kindWord = doc._genre === 'transcript' ? 'transcript' : 'document';
-    parts.push(`This ${doc._lang && doc._lang !== 'en' ? doc._lang + ' ' : ''}${kindWord} turns most on ${figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]}.`);
+    parts.push(`This ${doc._lang && doc._lang !== 'en' ? doc._lang + ' ' : ''}${kindWord} centers on ${figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]}.`);
     const assertions = keep ? p.assertions.filter(a => keep.has(String(a.name))) : p.assertions;
     const heavyEdges = keep ? p.heavyEdges.filter(ed => keep.has(String(ed.aName)) && keep.has(String(ed.bName))) : p.heavyEdges;
     if (assertions.length) {

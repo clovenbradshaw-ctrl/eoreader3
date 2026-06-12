@@ -265,8 +265,12 @@ group('buildUserContent — tiered spans/notes, question first and last', () => 
 
 // The shape pass: a director's note, not a rubric. The system prompt is the
 // taste surface — it characterizes the move and never answers; the note
-// rides the user message between the question and the spans.
-group('shape pass — a director\'s note between question and spans', () => {
+// rides the user message AFTER the spans, as closing guidance about HOW to
+// answer. The old order (note before spans, labeled "What this turn wants:")
+// let a small model read the note as a synopsis and pre-frame the spans it
+// hadn't reached yet — Cleon parroted "the author is not named" even when
+// the Author: span sat right below. Spans-before-note inverts that.
+group('shape pass — a director\'s note AFTER spans, framed as guidance', () => {
   ok(/never answer the question yourself/.test(LLM.SHAPE_SYSTEM), 'the shape prompt forbids answering');
   ok(/never state facts about the document/.test(LLM.SHAPE_SYSTEM), '…and forbids inventing document facts');
   ok(/what's the point of the book\?/.test(LLM.SHAPE_SYSTEM), 'synthesis example present (the taste lives in examples)');
@@ -280,11 +284,23 @@ group('shape pass — a director\'s note between question and spans', () => {
     notesProse: '', grounded: true,
     shapeNote: 'Bibliographic lookup. They want the name — one line.',
   });
-  ok(/What this turn wants:\nBibliographic lookup/.test(u), 'the note has its own block');
-  ok(u.indexOf('The user just asked') < u.indexOf('What this turn wants'), 'question orients first');
-  ok(u.indexOf('What this turn wants') < u.indexOf('quoted exactly'), 'the note precedes the spans');
+  ok(/Editor's note on HOW to handle this turn[^\n]*:\nBibliographic lookup/.test(u), 'the note has its own block, labeled as guidance about HOW (not WHAT)');
+  ok(/not facts about the document; only the spans supply facts/.test(u), 'the label spells out that the note is not source material');
+  ok(u.indexOf('The user just asked') < u.indexOf("Editor's note"), 'question orients first');
+  ok(u.indexOf('quoted exactly') < u.indexOf("Editor's note"), 'spans come BEFORE the editor note (facts before guidance, so a leaky note can\'t pre-frame the spans)');
+  ok(u.indexOf("Editor's note") < u.lastIndexOf("Answer the user's question"), 'the editor note closes the context, just above the answer prompt');
   const bare = LLM.buildUserContent({ question: 'q', spans: [{ idx: 1, text: 'x' }], grounded: true, shapeNote: '' });
-  ok(!/What this turn wants/.test(bare), 'no note ⇒ no empty block (answer pass unchanged)');
+  ok(!/Editor's note/.test(bare), 'no note ⇒ no empty block (answer pass unchanged)');
+  ok(!/What this turn wants/.test(u) && !/What this turn wants/.test(bare), 'the old "What this turn wants:" label is gone (read as a synopsis by small models)');
+
+  // The grounded system prompt names the editor's note as a third context
+  // type and tells Cleon it's guidance, not source — the standing guard
+  // that backs the reorder. Without it, a model that still reads the note
+  // as facts has nothing in the system prompt to pull it back.
+  const sys = LLM.systemFor('grounded', 'answer', true, 1);
+  ok(/editor.s note/i.test(sys), 'grounded system prompt names the editor\'s note');
+  ok(/guidance about your move, not as source material/i.test(sys), '…and frames it as guidance, not source');
+  ok(/only the spans supply facts/i.test(sys), '…and pins facts to the spans');
 });
 
 // Reasoning-model think gating: tagged chain-of-thought never reaches the

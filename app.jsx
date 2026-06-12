@@ -1451,6 +1451,26 @@ function App() {
         runChat(q, history, 'creative', ctx, true).catch(turnFailed('chat'));
         return;
       }
+      // When the model's draft is rejected for an egregious reason (declined,
+      // echoed the editor's note, or echoed a single span even after a
+      // stricter retry), DON'T substitute a mechanically-generated portrait
+      // and present it as if it were the model's reply — that's the "system
+      // response" the user reads as Cleon answering when in fact the model
+      // failed. Refuse honestly: a plain chat message naming the failure, an
+      // audit error step for the trace, and an 'end' that records the
+      // refusal. The bind-failure paths below (unbound, contradicts-assertion,
+      // kin-mismatch) keep their mechanical fallback — those still have a
+      // grounded signal pointing at the page, just not the one the model
+      // tried to draft.
+      const refuseModel = (reason, message) => {
+        const audit = { status: 'error', grounded: false, covers: '0/1', stable: false,
+          note: 'Refused — the model\'s draft failed audit (' + reason + '). Rather than substitute a mechanically-generated answer that would look like the model\'s reply, the turn surfaces the failure honestly.' };
+        AUD('step', 'error', { where: 'grounded', message: 'refused: ' + reason });
+        lastGroundedRef.current = false;
+        replaceLast({ role: 'assistant', text: message, audit, mode: 'grounded' });
+        AUD('end', { engine: 'refused (' + reason + ')', text: message, audit, cites: [] });
+        setBusy(false);
+      };
       const settle = (res, decision) => {
         // Only a model-phrased answer can carry an inference void; a mechanical
         // fallback states only what the page does.
@@ -1484,11 +1504,13 @@ function App() {
         AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
       };
       if (modelDeclined(full)) {
-        AUD('step', 'veto', { decision: 'mechanical', reason: 'model declined / empty / leaked reasoning' });
-        settle(window.EOEngine.answerScope(scope, q), 'mechanical (model declined)');
+        AUD('step', 'veto', { decision: 'refused', reason: 'model declined / empty / leaked reasoning' });
+        refuseModel('model_declined',
+          'I drafted, but the model came back empty (or refused to answer, or leaked raw reasoning instead of an answer). I’d rather say so than substitute a generated stand-in — try rephrasing, or point me at the line you want me to read.');
       } else if (echoesShapeNote(full, shapeNote)) {
-        AUD('step', 'veto', { decision: 'mechanical', reason: 'echoed the director’s note — meta about the question, not an answer' });
-        settle(window.EOEngine.answerScope(scope, q), 'mechanical (note echo)');
+        AUD('step', 'veto', { decision: 'refused', reason: 'echoed the director’s note — meta about the question, not an answer' });
+        refuseModel('note_echo',
+          'I drafted a reply, but it just paraphrased the editor’s guidance about the question rather than reading the document — that’s a non-answer in the shape of one. I’d rather say so than serve it. Try rephrasing, or point me at a passage you want me to read.');
       } else {
         // DEGENERACY VETO (audit-reject retry, ported from eo-extractor.html):
         // a near-verbatim copy of one retrieved span binds and audits clean but
@@ -1537,11 +1559,12 @@ function App() {
             retry = window.EOEngine.dedupeSentences(retry);
           } catch (e) { retry = ''; }
           // If the retry still echoes (or came back empty), the model can't do
-          // this turn — use the mechanical portrait answer, which never echoes.
+          // this turn — refuse honestly rather than substitute a mechanical
+          // portrait. The portrait would land as if it were the model's reply.
           if (!retry || retry.trim().length < 3 || echoesASpan(scope, q, retry)) {
-            AUD('step', 'veto', { decision: 'mechanical', reason: 'retry still echoed — using the mechanical answer' });
-            settle(window.EOEngine.answerScope(scope, q), 'mechanical (echo veto)');
-            setBusy(false);
+            AUD('step', 'veto', { decision: 'refused', reason: 'retry still echoed — refusing rather than serving a mechanical stand-in' });
+            refuseModel('echo_after_retry',
+              'I drafted, retried under a stricter rule, and both attempts just echoed a single passage instead of synthesizing — the model can’t do this turn. I’d rather say so than substitute a fallback. Try a more specific question, or point me at the line you want me to read.');
             return;
           }
           full = retry;   // retry produced a real answer; fall through to bind it
