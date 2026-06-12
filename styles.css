@@ -422,8 +422,14 @@ button { font-family: inherit; cursor: pointer; }
 .mode-seg button.on.grounded { color: var(--evidence); }
 .mode-seg button.on.creative { color: #6b4fa0; }
 
-.composer-hint { text-align: center; font-size: 11.5px; color: var(--text-3); margin-top: 9px; }
+.composer-hint { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; text-align: center; font-size: 11.5px; color: var(--text-3); margin-top: 9px; }
 .composer-hint b { color: var(--text-2); font-weight: 600; }
+.export-prompts {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: inherit; font-size: 11.5px; color: var(--text-3);
+  background: none; border: none; padding: 2px 4px; cursor: pointer; -webkit-appearance: none; appearance: none;
+}
+.export-prompts:hover { color: var(--accent); }
 
 /* ============================================================ EMPTY / HERO */
 .crash { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px; text-align: center; }

@@ -474,9 +474,11 @@ function Hero({ composerProps, onAttach, onExample, onPaste, dragOver }) {
   );
 }
 
-function ChatPane({ messages, onCite, composerProps, narrow, wide }) {
+function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts }) {
   const streamRef = React.useRef(null);
   React.useEffect(() => { const el = streamRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages]);
+  // Only offer the export once a turn has actually been recorded.
+  const hasTurns = !!(window.EOAudit && window.EOAudit.count && window.EOAudit.count() > 0);
   return (
     <div className={'pane-chat' + (narrow ? ' narrow' : '') + (wide ? ' wide' : '')} style={{ flex: 1, minHeight: 0 }}>
       <div className="chat-stream" ref={streamRef}>
@@ -484,7 +486,14 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide }) {
       </div>
       <div className="composer-wrap">
         <div className="composer"><Composer {...composerProps} placeholder={narrow ? 'Ask about this document…' : 'Message Cleon…'} /></div>
-        <div className="composer-hint">Runs locally · <b>{composerProps.mode}</b> mode</div>
+        <div className="composer-hint">
+          <span>Runs locally · <b>{composerProps.mode}</b> mode</span>
+          {onExportPrompts && hasTurns && (
+            <button type="button" className="export-prompts" onClick={onExportPrompts}>
+              <Icon name="expand" size={12} /> Export prompts (JSON)
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

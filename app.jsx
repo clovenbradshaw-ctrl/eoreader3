@@ -601,6 +601,18 @@ function App() {
     else if (!saved && model && model.provider === 'anthropic') setModelStatus('idle');
   };
   const pickModel = (m) => { setModel(m); setModelStatus('idle'); loadModel(m); };
+  // Download every recorded turn — including the exact prompt the model saw and
+  // its raw output on each call — as one JSON file, straight from the chat page.
+  // Empty when audit recording is paused (the dot next to the title is off).
+  const exportPrompts = () => {
+    const A = window.EOAudit;
+    if (!A || !A.count || A.count() === 0) {
+      showToast(A && A.isEnabled && !A.isEnabled() ? 'Recording is paused — turn it on in Audit, then ask again.' : 'No turns recorded yet.');
+      return;
+    }
+    const ok = A.downloadJSON && A.downloadJSON();
+    showToast(ok ? 'Exported ' + A.count() + ' turn' + (A.count() === 1 ? '' : 's') + ' with all prompts.' : 'Could not export the prompts.');
+  };
   // Stop an in-flight download. Terminates the worker so it halts immediately
   // rather than running on in the background.
   const cancelModel = () => {
@@ -2082,7 +2094,7 @@ function App() {
             <React.Fragment>
               {showChat && (
                 <div style={{ flexBasis: showDocPane ? (splitRatio * 100) + '%' : '100%', flexGrow: showDocPane ? 0 : 1, flexShrink: 0, display: 'flex', minWidth: 0 }}>
-                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} />
+                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} />
                 </div>
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}
