@@ -1,0 +1,216 @@
+/* ============================================================
+   Tests for the external-knowledge stratum (external.js → window.EOExternal).
+
+   external.js is a browser IIFE that also module.exports for Node. It holds no
+   network of its own — fetch, the clock, and the persistence store are all
+   injectable — so the whole policy surface (rate limiter, priority + budget,
+   the two source normalizers, the freeze/replay cache, the private-individual
+   gate) is exercised here with a deterministic fake fetch and an in-memory
+   store. No network is touched.
+
+   Run with `node tests/external.test.js`.
+   ============================================================ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const ROOT = path.resolve(__dirname, '..');
+
+/* ---- canned upstream payloads (the only "world" these tests see) ---- */
+const WIKI = {
+  'nashville downtown partnership': { title: 'Nashville Downtown Partnership', description: 'nonprofit organization in Nashville', extract: 'The Nashville Downtown Partnership is a nonprofit organization.', thumb: 'http://img/ndp.jpg', page: 'https://en.wikipedia.org/wiki/Nashville_Downtown_Partnership' },
+  'metro council': { title: 'Metropolitan Council', description: 'local government legislative body', extract: 'The Metropolitan Council is the legislative body.', page: 'https://en.wikipedia.org/wiki/Metropolitan_Council' },
+};
+const WIKT = {
+  socialism: { Noun: ['Any of various <a href="/economic">economic</a> systems.', 'A transitional stage between capitalism and communism.'] },
+};
+const titleIndex = {};
+for (const k of Object.keys(WIKI)) titleIndex[WIKI[k].title.replace(/ /g, '_')] = WIKI[k];
+
+function makeFetch(log) {
+  return async function fakeFetch(full) {
+    const inner = decodeURIComponent(String(full).split('?url=')[1] || '');
+    const at = Date.now();
+    const ok = (body) => ({ ok: true, status: 200, async text() { return JSON.stringify(body); } });
+    const notfound = () => ({ ok: false, status: 404, async text() { return 'nope'; } });
+    // Wikipedia search
+    let m = /list=search/.test(inner) && /srsearch=([^&]+)/.exec(inner);
+    if (m) {
+      const term = decodeURIComponent(m[1]).toLowerCase();
+      log.push({ at, kind: 'wiki-search', term });
+      const hit = WIKI[term];
+      const search = hit ? [{ title: hit.title, snippet: 'a <span class="searchmatch">match</span> here' }, { title: 'Other Thing', snippet: 'aside' }] : [];
+      return ok({ query: { search } });
+    }
+    // Wikipedia summary
+    m = /\/page\/summary\/(.+)$/.exec(inner);
+    if (m) {
+      const titleKey = decodeURIComponent(m[1]);
+      log.push({ at, kind: 'wiki-summary', term: titleKey });
+      const e = titleIndex[titleKey];
+      if (!e) return notfound();
+      return ok({ title: e.title, description: e.description, extract: e.extract, thumbnail: e.thumb ? { source: e.thumb } : undefined, content_urls: { desktop: { page: e.page } } });
+    }
+    // Wiktionary definition
+    m = /\/page\/definition\/(.+)$/.exec(inner);
+    if (m) {
+      const word = decodeURIComponent(m[1]).toLowerCase().replace(/_/g, ' ');
+      log.push({ at, kind: 'wikt-def', term: word });
+      const e = WIKT[word];
+      if (!e) return notfound();
+      const out = {};
+      out.en = Object.keys(e).map(pos => ({ partOfSpeech: pos, language: 'English', definitions: e[pos].map(def => ({ definition: def, examples: [] })) }));
+      return ok(out);
+    }
+    return notfound();
+  };
+}
+
+function loadExternal(fetchLog) {
+  const kv = {};
+  const store = { kvGet: async (k) => kv[k], kvPut: async (k, v) => { kv[k] = v; return true; } };
+  let ls = {};
+  const localStorage = { getItem: (k) => (k in ls ? ls[k] : null), setItem: (k, v) => { ls[k] = String(v); }, removeItem: (k) => { delete ls[k]; } };
+  const sandbox = { window: {}, console, module: { exports: {} }, setTimeout, clearTimeout, localStorage, Date, JSON, Math };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'external.js'), 'utf8'), sandbox, { filename: 'external.js' });
+  const X = sandbox.window.EOExternal;
+  if (!X) throw new Error('external.js did not publish window.EOExternal');
+  X.setConfig({ proxy: 'http://proxy.test/feed', fetchImpl: makeFetch(fetchLog), store, intervalMs: 5, maxRetries: 1, budget: 12 });
+  return X;
+}
+
+/* ---- tiny assert harness (matches the other test files) ---- */
+let pass = 0, fail = 0; const fails = [];
+function ok(cond, msg) { if (cond) { pass++; } else { fail++; fails.push(msg); console.error('  ✗ ' + msg); } }
+function eq(a, b, msg) { ok(a === b, `${msg} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`); }
+function group(name, fn) { console.log('• ' + name); return fn(); }
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+(async function main() {
+  const log = [];
+  const X = loadExternal(log);
+  const I = X._internals;
+
+  await group('config + disabled', async () => {
+    eq(X.enabled(), true, 'enabled with a proxy + fetch');
+    X.setConfig({ proxy: '' });
+    eq(X.enabled(), false, 'disabled when the proxy is cleared');
+    const r = await X.lookup('wikipedia', 'Anything');
+    eq(r.status, 'disabled', 'a cleared proxy yields status disabled, not a guess');
+    X.setConfig({ proxy: 'http://proxy.test/feed' }); // restore
+  });
+
+  group('normalizers (pure, no network)', () => {
+    eq(I.guessType('nonprofit organization in Nashville'), 'org', 'description → org');
+    eq(I.guessType('city in Tennessee'), 'place', 'description → place');
+    eq(I.guessType('American politician and author'), 'person', 'description → person');
+    eq(I.guessType('a small abstract idea'), null, 'no cue → null (conservative)');
+    eq(I.stripTags('a <b>b</b> &amp; <i>c</i>'), 'a b & c', 'stripTags drops markup and decodes entities');
+    const w = I.normalizeWiktionary({ en: [{ partOfSpeech: 'Noun', definitions: [{ definition: 'An <a href="/x">economic</a> system.', examples: ['used in a sentence'] }] }] });
+    eq(w.entries.length, 1, 'wiktionary: one part-of-speech group');
+    eq(w.entries[0].partOfSpeech, 'Noun', 'wiktionary: partOfSpeech carried');
+    ok(!/[<>]/.test(w.entries[0].definitions[0].definition), 'wiktionary: definition stripped of tags');
+    const wk = I.normalizeWiki({ title: 'X Partnership', description: 'nonprofit organization', extract: 'e', content_urls: { desktop: { page: 'http://p' } } }, [{ title: 'X Partnership' }, { title: 'Y', snippet: 's' }]);
+    eq(wk.typeGuess, 'org', 'wiki: typeGuess from description');
+    eq(wk.others.length, 1, 'wiki: other matches carried (minus the chosen title)');
+  });
+
+  await group('lookup + freeze / replay / abstain', async () => {
+    log.length = 0;
+    const a = await X.lookup('wikipedia', 'Nashville Downtown Partnership');
+    eq(a.status, 'hit', 'wikipedia hit');
+    eq(a.payload.title, 'Nashville Downtown Partnership', 'hit carries the title');
+    eq(a.basis.src, 'wikipedia', 'basis stamped with source');
+    ok(/^cyrb53:/.test(a.basis.hash), 'basis carries a content hash');
+    const reqAfterFirst = log.length;
+    ok(reqAfterFirst >= 2, 'a wikipedia hit is two upstream requests (search + summary)');
+    const b = await X.lookup('wikipedia', 'Nashville Downtown Partnership');
+    eq(b.status, 'hit', 'second lookup also a hit');
+    eq(b.cached, true, 'second lookup served from the freeze');
+    eq(log.length, reqAfterFirst, 'a frozen term pays no further network');
+
+    const miss = await X.lookup('wikipedia', 'Nonexistent Subject Xyzzy');
+    eq(miss.status, 'miss', 'no search hits → miss (reached, nothing found), never fabricated');
+
+    log.length = 0;
+    const pend = await X.lookup('wiktionary', 'freshunseenword', { replayOnly: true });
+    eq(pend.status, 'pending', 'replayOnly + uncached → pending (abstain)');
+    eq(log.length, 0, 'replayOnly pays no network');
+  });
+
+  await group('private-individual gate', async () => {
+    log.length = 0;
+    const g = await X.lookup('wikipedia', 'Mrs. Mill');
+    eq(g.status, 'gated', 'a courtesy-title person is gated from the world tier');
+    eq(log.length, 0, 'a gated lookup makes no request');
+    const lex = await X.lookup('wiktionary', 'Mrs. Mill');
+    ok(lex.status !== 'gated', 'the language tier (Wiktionary) is not gated — a name there is harmless');
+  });
+
+  group('classifyNeeds — seriousness ranking', () => {
+    const entities = [
+      { name: 'Nashville Downtown Partnership', type: 'place', mass: 9, key: 'ndp' },
+      { name: 'Socialism', type: 'thing', mass: 2, key: 'soc' },
+      { name: 'Metro Council', type: 'place', mass: 5, key: 'mc' },
+      { name: 'Poland', type: 'place', mass: 3, key: 'pol' },
+      { name: 'Tom Turner', type: 'person', mass: 4, key: 'tt' },
+      { name: 'Mrs. Mill', type: 'person', mass: 2, key: 'mm' },
+      { name: 'Departments Should Not Be', type: 'thing', mass: 1, key: 'noise' },
+    ];
+    const needs = X.classifyNeeds(entities);
+    const terms = needs.map(n => n.term);
+    ok(needs.every(n => !n.gated), 'no gated need in the default set');
+    ok(!terms.includes('Poland'), 'single-word place excluded (assumed correct)');
+    ok(!terms.includes('Tom Turner'), 'an already-person is not a residual');
+    ok(!terms.includes('Mrs. Mill'), 'private individual excluded by default');
+    ok(!terms.includes('Departments Should Not Be'), 'heading/TOC noise excluded');
+    eq(needs[0].term, 'Nashville Downtown Partnership', 'heaviest org is the most serious need');
+    const soc = needs.find(n => n.term === 'Socialism');
+    ok(soc && soc.source === 'wiktionary' && soc.kind === 'abstract-kind', 'abstract noun → safe language tier');
+    const ndp = needs.find(n => n.term === 'Nashville Downtown Partnership');
+    ok(ndp && ndp.source === 'wikipedia' && ndp.kind === 'org-or-law', 'proper referent → world tier');
+    const withGated = X.classifyNeeds(entities, { includeGated: true });
+    ok(withGated.some(n => n.term === 'Mrs. Mill' && n.gated), 'includeGated surfaces the gated need, marked');
+  });
+
+  await group('resolveNeeds — budget spends on the worst holes first', async () => {
+    log.length = 0;
+    const entities = [
+      { name: 'Nashville Downtown Partnership', type: 'place', mass: 9, key: 'ndp' },
+      { name: 'Metro Council', type: 'place', mass: 5, key: 'mc' },
+      { name: 'Socialism', type: 'thing', mass: 2, key: 'soc' },
+    ];
+    const needs = X.classifyNeeds(entities);
+    eq(needs.length, 3, 'three real needs');
+    const results = await X.resolveNeeds(needs, { budget: 2 });
+    eq(results.size, 3, 'every need gets a result row');
+    eq(results.get('soc').status, 'skipped', 'the lowest-severity need is skipped under budget');
+    eq(results.get('soc').reason, 'budget', 'skip reason is budget');
+    ok(['hit', 'miss'].includes(results.get('ndp').status), 'the heaviest need was actually fetched');
+    ok(['hit', 'miss'].includes(results.get('mc').status), 'the second need was actually fetched');
+    const askedSoc = log.some(e => e.kind === 'wikt-def' && e.term === 'socialism');
+    ok(!askedSoc, 'the skipped need never touched the network');
+  });
+
+  await group('rate limiter — calls are spaced by the interval', async () => {
+    X.setConfig({ intervalMs: 25 });
+    const log2 = [];
+    X.setConfig({ fetchImpl: makeFetch(log2) });
+    const words = ['rl_alpha', 'rl_beta', 'rl_gamma']; // fresh, uncached, all miss → 1 request each
+    await Promise.all(words.map(w => X.lookup('wiktionary', w)));
+    const times = log2.filter(e => e.kind === 'wikt-def').map(e => e.at).sort((a, b) => a - b);
+    eq(times.length, 3, 'three requests issued');
+    let spaced = true;
+    for (let i = 1; i < times.length; i++) if (times[i] - times[i - 1] < 18) spaced = false;
+    ok(spaced, `consecutive requests are ≥ ~interval apart (gaps: ${times.map((t, i) => i ? t - times[i - 1] : 0).join(',')})`);
+    X.setConfig({ intervalMs: 5 });
+  });
+
+  // ---- summary ----
+  await sleep(5);
+  console.log(`\n${fail ? '✗' : '✓'} external.js: ${pass} passed, ${fail} failed`);
+  if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
+})().catch(e => { console.error(e); process.exit(1); });

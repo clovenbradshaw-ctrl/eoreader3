@@ -1300,3 +1300,90 @@ button.gax-leg:hover .gax-dim { color: var(--text-2); }
 .gax-evdetail { padding: 4px 8px 12px 47px; }
 .gax-evspan { font-size: 12.5px; color: var(--text-2); line-height: 1.5; margin-bottom: 7px; display: flex; gap: 8px; }
 .gax-evjson { font-family: var(--mono); font-size: 11px; line-height: 1.5; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 9px 11px; overflow-x: auto; white-space: pre; color: var(--text-2); margin: 0; }
+
+/* ============================================================
+   Reference desk (external-knowledge stratum) — reference.jsx.
+   A "paper" register inside the document pane: the encyclopaedia article and
+   the lexicon entry, fetched through the proxy. Two local accent inks
+   (prussian for the article, the app's ochre for the word).
+   ============================================================ */
+.refdesk, .refbar {
+  --enc-ink: #2d4a6b;
+  --lex-ink: var(--warn-fg);
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+  border-radius: var(--r);
+  margin-top: 16px;
+  font-family: var(--serif);
+  color: var(--paper-ink);
+}
+.refbar { margin: 10px 0 2px; padding: 0; }
+
+.refdesk-head, .refbar-head { display: flex; align-items: center; gap: 7px; padding: 10px 13px; border-bottom: 1px solid var(--paper-line); }
+.refbar-head { border-bottom: none; }
+.refdesk-title { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--paper-ink); }
+.refdesk-sub { font-style: italic; color: var(--text-3); font-size: 13.5px; }
+.refbar-text { font-size: 13.5px; color: var(--paper-ink); }
+.refbar-faint { color: var(--text-3); font-size: 12px; font-family: var(--mono); }
+
+.refdesk-go { font-family: var(--mono); font-size: 12px; letter-spacing: .04em; border: 1px solid var(--enc-ink); background: var(--enc-ink); color: #fff; padding: 6px 12px; border-radius: var(--r-sm); cursor: pointer; }
+.refdesk-go:hover:not(:disabled) { background: #24405e; }
+.refdesk-go:disabled { opacity: .55; cursor: default; }
+.refdesk-go.small { padding: 4px 10px; font-size: 11.5px; }
+
+.refdesk-consent { padding: 12px 14px; }
+.refdesk-consent-body { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; color: var(--text-2); line-height: 1.5; margin-bottom: 10px; }
+.refdesk-consent code, .refbar code, .refdesk-basis code { font-family: var(--mono); font-size: 11.5px; color: var(--enc-ink); }
+.refdesk-loading, .refdesk-placeholder, .refdesk-note { padding: 12px 14px; color: var(--text-3); font-size: 13.5px; }
+.refdesk-loading { font-family: var(--mono); font-size: 12px; letter-spacing: .05em; }
+.refdesk-note { font-style: italic; }
+.refdesk-err { padding: 10px 14px; color: var(--bad-fg); font-size: 13.5px; }
+.refdesk-err code { font-family: var(--mono); font-size: 11.5px; }
+
+.refdesk-columns { display: grid; grid-template-columns: 1.1fr 1fr; gap: 0; }
+.refdesk-col { padding: 14px; min-width: 0; }
+.refdesk-col.enc { border-right: 1px solid var(--paper-line); }
+.refdesk-col-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.refdesk-col-head .mark { font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; font-weight: 600; }
+.refdesk-col-head .mark.enc { color: var(--enc-ink); }
+.refdesk-col-head .mark.lex { color: var(--lex-ink); }
+.refdesk-col-head .src { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+
+.refdesk-thumb { float: right; margin: 2px 0 10px 12px; max-width: 116px; width: 38%; border: 1px solid var(--paper-line); border-radius: var(--r-xs); }
+.refdesk-headword { font-size: 18px; font-weight: 600; line-height: 1.15; margin: 0 0 3px; }
+.refdesk-headword a { color: var(--paper-ink); text-decoration: none; border-bottom: 1px solid var(--enc-ink); }
+.refdesk-headword a:hover { color: var(--enc-ink); }
+.refdesk-desc { color: var(--text-3); font-style: italic; font-size: 13px; margin: 0 0 9px; }
+.refdesk-suggest { font-size: 12.5px; color: var(--lex-ink); background: var(--warn-bg); border: 1px solid var(--warn-bd); border-radius: var(--r-xs); padding: 6px 9px; margin: 0 0 10px; }
+.refdesk-summary { font-size: 14.5px; margin: 0 0 12px; line-height: 1.55; }
+.refdesk-seealso { clear: both; margin-top: 10px; }
+.refdesk-lbl { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-3); margin-bottom: 6px; }
+.refdesk-hit { border-top: 1px solid var(--paper-line); padding: 7px 0; font-size: 13.5px; }
+.refdesk-snip { color: var(--text-2); font-size: 12.5px; }
+
+.refdesk-pos { margin: 0 0 14px; }
+.refdesk-pos-label { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; color: var(--lex-ink); font-style: italic; border-bottom: 1px solid var(--paper-line); padding-bottom: 3px; margin-bottom: 7px; display: block; }
+ol.refdesk-defs { margin: 0; padding: 0 0 0 1.4em; }
+ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
+.refdesk-ex { display: block; color: var(--text-2); font-style: italic; font-size: 12.5px; margin-top: 2px; }
+
+.refdesk-basis { margin-top: 12px; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+.refdesk-basis a { color: var(--enc-ink); }
+
+.refbar-results { padding: 4px 13px 10px; }
+.refbar-row { border-top: 1px solid var(--paper-line); }
+.refbar-term { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: none; padding: 8px 0; cursor: pointer; font-family: var(--serif); color: var(--paper-ink); font-size: 13.5px; }
+.refbar-term b { font-weight: 600; }
+.refbar-term.open b { color: var(--enc-ink); }
+.refbar-status { color: var(--text-3); font-size: 12.5px; font-style: italic; }
+.refbar-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); flex: none; }
+.refbar-dot.hit { background: var(--good-fg); }
+.refbar-dot.gated { background: var(--warn-fg); }
+.refbar-dot.miss, .refbar-dot.skipped { background: var(--text-3); }
+.refbar-dot.error { background: var(--bad-fg); }
+.refbar-foot { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); padding: 8px 0 2px; }
+
+@media (max-width: 720px) {
+  .refdesk-columns { grid-template-columns: 1fr; }
+  .refdesk-col.enc { border-right: none; border-bottom: 1px solid var(--paper-line); }
+}
