@@ -289,10 +289,16 @@ Structure / Interpretation. The cube has two more faces the instrument does
 not yet score from a dump, and their vocabularies are pinned here so log
 shapes can grow into them:
 
-- **The Site face** (Space ⤫ Time) — *where* a mark lands: **Void, Thing,
+- **The Site face** (Space ⤫ Time) — *where* a mark lands: **Void, Entity,
   Kind / Field, Link, Network / Atmosphere, Lens, Paradigm**. A CON bond
   lives at a Link (Structure ⤫ Figure); a frame DEF reads a Network through
-  a Lens; chrome is Field-level furniture mistaken for Things.
+  a Lens; chrome is Field-level furniture mistaken for Entities. The
+  (Existence, Figure) cell is **Entity**, a generated cell like the other
+  eight; the entity *subtypes* (thing / person / place / org) are a separate
+  classification one rank below it, on the `entityType` axis, and never name
+  the cell. (The engine's legacy grid spelled this cell "Thing" — a level
+  error, naming the genus after its generic species; the `site_entity_cell`
+  rule corrects it, off by default for golden parity.)
 - **The Stance face** (Identity ⤫ Time) — *how* the engagement holds its
   target: **Clearing, Dissecting, Unraveling / Tending, Binding, Tracing /
   Cultivating, Making, Composing**. The stance of an operator varies with

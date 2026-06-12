@@ -10,9 +10,11 @@
    the fold change to be tractable at all — if Paradigm and Lens come up
    starved on essays the work is upstream of the fold.
 
-   Usage: node tools/terrain-histogram.js [pattern...]
+   Usage: node tools/terrain-histogram.js [--entity-cell] [pattern...]
      (no args)               every file under evo/corpus/
      pg34901 pg3300 pg18     the three named essays
+     --entity-cell           run with the site_entity_cell rule ON (the
+                             Entity-cell rename + SIG/NUL coordinate fix)
    ============================================================ */
 'use strict';
 const fs = require('fs');
@@ -21,12 +23,13 @@ const { loadEngine } = require('../tests/harness');
 
 const CORPUS = path.resolve(__dirname, '..', 'evo', 'corpus');
 
-const ROW_ORDER = [
-  { name: 'Existence',      cells: ['Void', 'Thing', 'Kind'] },
-  { name: 'Structure',      cells: ['Field', 'Link', 'Network'] },
-  { name: 'Interpretation', cells: ['Atmosphere', 'Lens', 'Paradigm'] },
-];
 const COL_ORDER = ['Ground', 'Figure', 'Pattern'];
+// Cell names come from the engine's live grid, so the histogram follows the
+// site_entity_cell rule (Thing legacy / Entity corrected) instead of pinning
+// the labels here.
+function rowOrder(E) {
+  return Object.entries(E.EO_SITE_GRID).map(([name, row]) => ({ name, cells: COL_ORDER.map(c => row[c]) }));
+}
 
 function pickFiles(patterns) {
   const all = fs.readdirSync(CORPUS).filter(f => f.endsWith('.txt')).sort();
@@ -45,16 +48,16 @@ function maxCellName(cells) {
   return { name: best, mass: max };
 }
 
-function rowTotals(cells) {
+function rowTotals(rows, cells) {
   const out = {};
-  for (const r of ROW_ORDER) {
+  for (const r of rows) {
     out[r.name] = +r.cells.reduce((s, c) => s + (cells[c] ? subst(cells[c]) : 0), 0).toFixed(2);
   }
   return out;
 }
-function colTotals(cells) {
+function colTotals(rows, cells) {
   const out = { Ground: 0, Figure: 0, Pattern: 0 };
-  for (const r of ROW_ORDER) {
+  for (const r of rows) {
     for (let i = 0; i < r.cells.length; i++) {
       const c = r.cells[i];
       out[COL_ORDER[i]] += cells[c] ? subst(cells[c]) : 0;
@@ -66,16 +69,25 @@ function colTotals(cells) {
 
 async function run() {
   const args = process.argv.slice(2);
-  const files = pickFiles(args);
+  const entityCell = args.includes('--entity-cell');
+  const files = pickFiles(args.filter(a => a !== '--entity-cell'));
   if (!files.length) {
     console.error('no corpus files matched');
     process.exit(1);
   }
-  const { EOEngine } = loadEngine();
+  const W = loadEngine();
+  const { EOEngine } = W;
+  if (entityCell) {
+    // same standing-host-rules path the app uses; survives ledger commits
+    W.EO_RULES = [{ id: 'site-entity-cell', installed: true, enabled: true, value: 1 }];
+    EOEngine.applyRules(W.EO_RULES);
+  }
+  const ROWS = rowOrder(EOEngine);
   // Header
   const header = ['document'.padEnd(34), ...COL_ORDER.map(c => c.padStart(8))].join(' ');
   console.log('\n# nine-cell Site terrain histogram — mass per cell (count fallback)');
-  console.log('# rows: Existence (Void/Thing/Kind) · Structure (Field/Link/Network) · Interpretation (Atmosphere/Lens/Paradigm)');
+  console.log('# rows: ' + ROWS.map(r => r.name + ' (' + r.cells.join('/') + ')').join(' · ')
+    + (entityCell ? '   [site_entity_cell ON]' : ''));
 
   const summary = [];
   for (const file of files) {
@@ -101,7 +113,7 @@ async function run() {
     console.log('  (substantive mass shown; reader-machinery bookkeeping in [brackets])');
     console.log('');
     console.log('  ' + header);
-    for (const row of ROW_ORDER) {
+    for (const row of ROWS) {
       const line = row.name.padEnd(16);
       const parts = row.cells.map((c, i) => {
         const cell = cells[c];
@@ -111,8 +123,8 @@ async function run() {
       });
       console.log('  ' + line + parts.join(' '));
     }
-    const rt = rowTotals(cells);
-    const ct = colTotals(cells);
+    const rt = rowTotals(ROWS, cells);
+    const ct = colTotals(ROWS, cells);
     const best = maxCellName(cells);
     const total = rt.Existence + rt.Structure + rt.Interpretation;
     console.log('');
