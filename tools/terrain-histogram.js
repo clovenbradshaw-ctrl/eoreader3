@@ -35,11 +35,12 @@ function pickFiles(patterns) {
 }
 
 function fmt(x) { return String(x).padStart(8, ' '); }
+function subst(cell) { return +(cell.mass - (cell.bookkeeping || 0)).toFixed(2); }
 
 function maxCellName(cells) {
   let best = null, max = -Infinity;
   for (const k of Object.keys(cells)) {
-    if (cells[k].mass > max) { max = cells[k].mass; best = k; }
+    if (subst(cells[k]) > max) { max = subst(cells[k]); best = k; }
   }
   return { name: best, mass: max };
 }
@@ -47,7 +48,7 @@ function maxCellName(cells) {
 function rowTotals(cells) {
   const out = {};
   for (const r of ROW_ORDER) {
-    out[r.name] = +r.cells.reduce((s, c) => s + (cells[c] ? cells[c].mass : 0), 0).toFixed(2);
+    out[r.name] = +r.cells.reduce((s, c) => s + (cells[c] ? subst(cells[c]) : 0), 0).toFixed(2);
   }
   return out;
 }
@@ -56,7 +57,7 @@ function colTotals(cells) {
   for (const r of ROW_ORDER) {
     for (let i = 0; i < r.cells.length; i++) {
       const c = r.cells[i];
-      out[COL_ORDER[i]] += cells[c] ? cells[c].mass : 0;
+      out[COL_ORDER[i]] += cells[c] ? subst(cells[c]) : 0;
     }
   }
   for (const k of Object.keys(out)) out[k] = +out[k].toFixed(2);
@@ -97,6 +98,7 @@ async function run() {
     const nEvents = (doc._events || []).length;
     const nSents = (doc.sentenceTexts || []).length;
     console.log('  ' + nSents.toLocaleString() + ' sentences · ' + nEvents.toLocaleString() + ' events · parse ' + parseMs + ' ms');
+    console.log('  (substantive mass shown; reader-machinery bookkeeping in [brackets])');
     console.log('');
     console.log('  ' + header);
     for (const row of ROW_ORDER) {
@@ -104,9 +106,10 @@ async function run() {
       const parts = row.cells.map((c, i) => {
         const cell = cells[c];
         const label = (c + '(' + COL_ORDER[i][0] + ')').padEnd(15);
-        return label + fmt(cell ? cell.mass : 0);
+        const bk = cell && cell.bookkeeping ? ' [' + cell.bookkeeping + ']' : '';
+        return label + fmt(cell ? subst(cell) : 0) + bk.padEnd(9);
       });
-      console.log('  ' + line + parts.join('  '));
+      console.log('  ' + line + parts.join(' '));
     }
     const rt = rowTotals(cells);
     const ct = colTotals(cells);
@@ -115,12 +118,12 @@ async function run() {
     console.log('');
     console.log('  row sums          Existence ' + fmt(rt.Existence) + '  Structure ' + fmt(rt.Structure) + '  Interpretation ' + fmt(rt.Interpretation));
     console.log('  col sums          Ground    ' + fmt(ct.Ground)    + '  Figure    ' + fmt(ct.Figure)    + '  Pattern        ' + fmt(ct.Pattern));
-    console.log('  heaviest cell     ' + best.name + ' (mass ' + best.mass + ', ' + ((best.mass / Math.max(total, 1)) * 100).toFixed(1) + '%)');
-    console.log('  interp share      ' + ((rt.Interpretation / Math.max(total, 1)) * 100).toFixed(1) + '%   (Paradigm ' + cells.Paradigm.mass + ', Lens ' + cells.Lens.mass + ', Atmosphere ' + cells.Atmosphere.mass + ')');
+    console.log('  heaviest cell     ' + best.name + ' (substantive mass ' + best.mass + ', ' + ((best.mass / Math.max(total, 1)) * 100).toFixed(1) + '%)');
+    console.log('  interp share      ' + ((rt.Interpretation / Math.max(total, 1)) * 100).toFixed(1) + '%   (Paradigm ' + subst(cells.Paradigm) + ', Lens ' + subst(cells.Lens) + ', Atmosphere ' + subst(cells.Atmosphere) + ')');
     summary.push({
       file, sentences: nSents, events: nEvents, total: +total.toFixed(2),
       best: best.name, bestMass: best.mass,
-      paradigm: cells.Paradigm.mass, lens: cells.Lens.mass, atmosphere: cells.Atmosphere.mass,
+      paradigm: subst(cells.Paradigm), lens: subst(cells.Lens), atmosphere: subst(cells.Atmosphere),
       interpTotal: rt.Interpretation, interpShare: +((rt.Interpretation / Math.max(total, 1)) * 100).toFixed(1),
     });
   }

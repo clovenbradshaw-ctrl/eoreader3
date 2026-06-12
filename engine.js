@@ -7781,10 +7781,22 @@ function projectGraph(events, frame = {}) {
   // per RULES_REV the way documentFolds does; a scoped walk (a chapter, an
   // impression region) recomputes. Returns a map keyed by the nine grid names
   // — Void/Thing/Kind, Field/Link/Network, Atmosphere/Lens/Paradigm — each
-  // cell `{ events, mass }`. The histogram is `cells[name].mass` for each.
+  // cell `{ events, mass, bookkeeping }`. The histogram is `cells[name].mass`;
+  // `mass - bookkeeping` is the substantive view.
+  //
+  // `bookkeeping` is the share of `mass` deposited by the reader's own
+  // machinery rather than observed in the text: admission-gate SEGs (the
+  // single-sighting retirements) and minted DEFs (frame hashes, csv schema).
+  // They are real events but they pool wherever the reader works, not where
+  // the document does — on a short article half the Link cell can be
+  // admission SEGs — so any ranking of cells should read them apart.
+  function _terrainBookkeeping(ev) {
+    return (ev.op === 'SEG' && ev.src === 'admission-gate')
+        || (ev.op === 'DEF' && (ev.src === 'frame-mint' || ev.src === 'csv-schema' || ev.src === 'csv-cell'));
+  }
   function _terrainsScope(doc, inScope) {
     const cells = {};
-    for (const s of EO_SITES) cells[s] = { events: [], mass: 0 };
+    for (const s of EO_SITES) cells[s] = { events: [], mass: 0, bookkeeping: 0 };
     for (const ev of (doc._events || [])) {
       if (inScope && !inScope(ev.sentence_idx)) continue;
       const s = eoSiteOfEvent(ev);
@@ -7792,6 +7804,7 @@ function projectGraph(events, frame = {}) {
       const w = (ev.mass != null && Number.isFinite(ev.mass)) ? ev.mass : 1;
       cells[s].events.push(ev);
       cells[s].mass += w;
+      if (_terrainBookkeeping(ev)) cells[s].bookkeeping += w;
     }
     for (const s of EO_SITES) {
       cells[s].events.sort((a, b) => {
@@ -7800,6 +7813,7 @@ function projectGraph(events, frame = {}) {
         return mb - ma;
       });
       cells[s].mass = +cells[s].mass.toFixed(2);
+      cells[s].bookkeeping = +cells[s].bookkeeping.toFixed(2);
     }
     return cells;
   }
