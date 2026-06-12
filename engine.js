@@ -4353,7 +4353,7 @@ async function extractEoGraph(text, onProgress) {
   // kin reader resolves against (a possessive determiner is a local anaphor).
   let prevSentencePersons = new Set();
   const processSentence = (sentDoc, i) => {
-    const sentText = sentDoc.text();
+    let sentText = sentDoc.text();
     sentenceTexts[i] = sentText.trim();
     const sentMeta = { sentence_idx: i };
     currentSentIdx = i;
@@ -4387,13 +4387,47 @@ async function extractEoGraph(text, onProgress) {
     // they mint nothing. The START/END marker lines are apparatus too.
     if (gutenbergPhase === 'header') {
       const wasStart = GUTENBERG_START_RE.test(sentText);
-      chromeIdx.push(i);
-      if (wasStart) gutenbergPhase = 'body';
-      return;
+      if (wasStart) {
+        gutenbergPhase = 'body';
+        // The START marker can be fused into the same sentence as the opening of
+        // the work when the source lacks a clean break after the marker line
+        // (no blank line, the splitter merges marker + first prose). Chroming the
+        // whole sentence then SWALLOWS the body that follows the marker — the
+        // first lines of the actual work go dark and never reach retrieval
+        // ("hits 0" on a doc whose body is plainly present). So: strip the
+        // header-and-marker prefix and, if real prose remains after it, let the
+        // sentence fall through to the emitters on that remainder. Only chrome
+        // it when nothing but apparatus is left.
+        const afterMarker = sentText.replace(/^[\s\S]*?\*{3}\s*START OF TH(?:E|IS) PROJECT GUTENBERG[^*]*\*{3}/i, '').trim();
+        if (afterMarker && afterMarker.length >= 8 && !isChrome(afterMarker)) {
+          // Re-point this sentence's text at the body remainder for extraction.
+          // sentenceTexts[i] keeps the verbatim line (display/index unchanged);
+          // the emitters below read `sentText`, so narrow that to the prose.
+          sentText = afterMarker;
+          currentSentText = afterMarker;
+          // fall through to chrome gate + emitters
+        } else {
+          chromeIdx.push(i);
+          return;
+        }
+      } else {
+        chromeIdx.push(i);
+        return;
+      }
     }
-    if (gutenbergPhase === 'footer') { chromeIdx.push(i); return; }
-    if (_gutenbergHasEnd && GUTENBERG_END_RE.test(sentText)) {
-      gutenbergPhase = 'footer'; chromeIdx.push(i); return;
+    else if (gutenbergPhase === 'footer') { chromeIdx.push(i); return; }
+    if (gutenbergPhase === 'body' && _gutenbergHasEnd && GUTENBERG_END_RE.test(sentText)) {
+      // Mirror of the START fusion: body prose can be fused before a glued END
+      // marker. Keep the prose that precedes the marker, drop the apparatus.
+      const beforeMarker = sentText.replace(/\*{3}\s*END OF TH(?:E|IS) PROJECT GUTENBERG[\s\S]*$/i, '').trim();
+      gutenbergPhase = 'footer';
+      if (beforeMarker && beforeMarker.length >= 8 && !isChrome(beforeMarker)) {
+        sentText = beforeMarker;
+        currentSentText = beforeMarker;
+        // fall through to read the trailing body prose
+      } else {
+        chromeIdx.push(i); return;
+      }
     }
 
     if (isChrome(sentText)) { chromeIdx.push(i); return; }
