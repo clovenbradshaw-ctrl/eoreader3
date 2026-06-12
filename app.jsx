@@ -134,6 +134,10 @@ function App() {
   // and/or the chat half (audit turns). Persisted with prefs. Both on by default.
   const [exportIngestion, setExportIngestion] = useState(true);
   const [exportOutput, setExportOutput] = useState(true);
+  // Per-message Wikipedia enrichment (external.js reference desk): when on, a
+  // sent message gets an encyclopaedia + dictionary card for its salient term.
+  // Off by default — it is the one path that sends a term off-device.
+  const [wikiEnrich, setWikiEnrich] = useState(false);
   const [model, setModel] = useState(defaultModel);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
@@ -267,6 +271,7 @@ function App() {
         if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
         if (typeof prefs.exportIngestion === 'boolean') setExportIngestion(prefs.exportIngestion);
         if (typeof prefs.exportOutput === 'boolean') setExportOutput(prefs.exportOutput);
+        if (typeof prefs.wikiEnrich === 'boolean') setWikiEnrich(prefs.wikiEnrich);
         // Restored docs were parsed under the saved modes, so suppress the
         // re-parse the same way rule toggles do (batched into one render).
         if (prefs.langModes && typeof prefs.langModes === 'object') { suppressReparse.current = true; setLangModes(prefs.langModes); }
@@ -325,8 +330,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput });
-  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich });
+  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -1799,6 +1804,69 @@ function App() {
     setBusy(false);
   };
 
+  // ---- chat with Wikipedia (external.js knowledge augmentation) ----
+  const toggleWikiEnrich = () => setWikiEnrich(v => {
+    const next = !v;
+    if (next) { try { window.EOExternal && window.EOExternal.grantConsent && window.EOExternal.grantConsent(); } catch (e) {} }
+    return next;
+  });
+
+  // Commit an externally-sourced document into the graph WITHOUT the upload
+  // path's UI seizure (no tab focus, no layout change, no busy flip): it is a
+  // background source the turn pulled in, surfaced through the chip + the card.
+  const ingestExternalSource = async (name, text) => {
+    const dup = docsRef.current.find(d => d.name === name);
+    if (dup) return dup;
+    const id = uid('doc');
+    let doc;
+    try { doc = await window.EOEngine.parseDocument(name, text, id); }
+    catch (e) { eoWarn('external source parse', e); return null; }
+    setDocs(ds => ds.some(d => d.id === doc.id) ? ds : [...ds, doc]);
+    return doc;
+  };
+
+  // Render a Wikipedia article payload into an ingestible prose document.
+  const buildWikiDocText = (p) => {
+    const parts = [];
+    if (p.title) parts.push(p.title);
+    if (p.description) parts.push(p.description);
+    parts.push('');
+    parts.push((p.text && p.text.trim()) ? p.text.trim() : (p.intro || ''));
+    parts.push('');
+    if (p.url) parts.push('Source: ' + p.url);
+    return parts.join('\n').trim();
+  };
+
+  // Pull the salient term's article, attach the card to the live assistant
+  // message (by turnId), and ingest it as a source. Returns the doc for THIS
+  // turn's scope (state updates land for later turns). Best-effort throughout.
+  const chatWikipedia = async (q, turnId) => {
+    const X = window.EOExternal;
+    if (!X || !X.enabled || !X.enabled()) return null;
+    try { X.grantConsent && X.grantConsent(); } catch (e) {}
+    const term = (X.pickQuery && X.pickQuery(q)) || q;
+    // A vague follow-up ("tell me more", "why?") names no new subject — keep
+    // chatting against whatever Wikipedia articles are already in scope rather
+    // than pulling a spurious one. The substantive turn did the ingest.
+    if (!term || term.length < 3 || /^(more|it|that|this|them|those|they|he|she|why|how|ok|okay|yes|no|sure|tell|again|continue|else|next|so|and|but)$/i.test(term)) return null;
+    const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
+    tag({ loading: true, term });
+    let res;
+    try { res = await X.article(term); }
+    catch (e) { res = { status: 'error', error: String((e && e.message) || e) }; }
+    const base = { ...res, term, query: (res && res.query) || term };
+    tag(base);
+    if (!res || res.status !== 'hit' || !res.payload) return null;
+    const name = 'Wikipedia · ' + res.payload.title;
+    let doc = docsRef.current.find(d => d.name === name);
+    if (!doc) {
+      const text = buildWikiDocText(res.payload);
+      if (text && text.replace(/\s+/g, ' ').trim().length > 60) doc = await ingestExternalSource(name, text);
+    }
+    if (doc) { addSource(doc.id); tag({ ...base, ingested: { id: doc.id, name } }); }
+    return doc || null;
+  };
+
   // Outer guard around turn routing: a throw in the router itself (or in an
   // awaited router step like the escalation retrieval) must never leave busy
   // stuck true. runTurn dispatches to the detached streaming paths and returns;
@@ -1824,11 +1892,24 @@ function App() {
     if (noDocs && (q.length > 140 || /\n/.test(q))) { ingest('Pasted text.txt', q); return; }
 
     const history = historyFor();
-    setMessages(m => [...m, { role: 'user', text: q }, { role: 'assistant', typing: true }]);
+    const turnId = 'wt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    setMessages(m => [...m, { role: 'user', text: q }, { role: 'assistant', typing: true, turnId }]);
     setBusy(true); ensureChat(q);
 
-    const doc = backingDoc();
-    const scope = scopeList();   // explicit source chips, else the focused doc
+    // CHAT WITH WIKIPEDIA: when enrichment is on, pull the salient term's
+    // article and INGEST it into the graph as a citable source before reading,
+    // so this turn grounds on it (and cites it), not on a sidecar card. The
+    // freshly-parsed doc is threaded into THIS turn's scope directly (state
+    // updates are stale within the turn); best-effort — a failure degrades to
+    // whatever sources were already in scope.
+    let injectedDoc = null;
+    if (wikiEnrich && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {
+      try { injectedDoc = await chatWikipedia(q, turnId); } catch (e) { eoWarn('wiki-chat', e); }
+    }
+
+    let doc = backingDoc() || injectedDoc;
+    let scope = scopeList();   // explicit source chips, else the focused doc
+    if (injectedDoc && !scope.some(d => d.id === injectedDoc.id)) scope = [injectedDoc, ...scope];
     const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
       ? window.EOLLM.hasAnthropicKey() : window.EOLLM.hasWebGPU()));
     const wasLoaded = canLLM && window.EOLLM.isLoaded(model.mlc);
@@ -2048,6 +2129,7 @@ function App() {
     sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     onAddSource: addSource, onRemoveSource: removeSource,
+    enrich: wikiEnrich, onToggleEnrich: toggleWikiEnrich,
   };
 
   const hasTabs = openTabs.length > 0;
