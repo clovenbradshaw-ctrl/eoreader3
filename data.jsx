@@ -66,6 +66,9 @@ const RULESETS = [
   { id: 'anaphora-weight', group: 'Parsing', phase: 'extraction', name: 'Anaphora Coupling', glyph: '↩',
     layer: 'significance', value: 0.4, mass: 8, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
     desc: 'Mass a pronoun BINDING deposits, at this weight (0.4) instead of full — a binding is an inference, not an observation, so it can’t count as full evidence for the next binding. Breaks the rich-get-richer loop that turns a heavy name into a black hole. Off ⇒ pronouns warm at full strength (the old runaway).' },
+  { id: 'site-entity-cell', group: 'Parsing', phase: 'extraction', name: 'Entity Cell (Site face)', glyph: '⊞',
+    layer: 'existence', value: 1, mass: 4, src: 'add-on', installed: false, enabled: false, locked: false, live: true,
+    desc: 'Names the Site face’s (Existence, Figure) cell Entity — its proper name among the nine generated cells; the subtypes thing/person/place/org live beneath it, never in a site slot — and corrects the SIG/NUL Object coordinate: a stall or an unattributed quote reads Ground and lands on Void instead of defaulting into Entity. Off ⇒ today’s grid (cell labeled “Thing”), byte-identical.' },
 
   // ── Chatting & grounding (chat) ──
   { id: 'auditor', group: 'Chatting & grounding', phase: 'chat', name: 'Grounded Auditor', glyph: '✓',

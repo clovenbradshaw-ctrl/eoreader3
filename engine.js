@@ -712,6 +712,11 @@ const READING_RULES = {
     value: 0.55, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'Predicate compatibility floor for the relation gate: a claim verb and an edge verb are the same relation when their lemmas overlap or their embedding cosine clears this. Measured on the app\'s own MiniLM-q8: cos(afford, pay) = 0.62 clears; cos(argued, hear) = 0.50 does not. This is the one place the embedder helps the relational cure, and only as a similarity scorer feeding a mechanical decision.',
   },
+  // ── Site face — the Entity cell named at its level ──────
+  site_entity_cell: {
+    value: false, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, the Site face\'s (Existence, Figure) cell is named Entity — its proper name as one of the nine generated cells (the entity subtypes thing/person/place/org live BENEATH it on the entityType axis, never in a site slot) — and the SIG/NUL Object coordinate corrects: a NUL stall and an unattributed SIG read Object Ground (an ambient existence-mass with no anchor, generating Void), while an attributed SIG resolves on its speaker. The cell stays generated from (Domain, Object); only the coordinate moves. OFF ships today\'s grid (the cell misnamed \'Thing\', SIG/NUL defaulting to Figure) byte-identical — the parity floor; flip after the parallel golden on the journalism + essay fixtures diffs clean.',
+  },
   speaker_label_patterns: {
     value: [], mass: 0, layer: 'structure', src: 'learned', module: 'core',
     desc: 'Grown, never seeded: line shapes (regex sources — capture 1 the label, capture 2 the statement) that bind a "LABEL: statement" line as that voice speaking — the org-acronym colon convention. Members arrive only through the proposal channel\'s admission physics: the model proposes from registered friction; documents or the user corroborate; admission writes the pattern here through the ledger. Starts EMPTY, so every shipped reading is byte-identical.',
@@ -2670,10 +2675,29 @@ function inferTypeFromGloss(gloss) {
    move a target off the Figure default are CONVENTIONS (site_*_cues).
    ============================================================ */
 const EO_SITE_GRID = {
+  Existence:      { Ground: 'Void',       Figure: 'Entity', Pattern: 'Kind' },
+  Structure:      { Ground: 'Field',      Figure: 'Link',   Pattern: 'Network' },
+  Interpretation: { Ground: 'Atmosphere', Figure: 'Lens',   Pattern: 'Paradigm' },
+};
+// The legacy grid (the parity floor): identical except the (Existence, Figure)
+// cell carries its old name 'Thing' — a level error the site_entity_cell rule
+// corrects. "Thing" is an entity SUBTYPE, peer to person/place/org, living one
+// rank below the cell on the entityType axis; it never names the cell itself.
+const EO_SITE_GRID_LEGACY = {
   Existence:      { Ground: 'Void',       Figure: 'Thing', Pattern: 'Kind' },
   Structure:      { Ground: 'Field',      Figure: 'Link',  Pattern: 'Network' },
   Interpretation: { Ground: 'Atmosphere', Figure: 'Lens',  Pattern: 'Paradigm' },
 };
+// applyRules coerces card values through Number(), so an installed card
+// arrives as 1; the seed is boolean false. Either truthy form means ON.
+function siteEntityCellEnabled() { const v = READING_RULES.site_entity_cell.value; return v === true || v === 1; }
+function eoSiteGrid() { return siteEntityCellEnabled() ? EO_SITE_GRID : EO_SITE_GRID_LEGACY; }
+// The entity subtypes — the classification BENEATH the Entity cell, off the
+// cube entirely. A 'thing' is a species of the genus Entity, as is a person.
+// These are entityType values, valid one rank below the (Existence, Figure)
+// cell; none of them is ever a site, and the ingestion audit treats one in a
+// site slot as a level error.
+const ENTITY_SUBTYPES = new Set(['thing', 'person', 'place', 'org', 'record']);
 // Identity × Space for each operator → its Space (Domain) row. Mode (the
 // Identity column: Differentiate/Relate/Generate) is the operator's other
 // coordinate and does not bear on the Site face.
@@ -2683,7 +2707,9 @@ const EO_DOMAIN_OF_OP = {
   DEF: 'Interpretation', EVA: 'Interpretation', REC: 'Interpretation',
 };
 // All nine site names, in grid order — for tallies and introspection.
-const EO_SITES = Object.values(EO_SITE_GRID).flatMap(row => Object.values(row));
+// A function, not a constant: the (Existence, Figure) cell's name follows
+// the site_entity_cell rule ('Entity' on, legacy 'Thing' off).
+function eoSites() { return Object.values(eoSiteGrid()).flatMap(row => Object.values(row)); }
 
 // The Time character (Ground/Figure/Pattern) of a target surface. Figure is
 // the default: a specific existent that holds still when named. A head noun in
@@ -2697,22 +2723,44 @@ function objectOf(surface, type) {
   }
   return 'Figure';
 }
-// The Site (phenomenological address) for a (Domain, target) pair.
+// The Site (phenomenological address) for a (Domain, target) pair. The cell
+// is always GENERATED — grid[Domain][Object] — never stamped by name.
 function eoSite(domain, surface, type) {
-  const row = EO_SITE_GRID[domain] || EO_SITE_GRID.Existence;
+  const grid = eoSiteGrid();
+  const row = grid[domain] || grid.Existence;
   return row[objectOf(surface, type)];
 }
 // The Site an EVENT touches: its operator fixes the Domain; its target fixes
 // the Time column. A CON to a specific referent is a Link; a DEF about a
 // doctrine is a Paradigm; an INS of an ambient mass is a Void.
+//
+// Under site_entity_cell the Object coordinate corrects for the two operators
+// whose target used to fall through to the Figure default: a NUL is a
+// preserved non-resolution — an existence that has not yet become a figure —
+// and an unattributed SIG (speaker '?') is an ephemeral registration with no
+// anchor; both read Object Ground and generate Void. An attributed SIG sits
+// on a who and resolves on its speaker, as before. Only the coordinate
+// moves; the cell stays the (Domain, Object) product.
 function eoSiteOfEvent(ev) {
   if (!ev || !ev.op) return null;
   const domain = EO_DOMAIN_OF_OP[ev.op];
   if (!domain) return null;
+  const grid = eoSiteGrid();
+  if (siteEntityCellEnabled()) {
+    if (ev.op === 'NUL') return (grid[domain] || grid.Existence).Ground;
+    if (ev.op === 'SIG' && (!ev.speaker || ev.speaker === '?')) return (grid[domain] || grid.Existence).Ground;
+  }
   const target = ev.op === 'SIG' ? ev.speaker
     : (ev.op === 'CON' || ev.op === 'SYN') ? (ev.o != null ? ev.o : ev.targetName)
     : (ev.target != null ? ev.target : ev.targetName);
   return eoSite(domain, target, ev.entityType || null);
+}
+// The display address of a referent: the generated cell, with the entity
+// subtype rendered as a refinement BENEATH the (Existence, Figure) cell
+// ("Entity / person") — two questions at two levels, never a tenth cell.
+function eoAddress(site, type) {
+  if (!site) return null;
+  return (site === eoSiteGrid().Existence.Figure && type) ? site + ' / ' + type : site;
 }
 
 function aliasRelation(aTok, bTok) {
@@ -5668,7 +5716,7 @@ async function extractEoGraph(text, onProgress) {
     // The Site face as a tally — how many acts landed on each of the nine
     // phenomenological addresses. The Act counts above are Identity × Space;
     // this is the Space × Time projection of the same log.
-    sites: (() => { const t = {}; for (const s of EO_SITES) t[s] = 0; for (const e of events) if (e.site) t[e.site]++; return t; })(),
+    sites: (() => { const t = {}; for (const s of eoSites()) t[s] = 0; for (const e of events) if (e.site) t[e.site]++; return t; })(),
     ms: Math.round(t1 - t0),
   };
 }
@@ -6461,9 +6509,10 @@ function projectGraph(events, frame = {}) {
       type: c.type,
       // The EO Site (phenomenological address) of the referent. A referent is
       // an existent admitted into being, so it occupies the Existence row;
-      // its Time column is read from its name (a specific Thing by default, a
+      // its Time column is read from its name (a specific Entity by default, a
       // Kind if its head is a category noun, a Void if an ambient mass noun).
-      // Orthogonal to `type` (person/place/org/thing), which sub-classes Thing.
+      // `type` (person/place/org/thing) is the entity SUBTYPE — a rank below
+      // the Entity cell, never a site.
       site: eoSite('Existence', c.name, c.type),
       gender: genderFromName(c.name) || c.memberKeys.map(k => learnedGender.get(k)).find(Boolean) || null,
       referent_id: c.canonical_referent_id,
@@ -6668,6 +6717,7 @@ function projectGraph(events, frame = {}) {
     'mass-weight': 'mass_weight',
     'singular-they': 'singular_they',
     'relation-gate': 'relation_gate',
+    'site-entity-cell': 'site_entity_cell',
   };
 
   /* ---------- Thinking depth: the effort dial's tunable budget ----------
@@ -6872,8 +6922,9 @@ function projectGraph(events, frame = {}) {
         // turned places (Cádiz) and OCR section labels (Figure, Note) into people.
         type: (e.type === 'person' || e.type === 'place' || e.type === 'org') ? e.type : 'thing',
         // EO Site (Space × Time): the referent's phenomenological address —
-        // Thing by default, Kind/Void if its name reads as a category/ambient
-        // noun. Orthogonal to `type` above (which sub-classes the Thing site).
+        // the Entity cell by default, Kind/Void if its name reads as a
+        // category/ambient noun. `type` above is the entity SUBTYPE, the
+        // classification beneath the Entity cell ("Entity / person").
         site: e.site || eoSite('Existence', e.name, e.type),
         raw: e.mentions || sents.length || 1,
         mass, sents,
@@ -7968,7 +8019,7 @@ function projectGraph(events, frame = {}) {
   // existing extraction-time stamp. The whole-document call caches on the doc
   // per RULES_REV the way documentFolds does; a scoped walk (a chapter, an
   // impression region) recomputes. Returns a map keyed by the nine grid names
-  // — Void/Thing/Kind, Field/Link/Network, Atmosphere/Lens/Paradigm — each
+  // — Void/Entity/Kind, Field/Link/Network, Atmosphere/Lens/Paradigm — each
   // cell `{ events, mass, bookkeeping }`. The histogram is `cells[name].mass`;
   // `mass - bookkeeping` is the substantive view.
   //
@@ -7984,7 +8035,7 @@ function projectGraph(events, frame = {}) {
   }
   function _terrainsScope(doc, inScope) {
     const cells = {};
-    for (const s of EO_SITES) cells[s] = { events: [], mass: 0, bookkeeping: 0 };
+    for (const s of eoSites()) cells[s] = { events: [], mass: 0, bookkeeping: 0 };
     for (const ev of (doc._events || [])) {
       if (inScope && !inScope(ev.sentence_idx)) continue;
       const s = eoSiteOfEvent(ev);
@@ -7994,7 +8045,7 @@ function projectGraph(events, frame = {}) {
       cells[s].mass += w;
       if (_terrainBookkeeping(ev)) cells[s].bookkeeping += w;
     }
-    for (const s of EO_SITES) {
+    for (const s of eoSites()) {
       cells[s].events.sort((a, b) => {
         const ma = (a.mass != null && Number.isFinite(a.mass)) ? a.mass : 1;
         const mb = (b.mass != null && Number.isFinite(b.mass)) ? b.mass : 1;
@@ -8090,7 +8141,10 @@ function projectGraph(events, frame = {}) {
       schema: 'cleon-graph/1',
       at: new Date().toISOString(),
       doc: { id: doc.id, name: doc.name, kind: doc.kind, lang: doc._lang || 'en', genre: doc._genre || null, sentences: (doc.sentenceTexts || []).length },
-      entities: entities.map(e => ({ name: e.name, key: e.key, type: e.type, mentions: e.raw, mass: e.mass, sents: e.sents })),
+      // `site` is the generated cell; `address` shows the subtype as a
+      // refinement beneath the Entity cell ("Entity / person"), never as a
+      // sibling of the nine
+      entities: entities.map(e => ({ name: e.name, key: e.key, type: e.type, site: e.site, address: eoAddress(e.site, e.type), mentions: e.raw, mass: e.mass, sents: e.sents })),
       edges: edges.map(e => ({ a: e.a, b: e.b, aName: e.aName, bName: e.bName, verb: e.verb, weight: e.weight })),
       assertions: (p.assertions || []).map(a => ({ subject: a.name, is: a.is })),
       spine: p.spine || [],
@@ -8209,6 +8263,21 @@ function projectGraph(events, frame = {}) {
     const termList = [...terms.values()].sort((a, b) => b.count - a.count || (a.token < b.token ? -1 : 1));
     const dropList = [...dropped.values()].sort((a, b) => b.count - a.count || (a.token < b.token ? -1 : 1));
     const entTermCount = termList.filter(t => t.entity).length;
+
+    // Site-face audit (the level guard): a `site` slot holds one of the nine
+    // generated cell names and nothing else. An entityType subtype value
+    // ('thing'/'person'/'place'/'org'/…) in a site slot is a LEVEL error —
+    // the subtype lives one rank below the Entity cell, on its own axis —
+    // and fails the audit rather than passing silently.
+    const siteNames = new Set(eoSites());
+    const siteTally = {}; for (const s of siteNames) siteTally[s] = 0;
+    const siteInvalid = [];
+    for (const ev of events) {
+      if (ev.site == null) continue;
+      if (siteNames.has(ev.site)) { siteTally[ev.site]++; continue; }
+      siteInvalid.push({ seq: ev.seq, op: ev.op, site: ev.site,
+        level_error: ENTITY_SUBTYPES.has(String(ev.site).toLowerCase()) });
+    }
     return {
       schema: 'cleon-ingestion/1',
       at: new Date().toISOString(),
@@ -8226,13 +8295,20 @@ function projectGraph(events, frame = {}) {
         entityTerms: entTermCount,    // distinct index terms that are part of a name
       },
       coverage: { sentences: sents.length, withEvents: sents.length - dark, dark },
+      // every stamped site, audited against the nine generated cell names;
+      // `invalid` must be empty — a member with level_error means a subtype
+      // crossed into the site slot
+      sites: { cells: siteTally, invalid: siteInvalid },
       dechrome: doc._dechrome || computeDechrome(doc),
       counts: { events: events.length, ops: opCounts, entities: entities.length },
       spans: sents,                   // the verbatim span texts (so an export is self-contained)
       lexicon: termList,              // the inverted index actually built
       stopwords: dropList,            // the words carried but not indexed
       sentences: perSent,             // lightweight per-span summary (tokens computed lazily)
-      entities: entities.map(e => ({ name: e.name, key: e.key, type: e.type, mentions: e.raw, mass: e.mass, sents: e.sents })),
+      // `site` is the generated cell; `address` shows the subtype as a
+      // refinement beneath the Entity cell ("Entity / person"), never as a
+      // sibling of the nine
+      entities: entities.map(e => ({ name: e.name, key: e.key, type: e.type, site: e.site, address: eoAddress(e.site, e.type), mentions: e.raw, mass: e.mass, sents: e.sents })),
       events,                         // the full append-only log (ground truth)
     };
   }
@@ -11038,8 +11114,12 @@ function projectGraph(events, frame = {}) {
     depictedAct, setDepictsEvaluator,
     // the Site face — the 9 phenomenological addresses (EO Space × Time): the
     // grid, the operator→Domain map, and the classifiers. The Act face is the
-    // event `op`; the Site face is `event.site` / `entity.site`.
-    EO_SITE_GRID, EO_DOMAIN_OF_OP, EO_SITES, eoSite, eoSiteOfEvent, objectOf,
+    // event `op`; the Site face is `event.site` / `entity.site`. The grid and
+    // the cell list are getters: their (Existence, Figure) cell follows the
+    // site_entity_cell rule ('Entity' on, legacy 'Thing' off).
+    get EO_SITE_GRID() { return eoSiteGrid(); },
+    get EO_SITES() { return eoSites(); },
+    EO_DOMAIN_OF_OP, eoSite, eoSiteOfEvent, objectOf, eoAddress, siteEntityCellEnabled,
     // EVA failures hydrate the conventions: the session's REC records,
     // JSONL-shaped and append-ready for memory/conventions.jsonl. A host may
     // set EOEngine.onConventionsRec = (rec) => … to ship each one out.

@@ -1,0 +1,1021 @@
+{
+ "schema": "site-face-parallel-golden/1",
+ "generated": "tools/site-face-golden.js",
+ "entityMassMovedToVoidByOp": {
+  "NUL": 48
+ },
+ "off": [
+  {
+   "id": "ndp",
+   "name": "NDP.txt",
+   "genre": "journalism",
+   "events": 44,
+   "sites": [
+    "Void",
+    "Thing",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Thing": 12
+    },
+    "SYN": {
+     "Link": 8
+    },
+    "DEF": {
+     "Lens": 9
+    },
+    "CON": {
+     "Link": 2
+    },
+    "NUL": {
+     "Thing": 2
+    },
+    "SIG": {
+     "Thing": 2
+    },
+    "SEG": {
+     "Link": 9
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Thing": {
+     "mass": 16,
+     "bookkeeping": 0,
+     "events": 16
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 19,
+     "bookkeeping": 9,
+     "events": 19
+    },
+    "Network": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 9,
+     "bookkeeping": 3,
+     "events": 9
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "dispatch",
+   "name": "dispatch.txt",
+   "genre": "journalism",
+   "events": 18,
+   "sites": [
+    "Void",
+    "Thing",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Thing": 3
+    },
+    "SYN": {
+     "Link": 9
+    },
+    "NUL": {
+     "Thing": 3
+    },
+    "SEG": {
+     "Link": 1
+    },
+    "DEF": {
+     "Lens": 2
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Thing": {
+     "mass": 6,
+     "bookkeeping": 0,
+     "events": 6
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 10,
+     "bookkeeping": 1,
+     "events": 10
+    },
+    "Network": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 2,
+     "bookkeeping": 2,
+     "events": 2
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "liberty",
+   "name": "liberty.txt",
+   "genre": "essay",
+   "events": 275,
+   "sites": [
+    "Void",
+    "Thing",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Thing": 58
+    },
+    "SYN": {
+     "Link": 88,
+     "Network": 1,
+     "Field": 1
+    },
+    "NUL": {
+     "Thing": 26
+    },
+    "DEF": {
+     "Lens": 42
+    },
+    "SIG": {
+     "Thing": 7
+    },
+    "CON": {
+     "Link": 6
+    },
+    "SEG": {
+     "Link": 46
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Thing": {
+     "mass": 91,
+     "bookkeeping": 0,
+     "events": 91
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 1,
+     "bookkeeping": 0,
+     "events": 1
+    },
+    "Link": {
+     "mass": 140,
+     "bookkeeping": 46,
+     "events": 140
+    },
+    "Network": {
+     "mass": 1,
+     "bookkeeping": 0,
+     "events": 1
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 42,
+     "bookkeeping": 12,
+     "events": 42
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "wealth",
+   "name": "wealth.txt",
+   "genre": "essay",
+   "events": 31,
+   "sites": [
+    "Void",
+    "Thing",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Thing": 5
+    },
+    "DEF": {
+     "Lens": 6
+    },
+    "SYN": {
+     "Link": 9,
+     "Network": 1
+    },
+    "NUL": {
+     "Thing": 9
+    },
+    "SEG": {
+     "Link": 1
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Thing": {
+     "mass": 14,
+     "bookkeeping": 0,
+     "events": 14
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 10,
+     "bookkeeping": 1,
+     "events": 10
+    },
+    "Network": {
+     "mass": 1,
+     "bookkeeping": 0,
+     "events": 1
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 6,
+     "bookkeeping": 4,
+     "events": 6
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "federalist",
+   "name": "federalist.txt",
+   "genre": "essay",
+   "events": 282,
+   "sites": [
+    "Void",
+    "Thing",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Thing": 100
+    },
+    "DEF": {
+     "Lens": 56
+    },
+    "SYN": {
+     "Link": 59,
+     "Network": 2
+    },
+    "NUL": {
+     "Thing": 7
+    },
+    "SEG": {
+     "Link": 58
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Thing": {
+     "mass": 107,
+     "bookkeeping": 0,
+     "events": 107
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 117,
+     "bookkeeping": 58,
+     "events": 117
+    },
+    "Network": {
+     "mass": 2,
+     "bookkeeping": 0,
+     "events": 2
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 56,
+     "bookkeeping": 42,
+     "events": 56
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "treatise",
+   "name": "treatise.txt",
+   "genre": "essay",
+   "events": 6,
+   "sites": [
+    "Void",
+    "Thing",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Thing": 2
+    },
+    "NUL": {
+     "Thing": 1
+    },
+    "SYN": {
+     "Link": 1
+    },
+    "SEG": {
+     "Link": 2
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Thing": {
+     "mass": 3,
+     "bookkeeping": 0,
+     "events": 3
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 3,
+     "bookkeeping": 2,
+     "events": 3
+    },
+    "Network": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  }
+ ],
+ "on": [
+  {
+   "id": "ndp",
+   "name": "NDP.txt",
+   "genre": "journalism",
+   "events": 44,
+   "sites": [
+    "Void",
+    "Entity",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Entity": 12
+    },
+    "SYN": {
+     "Link": 8
+    },
+    "DEF": {
+     "Lens": 9
+    },
+    "CON": {
+     "Link": 2
+    },
+    "NUL": {
+     "Void": 2
+    },
+    "SIG": {
+     "Entity": 2
+    },
+    "SEG": {
+     "Link": 9
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 2,
+     "bookkeeping": 0,
+     "events": 2
+    },
+    "Entity": {
+     "mass": 14,
+     "bookkeeping": 0,
+     "events": 14
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 19,
+     "bookkeeping": 9,
+     "events": 19
+    },
+    "Network": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 9,
+     "bookkeeping": 3,
+     "events": 9
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "dispatch",
+   "name": "dispatch.txt",
+   "genre": "journalism",
+   "events": 18,
+   "sites": [
+    "Void",
+    "Entity",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Entity": 3
+    },
+    "SYN": {
+     "Link": 9
+    },
+    "NUL": {
+     "Void": 3
+    },
+    "SEG": {
+     "Link": 1
+    },
+    "DEF": {
+     "Lens": 2
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 3,
+     "bookkeeping": 0,
+     "events": 3
+    },
+    "Entity": {
+     "mass": 3,
+     "bookkeeping": 0,
+     "events": 3
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 10,
+     "bookkeeping": 1,
+     "events": 10
+    },
+    "Network": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 2,
+     "bookkeeping": 2,
+     "events": 2
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "liberty",
+   "name": "liberty.txt",
+   "genre": "essay",
+   "events": 275,
+   "sites": [
+    "Void",
+    "Entity",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Entity": 58
+    },
+    "SYN": {
+     "Link": 88,
+     "Network": 1,
+     "Field": 1
+    },
+    "NUL": {
+     "Void": 26
+    },
+    "DEF": {
+     "Lens": 42
+    },
+    "SIG": {
+     "Entity": 7
+    },
+    "CON": {
+     "Link": 6
+    },
+    "SEG": {
+     "Link": 46
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 26,
+     "bookkeeping": 0,
+     "events": 26
+    },
+    "Entity": {
+     "mass": 65,
+     "bookkeeping": 0,
+     "events": 65
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 1,
+     "bookkeeping": 0,
+     "events": 1
+    },
+    "Link": {
+     "mass": 140,
+     "bookkeeping": 46,
+     "events": 140
+    },
+    "Network": {
+     "mass": 1,
+     "bookkeeping": 0,
+     "events": 1
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 42,
+     "bookkeeping": 12,
+     "events": 42
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "wealth",
+   "name": "wealth.txt",
+   "genre": "essay",
+   "events": 31,
+   "sites": [
+    "Void",
+    "Entity",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Entity": 5
+    },
+    "DEF": {
+     "Lens": 6
+    },
+    "SYN": {
+     "Link": 9,
+     "Network": 1
+    },
+    "NUL": {
+     "Void": 9
+    },
+    "SEG": {
+     "Link": 1
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 9,
+     "bookkeeping": 0,
+     "events": 9
+    },
+    "Entity": {
+     "mass": 5,
+     "bookkeeping": 0,
+     "events": 5
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 10,
+     "bookkeeping": 1,
+     "events": 10
+    },
+    "Network": {
+     "mass": 1,
+     "bookkeeping": 0,
+     "events": 1
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 6,
+     "bookkeeping": 4,
+     "events": 6
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "federalist",
+   "name": "federalist.txt",
+   "genre": "essay",
+   "events": 282,
+   "sites": [
+    "Void",
+    "Entity",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Entity": 100
+    },
+    "DEF": {
+     "Lens": 56
+    },
+    "SYN": {
+     "Link": 59,
+     "Network": 2
+    },
+    "NUL": {
+     "Void": 7
+    },
+    "SEG": {
+     "Link": 58
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 7,
+     "bookkeeping": 0,
+     "events": 7
+    },
+    "Entity": {
+     "mass": 100,
+     "bookkeeping": 0,
+     "events": 100
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 117,
+     "bookkeeping": 58,
+     "events": 117
+    },
+    "Network": {
+     "mass": 2,
+     "bookkeeping": 0,
+     "events": 2
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 56,
+     "bookkeeping": 42,
+     "events": 56
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  },
+  {
+   "id": "treatise",
+   "name": "treatise.txt",
+   "genre": "essay",
+   "events": 6,
+   "sites": [
+    "Void",
+    "Entity",
+    "Kind",
+    "Field",
+    "Link",
+    "Network",
+    "Atmosphere",
+    "Lens",
+    "Paradigm"
+   ],
+   "matrix": {
+    "INS": {
+     "Entity": 2
+    },
+    "NUL": {
+     "Void": 1
+    },
+    "SYN": {
+     "Link": 1
+    },
+    "SEG": {
+     "Link": 2
+    }
+   },
+   "cells": {
+    "Void": {
+     "mass": 1,
+     "bookkeeping": 0,
+     "events": 1
+    },
+    "Entity": {
+     "mass": 2,
+     "bookkeeping": 0,
+     "events": 2
+    },
+    "Kind": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Field": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Link": {
+     "mass": 3,
+     "bookkeeping": 2,
+     "events": 3
+    },
+    "Network": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Atmosphere": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Lens": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    },
+    "Paradigm": {
+     "mass": 0,
+     "bookkeeping": 0,
+     "events": 0
+    }
+   },
+   "stampedOffGrid": 0
+  }
+ ]
+}
