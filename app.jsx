@@ -1465,6 +1465,13 @@ function App() {
     // Best-fit token budget from the matched archetype's length (shape.js §9);
     // undefined keeps today's depth-scaled cap. Reused by the stricter retry.
     const shapeMax = await shapeBudgetFor(q, intent, shapeNote);
+    // The relation gate (relation_gate rule, OFF by default). Up, it changes
+    // three things on this path: the model tags each claim with the span it
+    // used (provenance binds at generation), the tags are consumed by
+    // bindClaimKeysScope with the old binder as unkeyed-only fallback, and
+    // every draft claim is checked relation-against-relation. Down ⇒ every
+    // step below is byte-identical to today (the parity floor).
+    const gateOn = !!(window.EOEngine.relationGateEnabled && window.EOEngine.relationGateEnabled());
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       let full = await window.EOLLM.phrase({
@@ -1472,7 +1479,7 @@ function App() {
         spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
         docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote, maxTokens: shapeMax,
         grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
-        depth: budget && budget.level,
+        depth: budget && budget.level, provenanceKeys: gateOn,
       });
       full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
       // Reconsideration (Phase 5, deepest depth): a refused summary is not a
@@ -1556,7 +1563,7 @@ function App() {
           AUD('step', 'veto', { decision: 'reject', reason: 'echoes a single span — retrying under a stricter rule' });
           // The stricter rule is an instruction, so it rides the system prompt;
           // the spans/notes tiers stay as they are.
-          const stricterSys = window.EOLLM.systemFor('grounded', task, true, (budget && budget.level) || 1)
+          const stricterSys = window.EOLLM.systemFor('grounded', task, true, (budget && budget.level) || 1, gateOn ? { provenanceKeys: true } : undefined)
             + '\n\nDo NOT copy or lightly reword any single span. Compose a fresh '
             + (task === 'summary' ? 'summary that synthesizes across the spans in your own words.' : 'answer in your own words.');
           let stricterCtx = ctx;
@@ -1589,7 +1596,7 @@ function App() {
               spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
               docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote, sysOverride: stricterSys, maxTokens: shapeMax,
               grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
-              depth: budget && budget.level,
+              depth: budget && budget.level, provenanceKeys: gateOn,
             });
             retry = window.EOEngine.dedupeSentences(retry);
           } catch (e) { retry = ''; }
@@ -1609,9 +1616,15 @@ function App() {
         // just because it named one unsupported term — that term is marked as a
         // void and the (better) phrasing is kept, badged as a caveat. Only a
         // draft that won't bind to ANY source falls back to the mechanical answer.
-        const perDoc = scope.map(d => new Set(window.EOEngine.inventedTerms(d, full)));
+        // With the gate up the draft carries the model's own span tags —
+        // strip them for the term/claim checks so a tag never reads as an
+        // invented term; the keyed binder consumes them from `full` itself.
+        const fullForChecks = gateOn ? full.replace(/\[s(?:\d+|\?)\]/g, ' ') : full;
+        const perDoc = scope.map(d => new Set(window.EOEngine.inventedTerms(d, fullForChecks)));
         const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
-        const bound = window.EOEngine.bindCitationsScope(scope, full, q, intent, { hotEntity: hotEntity() });
+        let bound = (gateOn && window.EOEngine.bindClaimKeysScope)
+          ? window.EOEngine.bindClaimKeysScope(scope, full, q, intent, { hotEntity: hotEntity() })
+          : window.EOEngine.bindCitationsScope(scope, full, q, intent, { hotEntity: hotEntity() });
         // KIN-SUBJECT VETO (every depth — binding is not correctness): a
         // claim can bind cleanly to a kin sentence ("…his son served as
         // Director…") while hanging the kin's role on the POSSESSOR — the
@@ -1619,8 +1632,39 @@ function App() {
         // its subject. The parse recorded who the possessive resolves to;
         // check the draft's subjects against it, claim against record.
         let kinMismatches = [];
-        try { kinMismatches = window.EOEngine.checkKinSubjectsScope(scope, full) || []; }
+        try { kinMismatches = window.EOEngine.checkKinSubjectsScope(scope, fullForChecks) || []; }
         catch (e) { eoWarn('kin-subject-check', e); }
+        // RELATION GATE (relation_gate rule): the draft's claims checked
+        // relation-against-relation — agency inversion, wrong speaker, a
+        // named subject the edge doesn't carry. Its own audit step, every
+        // run; flag down ⇒ never reached.
+        let relationMismatches = [];
+        if (gateOn && window.EOEngine.checkRelationsScope) {
+          try { relationMismatches = await window.EOEngine.checkRelationsScope(scope, fullForChecks) || []; }
+          catch (e) { eoWarn('relation-check', e); }
+          AUD('step', 'relation-gate', {
+            keyed: bound.keyed || 0,
+            held: (bound.held || []).map(h => ({ key: h.key, claim: h.claim })),
+            mismatches: relationMismatches.map(m => ({ kind: m.kind, claim: m.claim, docId: m.docId,
+              edge: m.edge ? `${m.edge.s} —${m.edge.v}→ ${m.edge.o}` : null, sent: m.edge ? m.edge.sent : null })),
+          });
+        }
+        // GROUNDING ENVELOPE (mechanism D, embedder-backed): each cited
+        // claim's embedding distance to the span its OWN footnote names —
+        // drift from the cited source flags; style never does. Vacuous
+        // without the embedder; its own audit step when it checks anything.
+        if (gateOn && window.EOEmbed && window.EOEmbed.ready() && window.EOEngine.groundingEnvelope && primaryDoc) {
+          try {
+            const env = await window.EOEngine.groundingEnvelope(primaryDoc, bound.text);
+            if (env.checked) {
+              AUD('step', 'envelope', { checked: env.checked, leaks: env.leaks,
+                impressionistic: env.impressionistic, strong: env.strong,
+                rows: env.rows.map(r => ({ idx: r.idx, cos: r.cos, band: r.band })) });
+              if (env.leaks) bound = { ...bound, audit: { ...bound.audit, status: 'warn',
+                note: (bound.audit.note || '') + ` ${env.leaks} cited claim(s) drifted from their own span (embedding envelope) — treat those citations with care.` } };
+            }
+          } catch (e) { eoWarn('envelope', e); }
+        }
         // PROPOSITIONAL VETO (every depth — promoted from behind the dial):
         // the string-layer checks above wave through a draft that NEGATES what
         // the page itself asserted — "X was not Y" binds cleanly while the
@@ -1629,7 +1673,7 @@ function App() {
         // to the mechanical answer with the disagreement named in the trace.
         let contradictions = [];
         if (budget && budget.assertionCheck) {
-          try { contradictions = window.EOEngine.checkAssertionsScope(scope, full) || []; }
+          try { contradictions = window.EOEngine.checkAssertionsScope(scope, fullForChecks) || []; }
           catch (e) { eoWarn('assertion-check', e); }
         }
         if (!bound.audit.grounded) {
@@ -1645,6 +1689,14 @@ function App() {
             contradictions: contradictions.map(c => ({ subject: c.subject, is: c.is, sent: c.sent, claim: c.claim, docId: c.docId })),
             boundGrounded: true, boundCovers: bound.audit.covers });
           settle(window.EOEngine.answerScope(scope, q), 'mechanical (contradicted the page)');
+        } else if (relationMismatches.length) {
+          // A claim whose relation contradicts its deposited edge is held,
+          // not waved through — the inversion fix. Mechanical answer +
+          // legible trace, mirroring the assertion and kin vetoes.
+          AUD('step', 'veto', { decision: 'mechanical', reason: 'relation-mismatch',
+            relationMismatches: relationMismatches.map(m => ({ kind: m.kind, claim: m.claim, docId: m.docId })),
+            boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
+          settle(window.EOEngine.answerScope(scope, q), 'mechanical (relation mismatch)');
         } else if (kinMismatches.length) {
           AUD('step', 'veto', { decision: 'mechanical', reason: 'kin-subject-mismatch',
             kinMismatches: kinMismatches.map(m => ({ possessor: m.possessor, kin: m.kin, sent: m.sent, claim: m.claim, docId: m.docId })),
