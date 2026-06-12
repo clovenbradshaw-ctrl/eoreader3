@@ -161,6 +161,17 @@ function App() {
   // Did the previous turn route to the document? Feeds conversation continuity so
   // an anaphoric follow-up ("tell me more about it") stays on the page.
   const lastGroundedRef = useRef(false);
+  // Has ANY turn in this chat routed to the document? Sticky (reset only on a
+  // new/switched chat) so one mis-routed turn can't strand every later
+  // follow-up off the page — the observed cascade: a follow-up drops to plain
+  // chat, prevGrounded flips false, and "but why not?" / "explain why" can
+  // never find their way back to the document again.
+  const everGroundedRef = useRef(false);
+  // The last grounded turn's question and citations — the carry. A follow-up
+  // with no lexical signal of its own ("but why not?") is re-asked THROUGH
+  // this material: the prior question's words plus the prior answer's cited
+  // sentences are the retrieval seed the bare follow-up lacks.
+  const lastCarryRef = useRef(null);
   // How many repair turns this chat has absorbed — cycles the acknowledgment
   // phrasing so a frustrated user is never answered with the same opener twice.
   const repairCountRef = useRef(0);
@@ -701,12 +712,32 @@ function App() {
   // the NEXT turn can carry them forward. Always runs (depth-independent); what
   // the depth dial governs is how much of the field is read back into a prompt.
   const depositSettled = (scope, q, cites) => {
+    // Stash the carry for follow-up turns (see lastCarryRef): every settled
+    // grounded turn becomes the retrieval seed the next elliptical turn rides.
+    lastCarryRef.current = { q: String(q || ''), cites: (cites || []).slice(0, 8) };
     const F = window.EOEngine && window.EOEngine.conversationField;
     if (!F) return;
     let matter = [];
     try { matter = (window.EOEngine.referentsScope(scope, q) || {}).matter || []; } catch (e) {}
     try { F.deposit({ entities: matter, sentences: (cites || []).map(c => ({ docId: c.docId, idx: c.idx })) }, 1); }
     catch (e) { eoWarn('field deposit', e); }
+  };
+
+  // The follow-up's retrieval seed: the turn's own words plus the previous
+  // grounded turn's question and its cited sentences (verbatim document text,
+  // so the seed can never inject model phrasing into retrieval). "but why
+  // not?" carries no document tokens; the question it follows does.
+  const carryQuery = (scope, q) => {
+    const c = lastCarryRef.current;
+    if (!c) return null;
+    const texts = [];
+    for (const ct of c.cites || []) {
+      const d = scope.find(x => x.id === ct.docId);
+      const t = d && d.sentenceTexts && d.sentenceTexts[ct.idx];
+      if (t) texts.push(t);
+    }
+    const seed = (c.q + ' ' + texts.join(' ')).trim();
+    return seed ? (String(q) + ' ' + seed) : null;
   };
 
   // Build the heat-ranked working memory carried INTO this turn from the
@@ -1204,6 +1235,13 @@ function App() {
       // reasoning-preamble heuristics don't apply here — only raw think tags
       // disqualify a note.
       if (/<\/?think/i.test(note)) note = '';
+      // The note must never carry document content, but a small editor model
+      // leaks it as quoted "example answers" — and the answering model then
+      // copies the example verbatim (the observed trace: the note's own
+      // "bad answer would be…" sample became the reply's opening line).
+      // Strip quoted spans of 4+ words; short quoted register words survive.
+      note = note.replace(/["“](?:[^"“”]{0,80}?\s){3,}[^"“”]*?["”]/g, '')
+        .replace(/\s{2,}/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
       AUD('step', 'shape', { note: note || null, ms: Math.round(performance.now() - t0) });
       return note;
     } catch (e) { eoWarn('shape', e); return ''; }
@@ -1756,7 +1794,7 @@ function App() {
       // reply counts, grounded or not (the trace's "someone's son is mentioned"
       // followed a PLAIN-chat miss, so prevGrounded alone would drop it).
       const hadReply = messages.some(m => m.role === 'assistant' && m.text && !m.typing && !m.loading);
-      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current, hadReply });
+      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current, hadReply, everGrounded: everGroundedRef.current });
     } else {
       route = { decision: 'chat', confidence: 'none', reason: 'no-scope' };
     }
@@ -1785,8 +1823,39 @@ function App() {
       else { route.decision = 'chat'; }
     }
 
+    // CARRY-GROUNDED: a follow-up with no lexical signal of its own is re-asked
+    // THROUGH the previous grounded turn's material — its question plus its
+    // cited sentences (verbatim page text) seed the retrieval the bare turn
+    // can't. Two shapes ride it: a turn the router already kept on the page as
+    // continuity ("but why not?", "tell me more about it" — which used to pass
+    // routing and then die at the runner's no-ground check), and a failed
+    // escalate (question-no-lexical) in a conversation that HAS been on the
+    // page — the observed cascade where "what is the craziest stuff in there?"
+    // fell to plain chat and the model could only parrot its previous answer.
+    // No carry material, or nothing retrieved through it ⇒ exactly the old
+    // behavior.
+    if (!semanticHits && lastCarryRef.current
+        && (lastGroundedRef.current || everGroundedRef.current)
+        && (route.reason === 'continuity'
+            || (route.decision === 'chat' && route.reason === 'question-no-lexical'))) {
+      const cq = carryQuery(scope, q);
+      let carryHits = [];
+      try { carryHits = cq ? window.EOEngine.retrieveScope(scope, cq, 6) : []; } catch (e) { eoWarn('carry', e); }
+      AUD('step', 'carry', { reason: route.reason, found: carryHits.length,
+        recovered: !!(carryHits.length && route.decision === 'chat') });
+      if (carryHits.length) {
+        semanticHits = carryHits;
+        if (route.decision === 'chat') {
+          route.decision = 'mechanical'; route.confidence = 'carry';
+          route.reason += '+carry';
+          route.primary = route.primary || window.EOEngine.routePrimary(scope, cq) || scope[0];
+        }
+      }
+    }
+
     const referencing = route.decision === 'mechanical';
     lastGroundedRef.current = referencing;
+    if (referencing) everGroundedRef.current = true;
 
     if (referencing) {
       const primary = route.primary || window.EOEngine.routePrimary(scope, q) || scope[0];
@@ -1812,8 +1881,8 @@ function App() {
   // Reset the conversation field on a fresh or switched chat — working memory is
   // chat-scoped, matching newChat's reset semantics (distinct from the learned ledger).
   const resetField = () => { try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.reset(); } catch (e) { eoWarn('field reset', e); } };
-  const newChat = () => { setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
-  const selectChat = (id) => { setActiveChat(id); lastGroundedRef.current = false; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
+  const newChat = () => { setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
+  const selectChat = (id) => { setActiveChat(id); lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
 
   // ---- rules ----
   const toggleRule = (id) => setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));

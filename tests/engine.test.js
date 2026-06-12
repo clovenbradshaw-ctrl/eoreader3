@@ -1134,7 +1134,8 @@ await group('definitional asks — answered from the graph\'s own assertions', a
   ok(job.audit.grounded && job.audit.status === 'clean', 'definitional answer is grounded and clean');
   ok(job.cites.length > 0 && job.cites[0].idx === 2, 'cited to the antecedent sentence, not the naming line');
   const who = E.answer(ndp, 'who is Tom Turner?');
-  ok(/^Tom Turner is the same person who runs the DMC/.test(who.text), 'identity ask answers from the class gloss');
+  ok(/^Tom Turner is the person who runs the DMC and who then hires his own firm/.test(who.text),
+    'identity ask answers from the class gloss — de-anaphored ("the same person" → "the person") and carrying the payload clause');
 
   // the graph's evidence reaches the depth-1 LLM context even though the
   // assertion sentence never carries the name
@@ -1275,6 +1276,72 @@ await group('impression query — embedding as a fuzzy graph query', async () =>
 
   const note = SE.impressionNote(imp.fold);
   ok(/Related by impression/.test(note) && note.includes(imp.fold), 'the impression renders as a marked note carrying the fold');
+});
+
+// THE PARROT LOOP (observed NDP trace): follow-ups with no lexical signal of
+// their own — "what is the craziest stuff in there?", "but why not?", "explain
+// why" — fell to plain chat, where the model could only repeat its previous
+// answer; and the first such drop flipped prevGrounded, stranding every LATER
+// follow-up off the page too. Continuity now reads ellipsis and locative
+// deixis alongside the ruliad anaphors, and accepts the sticky everGrounded
+// signal so one mis-routed turn can't poison the rest of the conversation.
+group('route — elliptical & deictic follow-ups (the parrot-loop fix)', () => {
+  eq(E.routeTurn([voss], 'but why not?', { prevGrounded: true }).reason, 'continuity',
+    '"but why not?" (pure function words) continues a grounded turn');
+  eq(E.routeTurn([voss], 'explain why', { prevGrounded: true }).reason, 'continuity',
+    '"explain why" (imperative, no "?") continues a grounded turn');
+  eq(E.routeTurn([voss], 'what is the craziest stuff in there?', { prevGrounded: true }).reason, 'continuity',
+    'locative deixis ("in there") points at the page');
+  eq(E.routeTurn([voss], 'but why not?', { prevGrounded: false, everGrounded: true }).reason, 'continuity',
+    'everGrounded recovers continuity after an intervening chat turn');
+  // Guard rails: acknowledgments, greetings and fresh topics never continue.
+  eq(E.routeTurn([voss], 'okay', { prevGrounded: true }).decision, 'chat',
+    'a bare acknowledgment stays in chat (no wh/meta token)');
+  eq(E.routeTurn([voss], 'thanks, that really helps', { prevGrounded: true }).decision, 'chat',
+    'gratitude stays in chat ("thanks"/"helps" are content, not glue)');
+  eq(E.routeTurn([voss], 'hi there', { prevGrounded: true }).decision, 'chat',
+    'a bare "there" is a greeting, not deixis — only prepositional "in there" continues');
+  eq(E.routeTurn([voss], 'tell me a joke about penguins', { prevGrounded: true }).decision, 'chat',
+    'a fresh topic does not continue just because the last turn was grounded');
+  // Inert without ctx — batch/parity callers see exactly the prior routing.
+  eq(E.routeTurn([voss], 'but why not?', {}).decision, 'escalate',
+    'no grounding ctx → the old escalate band, unchanged');
+  ok(!E.referencesDoc(voss, 'explain why'), 'referencesDoc stays inert without ctx (parity)');
+});
+
+// HEADLINE PROMOTION + MODIFIER-MERGE GUARD (observed NDP graph): a title line
+// pasted with a single newline was glued into the first sentence and Title
+// Case minted phantom entities ("Mistakes If", "…Owners: You Cannot"); and the
+// single-token containment merge fused the document's protagonist into its
+// hometown ("Nashville" ⊂ "Nashville Downtown Partnership" — a leading
+// MODIFIER match, not a short form) and "Tennessee" into "Tennessee Highway
+// Patrol". Person short forms ("Corman" ⊂ "David Corman") must keep merging.
+const headlineDoc = await E.parseDocument('headline.txt',
+  'Downtown Business Owners:  You Cannot Afford to Keep Paying for Mistakes\n'
+  + 'If you own a business downtown, you pay the Nashville Downtown Partnership. '
+  + 'The Nashville Downtown Partnership manages the district. '
+  + 'Nashville grew quickly last year. Nashville approved a new budget. '
+  + 'The Tennessee Highway Patrol signed the contract. '
+  + 'Tennessee passed a stricter law. Tennessee kept growing. '
+  + 'The Tennessee Highway Patrol expanded its patrols. '
+  + 'David Corman runs the safety office. But Corman disagreed with the plan. '
+  + 'The report quotes Corman directly.', 'headline');
+group('extraction — headline promotion & the modifier-merge guard', () => {
+  ok(/^Downtown Business Owners/.test(headlineDoc.sentenceTexts[0] || ''),
+    'the title line is its own sentence');
+  ok(!/If you own/.test(headlineDoc.sentenceTexts[0] || ''),
+    'the title line is NOT glued into the first body sentence');
+  const names = E.projectEntities(headlineDoc).entities.map(e => e.name);
+  ok(!names.some(n => /:/.test(n)), 'no entity name carries a colon (headline lead-ins trimmed)');
+  ok(!names.some(n => /\b(Mistakes If|You Cannot|Keep Paying)\b/.test(n)),
+    'no phantom Title-Case entities from the headline');
+  ok(names.includes('Nashville Downtown Partnership'),
+    'the org keeps its full name — never renamed to its hometown');
+  ok(names.includes('Nashville'), 'the city is its OWN entity, not absorbed into the org');
+  ok(names.includes('Tennessee Highway Patrol') && names.includes('Tennessee'),
+    'the state is not absorbed into the agency named after it');
+  eq(names.filter(n => /Corman/.test(n)).length, 1,
+    'a person\'s surname short form still merges — one Corman referent, never two');
 });
 
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
