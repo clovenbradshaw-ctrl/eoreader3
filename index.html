@@ -113,6 +113,10 @@
 <script src="store.js"></script>
 <script src="audit.js"></script>
 <script src="enrich.js"></script>
+<!-- the external-knowledge stratum: an opt-in reference desk (Wikipedia +
+     Wiktionary) through the proxy, rate-limited and prioritised. Inert unless
+     window.EO_REFERENCE_PROXY resolves; clear it to keep the reader local. -->
+<script src="external.js"></script>
 
 <!-- evo sandbox (dev-only): bundled constitution + in-browser evolution loop, plus the
      baked fixtures/golden/harness. Loads one IIFE (window.EVO_SANDBOX) + one data global. -->
@@ -125,6 +129,7 @@
 <script type="text/babel" src="icons.jsx"></script>
 <script type="text/babel" src="sidebar.jsx"></script>
 <script type="text/babel" src="chat.jsx"></script>
+<script type="text/babel" src="reference.jsx"></script>
 <script type="text/babel" src="docview.jsx"></script>
 <script type="text/babel" src="rulesets.jsx"></script>
 <script type="text/babel" src="auditview.jsx"></script>

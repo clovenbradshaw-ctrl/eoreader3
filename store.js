@@ -96,5 +96,9 @@
     available: typeof indexedDB !== 'undefined',
     saveDocs, loadDocs, saveChat, loadChat, saveAudit, loadAudit,
     savePrefs, loadPrefs, saveLedger, loadLedger, clearAll,
+    // generic IndexedDB kv (used by the external-knowledge freeze cache). Same
+    // defensive contract as the rest: a storage failure resolves undefined/false,
+    // never throws into the caller.
+    kvGet, kvPut,
   };
 })();

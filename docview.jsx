@@ -38,6 +38,7 @@ function ProseDoc({ doc, explore, onEntity, activeEntity, flashSent, onCite }) {
           {!proj.entities.length && <span className="xl" style={{ opacity: .7 }}>no entities found</span>}
         </div>
       )}
+      {explore && window.ReferenceDeskBar && <window.ReferenceDeskBar entities={proj.entities} />}
       <div className="prose">
         {doc.blocks.map((b, bi) => {
           if (b.type === 'h1') return <h1 key={bi} className="doc-h1">{b.text}</h1>;
@@ -177,6 +178,7 @@ function EntityView({ doc, name, onCite, onEntity }) {
             <span className="sidx">s{s.i}</span> {s.t}
           </div>
         ))}
+        {window.ReferenceDesk && <window.ReferenceDesk term={d.name} type={d.type} />}
       </div>
     </div>
   );
@@ -214,6 +216,7 @@ function EntityModal({ doc, name, onCite, onEntity, onOpenTab, onClose }) {
             </div>
           ))}
           {d.sentences.length > 8 && <div className="ent-more" onClick={() => { onOpenTab(doc.id, d.name); onClose(); }}>+ {d.sentences.length - 8} more — open as tab</div>}
+          {window.ReferenceDesk && <window.ReferenceDesk term={d.name} type={d.type} />}
         </div>
       </div>
     </div>
