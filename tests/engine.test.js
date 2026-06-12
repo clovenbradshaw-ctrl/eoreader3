@@ -372,6 +372,15 @@ NDP's Director of Safety Services is David Corman, a former precinct commander, 
 
 "My daughter would never work there," a passerby said.`;
 const kinDoc = await E.parseDocument('kin.txt', KIN_DOC, 'kin');
+// Boundary fixtures: a parenthesized acronym + a name that recurs clipped,
+// a short distractor next to the sentence carrying a fused name, and a
+// heavy early name followed by a long silence before a stranger's quote.
+const paren = await E.parseDocument('paren.txt', `The Shell
+\nThe District Management Corporation (the DMC) was created in 2003. The DMC runs the downtown operation. The suit was filed in Davidson County Chancery Court last week. Davidson County Chancery had seen the agency before.`, 'paren');
+const citycast = await E.parseDocument('citycast.txt', `Growth Notes
+\nThe city had no plan for the cars. Former governor Lamar Alexander was interviewed on CityCast Nashville about advice he would give the city as it grows.`, 'citycast');
+const cold = await E.parseDocument('cold.txt', `The Operation
+\nDavid Corman ran the private policing operation. Corman earned a large salary directing it. The budget grew every year. The council never saw the terms. The garage burned in June. The insurer sued over the fire. The cars sat in the structure for months. Nobody retrieved them. The city had no plan. The contract renewal came up again. The assessment kept rising. Former governor Lamar Alexander, asked last week what advice he would give the city, put it plainly: "Keep it a nice place to live."`, 'cold');
 group('kin — the possessive resolved into the graph', () => {
   const kinDefs = kinDoc._events.filter(ev => ev.op === 'DEF' && ev.path === 'kin');
   eq(kinDefs.length, 1, 'exactly one kin DEF (the quoted "my daughter" is speech, not record)');
@@ -402,6 +411,73 @@ group('kin — the possessive resolved into the graph', () => {
   ok(E.entityEvidence(kinDoc, 'corman').some(s => /his son served/.test(s.t)), 'entityEvidence for "corman" includes the kin sentence');
   // VOSS carries no kin phrases: the reader deposits nothing there (parity).
   eq(voss._events.filter(ev => ev.op === 'DEF' && ev.path === 'kin').length, 0, 'no kin DEFs on a page without kin possessives');
+});
+
+// The kin-subject veto: binding is not correctness. A draft that hangs the
+// kin sentence's role on the POSSESSOR binds to that sentence with a clean
+// cite while misattributing its subject — the observed failure: "who is
+// david corman" answered with the son's Solaren title, passed as clean.
+group('kin-subject veto — a possessor wearing the kin\'s role is flagged', () => {
+  const wrong = 'David Corman is the person who served as Director of Administration at Solaren Risk Management, overseeing payroll and compliance.';
+  const flagged = E.checkKinSubjects(kinDoc, wrong);
+  eq(flagged.length, 1, 'the possessor wearing the son\'s role is flagged');
+  ok(/corman/i.test(flagged[0].possessor) && flagged[0].kin === 'son', 'the mismatch names the possessor and the kin relation');
+  eq(E.checkKinSubjects(kinDoc, "David Corman's son served as Director of Administration at Solaren Risk Management.").length, 0,
+    'a draft that names the son is about the right person — not flagged');
+  eq(E.checkKinSubjects(kinDoc, 'David Corman is NDP\'s Director of Safety Services, a former precinct commander.').length, 0,
+    'Corman\'s own role binds to his own sentence — not flagged');
+  eq(E.checkKinSubjects(voss, wrong).length, 0, 'a page without kin records flags nothing (parity)');
+  const sc = E.checkKinSubjectsScope([kinDoc, voss], wrong);
+  eq(sc.length, 1, 'scope variant folds per-doc');
+  eq(sc[0].docId, 'kin', '…and tags the source');
+  // The grounded prompt warns about the hazard even when the question never
+  // asked about kin: the kin sentence is in view, so the note names whose
+  // son it is — and who the sentence is NOT about.
+  const parts = E.contextParts(kinDoc, 'who is david corman', 6);
+  ok(parts.spans.some(s => /his son served/.test(s.text)), 'the kin sentence reaches the spans for a bare-name ask');
+  ok(parts.notes.some(n => /not about David Corman/.test(n)), 'the notes say the sentence is about the son, not Corman');
+});
+
+// Entity boundaries: a capture that swallowed the close of a parenthetical
+// it never opened ("(the DMC)" → "DMC)") and a canonical pick that beheads
+// a name at the shape score's length penalty ("Davidson County Chancery
+// Court" losing "Court" to its own clipped echo).
+group('entity boundaries — unbalanced parens stripped, fuller form canonical', () => {
+  const parenDoc = paren;
+  const names = E.projectEntities(parenDoc).entities.map(e => e.name);
+  ok(names.includes('DMC'), 'the acronym is admitted clean');
+  ok(!names.some(n => /[()\[\]]/.test(n) && !/\(.*\)/.test(n)), 'no entity keeps an unbalanced bracket');
+  ok(names.includes('Davidson County Chancery Court'),
+    'at tied counts the fuller form is canonical — the shorter is its clipped echo, not a competing name');
+  ok(!names.includes('Davidson County Chancery'), 'the beheaded form does not survive as the label');
+});
+
+// Retrieval: a multi-word name in the query is one name, not independent
+// unigram hits. Without the phrase boost a short line sharing one common
+// word ("the city") outranks the long sentence carrying the asked-about
+// name whole — the observed three-turn CityCast disambiguation.
+group('retrieve — adjacent query bigrams boost the sentence carrying the name', () => {
+  const hits = E.retrieve(citycast, 'who was on city cast?', 3);
+  ok(hits.length >= 2, 'both candidate sentences retrieved');
+  ok(/CityCast Nashville/.test(hits[0].t), 'the fused name ("city cast" → CityCast) outranks the short distractor');
+  const hits2 = E.retrieve(citycast, 'citycast nashville interview', 3);
+  ok(/CityCast Nashville/.test(hits2[0].t), 'the verbatim bigram ranks the carrying sentence first');
+  eq(E.retrieve(citycast, 'the of a to', 3).length, 0, 'an all-stopword query still retrieves nothing (parity)');
+});
+
+// Quote attribution: the mass-weighted fallback must be WARM. A candidate
+// silent for many sentences scores on accumulated mass alone, and binding a
+// quote to whoever the document mentioned MOST — rather than anyone present
+// in the scene — is how a fresh in-sentence name loses its own quote to a
+// heavy character from pages back. Cold candidates decline; the quote goes
+// out honestly unattributed.
+group('attribution — a cold heavy name does not absorb a distant quote', () => {
+  const sigs = cold._events.filter(ev => ev.op === 'SIG');
+  ok(sigs.length >= 1, 'the late quote is recorded');
+  const late = sigs[sigs.length - 1];
+  ok(!/corman/i.test(String(late.speaker)), 'the long-silent heavy name does not take the quote');
+  ok(late.attributed === 'unattributed' || late.attributed === 'none' || /alexander/i.test(String(late.speaker)),
+    'the quote is honestly unattributed (or bound to someone actually present)');
 });
 
 // Conversational repair: pushback is a ROUTE, not a retrieval query. The

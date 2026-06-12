@@ -194,7 +194,7 @@
   "retrieve:the storm on the seaward side": [
    {
     "i": 11,
-    "score": 0.603023,
+    "score": 1.206045,
     "overlap": 2
    },
    {
@@ -276,12 +276,12 @@
   "retrieve:where is Voss Point": [
    {
     "i": 0,
-    "score": 1,
+    "score": 2,
     "overlap": 2
    },
    {
     "i": 9,
-    "score": 0.666667,
+    "score": 1.333333,
     "overlap": 2
    }
   ],
@@ -789,32 +789,32 @@
   "retrieve:where is Voss Point": [
    {
     "i": 0,
-    "score": 0.894427,
+    "score": 1.788854,
     "overlap": 2
    },
    {
     "i": 10,
-    "score": 0.707107,
+    "score": 1.414214,
     "overlap": 2
    },
    {
     "i": 61,
-    "score": 0.707107,
+    "score": 1.414214,
     "overlap": 2
    },
    {
     "i": 91,
-    "score": 0.707107,
+    "score": 1.414214,
     "overlap": 2
    },
    {
     "i": 140,
-    "score": 0.707107,
+    "score": 1.414214,
     "overlap": 2
    },
    {
     "i": 162,
-    "score": 0.707107,
+    "score": 1.414214,
     "overlap": 2
    }
   ],

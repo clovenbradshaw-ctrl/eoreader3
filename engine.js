@@ -2763,6 +2763,13 @@ function cleanEntitySurface(surf) {
   s = s.replace(/[\s.,;:!?*†‡§·•_'"”’“‘`\u2026]+$/gu, '').trim();
   // Same on the leading edge
   s = s.replace(/^[\s.,;:!?*†‡§·•_'"”’“‘`\u2026]+/gu, '').trim();
+  // Unbalanced bracket on an edge: a capture that swallowed the close of a
+  // parenthetical it never opened — "(the DMC)" captured as "DMC)" — or the
+  // open of one it never closes. A balanced pair stays; it's content.
+  for (const [open, close] of [['(', ')'], ['[', ']']]) {
+    while (s.endsWith(close) && !s.includes(open)) s = s.slice(0, -1).trim();
+    while (s.startsWith(open) && !s.includes(close)) s = s.slice(1).trim();
+  }
   // Split at internal sentence-boundary punctuation followed by whitespace
   // and a non-space character. "Princess! Go" → "Princess".
   const splitMatch = s.match(/^(.+?)[!?]\s+\S/);
@@ -5128,16 +5135,26 @@ async function extractEoGraph(text, onProgress) {
       // been committed for her yet. Named sites must clear the plausibility
       // gate; signals (an unnamed person tracked through narration pronouns)
       // are inherently agentive and stay eligible.
+      // Both must also be WARM: momentum decays by γ per sentence, so a
+      // candidate silent for ~8+ sentences scores on accumulated mass alone —
+      // and binding a quote to whoever the document has mentioned MOST,
+      // rather than anyone present in the scene, is how a fresh in-sentence
+      // name (gated above for lacking agency evidence) loses its own quote
+      // to a heavy character from pages back. Cold candidates are declined;
+      // the quote goes out honestly unattributed.
+      const FALLBACK_MOMENTUM_FLOOR = 0.05;
       if (!speaker) {
         let bestKey = null, bestScore = -Infinity, bestSignal = null;
         for (const [k, v] of sites) {
           if (v.type !== 'person') continue;
           if (!speakerEligible(v)) { gatedCandidate = true; continue; }
+          if (v.momentum < FALLBACK_MOMENTUM_FLOOR) { gatedCandidate = true; continue; }
           const score = v.mass * MASS_WEIGHT + v.momentum;
           if (score > bestScore) { bestKey = k; bestScore = score; bestSignal = null; }
         }
         for (const sig of signals.values()) {
           if (sig.constraints.type !== 'person') continue;
+          if (sig.momentum < FALLBACK_MOMENTUM_FLOOR) continue;
           const score = sig.mass * MASS_WEIGHT + sig.momentum;
           if (score > bestScore) {
             bestSignal = sig;
@@ -5530,10 +5547,19 @@ function bumpForm(site, surface) {
 // Map(surface → sighting count).
 function pickCanonicalForm(forms, fallback) {
   if (!forms || forms.size === 0) return fallback;
+  // One tied form being a word-prefix of the other means the shorter is the
+  // longer's clipped echo, not a competing name — "Davidson County Chancery"
+  // next to "Davidson County Chancery Court" is the same name cut short, and
+  // the shape score's length penalty must not behead it. Only at equal
+  // counts: a genuinely more-mentioned short form ("Toronto") still wins.
+  const wordPrefix = (shorter, longer) =>
+    longer.length > shorter.length && longer.toLowerCase().startsWith(shorter.toLowerCase() + ' ');
   let best = null, bestN = -Infinity, bestShape = -Infinity;
   for (const [form, n] of forms) {
     if (n > bestN) { best = form; bestN = n; bestShape = canonicalShapeScore(form); continue; }
     if (n === bestN) {
+      if (wordPrefix(best, form)) { best = form; bestShape = canonicalShapeScore(form); continue; }
+      if (wordPrefix(form, best)) continue;
       const shape = canonicalShapeScore(form);
       if (shape > bestShape || (shape === bestShape && form.length > best.length)) {
         best = form; bestShape = shape;
@@ -6869,6 +6895,18 @@ function projectGraph(events, frame = {}) {
     const sets = sentTokSets(doc);
     const scored = [];
     const sents = doc.sentences;
+    // Adjacent content-token pairs from the query, checked verbatim (and
+    // fused — "city cast" also matches "CityCast") against each sentence.
+    // A name match is not two independent unigram hits: without the boost a
+    // short line sharing one common word ("the city") outranks the long
+    // sentence that carries the asked-about name whole, because the score
+    // normalizes by candidate length only.
+    const qWords = String(query).toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || [];
+    const qBigrams = [];
+    for (let w = 0; w + 1 < qWords.length; w++) {
+      const a = qWords[w], b = qWords[w + 1];
+      if (a.length >= 3 && b.length >= 3 && !QA_STOP.has(a) && !QA_STOP.has(b)) qBigrams.push([a, b]);
+    }
     // The de-chromed view is the default: lines the chrome gate set aside
     // (doc._chrome) stay verbatim in the spine but read as page structure, not
     // prose, so ordinary retrieval scores past them — no more "retrieval grabs
@@ -6881,8 +6919,13 @@ function projectGraph(events, frame = {}) {
       if (chromeSet && chromeSet.has(sents[n].i)) continue;
       const st = sets[n];
       let overlap = 0; for (const t of qt) if (st.has(t)) overlap++;
-      if (!overlap) continue;
-      scored.push({ ...sents[n], score: overlap / Math.sqrt(st.size + 1), overlap });
+      let phrase = 0;
+      if (qBigrams.length) {
+        const lc = sents[n].t.toLowerCase();
+        for (const [a, b] of qBigrams) if (lc.includes(a + ' ' + b) || lc.includes(a + b)) phrase++;
+      }
+      if (!overlap && !phrase) continue;
+      scored.push({ ...sents[n], score: (overlap + 2 * phrase) / Math.sqrt(st.size + 1), overlap });
     }
     scored.sort((a, b) => b.score - a.score || a.i - b.i);
     return scored.slice(0, k);
@@ -8885,6 +8928,19 @@ function projectGraph(events, frame = {}) {
         push(r.sent); push(r.anchor);
       }
     }
+    // A kin sentence among the spans is a misattribution hazard even when
+    // the question never asked about kin: its surface says only "his/her
+    // <kin>", and a model reading it beside the possessor's name welds the
+    // kin's role onto the possessor. Whenever such a span is in view, say
+    // who the pronoun resolves to — and who the sentence is NOT about.
+    for (const r of kinRecords(doc)) {
+      if (r.sent == null || !have.has(r.sent)) continue;
+      if (asked.includes(r.kin) || asked.includes(r.kin + 's')) continue;   // noted above
+      const surfLC = String((doc.sentenceTexts || [])[r.sent] || '').toLowerCase();
+      const subjToks = String(r.possessor).toLowerCase().split(/\s+/).filter(t => t.length >= 3 && !QA_STOP.has(t));
+      if (!subjToks.length || subjToks.some(t => surfLC.includes(t))) continue;
+      notes.push(`At [s${r.sent}], the ${r.kin} is ${r.possessor}’s ${r.kin} — that sentence is about the ${r.kin}, not about ${r.possessor}.`);
+    }
     return { spans, notes };
   }
   function contextPartsScope(docs, query, k = 6) {
@@ -8914,6 +8970,16 @@ function projectGraph(events, frame = {}) {
           notes.push(`In ${d.name}: the ${r.kin} mentioned is ${r.possessor}’s.`);
           push(d.id, r.sent, texts[r.sent]); push(d.id, r.anchor, texts[r.anchor]);
         }
+      }
+      // Same misattribution guard as contextParts: a kin sentence in view
+      // gets its pronoun named even when the question never asked about kin.
+      for (const r of kinRecords(d)) {
+        if (r.sent == null || !have.has(d.id + ':' + r.sent)) continue;
+        if (asked.includes(r.kin) || asked.includes(r.kin + 's')) continue;
+        const surfLC = String(texts[r.sent] || '').toLowerCase();
+        const subjToks = String(r.possessor).toLowerCase().split(/\s+/).filter(t => t.length >= 3 && !QA_STOP.has(t));
+        if (!subjToks.length || subjToks.some(t => surfLC.includes(t))) continue;
+        notes.push(`In ${d.name} at [${d.id}:${r.sent}], the ${r.kin} is ${r.possessor}’s ${r.kin} — that sentence is about the ${r.kin}, not about ${r.possessor}.`);
       }
     }
     return { spans, notes };
@@ -9357,6 +9423,13 @@ function projectGraph(events, frame = {}) {
     const picks = new Map();
     const take = (i, via) => { if (i != null && i >= 0 && i < doc.sentenceTexts.length && !picks.has(i)) picks.set(i, via); };
     for (const d of heldDefs) take(d.sent, `asserted of ${d.subject}`);
+    // A kin sentence reached through the possessor's node is evidence about
+    // the KIN, not the possessor — label the hop so the trace (and anything
+    // reading it) can't mistake whose predicate the sentence carries.
+    for (const r of kinRecords(doc)) {
+      if (walkedKeys.has(r.key) || (r.key.length >= 4 && [...walkedKeys].some(k => _keyWithin(k, r.key) || _keyWithin(r.key, k))))
+        take(r.sent, `${r.possessor}’s ${r.kin} (kin record — about the ${r.kin}, not ${r.possessor})`);
+    }
     for (const w of walked.values()) for (const i of w.entity.sents.slice(0, w.hop === 0 ? 3 : 1)) take(i, w.entity.name);
     const sentences = [...picks.entries()].sort((a, b) => a[0] - b[0]).slice(0, 12)
       .map(([i, via]) => ({ i, t: doc.sentenceTexts[i], via }));
@@ -9460,6 +9533,68 @@ function projectGraph(events, frame = {}) {
       if (d.kind === 'table') continue;
       let cs = []; try { cs = checkAssertions(d, draftText); } catch (e) {}
       for (const c of cs) out.push({ ...c, docId: d.id });
+    }
+    return out;
+  }
+
+  /* ---------- the kin-subject veto: binding is not correctness ----------
+     The citation binder checks that a claim's words live in a re-read
+     sentence — a SITE check. It cannot see that the sentence's subject is
+     someone else: "Until recently, his son served as Director…" supports a
+     claim about THE SON, but a draft that hangs that role on the possessor
+     ("David Corman served as Director…") binds to the same sentence with the
+     same overlap and wears a clean cite while misattributing the role. The
+     parse already recorded who "his" is (possessive-kin DEF) — so the
+     mismatch is mechanically checkable: a claim that (1) names the possessor
+     as its subject, (2) never names the kin relation, and (3) would bind to
+     a kin sentence whose surface carries only the pronoun, not the
+     possessor's name, is predicating of the wrong person. Conservative by
+     design — a kin sentence that names the possessor outright ("Corman
+     raised his son") can genuinely support a claim about him and is left
+     alone. Failure mode: the honest mechanical answer + a legible trace. */
+  function checkKinSubjects(doc, draftText) {
+    if (!doc || doc.kind !== 'prose') return [];
+    let recs = []; try { recs = kinRecords(doc).filter(r => r.sent != null); } catch (e) {}
+    if (!recs.length) return [];
+    const texts = doc.sentenceTexts || [];
+    const parts = splitDraft(String(draftText == null ? '' : draftText).replace(/\{\{[^}]*\}\}/g, ' '));
+    const out = [], seen = new Set();
+    for (const sent of parts) {
+      const sToks = new Set(tok(sent));
+      if (!sToks.size) continue;
+      let cand = null;
+      for (const r of recs) {
+        const kinSentText = texts[r.sent];
+        if (!kinSentText) continue;
+        // (1) the claim names the possessor
+        const subjToks = String(r.possessor).toLowerCase().split(/\s+/).filter(t => t.length >= 3 && !QA_STOP.has(t));
+        if (!subjToks.length || !subjToks.some(t => sToks.has(t))) continue;
+        // (2) but never the kin relation — naming it means the claim is
+        // already about the right person ("Corman's son served as…")
+        const kinBase = r.kin.replace(/s$/, '');
+        if (sToks.has(r.kin) || sToks.has(kinBase) || sToks.has(kinBase + 's')) continue;
+        // (3) the kin sentence's surface never names the possessor — the
+        // page tied it to him only through the pronoun the parse resolved
+        const kinLC = kinSentText.toLowerCase();
+        if (subjToks.some(t => kinLC.includes(t))) continue;
+        // and the claim would BIND there: the kin sentence is what the
+        // citation layer would stamp under this claim
+        cand = cand || retrieve(doc, sent, 1)[0];
+        if (!cand || cand.i !== r.sent || !supportsClaim(cand, sent, CITE_FLOOR)) continue;
+        const key = r.key + '|' + r.kin;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ possessor: r.possessor, kin: r.kin, sent: r.sent, claim: sent.trim() });
+      }
+    }
+    return out.slice(0, 3);
+  }
+  function checkKinSubjectsScope(docs, draftText) {
+    const out = [];
+    for (const d of scopeDocs(docs)) {
+      if (d.kind === 'table') continue;
+      let ks = []; try { ks = checkKinSubjects(d, draftText); } catch (e) {}
+      for (const m of ks) out.push({ ...m, docId: d.id });
     }
     return out;
   }
@@ -9892,6 +10027,9 @@ function projectGraph(events, frame = {}) {
     // propositional veto (draft claims audited against DEF assertions)
     traverseGraph, traverseScope, readingContext, assertionsOf,
     checkAssertions, checkAssertionsScope, entityEvidence,
+    // the kin-subject veto: a claim that binds to a kin sentence but hangs
+    // the kin's predicate on the possessor (grounded ≠ correct)
+    checkKinSubjects, checkKinSubjectsScope,
     // definitional asks answered from the graph's own assertions
     answerDefine, defineAssertions, isDefinitionalAsk,
     // kin asks answered from possessive-kin resolutions ("whose son…?"), the
