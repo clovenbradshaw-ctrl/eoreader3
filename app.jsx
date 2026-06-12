@@ -2156,7 +2156,7 @@ function App() {
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { err: null }; }
   static getDerivedStateFromError(err) { return { err }; }
-  componentDidCatch(err, info) { if (typeof window !== 'undefined' && window.EO_DEBUG) console.error('[Cleon] render error', err, info); }
+  componentDidCatch(err, info) { if (typeof console !== 'undefined') console.error('[Cleon] render error', err, info); }
   render() {
     if (this.state.err) {
       return (

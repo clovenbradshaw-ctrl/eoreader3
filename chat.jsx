@@ -354,6 +354,50 @@ function MechanicalReading({ data, onCite }) {
   );
 }
 
+/* ── Per-message render guard ──────────────────────────────────────────────
+   A render error inside ONE message (an unexpected audit/marker shape from a
+   model draft, a malformed citation, a content edge case) used to throw all
+   the way to the app-level ErrorBoundary, which unmounts the whole app — the
+   conversation, the open document, everything — and demands a reload. That is
+   the "it crashes when I chat" failure: a single bad message takes down the
+   page. This boundary contains the blast radius to the one message: the rest
+   of the chat and the app keep running, the raw text is still shown (and
+   copyable) so the answer isn't lost, and the real error is logged so the
+   underlying cause stays diagnosable. `resetKey` (the message's changing
+   content) clears the error state so a transient failure mid-stream recovers
+   on the next token instead of staying stuck. */
+class MessageBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  static getDerivedStateFromProps(props, state) {
+    // a new resetKey (content changed) → drop the prior error and try again
+    if (state.err && props.resetKey !== state.key) return { err: null, key: props.resetKey };
+    if (state.key === undefined) return { key: props.resetKey };
+    return null;
+  }
+  componentDidCatch(err, info) {
+    if (window.eoWarn) window.eoWarn('message render', err);
+    else if (typeof console !== 'undefined') console.error('[Cleon] message render error', err, info);
+  }
+  render() {
+    if (this.state.err) {
+      const raw = this.props.raw;
+      return (
+        <div className="msg-row asst">
+          <div className="msg-asst">
+            <div className="asst-head"><span className="asst-av">Cl</span><span className="asst-name">Cleon</span></div>
+            {raw
+              ? <p style={{ whiteSpace: 'pre-wrap' }}>{String(raw).replace(/\{\{(?:cite|void|infer|absent):[^}]*\}\}/g, '')}</p>
+              : <p style={{ opacity: .75 }}>This message couldn’t be displayed.</p>}
+            <div className="audit"><span className="audit-chip plain"><span className="seg"><span className="no">–</span>display error — the rest of the chat is unaffected</span></span></div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function Message({ msg, onCite }) {
   if (msg.role === 'user') return <div className="msg-row user"><div className="bubble-user">{msg.text}</div></div>;
   return (
@@ -482,7 +526,13 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
   return (
     <div className={'pane-chat' + (narrow ? ' narrow' : '') + (wide ? ' wide' : '')} style={{ flex: 1, minHeight: 0 }}>
       <div className="chat-stream" ref={streamRef}>
-        <div className="chat-inner">{messages.map((m, i) => <Message key={i} msg={m} onCite={onCite} />)}</div>
+        <div className="chat-inner">{messages.map((m, i) => (
+          <MessageBoundary key={i}
+            resetKey={(m.text ? m.text.length : 0) + ':' + (m.streaming ? 1 : 0) + ':' + (m.typing ? 1 : 0) + ':' + (m.loading ? 1 : 0) + ':' + (m.audit ? 1 : 0)}
+            raw={m.role === 'assistant' ? m.text : null}>
+            <Message msg={m} onCite={onCite} />
+          </MessageBoundary>
+        ))}</div>
       </div>
       <div className="composer-wrap">
         <div className="composer"><Composer {...composerProps} placeholder={narrow ? 'Ask about this document…' : 'Message Cleon…'} /></div>
@@ -499,4 +549,4 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
   );
 }
 
-Object.assign(window, { ChatPane, Hero, Composer, Message, AuditBadge, MechanicalReading, renderAnswer, ThinkingBlock, narrateTurn });
+Object.assign(window, { ChatPane, Hero, Composer, Message, MessageBoundary, AuditBadge, MechanicalReading, renderAnswer, ThinkingBlock, narrateTurn });

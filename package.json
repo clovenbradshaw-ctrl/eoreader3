@@ -4,7 +4,7 @@
   "private": true,
   "description": "Dev-only test/benchmark harness for the Cleon reading engine. The app itself is a no-build static site (see index.html); this exists only so the deterministic engine can be exercised and timed from Node.",
   "scripts": {
-    "test": "node tests/engine.test.js && node tests/learning.test.js && node tests/audit.test.js && node tests/enrich.test.js && node tests/ingestion.test.js && node tests/conformance.test.js && node tests/llm.test.js && node tests/shape.test.js && node tests/conventions.test.js && node tests/greek.test.js && node tests/depicts.test.js && node tests/coref.test.js && node tests/dechrome.test.js && node tests/relation.test.js && node tests/site.test.js && node tools/validate-packs.mjs && node tests/parity.js",
+    "test": "node tests/engine.test.js && node tests/learning.test.js && node tests/audit.test.js && node tests/enrich.test.js && node tests/ingestion.test.js && node tests/conformance.test.js && node tests/llm.test.js && node tests/shape.test.js && node tests/conventions.test.js && node tests/greek.test.js && node tests/depicts.test.js && node tests/coref.test.js && node tests/dechrome.test.js && node tests/relation.test.js && node tests/site.test.js && node tests/scan-undef.js && node tests/verify-msg-boundary.js && node tools/validate-packs.mjs && node tests/parity.js",
     "test:update": "node tests/parity.js --update",
     "bench": "node tests/bench.js",
     "demo": "node tests/demo-learning.js",
@@ -29,8 +29,11 @@
     "conformance": "node tools/conformance.js"
   },
   "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@babel/preset-react": "^7.29.7",
     "compromise": "^14.14.0",
     "esbuild": "^0.24.0",
+    "jsdom": "^25.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   }
