@@ -440,6 +440,7 @@ function Message({ msg, onCite }) {
               {!msg.interrupted && <AuditBadge audit={msg.audit} />}
               {msg.mechanical && <MechanicalReading data={msg.mechanical} onCite={onCite} />}
             </React.Fragment>}
+        {msg.enrichment && window.ReferenceCard && <window.ReferenceCard data={msg.enrichment} />}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
             <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer|absent):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
@@ -484,10 +485,12 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource }) {
+function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, enrich, onToggleEnrich }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
+  // The reference desk is off (proxy cleared) ⇒ no toggle, the chat stays local.
+  const canEnrich = !!(window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled());
   return (
     <div className="composer-box">
       <SourceChips sources={sources} addable={addable} onAddSource={onAddSource} onRemoveSource={onRemoveSource} />
@@ -504,6 +507,13 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, o
             </button>
           ))}
         </div>
+        {canEnrich && onToggleEnrich && (
+          <button type="button" className={'comp-btn enrich' + (enrich ? ' on' : '')} aria-pressed={!!enrich}
+            title="Wikipedia enrichment — attach an encyclopaedia + dictionary card to your message. Sends the looked-up term (not the document) to Wikipedia & Wiktionary through the proxy."
+            onClick={onToggleEnrich}>
+            <Icon name="book" size={15} /> Wikipedia
+          </button>
+        )}
         <div className="comp-spacer" />
         {generating
           ? <button className="send-btn stop" aria-label="Stop generating" title="Stop generating" onClick={onStop}><Icon name="stop" size={15} /></button>
@@ -556,7 +566,7 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
       <div className="composer-wrap">
         <div className="composer"><Composer {...composerProps} placeholder={narrow ? 'Ask about this document…' : 'Message Cleon…'} /></div>
         <div className="composer-hint">
-          <span>Runs locally · <b>{composerProps.mode}</b> mode</span>
+          <span>Runs locally · <b>{composerProps.mode}</b> mode{composerProps.enrich ? <span> · chatting with <b>Wikipedia</b></span> : null}</span>
           {onExportPrompts && hasTurns && (
             <button type="button" className="export-prompts" onClick={onExportPrompts}>
               <Icon name="expand" size={12} /> Export prompts (JSON)
