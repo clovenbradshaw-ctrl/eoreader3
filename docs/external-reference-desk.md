@@ -69,16 +69,52 @@ byte-identical.
 store are injectable — so the entire policy surface is unit-tested with a fake
 fetch and no network.
 
-## The two registers (`EOExternal`)
+## Chatting with Wikipedia — knowledge augmentation, ingested
+
+The desk above is read-only sidecar. The **Wikipedia toggle in the chat
+composer** goes further: it makes Wikipedia a first-class knowledge source the
+grounded reader works over. When it is on and you send a message:
+
+1. `pickQuery` extracts the salient term from your message (a quoted phrase, a
+   capitalized run, or the cleaned remainder; a vague follow-up like "tell me
+   more" pulls nothing and chats against what is already loaded).
+2. `article(term)` pulls the **full plain-text article** (search → extracts),
+   not just the lead — rate-limited, cached, gated, capped so a parse stays
+   responsive.
+3. The article is **ingested into the graph** as a real prose source
+   (`Wikipedia · <title>`), threaded into *this* turn's scope, so the grounded
+   answer reads and **cites** it like any uploaded document. The mechanical
+   audit (grounded / covers / stable) applies unchanged.
+4. The card under the message shows what was pulled and confirms it was added
+   to the graph.
+
+So with no document loaded at all, toggling Wikipedia on turns Cleon into a
+grounded reader of Wikipedia: ask a question, the article enters the graph, and
+the answer is bound to its lines. Articles accumulate across a conversation —
+the tool's knowledge grows as you chat. It is wired in `app.jsx`
+(`chatWikipedia` → `ingestExternalSource`, injected into `runTurn`'s scope) and
+surfaced by the composer toggle (`chat.jsx`) — off by default, persisted in
+prefs, and inert when the proxy is cleared.
+
+## The API (`EOExternal`)
 
 ```js
+// chat-with-Wikipedia (knowledge augmentation)
+EOExternal.article(q)                // search → FULL plain-text extract, for ingestion
+EOExternal.pickQuery(text)           // the salient term from a free-text message (pure)
+EOExternal.enrichTerm(q)             // the normalized /lookup node: { encyclopedia, dictionary, sources }
+
+// the read-only desk
 EOExternal.classifyNeeds(entities)   // rank the residual by seriousness (pure, no network)
 EOExternal.refdesk(term)             // → { encyclopaedia, lexicon } for one term
 EOExternal.encyclopaedia(term)       // Wikipedia: search → summary
 EOExternal.lexicon(term)             // Wiktionary: REST definition
 EOExternal.resolveNeeds(needs, { budget, onResult })  // prioritised, budgeted, rate-limited batch
-EOExternal.cfg() / setConfig(patch)  // proxy, intervalMs, concurrency, budget, …
+EOExternal.cfg() / setConfig(patch)  // proxy, lookupEndpoint, intervalMs, concurrency, budget, …
 ```
+
+`window.EO_REFERENCE_LOOKUP` overrides the `/lookup` endpoint independently of
+the proxy (it otherwise derives from the proxy host as `…/webhook/lookup`).
 
 Each result is `{ status, basis?, payload? }` where `status ∈ { hit, miss,
 pending, gated, disabled, skipped, error }`. A `hit` payload is render-ready

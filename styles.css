@@ -1479,3 +1479,40 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
   .refdesk-columns { grid-template-columns: 1fr; }
   .refdesk-col.enc { border-right: none; border-bottom: 1px solid var(--paper-line); }
 }
+
+/* ---- Wikipedia enrichment: the composer toggle + the chat reference card ---- */
+.comp-btn.enrich {
+  display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 11px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-pill); background: var(--bg);
+  color: var(--text-2); font-size: 12.5px; font-weight: 500; cursor: pointer; white-space: nowrap;
+}
+.comp-btn.enrich:hover { background: var(--bg-subtle); }
+.comp-btn.enrich.on { background: #2d4a6b; border-color: #2d4a6b; color: #fff; }
+.comp-btn.enrich.on svg { color: #fff; }
+
+.refcard {
+  --enc-ink: #2d4a6b;
+  margin-top: 12px; border: 1px solid var(--paper-line); border-radius: var(--r);
+  background: var(--paper); font-family: var(--serif); color: var(--paper-ink); overflow: hidden;
+}
+.refcard-head { display: flex; align-items: center; gap: 7px; padding: 9px 13px; border-bottom: 1px solid var(--paper-line); }
+.refcard-title { font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--enc-ink); font-weight: 600; }
+.refcard-term { font-style: italic; color: var(--text-2); font-size: 13.5px; }
+.refcard-head .refcard-src { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+.refcard-body { padding: 13px; }
+.refcard-rel { display: inline-block; font-size: 12px; color: var(--text-2); background: var(--bg-subtle); border: 1px solid var(--border); border-radius: var(--r-xs); padding: 2px 7px; margin: 0 5px 5px 0; }
+.refcard-ingested {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 9px 13px; border-top: 1px solid var(--paper-line); background: var(--good-bg);
+  color: var(--good-fg); font-size: 12.5px; font-family: var(--sans);
+}
+.refcard-ingested svg { color: var(--good-fg); flex: none; }
+.refcard-ingested b { font-weight: 600; }
+.refcard-open { margin-left: auto; font-family: var(--mono); font-size: 11px; border: 1px solid var(--good-bd); background: transparent; color: var(--good-fg); border-radius: var(--r-xs); padding: 2px 8px; cursor: pointer; }
+.refcard .refdesk-thumb { float: right; margin: 0 0 8px 12px; max-width: 104px; width: 34%; border: 1px solid var(--paper-line); border-radius: var(--r-xs); }
+.refcard .refdesk-headword { font-size: 17px; font-weight: 600; margin: 0 0 3px; }
+.refcard .refdesk-headword a { color: var(--paper-ink); text-decoration: none; border-bottom: 1px solid var(--enc-ink); }
+.refcard .refdesk-desc { color: var(--text-3); font-style: italic; font-size: 13px; margin: 0 0 8px; }
+.refcard .refdesk-summary { font-size: 14px; line-height: 1.55; margin: 0 0 8px; }
+.refcard .refdesk-seealso { clear: both; }
+.refcard .refdesk-basis { padding: 0 13px 11px; }
