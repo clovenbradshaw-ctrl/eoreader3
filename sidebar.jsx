@@ -1,5 +1,5 @@
 /* ============================================================ Sidebar ===== */
-function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc,
+function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, onUpload,
                    chats, activeChat, onNewChat, onSelectChat, model, onModelClick, onRulesClick,
                    enabledRules, modelStatus,
                    projects, activeProject, onSelectProject, onNewProject, onDeleteProject, onClearProject,
@@ -49,8 +49,16 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc,
         </div>
 
         <div className="sb-section">
-          <div className="sb-label">Documents <span className="count">{docs.length}</span></div>
-          {docs.length === 0 && <div className="sb-empty">Upload or paste to add a document.</div>}
+          <div className="sb-label">Documents <span className="count">{docs.length}</span>
+            {onUpload && <button className="sb-mini" title="Upload a document (.txt, .md, .csv)" onClick={onUpload}><Icon name="upload" size={13} /></button>}
+          </div>
+          {docs.length === 0 && (
+            <button type="button" className="sb-dropzone" onClick={onUpload}>
+              <Icon name="upload" size={16} />
+              <span className="dz-main">Upload a document</span>
+              <span className="dz-sub">or drop a file anywhere · .txt, .md, .csv</span>
+            </button>
+          )}
           {docs.map(d => (
             <div key={d.id} className={'sb-item' + (openTabs.includes(d.id) ? ' active' : '')} onClick={() => onOpenDoc(d.id)}>
               <span className="ti"><Icon name={iconFor(d)} size={16} /></span>
@@ -63,6 +71,11 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc,
               </button>
             </div>
           ))}
+          {docs.length > 0 && onUpload && (
+            <button type="button" className="sb-dropzone slim" onClick={onUpload}>
+              <Icon name="plus" size={14} /><span className="dz-main">Add another document</span>
+            </button>
+          )}
         </div>
       </div>
 
