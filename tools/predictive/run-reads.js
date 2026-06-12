@@ -80,9 +80,9 @@ async function main() {
   out.push(`- **Mechanism E** (pre-warm the next region): gated on the same prediction accuracy as A — ${aGood ? 'viable.' : 'the next-region guess is poor; pre-warming warms the wrong region. **Not built.**'}`);
   out.push(`- **The relation gate**: inversion flagged = ${r3.bar['inversion flagged']}, faithful paraphrase passed = ${r3.bar['faithful paraphrase passed']}, battery ${r3.bar['battery agreement']} with zero false flags. ` +
     (r3.bar['inversion flagged'] && r3.bar['faithful paraphrase passed']
-      ? '**The bar passes — the gate is the highest-value safety build.** Its misses share one shape: the true relation was never deposited (serpentine spans, unresolved pronouns) — extraction recall, not gate logic, is the binding constraint.'
+      ? '**The bar passes — built** behind the `relation_gate` rule (off by default): checkRelations/checkRelationsScope, provenance-at-generation via bindClaimKeys, prototyped here and pinned by tests/relation.test.js, with the flag-on parallel golden in tests/golden-relation-gate.json. Its misses share one shape: the true relation was never deposited (serpentine spans, unresolved pronouns) — extraction recall, not gate logic, is the binding constraint.'
       : 'The bar does not pass; the gate is not ready.'));
-  out.push(`- **Mechanism D** (envelope on grounding leak): independent of trajectory by design; measured against the claim's own cited span, never the exemplar library. Buildable.`);
+  out.push(`- **Mechanism D** (envelope on grounding leak): independent of trajectory by design; measured against the claim's own cited span, never the exemplar library. **Built** as groundingEnvelope behind the same flag — the parallel golden shows it catching exactly the costume cites the fallback binder staples on.`);
   out.push(`- **Stage 4** (prediction error in the reading): gated on read 1 — ${aGood ? 'measurable next.' : 'deferred with A.'}\n`);
 
   const dest = path.join(ROOT, 'docs', 'predictive-reads.md');
