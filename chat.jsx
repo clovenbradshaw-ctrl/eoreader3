@@ -168,6 +168,20 @@ function narrateTurn(turn) {
           push('Kept the draft, but it named ' + quoteList(s.invented || []) + ' — not in the document — so I struck those as unverified and flagged the answer.');
         else if (s.decision === 'reject')
           push('The draft just echoed a single passage instead of answering, so I sent it back under a stricter rule.');
+        else if (s.decision === 'model-flagged') {
+          if (s.reason === 'contradicts-assertion' && s.contradictions && s.contradictions.length) {
+            const c = s.contradictions[0];
+            push('The draft conflicts with what the page asserts — the page holds “' + c.subject + ' is ' + c.is + '”' + (c.sent != null ? ' [s' + c.sent + ']' : '') + ', the draft said “' + c.claim + '” — but I kept the model’s answer and flagged it; the exact mechanical reading is one click away.');
+          }
+          else if (s.reason === 'relation-mismatch')
+            push('A claim’s relation doesn’t match the page’s recorded edge — kept the model’s answer and flagged it; the exact mechanical reading is one click away.');
+          else if (s.reason === 'kin-subject-mismatch')
+            push('The draft may hang a role on the wrong person — kept the model’s answer and flagged it; the exact mechanical reading is one click away.');
+          else if (s.reason && /unbound/.test(s.reason))
+            push('The draft didn’t bind to any passage in the document — kept the model’s answer and flagged it; the exact mechanical reading is one click away.');
+          else
+            push('The draft tripped a check — kept the model’s answer and flagged it; the exact mechanical reading is one click away.');
+        }
         else if (s.decision === 'mechanical') {
           if (s.reason === 'contradicts-assertion' && s.contradictions && s.contradictions.length) {
             const c = s.contradictions[0];
@@ -239,6 +253,7 @@ function narrateTurn(turn) {
   if (f && f.engine) {
     const modelName = (turn.model && turn.model.name) || 'the local model';
     push(/mechanical/.test(f.engine) ? 'Final answer: the document’s exact mechanical reading.'
+      : /flag/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', kept but flagged — the page’s exact mechanical reading is one click away.'
       : /caveat/.test(f.engine) ? 'Final answer: the model’s phrasing, kept with unverified terms struck and citations bound.'
       : /model/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', with citations bound to the document.'
       : 'Final answer: ' + f.engine + '.');
@@ -248,6 +263,7 @@ function narrateTurn(turn) {
 function ThinkingBlock({ auditId }) {
   const [, force] = React.useReducer(x => x + 1, 0);
   const [open, setOpen] = React.useState(null);   // null = auto (open live, closed once done); sticky once clicked
+  const [rawOpen, setRawOpen] = React.useState(false);   // the verbatim prompt/response disclosure
   const A = (typeof window !== 'undefined') ? window.EOAudit : null;
   const turn = (A && auditId) ? A.all().find(t => t.id === auditId) : null;
   const live = !!(turn && !turn.done);
@@ -257,7 +273,10 @@ function ThinkingBlock({ auditId }) {
   }, [A, auditId, live]);
   if (!A || !auditId || !turn || !turn.steps || !turn.steps.length) return null;
   const lines = narrateTurn(turn);
-  if (!lines.length) return null;
+  // Every model call recorded on this turn (shape pass, answer pass, any retry),
+  // kept verbatim by the audit recorder — system + user prompt and raw output.
+  const llmCalls = (turn.steps || []).filter(s => s.t === 'llm' && ((s.messages && s.messages.length) || s.system || s.output));
+  if (!lines.length && !llmCalls.length) return null;
   const expanded = open == null ? live : open;
   const ms = turn.ms != null ? turn.ms : (turn.steps.length ? turn.steps[turn.steps.length - 1].dt : 0);
   return (
@@ -276,6 +295,34 @@ function ThinkingBlock({ auditId }) {
                 : ln.text}
             </div>
           ))}
+          {llmCalls.length > 0 && (
+            <div className="think-raw">
+              <button type="button" className="raw-toggle" aria-expanded={rawOpen} onClick={() => setRawOpen(o => !o)}>
+                <Icon name="expand" size={12} className="raw-ico" />
+                {rawOpen ? 'Hide the full prompt & response' : 'Show the full prompt & response'}
+              </button>
+              {rawOpen && llmCalls.map((s, i) => (
+                <div key={i} className="raw-call">
+                  <div className="raw-h">
+                    {(s.mode || 'call') + (s.task ? ' · ' + s.task : '')}
+                    {s.params && s.params.max_tokens != null ? ' · max ' + s.params.max_tokens + ' tok' : ''}
+                    {s.params && s.params.temperature != null ? ' · temp ' + s.params.temperature : ''}
+                  </div>
+                  {(s.messages && s.messages.length
+                    ? s.messages
+                    : (s.system ? [{ role: 'system', content: s.system }] : [])
+                  ).map((m, j) => (
+                    <React.Fragment key={j}>
+                      <div className="raw-role">{m.role}</div>
+                      <pre className="raw-pre">{m.content}</pre>
+                    </React.Fragment>
+                  ))}
+                  <div className="raw-role out">response{s.error ? ' (error)' : ''}</div>
+                  <pre className="raw-pre">{s.error ? s.error : (s.output || '∅')}</pre>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

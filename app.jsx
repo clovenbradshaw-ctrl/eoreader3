@@ -1705,32 +1705,42 @@ function App() {
           try { contradictions = window.EOEngine.checkAssertionsScope(scope, fullForChecks) || []; }
           catch (e) { eoWarn('assertion-check', e); }
         }
+        // The user asked for this: when the model's draft trips a binding or
+        // consistency check, KEEP the model's answer and flag it rather than
+        // silently swapping in the mechanical reading. The mechanical reading
+        // still rides along as the click-to-view "Exact mechanical reading"
+        // panel (settle attaches it for any 'model…' decision), so the page's
+        // own answer is never lost — the model's phrasing just leads, wearing
+        // an honest caveat badge.
+        const flagModel = (reason, note) => {
+          const flagged = { ...bound,
+            audit: { ...(bound.audit || {}), status: 'warn',
+              note: note + (bound.audit && bound.audit.note ? ' ' + bound.audit.note : '') } };
+          settle(flagged, 'model (flagged: ' + reason + ')');
+        };
         if (!bound.audit.grounded) {
-          // Unmoored: the phrasing matched no passage — use the mechanical answer.
-          // Reconsideration (Phase 5): at the deepest depth, read a factual draft
-          // that binds nothing as a question the page does not address, not a
-          // failed answer — the mechanical reading surfaces that silence/void.
+          // Unmoored: the phrasing matched no passage. Kept and flagged; the
+          // mechanical reading is one click away.
           if (budget && budget.replan) AUD('step', 'plan-seg', { from: 'factual', to: 'question-about-silence', reason: 'the draft bound to nothing on the page' });
-          AUD('step', 'veto', { decision: 'mechanical', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
-          settle(window.EOEngine.answerScope(scope, q), 'mechanical (veto)');
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
+          flagModel('unbound', 'Phrased by the model, but it didn’t bind to any passage in the document — kept and flagged. The exact mechanical reading is one click away.');
         } else if (contradictions.length) {
-          AUD('step', 'veto', { decision: 'mechanical', reason: 'contradicts-assertion',
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'contradicts-assertion',
             contradictions: contradictions.map(c => ({ subject: c.subject, is: c.is, sent: c.sent, claim: c.claim, docId: c.docId })),
             boundGrounded: true, boundCovers: bound.audit.covers });
-          settle(window.EOEngine.answerScope(scope, q), 'mechanical (contradicted the page)');
+          flagModel('contradicts-assertion', 'Kept the model’s answer, but it conflicts with what the page asserts (see the trace) — flagged. The page’s mechanical reading is one click away.');
         } else if (relationMismatches.length) {
-          // A claim whose relation contradicts its deposited edge is held,
-          // not waved through — the inversion fix. Mechanical answer +
-          // legible trace, mirroring the assertion and kin vetoes.
-          AUD('step', 'veto', { decision: 'mechanical', reason: 'relation-mismatch',
+          // A claim whose relation contradicts its deposited edge: kept but
+          // flagged, mirroring the assertion and kin flags.
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'relation-mismatch',
             relationMismatches: relationMismatches.map(m => ({ kind: m.kind, claim: m.claim, docId: m.docId })),
             boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
-          settle(window.EOEngine.answerScope(scope, q), 'mechanical (relation mismatch)');
+          flagModel('relation-mismatch', 'Kept the model’s answer, but one claim’s relation doesn’t match the page’s recorded edge — flagged. The mechanical reading is one click away.');
         } else if (kinMismatches.length) {
-          AUD('step', 'veto', { decision: 'mechanical', reason: 'kin-subject-mismatch',
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'kin-subject-mismatch',
             kinMismatches: kinMismatches.map(m => ({ possessor: m.possessor, kin: m.kin, sent: m.sent, claim: m.claim, docId: m.docId })),
             boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
-          settle(window.EOEngine.answerScope(scope, q), 'mechanical (kin subject mismatch)');
+          flagModel('kin-subject-mismatch', 'Kept the model’s answer, but it may hang a role on the wrong person (kin vs possessor) — flagged. The mechanical reading is one click away.');
         } else if (invented.length) {
           // Grounded, but names term(s) the page doesn't contain: KEEP the draft,
           // strike those terms as voids, downgrade the badge to an honest caveat.
