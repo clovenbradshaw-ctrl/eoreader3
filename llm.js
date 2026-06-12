@@ -248,7 +248,7 @@
   //  - grounded: answer strictly from the supplied passages; citations are
   //    bound mechanically afterward, never written by the model.
   //  - creative: free composition over any supplied passages.
-  function systemFor(mode, task, grounded, depth = 1) {
+  function systemFor(mode, task, grounded, depth = 1, opts) {
     if (mode === 'creative')
       return 'You are Cleon, a private assistant running locally in the user\'s browser. Use any supplied passages as raw material to compose freely. Do not add citation markers.';
     if (grounded) {
@@ -287,7 +287,16 @@
         lines.push('Right now they want a summary: say what the document is about in your own words, drawing the spans together — never copy or lightly reword a single span as the whole answer.');
       }
       lines.push('');
-      lines.push('Don\'t write citation markers like [s1] — those are added mechanically after you write.');
+      if (opts && opts.provenanceKeys) {
+        // Provenance binds at generation (the relation_gate rule): the model
+        // tags each claim with the span it was BUILT from, and the engine's
+        // bindClaimKeys verifies each tag against its own span — never
+        // re-retrieving a better-agreeing one. Off by default; without the
+        // option this prompt is byte-identical to before.
+        lines.push('After each factual claim, write the tag of the span you actually used, exactly as it appears above — like [s12], placed just before the period. One tag per claim. If a claim is your synthesis across several spans, tag the one that most directly supports it; if nothing you were handed supports a claim, write [s?] rather than inventing a tag.');
+      } else {
+        lines.push('Don\'t write citation markers like [s1] — those are added mechanically after you write.');
+      }
       return lines.join('\n');
     }
     return 'You are Cleon, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. Do not invent facts about real people, places, or events: if you are not sure something is true, say you are not sure rather than making something up — a confident wrong answer is worse than an honest "I\'m not certain." A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. If the user is clearly asking about an open document but you were not handed a relevant passage, say so and offer to look it up, rather than guessing at what it contains. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
@@ -634,14 +643,14 @@
   // pass retrieved passages. onToken(deltaText). `maxTokens` (optional) lets the
   // shape layer set the ceiling from the best-fit archetype's length; unset, the
   // depth-scaled default applies (parity).
-  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride, spans, notes, docTitle, shapeNote, maxTokens }) {
+  async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride, spans, notes, docTitle, shapeNote, maxTokens, provenanceKeys }) {
     const eng = await load(mlcKey);
     // Thinking depth (1 reflex … 3 deepest) shapes the grounded phrasing and how
     // much room the answer gets. Absent/1 ⇒ today's prompt and token caps (parity).
     const lvl = Math.min(3, Math.max(1, (depth | 0) || 1));
     // sysOverride lets the sandbox's prompt lab try a candidate talker prompt;
     // unset everywhere else, so normal chat is byte-identical (parity holds).
-    const sys = sysOverride || systemFor(mode, task, grounded, lvl);
+    const sys = sysOverride || systemFor(mode, task, grounded, lvl, provenanceKeys ? { provenanceKeys: true } : undefined);
     const messages = assembleMessages({ sys, history, contextText, question, grounded, budget, workingMemory, spans, notes, docTitle, shapeNote });
     const temperature = mode === 'creative' ? 0.8 : (grounded ? 0.12 : 0.4);
     // Deeper reading earns more room to synthesize: the grounded caps grow with the

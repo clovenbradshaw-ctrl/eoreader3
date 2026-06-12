@@ -699,6 +699,19 @@ const READING_RULES = {
     value: 2.0, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
     desc: 'Admission threshold for a proposed convention: the sum of independent-anchor couplings (one per distinct span hash) must reach this, across ≥ 2 distinct spans, with at least one non-model witness. At 2.0: two document witnesses, or one document plus the model\'s evidence spans, or a user confirmation instantly. A tunable rule, like the two-sighting law it generalizes.',
   },
+  // ── Relation gate — the relational cure (agency inversion) ──────
+  relation_gate: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, provenance binds at generation (the model tags each claim with the span id it used; bindClaimKeys consumes the tags and the old binder is fallback for unkeyed claims only) and every draft claim\'s subject–predicate–object is checked against the relations the graph deposited — a claim whose subject inverts against its edge, or names a figure the edge does not carry, is held and flagged relation-mismatch. OFF ships today\'s behavior byte-identical (the parity floor); flip after the parallel golden on the journalism + essay fixtures diffs clean.',
+  },
+  relation_align_floor: {
+    value: 0.45, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Below this, a claim surface does not align to an edge slot at all. Alignment is lexical-first (token subset = 1; two distinct named figures never embed-align — measured: name↔name cosine ≈ 0.45 is noise); the embedder only bridges description↔name paraphrase, and goes vacuous when EOEmbed is cold.',
+  },
+  relation_rel_floor: {
+    value: 0.55, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Predicate compatibility floor for the relation gate: a claim verb and an edge verb are the same relation when their lemmas overlap or their embedding cosine clears this. Measured on the app\'s own MiniLM-q8: cos(afford, pay) = 0.62 clears; cos(argued, hear) = 0.50 does not. This is the one place the embedder helps the relational cure, and only as a similarity scorer feeding a mechanical decision.',
+  },
   speaker_label_patterns: {
     value: [], mass: 0, layer: 'structure', src: 'learned', module: 'core',
     desc: 'Grown, never seeded: line shapes (regex sources — capture 1 the label, capture 2 the statement) that bind a "LABEL: statement" line as that voice speaking — the org-acronym colon convention. Members arrive only through the proposal channel\'s admission physics: the model proposes from registered friction; documents or the user corroborate; admission writes the pattern here through the ledger. Starts EMPTY, so every shipped reading is byte-identical.',
@@ -2036,7 +2049,8 @@ function _originalSig() { return ORIGINAL_LANGS.size ? ('§om:' + [...ORIGINAL_L
 // so changing them on an already-read document requires re-extraction.
 const REPLAY_PHASE_IDS = new Set(['decay_gamma', 'inertia_delta', 'eva_energy_budget',
   'quote_interior_coupling', 'anaphora_coupling', 'audit_paraphrase_strong', 'audit_resemblance', 'audit_bind_floor',
-  'proposal_auto_accept_sim', 'sentinel_draft_overlap', 'sentinel_budget_ratio', 'sentinel_max_drafts']);
+  'proposal_auto_accept_sim', 'sentinel_draft_overlap', 'sentinel_budget_ratio', 'sentinel_max_drafts',
+  'relation_gate', 'relation_align_floor', 'relation_rel_floor']);
 function _rulePhase(id) { return REPLAY_PHASE_IDS.has(id) ? 'replay' : 'extract'; }
 function _packsKey(packs) { return [...packs].sort().join('|'); }
 function _strHash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return h >>> 0; }
@@ -2245,6 +2259,10 @@ function frameForLang(lang) {
   return { packs: new Set(['core', pid]), upTo: Infinity };
 }
 
+// Registered by applyRules once it exists (it may live in a narrower
+// scope); lets deriveSets re-apply the host's standing rules after a
+// re-derivation without assuming they share a scope.
+let _reapplyHostRules = null;
 // deriveSets(projection, {apply}) — turn a projection into the hot-path
 // view. apply:true writes through into READING_RULES / READER_REGISTRY
 // and rebuilds the derived Sets (the live objects every read site
@@ -2318,6 +2336,15 @@ function deriveSets(proj, opts = {}) {
   }
   RULES_REV = proj.rev;
   rebuildLangSets();
+  // The host's standing rule settings survive the re-derivation. A ledger
+  // commit mid-session (verb induction during a parse) used to silently
+  // revert every panel-tuned value — and any flipped flag like
+  // relation_gate — to its seed until the next panel change. The app
+  // maintains window.EO_RULES; re-applying it here keeps the settings
+  // where the user put them. Unset (the Node harness, parity) ⇒ no-op;
+  // untouched defaults re-apply seed-equal values ⇒ also a no-op.
+  if (_reapplyHostRules && typeof window !== 'undefined' && Array.isArray(window.EO_RULES))
+    _reapplyHostRules(window.EO_RULES);
   return snap;
 }
 
@@ -6513,6 +6540,7 @@ function projectGraph(events, frame = {}) {
     'eva-energy': 'eva_energy_budget',
     'mass-weight': 'mass_weight',
     'singular-they': 'singular_they',
+    'relation-gate': 'relation_gate',
   };
 
   /* ---------- Thinking depth: the effort dial's tunable budget ----------
@@ -6623,6 +6651,7 @@ function projectGraph(events, frame = {}) {
     RULES_REV = (RULES_REV + 1) >>> 0;   // invalidate the projection cache
     return RULES_REV;
   }
+  _reapplyHostRules = applyRules;   // deriveSets re-applies window.EO_RULES through this
 
   // A transmuting DEF changes an ESTABLISHED type/flavor (the significance-layer
   // "weak" law) as opposed to attaching a property. Derived from event provenance,
@@ -9914,6 +9943,392 @@ function projectGraph(events, frame = {}) {
     return out;
   }
 
+  /* ============================================================ RELATION GATE
+     The relational cure. The string-layer vetoes check that a claim's WORDS
+     live on the page; the kin veto checks one specific subject swap; this
+     checks the general case — a claim built from on-topic words whose
+     subject–predicate–object inverts against the relation the graph
+     deposited ("the Association cannot afford its bills" vs the edge where
+     the OWNERS pay). Every word semantically correct, the aboutness intact,
+     the agency flipped; not a semantic outlier, so no embedding-surprise
+     mechanism can see it. Only relation-against-relation can.
+
+     Validated against the NDP battery (tools/predictive/read3.js — the
+     measurement this build is gated on): the inversion flags, every
+     faithful paraphrase passes, zero false flags. Design facts from that
+     read, kept here because they shaped the rules:
+       • the graph is SPARSE on exactly the relations summaries invert (the
+         owner-pays edge was never deposited — its subject isn't
+         entity-shaped), so the gate also reads the span its claim resolves
+         to, live, with the same clause heuristic the parse uses;
+       • short-surface embedding alignment is NOISE at the resident model's
+         scale (cos(association, partnership) = cos(association, owners) =
+         0.26), so subject alignment is lexical-first, two distinct named
+         figures never embed-align, and the absent-subject branch rides the
+         existing void machinery (referents' antimatter);
+       • the embedder's one real contribution is PREDICATE compatibility
+         (cos(afford, pay) = 0.62) — quantities only, a mechanical gate
+         decides, and it goes vacuous when EOEmbed is cold (the gate then
+         degrades to lexical: the strict swap still flags, the paraphrased
+         inversion is out of reach until the embedder is warm).
+
+     Everything is behind the relation_gate rule (OFF by default): with the
+     flag down, no shipped path calls any of this and parity holds. */
+  // applyRules coerces card values through Number(), so an installed card
+  // arrives as 1; the seed is boolean false. Either truthy form means ON.
+  function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
+
+  const _RG_STOP = new Set(['the', 'a', 'an', 'his', 'her', 'their', 'its', 'this', 'that', 'of', 'to', 'own', 'mr', 'mrs']);
+  const _rgToks = (s) => String(s || '').toLowerCase().replace(/['’]s\b/g, '')
+    .replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter(t => t && !_RG_STOP.has(t));
+  function _rgSubset(a, b) {
+    const ta = _rgToks(a), tb = _rgToks(b);
+    if (!ta.length || !tb.length) return false;
+    const [small, big] = ta.length <= tb.length ? [ta, new Set(tb)] : [tb, new Set(ta)];
+    return small.every(w => big.has(w));
+  }
+  // The gate's predicate normalizer: normalizeRelation plus the modal/
+  // negation shell ("cannot afford" → "afford"), so polarity stays with
+  // checkAssertions and the gate compares the act itself.
+  function _rgNormRel(v) {
+    return normalizeRelation(String(v || '').replace(/[,"“”]/g, ''))
+      .replace(/\b(will|would|can|cannot|could|shall|should|may|might|must|to|not|never|also|then|still|already)\b/g, '')
+      .replace(/\s+/g, ' ').trim();
+  }
+  function _rgLemmaOverlap(a, b) {
+    const la = new Set(), lb = new Set();
+    for (const w of _rgNormRel(a).split(' ')) if (w) for (const l of verbLemmas(w)) la.add(l);
+    for (const w of _rgNormRel(b).split(' ')) if (w) for (const l of verbLemmas(w)) lb.add(l);
+    for (const l of la) if (l && lb.has(l)) return true;
+    return false;
+  }
+  // Embedding similarity of two short surfaces — quantities only, cached,
+  // null when the embedder is cold (callers treat null as "no signal").
+  const _rgVecCache = new Map();
+  async function _rgCos(a, b) {
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return null;
+    const get = async (s) => {
+      const k = String(s || '').toLowerCase().trim();
+      if (!k) return null;
+      if (_rgVecCache.has(k)) return _rgVecCache.get(k);
+      let v = null; try { v = await window.EOEmbed.embedQuery(k); } catch (e) { v = null; }
+      _rgVecCache.set(k, v);
+      return v;
+    };
+    const va = await get(a), vb = await get(b);
+    return (va && vb) ? _cosineNorm(va, vb) : null;
+  }
+
+  const _RG_AUX = /^(have|has|had|do|does|did|got|get|be|been|being)$/i;
+  const _RG_PRONOUN = /^(he|she|it|they|him|her|them|his|hers|their|its|i|we|you|who|whom|that|this|those|these|me|us|one|nobody|everyone|someone)$/i;
+  const _RG_QUOTEY = /["“”]/;
+  const _RG_ATTRIB = new Set(['said', 'says', 'say', 'answered', 'replied', 'wrote', 'called', 'told', 'asked',
+    'exclaimed', 'shouted', 'whispered', 'muttered', 'added', 'stated', 'noted', 'remarked', 'commented', 'argued']);
+
+  /* Claim/span SVO candidates — the parse's own clause heuristic (first
+     noun / last verb / last noun) plus the head-verb variant, because a
+     claim's main predicate often leads where page prose trails. Reads only;
+     never deposits an event. */
+  function _rgSvo(text) {
+    const cands = [];
+    let doc; try { doc = nlp(String(text || '')); } catch (e) { return cands; }
+    doc.clauses().forEach(clause => {
+      const nouns = clause.nouns().out('array');
+      const verbs = clause.verbs().out('array');
+      if (nouns.length < 2 || verbs.length < 1) return;
+      const variants = [
+        { v: verbs[verbs.length - 1], o: nouns[nouns.length - 1] },
+        { v: verbs[0], o: nouns[1] },
+      ];
+      for (const { v, o } of variants) {
+        const s = nouns[0];
+        if (!s || !v || !o || normSurface(s) === normSurface(o)) continue;
+        const vFirst = String(v).toLowerCase().split(/\s+/)[0];
+        if (_RG_AUX.test(vFirst)) continue;
+        const copular = COPULAR.test(vFirst);
+        if (cands.some(c => normSurface(c.s) === normSurface(s) && _rgNormRel(c.v) === _rgNormRel(v) && normSurface(c.o) === normSurface(o))) continue;
+        cands.push({ s, v: String(v).toLowerCase(), o, copular });
+      }
+    });
+    return cands;
+  }
+
+  /* Every relation the gate can check a claim against: deposited CON edges
+     and text-layer SYN edges (subject hints resolved to their referent's
+     name; an unhinted pronoun subject never carries a verdict), edges
+     derived from DEF role/class assertions, the live SVO read of a span
+     (minted on demand, quote fragments excluded — reported speech is SIG's
+     business), and the SIG attribution slots. Cached per doc. */
+  const _rgRelCache = new WeakMap();
+  function _rgRelations(doc) {
+    if (_rgRelCache.has(doc)) return _rgRelCache.get(doc);
+    const edges = [];
+    for (const ev of (doc._events || [])) {
+      if (ev.op === 'CON') {
+        edges.push({ s: ev.sourceName || ev.s, v: ev.v, o: ev.targetName || ev.o, sent: ev.sentence_idx, via: 'CON' });
+      } else if (ev.op === 'SYN' && !Array.isArray(ev.sites) && ev.s && ev.v && ev.o) {
+        edges.push({
+          s: (ev.sHint && ev.sHint.name) || ev.s, v: ev.v, o: (ev.oHint && ev.oHint.name) || ev.o,
+          sent: ev.sentence_idx, via: 'SYN', pronoun: !ev.sHint && _RG_PRONOUN.test(String(ev.s).trim()),
+        });
+      }
+    }
+    let defs = [];
+    try { defs = assertionsOf(doc) || []; } catch (e) {}
+    for (const d of defs) {
+      if (d.path !== 'role' && d.path !== 'class') continue;
+      for (const c of _rgSvo(d.subject + ' ' + d.is))
+        edges.push({ s: c.s, v: c.v, o: c.o, sent: d.sent, via: 'DEF' });
+    }
+    const live = new Map();
+    const liveAt = (idx) => {
+      if (live.has(idx)) return live.get(idx);
+      const t = (doc.sentenceTexts || [])[idx] || '';
+      const out = _rgSvo(t)
+        .filter(c => !c.copular && !_RG_QUOTEY.test(c.s) && !_RG_QUOTEY.test(c.o))
+        .map(c => ({ s: c.s, v: c.v, o: c.o, sent: idx, via: 'span-svo', pronoun: _RG_PRONOUN.test(String(c.s).trim()) }));
+      live.set(idx, out);
+      return out;
+    };
+    // Only CONFIDENT attributions carry a verdict — a mass-weighted
+    // fallback guess is the reader's own speculation, and holding a claim
+    // against a speculation would be the gate inverting its own rule
+    // (the same discipline continuation_inheritance applies).
+    const sigs = (doc._events || []).filter(e => e.op === 'SIG' && e.attributed && e.attributed !== 'fallback' && e.attributed !== 'none')
+      .map(e => ({ sent: e.sentence_idx, speaker: (e.speakerHint && e.speakerHint.name) || e.speaker }));
+    const rel = { edges, defs, liveAt, sigs };
+    _rgRelCache.set(doc, rel);
+    return rel;
+  }
+
+  /* The gate. For each claim in the draft: resolve the span its footnote
+     points at (the binder's own move), gather candidate relations, align
+     the claim's subject and object to each edge's s and o, and hold the
+     claim when the agency inverts, the speaker is wrong, or the subject is
+     a named figure the edge does not carry. Conservative by design; its
+     failure mode is the honest mechanical answer plus a legible audit
+     step, exactly like the kin and assertion vetoes beside it. */
+  async function checkRelations(doc, draftText, opts = {}) {
+    if (!doc || doc.kind !== 'prose') return [];
+    const ALIGN_FLOOR = READING_RULES.relation_align_floor.value;
+    const REL_FLOOR = READING_RULES.relation_rel_floor.value;
+    const rel = _rgRelations(doc);
+    if (!rel.edges.length && !rel.defs.length && !rel.sigs.length && !(doc.sentenceTexts || []).length) return [];
+    let entNames = [];
+    try { entNames = (projectEntities(doc).entities || []).map(e => e.name); } catch (e) {}
+    const entityOf = (surface) => entNames.find(n => _rgSubset(surface, n)) || null;
+    // two distinct named figures of the page never embed-align (Ruiz ≠ Vance)
+    const align = async (a, b) => {
+      if (_rgSubset(a, b)) return 1;
+      const ea = entityOf(a), eb = entityOf(b);
+      if (ea && eb && ea !== eb) return 0;
+      const c = await _rgCos(a, b);
+      return c == null ? 0 : c;
+    };
+    const relComp = async (cv, ev) => {
+      if (_rgLemmaOverlap(cv, ev)) return 1;
+      const c = await _rgCos(_rgNormRel(cv) || String(cv), _rgNormRel(ev) || String(ev));
+      return c == null ? 0 : c;
+    };
+    const parts = splitDraft(String(draftText == null ? '' : draftText).replace(/\{\{[^}]*\}\}/g, ' ').replace(/\[s?\d+\]/gi, ' '));
+    const out = [], seen = new Set();
+    for (const sent of parts) {
+      if (out.length >= 3) break;
+      // where would this claim's footnote point? (the binder's own move)
+      let boundIdx = null;
+      const cand = retrieve(doc, sent, 1)[0];
+      if (cand && supportsClaim(cand, sent, CITE_FLOOR)) boundIdx = cand.i;
+      // is the claim's subject a NAMED referent — present (matter) or
+      // invented (antimatter, the void machinery's read)?
+      let refs = { matter: [], antimatter: [] };
+      try { refs = referents(doc, sent) || refs; } catch (e) {}
+      const namedSubject = (surface) => {
+        const all = [...(refs.matter || []), ...(refs.antimatter || [])];
+        const hit = all.find(n => _rgSubset(n, surface) || _rgSubset(surface, n));
+        if (hit) return { isNamed: true, absent: (refs.antimatter || []).some(n => _rgSubset(n, surface) || _rgSubset(surface, n)) };
+        return { isNamed: !!entityOf(surface), absent: false };
+      };
+      for (const c of _rgSvo(sent)) {
+        const vHead = _rgNormRel(c.v).split(' ')[0] || String(c.v).split(/\s+/).pop();
+        // attribution claims check the SIG record first: who held the slot
+        if (_RG_ATTRIB.has(vHead) && boundIdx != null) {
+          const sig = rel.sigs.find(g => g.sent === boundIdx && g.speaker && g.speaker !== '?');
+          if (sig) {
+            if ((await align(c.s, sig.speaker)) >= ALIGN_FLOOR) continue;   // the right voice
+            if (entityOf(c.s) && entityOf(sig.speaker) && entityOf(c.s) !== entityOf(sig.speaker)) {
+              const key = 'sig|' + boundIdx + '|' + normSurface(c.s);
+              if (!seen.has(key)) {
+                seen.add(key);
+                out.push({ claim: sent.trim(), kind: 'wrong-speaker', edge: { s: sig.speaker, v: 'said', o: '“…”', sent: boundIdx, via: 'SIG' }, claimSVO: { s: c.s, v: c.v, o: c.o } });
+              }
+              continue;
+            }
+          }
+        }
+        if (c.copular) continue;        // a copular claim is DEF territory (checkAssertions), not an enacted relation
+        const pool = [];
+        if (boundIdx != null) {
+          for (const e of rel.edges) if (e.sent === boundIdx) pool.push(e);
+          for (const e of rel.liveAt(boundIdx)) pool.push(e);
+        }
+        for (const e of rel.edges) if (e.sent !== boundIdx) pool.push(e);
+        // a claim that bound NOWHERE is resolved by relation: the live span
+        // reads supply the edges the sparse graph never deposited (the
+        // owner-pays sentence whose subject isn't entity-shaped)
+        if (boundIdx == null) {
+          const n = (doc.sentenceTexts || []).length;
+          for (let i = 0; i < n; i++) for (const e of rel.liveAt(i)) pool.push(e);
+        }
+        for (const e of pool) {
+          if (e.pronoun) continue;      // an unresolved pronoun subject carries no verdict
+          const rc = await relComp(c.v, e.v);
+          if (rc < REL_FLOOR) continue;
+          const sS = await align(c.s, e.s), sO = await align(c.s, e.o);
+          const oS = await align(c.o, e.s), oO = await align(c.o, e.o);
+          const hit = (kind, extra) => {
+            const key = kind + '|' + e.sent + '|' + normSurface(c.s);
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(Object.assign({
+              claim: sent.trim(), kind,
+              edge: { s: e.s, v: e.v, o: e.o, sent: e.sent, via: e.via },
+              claimSVO: { s: c.s, v: c.v, o: c.o },
+              scores: { rc: +rc.toFixed(2), sS: +sS.toFixed(2), sO: +sO.toFixed(2), oS: +oS.toFixed(2), oO: +oO.toFixed(2) },
+            }, extra || {}));
+          };
+          // the clean swap: subject lexically on the object side and the
+          // object on the subject side ("the Partnership pays owners")
+          if (sO >= 0.9 && sS < ALIGN_FLOOR && (oS >= 0.9 || oO < ALIGN_FLOOR)) { hit('inverted'); break; }
+          // subject aligned where the edge put it — the claim holds
+          if (sS >= ALIGN_FLOOR && sS >= sO) continue;
+          // a NAMED subject the edge doesn't carry, asserting this very
+          // relation: the same act + object under a different actor flags;
+          // without the object anchor only a subject absent from the whole
+          // page can flag — a present figure may hold the relation elsewhere
+          const nm = namedSubject(c.s);
+          if (nm.isNamed && Math.max(sS, sO) < ALIGN_FLOOR &&
+              (oO >= ALIGN_FLOOR || (nm.absent && rc >= REL_FLOOR))) {
+            hit('foreign-subject', { subjectAbsentFromPage: nm.absent });
+          }
+        }
+      }
+    }
+    return out.slice(0, 3);
+  }
+  async function checkRelationsScope(docs, draftText) {
+    const out = [];
+    for (const d of scopeDocs(docs)) {
+      if (d.kind === 'table') continue;
+      let ms = []; try { ms = await checkRelations(d, draftText); } catch (e) {}
+      for (const m of ms) out.push({ ...m, docId: d.id });
+    }
+    return out;
+  }
+
+  /* ---------- provenance binds at generation ----------
+     bindClaimKeys consumes the span tags the model wrote ([s12] — the same
+     tags the spans wear in its prompt) as each claim's PROVENANCE KEY: the
+     span the claim was built from, not a plausible span retrieved
+     afterward. A keyed claim verifies against ITS OWN span only — a key is
+     never overwritten with a better-agreeing span, because that better
+     agreement is exactly how citation-as-costume happens. A key that does
+     not resolve (bad index, or no token of the claim lives in the span)
+     HOLDS the claim: it ships uncited and is named in the audit. Unkeyed
+     claims fall back to the old binder, claim by claim — fallback only,
+     never the primary path. Semantic drift of a keyed claim from its own
+     span is the envelope's job (groundingEnvelope), kept separate so this
+     stays sync and cheap. */
+  function bindClaimKeys(doc, answerText, query, intent, opts) {
+    const floor = CITE_FLOOR;
+    // a tag the model wrote AFTER the period belongs to the sentence it
+    // closes — pull it back inside before the draft is split into claims
+    const raw = String(answerText == null ? '' : answerText)
+      .replace(/([.!?]['"’”)\]]*)\s*((?:\[s(?:\d+|\?)\]\s*)+)/g, ' $2$1')
+      .replace(/\s+([.,;:])/g, '$1').trim();
+    const texts = doc.sentenceTexts || [];
+    const parts = splitDraft(raw).filter(p => p.replace(/\[s(?:\d+|\?)\]/g, '').trim());
+    const cited = [], held = [];
+    let attested = 0, keyed = 0;
+    const out = parts.map(sent => {
+      const tags = [...String(sent).matchAll(/\[s(\d+|\?)\]/g)].map(m => m[1]);
+      const clean = sent.replace(/\[s(?:\d+|\?)\]/g, '').replace(/\s+([.,;:])/g, '$1').replace(/\s{2,}/g, ' ').trim();
+      const keys = tags.filter(t => t !== '?').map(Number).filter(n => n >= 0 && n < texts.length);
+      if (keys.length) {
+        keyed++;
+        const idx = keys[0];                      // the first tag is the claim's provenance
+        const span = texts[idx] || '';
+        const cT = new Set(tok(clean)), sT = new Set(tok(span));
+        let overlap = 0; for (const t of cT) if (sT.has(t)) overlap++;
+        if (overlap >= 1) { cited.push({ docId: doc.id, idx }); return `${clean} {{cite:${doc.id}:${idx}:s${idx}}}`; }
+        held.push({ claim: clean, key: idx, reason: 'key-unresolved' });
+        return clean;
+      }
+      // unkeyed → the old binder path, claim by claim (fallback only)
+      const receipt = absenceClaim(doc, clean, opts && opts.hotEntity);
+      if (receipt) { attested++; return `${clean} {{absent:${doc.id}:${receipt}}}`; }
+      const cands = retrieve(doc, clean, 1);
+      if (cands.length && supportsClaim(cands[0], clean, floor)) { cited.push({ docId: doc.id, idx: cands[0].i }); return `${clean} {{cite:${doc.id}:${cands[0].i}:s${cands[0].i}}}`; }
+      return clean;
+    }).join(' ');
+    const supported = cited.length + attested;
+    const grounded = supported > 0 && supported >= parts.length * 0.5;
+    const cov = (intent && intent !== 'factual') ? { n: 1, d: 1 } : coverage(query, parts.join(' '));
+    return {
+      text: out, cites: cited, held, keyed,
+      audit: {
+        status: held.length ? 'warn' : (grounded ? (cov.n >= cov.d ? 'clean' : 'notes') : 'warn'),
+        grounded, covers: `${cov.n}/${cov.d}`, stable: true,
+        note: (keyed ? `Provenance bound at generation: ${keyed} claim(s) carried their own span key; the old binder served only the unkeyed rest.`
+                     : 'No model-supplied keys — every citation bound by the fallback binder.')
+          + (held.length ? ` ${held.length} claim(s) HELD: their keys did not resolve (${held.map(h => 's' + h.key).join(', ')}) — shipped uncited rather than re-bound to a better-agreeing span.` : '')
+          + (attested ? ' Absence claims attested against the event log (⊥ with a scan receipt).' : ''),
+      },
+    };
+  }
+  function bindClaimKeysScope(docs, answerText, query, intent, opts) {
+    const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
+    // keyed binding is per-doc ([sN] names a span of the PRIMARY source);
+    // a multi-prose scope keeps the old scope binder until [docId:N] keys land
+    if (ds.length === 1) return bindClaimKeys(ds[0], answerText, query, intent, opts);
+    return bindCitationsScope(docs, answerText, query, intent, opts);
+  }
+
+  /* ---------- the grounding-leak envelope (mechanism D) ----------
+     For each cited claim in a BOUND answer, the embedding distance to the
+     span its own footnote names — never to an exemplar library, so a
+     sharp, unusual, true sentence is safe and only drift from the cited
+     source flags. Bands are the existing audit rules: below
+     audit_resemblance the claim is a leak (it left its span); between
+     resemblance and audit_paraphrase_strong it is impressionistic; at or
+     above, a close paraphrase. Vacuous without the embedder. */
+  async function groundingEnvelope(doc, boundText) {
+    const empty = { checked: 0, rows: [], leaks: 0, impressionistic: 0, strong: 0 };
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return empty;
+    if (!doc || doc.kind !== 'prose') return empty;
+    const texts = doc.sentenceTexts || [];
+    const RES = READING_RULES.audit_resemblance.value;
+    const STRONG = READING_RULES.audit_paraphrase_strong.value;
+    const out = { checked: 0, rows: [], leaks: 0, impressionistic: 0, strong: 0 };
+    const re = /\{\{cite:([^:}]+):(\d+):[^}]*\}\}/g;
+    let m, cursor = 0;
+    const text = String(boundText == null ? '' : boundText);
+    while ((m = re.exec(text)) !== null) {
+      const claim = text.slice(cursor, m.index).replace(/\{\{[^}]*\}\}/g, ' ').replace(/\s+/g, ' ').trim();
+      cursor = re.lastIndex;
+      const idx = +m[2];
+      if (m[1] !== doc.id || !claim || !(idx >= 0 && idx < texts.length)) continue;
+      let cv = null, sv = null;
+      try { cv = await window.EOEmbed.embedQuery(claim); sv = await window.EOEmbed.embedQuery(texts[idx]); } catch (e) {}
+      if (!cv || !sv) continue;
+      const cos = _cosineNorm(cv, sv);
+      const band = cos < RES ? 'leak' : cos < STRONG ? 'impressionistic' : 'strong';
+      out.checked++;
+      out[band === 'leak' ? 'leaks' : band === 'impressionistic' ? 'impressionistic' : 'strong']++;
+      out.rows.push({ claim, idx, cos: +cos.toFixed(4), band });
+    }
+    return out;
+  }
+
   // A coverage gap can only be SOUGHT if the term exists somewhere in the
   // sources. Sub-querying on a meta-word from the user's own phrasing
   // ("mistakes", "summary") seeks nothing and spends a round on the wrong
@@ -10418,6 +10833,13 @@ function projectGraph(events, frame = {}) {
     // the kin-subject veto: a claim that binds to a kin sentence but hangs
     // the kin's predicate on the possessor (grounded ≠ correct)
     checkKinSubjects, checkKinSubjectsScope,
+    // the relation gate (relation_gate rule, OFF by default — parity floor):
+    // claims checked relation-against-relation (agency inversion, wrong
+    // speaker, foreign subject), provenance bound at generation with the
+    // old binder as fallback, and the grounding-leak envelope (distance
+    // from the claim's OWN cited span, never an exemplar library)
+    relationGateEnabled, checkRelations, checkRelationsScope,
+    bindClaimKeys, bindClaimKeysScope, groundingEnvelope,
     // definitional asks answered from the graph's own assertions
     answerDefine, defineAssertions, isDefinitionalAsk,
     // kin asks answered from possessive-kin resolutions ("whose son…?"), the

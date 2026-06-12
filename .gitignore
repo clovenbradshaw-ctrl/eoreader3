@@ -6,3 +6,6 @@ evo/work/
 evo/observations/*.md
 evo/proposals/*.diff
 evo/proposals/*.md
+
+# local model cache for Node-side measurement (vendored MiniLM, never committed)
+.models/
