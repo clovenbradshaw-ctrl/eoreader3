@@ -7637,29 +7637,57 @@ function projectGraph(events, frame = {}) {
       const k = normSurface(ev.target);
       if (!figKeys.has(k) || seenA.has(k)) continue;
       seenA.add(k);
-      asserts.push(`${nameByKey.get(k)} is ${ev.value}`);
+      asserts.push({ name: nameByKey.get(k), is: String(ev.value) });
       if (asserts.length >= 4) break;
     }
 
     // section labels whose heading falls in the window
     const spine = foldSections(doc).filter(s => s.start < end).map(s => s.label).slice(0, 8);
 
-    const parts = [];
-    if (heavy.length) {
-      const f = heavy.map(e => e.name);
-      parts.push(`It turns most on ${f.length > 1 ? f.slice(0, -1).join(', ') + ' and ' + f[f.length - 1] : f[0]}.`);
-    }
-    if (asserts.length) parts.push(`It states that ${asserts.join('; ')}.`);
-    if (spine.length > 1) parts.push(`It moves through ${spine.join(' → ')}.`);
     // an opening line anchors the gist on something concrete the model can quote
     let opener = '';
     for (let i = 0; i < end; i++) {
       const t = String(texts[i] || '').trim();
       if (t.length >= 40 && /[.!?…"”'’)]$/.test(t)) { opener = t; break; }
     }
-    if (!parts.length && !opener) return '';
-    if (opener) parts.push(`It opens: “${opener}”`);
-    return parts.join(' ');
+
+    return prosifyFold({ figures: heavy.map(e => e.name), asserts, spine, opener });
+  }
+
+  // The fold as PROSE, not a template. The structured pieces — the figures the
+  // window turns on, what it takes them to be, the chapters it crosses, the line
+  // it opens on — are joined into flowing sentences a reader's voice would use,
+  // so the model composes over an overview rather than re-listing slots. Still
+  // mechanical: no model writes this, the wording is deterministic.
+  function _joinList(xs) {
+    const a = xs.filter(Boolean);
+    if (!a.length) return '';
+    if (a.length === 1) return a[0];
+    if (a.length === 2) return a[0] + ' and ' + a[1];
+    return a.slice(0, -1).join(', ') + ', and ' + a[a.length - 1];
+  }
+  function prosifyFold({ figures, asserts, spine, opener }) {
+    const sents = [];
+    // who/what it turns on, with what the text takes them to be folded in
+    if (figures && figures.length) {
+      let lead = `It turns mostly on ${_joinList(figures)}`;
+      if (asserts && asserts.length) {
+        lead += ` — it takes ${_joinList(asserts.map(a => `${a.name} to be ${a.is}`))}`;
+      }
+      sents.push(lead + '.');
+    } else if (asserts && asserts.length) {
+      sents.push(`It takes ${_joinList(asserts.map(a => `${a.name} to be ${a.is}`))}.`);
+    }
+    // the arc across its chapters, read as movement rather than a list
+    if (spine && spine.length > 1) {
+      const middle = spine.length > 2 ? `, by way of ${_joinList(spine.slice(1, -1))},` : '';
+      sents.push(`It runs from ${spine[0]}${middle} through to ${spine[spine.length - 1]}.`);
+    } else if (spine && spine.length === 1) {
+      sents.push(`It sits under ${spine[0]}.`);
+    }
+    // the concrete opening line, so the gist has something to hold
+    if (opener) sents.push(`It opens: “${opener}”`);
+    return sents.join(' ');
   }
 
   // Build (and cache, per rules revision) the integral fold of the whole
@@ -9844,6 +9872,92 @@ function projectGraph(events, frame = {}) {
     return out.slice(0, k);
   }
 
+  /* ---------- Stray thoughts (a lightweight associative RAG) ----------
+     A prompt doesn't only retrieve what it names — it STIRS the page. Seeded
+     from the question's own embedding, strayThoughts pulls the nearest sentence
+     the question never reaches in words (a tangent, not an answer), then re-seeds
+     from THAT thought to pull the next, and so on: a short self-re-prompting
+     drift, the way one stray thought triggers another. Each hop is similarity-
+     floored, kept lexically distinct from the question (so it stays "stray"),
+     δ-gated against the doc's own gravity (a line near everything is no pull),
+     and de-duplicated, so the chain converges and stops. The thoughts ride the
+     prompt as their own low-confidence tier, legible as association rather than
+     retrieval. No embedder ⇒ [] (degrades to the lexical paths — parity floor).
+     Reuses _docVecCache, so the drift costs only the query embedding. */
+  const STRAY_SIM_FLOOR = 0.30;   // below this cosine, not a real associative pull
+  const STRAY_LEX_MAX = 0.30;     // above this overlap with the question, not "stray"
+  async function strayThoughts(doc, query, opts = {}) {
+    const out = [];
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return out;
+    if (!doc || doc.kind !== 'prose') return out;
+    const hops = Math.max(1, Math.min(opts.hops || 3, 6));      // length of the drift
+    const branch = Math.max(1, Math.min(opts.branch || 1, 3));  // how many it may split into per hop
+    let vecs; try { vecs = await docSentVectors(doc); } catch (e) { vecs = null; }
+    if (!vecs || !vecs.length) return out;
+    let seed; try { seed = await window.EOEmbed.embedQuery(query); } catch (e) { seed = null; }
+    if (!seed) return out;
+    const texts = doc.sentenceTexts || [];
+    const qTokens = new Set(tok(String(query || '')));
+    const chromeSet = (doc._chrome && doc._chrome.length) ? new Set(doc._chrome) : null;
+    const dim = vecs[0].length;
+    const globalC = (() => {
+      const v = new Float64Array(dim);
+      for (const r of vecs) for (let d = 0; d < dim; d++) v[d] += r[d];
+      let n = 0; for (let d = 0; d < dim; d++) n += v[d] * v[d]; n = Math.sqrt(n) || 1;
+      for (let d = 0; d < dim; d++) v[d] /= n;
+      return v;
+    })();
+    const visited = new Set();
+    const nearest = (seedVec, fromIdx) => {
+      let best = null;
+      for (let j = 0; j < vecs.length; j++) {
+        if (visited.has(j) || j === fromIdx) continue;
+        if (chromeSet && chromeSet.has(j)) continue;
+        const sim = _cosineNorm(seedVec, vecs[j]);
+        if (sim < STRAY_SIM_FLOOR) continue;
+        // a stray thought is one the question doesn't already reach in words
+        const jt = tok(texts[j] || ''); let shared = 0; for (const t of jt) if (qTokens.has(t)) shared++;
+        const lex = jt.length ? shared / jt.length : 0;
+        if (lex > STRAY_LEX_MAX) continue;
+        // δ gate: a sentence near the whole document (flat) is not a real pull
+        const baseline = Math.max(1e-6, _cosineNorm(vecs[j], globalC));
+        if (sim < baseline) continue;
+        if (!best || sim > best.sim) best = { i: j, t: texts[j], sim: +sim.toFixed(4), lex: +lex.toFixed(3) };
+      }
+      return best;
+    };
+    // the cascade: the question seeds the first thought; each thought re-prompts
+    // the next, branching at most `branch` ways per hop.
+    let frontier = [{ vec: seed, via: null }];
+    for (let h = 0; h < hops && out.length < hops; h++) {
+      const next = [];
+      for (const f of frontier) {
+        const found = nearest(f.vec, f.via);
+        if (!found) continue;
+        visited.add(found.i);
+        out.push({ i: found.i, t: found.t, sim: found.sim, via: f.via, hop: h });
+        next.push({ vec: vecs[found.i], via: found.i });
+        if (next.length >= branch || out.length >= hops) break;
+      }
+      if (!next.length) break;
+      frontier = next;
+    }
+    return out;
+  }
+
+  // The drift as a prompt note — its own low-confidence tier, marked as
+  // association ("usually tangential, occasionally the key"), each line cited so
+  // a thought the model actually leans on is bound like any other span.
+  function strayThoughtsNote(stray, doc) {
+    if (!stray || !stray.length) return '';
+    const texts = (doc && doc.sentenceTexts) || [];
+    const lines = stray.map(s => {
+      const from = s.via == null ? 'the question' : `“${String(texts[s.via] || '').replace(/\s+/g, ' ').trim().slice(0, 36)}…”`;
+      return `- drifting from ${from}: ${String(s.t).replace(/\s+/g, ' ').trim()} [s${s.i}]`;
+    });
+    return 'Stray thoughts — lines the page pulled toward as you read this, by association rather than by the words of the question (usually tangential, occasionally the key; ignore the ones that don’t earn their place):\n' + lines.join('\n');
+  }
+
   async function retrieveHybrid(docs, q, k = 6) {
     const ds = scopeDocs(docs);
     const lex = retrieveScope(ds, q, k).map(h => ({ ...h }));
@@ -10107,6 +10221,10 @@ function projectGraph(events, frame = {}) {
     answerConfirm, answerConfirmScope, splitDraft, holdsSpeakerSlot,
     // the embedder as a wandering reader: associative, δ-gated neighbors (no-op without an embedder)
     associativeNeighbors,
+    // stray thoughts: a lightweight associative RAG — the question seeds a short
+    // self-re-prompting drift of embedding-near, lexically-distinct lines that
+    // ride the prompt as their own low-confidence tier (no-op without an embedder)
+    strayThoughts, strayThoughtsNote,
     // the inference void: mark what the reader ADDED across two cited spans
     markInferred,
     // reconsideration: does a draft read as a refusal / non-answer (plan SEG),

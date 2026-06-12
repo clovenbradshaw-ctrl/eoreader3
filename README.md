@@ -98,10 +98,12 @@ the standing overview; it rides into the grounded prompt as the leading note
 (*"What the document is about, your reading of the whole: …"*), so "what is this
 about" is answerable on any turn, not just an explicit `summarize`.
 
-The fold is the graph's own reading, scoped to a prefix and said in words — the
-heaviest figures named inside the window, what the text asserts about them, the
-chapter labels crossed, and an opening line to anchor the gist. No model touches
-it (`documentFold` / `documentFolds`, cached per rules-revision on the doc).
+The fold is the graph's own reading, scoped to a prefix and said in **prose** —
+the heaviest figures the window turns on (with what the text takes them to be
+folded into the same sentence), the arc across the chapters it crosses, and an
+opening line to anchor the gist, joined into flowing sentences rather than a slot
+template. No model touches it (`documentFold` / `documentFolds`, `prosifyFold`,
+cached per rules-revision on the doc).
 
 And it is **cumulative**, so a chapter scopes it: ask about Ch 1 and you get the
 fold *up to the beginning of Ch 2* — the reading so far, with figures introduced
@@ -111,6 +113,28 @@ only in later chapters absent. A chapter reference is read mechanically
 to. A turn with no chapter reference gets the integral fold of the whole.
 Chapter boundaries are the same standalone-heading structure the rest of the
 reader leverages — "structure is what folds leverage."
+
+### Stray thoughts (a lightweight associative RAG)
+
+A prompt doesn't only retrieve what it names — it **stirs** the page. Seeded from
+the question's own embedding, `strayThoughts` pulls the nearest sentence the
+question never reaches in words (a tangent, not an answer), then **re-seeds from
+that thought** to pull the next, and so on: a short self-re-prompting drift, the
+way one stray thought triggers another. Each hop is similarity-floored, kept
+lexically distinct from the question (so it stays *stray*), δ-gated against the
+document's own gravity (a line near everything is no real pull), and
+de-duplicated — so the chain converges and stops on its own (budgeted to a few
+hops).
+
+The drift rides the prompt as its **own low-confidence tier** —
+*"stray thoughts… usually tangential, occasionally the key; ignore the ones that
+don't earn their place"* — each line cited, so a thought the model actually leans
+on binds like any other span. It's lightweight: it fires only when the embedder
+is already resident (the same MiniLM the rest of the app warms in the
+background), reusing the cached sentence vectors, so it costs only the query
+embedding. With no embedder it is a clean no-op (`strayThoughts` returns nothing
+and the lexical paths answer exactly as before — the parity floor holds), and it
+recorded as its own `stray` audit step so the drift is inspectable.
 
 ### When you push back (conversational repair)
 

@@ -1154,6 +1154,53 @@ The storm took the shutter by midnight. Edith and Sefton sat close to the lamp.`
   // and a summary turn's blob leads with the fold
   const ctx = E.context(doc, 'summarize this', 6);
   ok(/whole document is about/.test(ctx) && /Edith/.test(ctx), 'the summary context leads with the fold');
+
+  // the fold reads as prose, not a slot template
+  ok(/turns mostly on/.test(folds.integral), 'the fold reads as prose');
+  ok(!/It states that .*;.*;/.test(folds.integral), 'the fold is not a semicolon-joined slot list');
+});
+
+// ── stray thoughts: a lightweight associative RAG, seeded by the prompt and
+// re-seeded by each thought it surfaces (no-op without an embedder) ──
+await group('stray thoughts — the prompt stirs the page', async () => {
+  const RING = `Ring of Notes
+
+Tokenzero alphazero betazero drifts onward.
+Tokenone alphaone betaone drifts onward.
+Tokentwo alphatwo betatwo drifts onward.
+Tokenthree alphathree betathree drifts onward.
+Tokenfour alphafour betafour drifts onward.
+Tokenfive alphafive betafive drifts onward.`;
+  const sandbox = loadEngine();
+  const SE = sandbox.EOEngine;
+  const doc = await SE.parseDocument('ring.txt', RING, 'ring');
+
+  // no embedder ⇒ the drift is a clean no-op (parity floor)
+  const none = await SE.strayThoughts(doc, 'tell me a stray thought', { hops: 3 });
+  ok(Array.isArray(none) && none.length === 0, 'no embedder ⇒ no stray thoughts');
+
+  // a deterministic fake embedder: sentences live on a 2-D ring (adjacent ones
+  // are near), the query sits just off it — enough graded structure to drift.
+  const ring = (theta) => Float32Array.from([Math.cos(theta), Math.sin(theta)]);
+  sandbox.EOEmbed = {
+    ready: () => true, warm: () => {},
+    embedSentences: async (arr) => arr.map((_, i) => ring(i * 0.6)),
+    embedQuery: async () => ring(0.3),
+  };
+
+  const stray = await SE.strayThoughts(doc, 'tell me a stray thought', { hops: 3, branch: 1 });
+  ok(stray.length >= 1, 'with an embedder the prompt surfaces stray thoughts');
+  ok(stray.length <= 3, 'the drift is bounded by the hop budget');
+  const idxs = stray.map(s => s.i);
+  ok(new Set(idxs).size === idxs.length, 'a stray thought is never repeated (the chain converges)');
+  eq(stray[0].via, null, 'the first stray thought is seeded by the question itself');
+  let chained = true;
+  for (let k = 1; k < stray.length; k++) if (stray[k].via !== stray[k - 1].i) chained = false;
+  ok(chained, 'each later thought re-prompts from the one before it (self re-prompting)');
+
+  // it rides the prompt as a marked, cited tier
+  const note = SE.strayThoughtsNote(stray, doc);
+  ok(/Stray thoughts/.test(note) && /\[s\d+\]/.test(note), 'stray thoughts render as a cited, marked note');
 });
 
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
