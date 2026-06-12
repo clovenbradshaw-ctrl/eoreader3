@@ -7772,6 +7772,74 @@ function projectGraph(events, frame = {}) {
     return value;
   }
 
+  // The Site face as a per-document histogram: walk the event log, address
+  // each event to one of the nine Sites (eoSiteOfEvent), and bucket. Each cell
+  // holds its events ranked by salience; mass is the sum of each event's
+  // physics mass — looked up by referent_id (or normalized target surface)
+  // from projectEntities — with a count fallback when physics is absent. Pure
+  // read: deposits nothing on the event record, runs eoSiteOfEvent live rather
+  // than reading any cached `ev.site`.
+  //
+  // The whole-doc histogram (inScope omitted) caches on doc._terrains per
+  // RULES_REV, mirroring documentFolds. Scoped reads (a chapter prefix, an
+  // impression region) recompute — the integral property holds because the
+  // scope predicate filters by sentence_idx, the same one _foldScope threads.
+  const EO_SITE_NAMES = ['Void','Thing','Kind','Field','Link','Network','Atmosphere','Lens','Paradigm'];
+  function _emptyCells() {
+    const c = {}; for (const k of EO_SITE_NAMES) c[k] = []; return c;
+  }
+  function _zeroByCell() {
+    const c = {}; for (const k of EO_SITE_NAMES) c[k] = 0; return c;
+  }
+  function foldTerrains(doc, inScope) {
+    if (!doc || doc.kind !== 'prose' || !Array.isArray(doc._events)) return null;
+    // Cache the all-scope histogram — the genre fingerprint use of this is
+    // whole-document; scoped reads recompute on the fly.
+    const scoped = (typeof inScope === 'function');
+    if (!scoped && doc._terrains && doc._terrains.rev === RULES_REV) return doc._terrains.value;
+
+    // Build a name → mass map from the projected entity view. Events don't
+    // carry physics mass directly; their TARGET (the referent the event
+    // touches) does. Same projection the entity ranker reads, so the histogram
+    // is mass-weighted the same way the cast is.
+    let massByName = new Map();
+    try {
+      const { entities } = projectEntities(doc);
+      for (const e of (entities || [])) {
+        const m = (e.mass != null) ? e.mass : (e.raw || 1);
+        const k = normSurface(e.name);
+        if (k && (!massByName.has(k) || massByName.get(k) < m)) massByName.set(k, m);
+      }
+    } catch (_) { /* leave map empty — every event falls back to count */ }
+
+    const cells = _emptyCells();
+    const mass = _zeroByCell();
+    const count = _zeroByCell();
+    // The target-surface logic mirrors eoSiteOfEvent: SIG's surface is speaker,
+    // CON/SYN's is the object endpoint, the rest is target/targetName.
+    const targetOf = (ev) => ev.op === 'SIG' ? ev.speaker
+      : (ev.op === 'CON' || ev.op === 'SYN') ? (ev.o != null ? ev.o : ev.targetName)
+      : (ev.target != null ? ev.target : ev.targetName);
+
+    for (const ev of doc._events) {
+      if (!ev || !ev.op) continue;
+      if (scoped && !inScope(ev.sentence_idx)) continue;
+      const site = eoSiteOfEvent(ev);
+      if (!site || !(site in cells)) continue;
+      const t = targetOf(ev);
+      const key = (t != null) ? normSurface(t) : '';
+      const m = (key && massByName.has(key)) ? massByName.get(key) : 1;
+      mass[site] += m;
+      count[site] += 1;
+      cells[site].push({ seq: ev.seq, op: ev.op, sentence_idx: ev.sentence_idx, target: t, mass: m });
+    }
+    for (const k of EO_SITE_NAMES) cells[k].sort((a, b) => b.mass - a.mass);
+
+    const value = { cells, mass, count };
+    if (!scoped) doc._terrains = { rev: RULES_REV, value };
+    return value;
+  }
+
   // number-words and roman numerals, so "chapter two" / "part IV" resolve to an
   // ordinal the same way "chapter 2" does
   const _FOLD_ORDINALS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
@@ -10398,6 +10466,12 @@ function projectGraph(events, frame = {}) {
     // grid, the operator→Domain map, and the classifiers. The Act face is the
     // event `op`; the Site face is `event.site` / `entity.site`.
     EO_SITE_GRID, EO_DOMAIN_OF_OP, EO_SITES, eoSite, eoSiteOfEvent, objectOf,
+    // the Site histogram: a pure read over the event log that buckets every
+    // event into its terrain. Whole-doc value is cached on RULES_REV; scoped
+    // reads recompute. The fold doesn't yet use it (read-only first pass);
+    // shipping it lets the corpus expose whether the Interpretation row
+    // actually carries mass on essays before any prosifier work begins.
+    foldTerrains,
     // EVA failures hydrate the conventions: the session's REC records,
     // JSONL-shaped and append-ready for memory/conventions.jsonl. A host may
     // set EOEngine.onConventionsRec = (rec) => … to ship each one out.

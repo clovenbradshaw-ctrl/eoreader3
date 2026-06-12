@@ -1,0 +1,231 @@
+{
+  "cap": 14000,
+  "docs": [
+    {
+      "id": "pg219",
+      "title": "Heart of Darkness",
+      "genre": "narrative",
+      "sentences": 119,
+      "events": 130,
+      "mass": {
+        "Void": 0,
+        "Thing": 58.8,
+        "Kind": 0,
+        "Field": 1,
+        "Link": 69,
+        "Network": 1,
+        "Atmosphere": 0,
+        "Lens": 7.8,
+        "Paradigm": 0
+      },
+      "count": {
+        "Void": 0,
+        "Thing": 55,
+        "Kind": 0,
+        "Field": 1,
+        "Link": 69,
+        "Network": 1,
+        "Atmosphere": 0,
+        "Lens": 4,
+        "Paradigm": 0
+      }
+    },
+    {
+      "id": "pg1237",
+      "title": "Father Goriot",
+      "genre": "narrative",
+      "sentences": 76,
+      "events": 96,
+      "mass": {
+        "Void": 0,
+        "Thing": 52.6,
+        "Kind": 0,
+        "Field": 0,
+        "Link": 50,
+        "Network": 0,
+        "Atmosphere": 0,
+        "Lens": 41,
+        "Paradigm": 0
+      },
+      "count": {
+        "Void": 0,
+        "Thing": 38,
+        "Kind": 0,
+        "Field": 0,
+        "Link": 46,
+        "Network": 0,
+        "Atmosphere": 0,
+        "Lens": 12,
+        "Paradigm": 0
+      }
+    },
+    {
+      "id": "pg5200",
+      "title": "Metamorphosis",
+      "genre": "narrative",
+      "sentences": 106,
+      "events": 119,
+      "mass": {
+        "Void": 0,
+        "Thing": 727.1999999999999,
+        "Kind": 0,
+        "Field": 1,
+        "Link": 86,
+        "Network": 0,
+        "Atmosphere": 0,
+        "Lens": 801.9999999999999,
+        "Paradigm": 0
+      },
+      "count": {
+        "Void": 0,
+        "Thing": 18,
+        "Kind": 0,
+        "Field": 1,
+        "Link": 86,
+        "Network": 0,
+        "Atmosphere": 0,
+        "Lens": 14,
+        "Paradigm": 0
+      }
+    },
+    {
+      "id": "pg600",
+      "title": "Notes from Underground",
+      "genre": "narrative",
+      "sentences": 125,
+      "events": 80,
+      "mass": {
+        "Void": 0,
+        "Thing": 23.2,
+        "Kind": 0,
+        "Field": 0,
+        "Link": 60,
+        "Network": 0,
+        "Atmosphere": 0,
+        "Lens": 7.2,
+        "Paradigm": 0
+      },
+      "count": {
+        "Void": 0,
+        "Thing": 18,
+        "Kind": 0,
+        "Field": 0,
+        "Link": 60,
+        "Network": 0,
+        "Atmosphere": 0,
+        "Lens": 2,
+        "Paradigm": 0
+      }
+    },
+    {
+      "id": "pg34901",
+      "title": "On Liberty",
+      "genre": "essay",
+      "sentences": 96,
+      "events": 227,
+      "mass": {
+        "Void": 0,
+        "Thing": 517,
+        "Kind": 0,
+        "Field": 1,
+        "Link": 184,
+        "Network": 1,
+        "Atmosphere": 0,
+        "Lens": 848.8,
+        "Paradigm": 0
+      },
+      "count": {
+        "Void": 0,
+        "Thing": 78,
+        "Kind": 0,
+        "Field": 1,
+        "Link": 111,
+        "Network": 1,
+        "Atmosphere": 0,
+        "Lens": 36,
+        "Paradigm": 0
+      }
+    },
+    {
+      "id": "pg3300",
+      "title": "Wealth of Nations",
+      "genre": "essay",
+      "sentences": 106,
+      "events": 14,
+      "mass": {
+        "Void": 0,
+        "Thing": 8,
+        "Kind": 0,
+        "Field": 0,
+        "Link": 6,
+        "Network": 0,
+        "Atmosphere": 0,
+        "Lens": 4,
+        "Paradigm": 0
+      },
+      "count": {
+        "Void": 0,
+        "Thing": 6,
+        "Kind": 0,
+        "Field": 0,
+        "Link": 6,
+        "Network": 0,
+        "Atmosphere": 0,
+        "Lens": 2,
+        "Paradigm": 0
+      }
+    }
+  ],
+  "byGenre": {
+    "narrative": {
+      "mass": {
+        "Void": 0,
+        "Thing": 861.8,
+        "Kind": 0,
+        "Field": 2,
+        "Link": 265,
+        "Network": 1,
+        "Atmosphere": 0,
+        "Lens": 857.9999999999999,
+        "Paradigm": 0
+      },
+      "count": {
+        "Void": 0,
+        "Thing": 129,
+        "Kind": 0,
+        "Field": 2,
+        "Link": 261,
+        "Network": 1,
+        "Atmosphere": 0,
+        "Lens": 32,
+        "Paradigm": 0
+      },
+      "n": 4
+    },
+    "essay": {
+      "mass": {
+        "Void": 0,
+        "Thing": 525,
+        "Kind": 0,
+        "Field": 1,
+        "Link": 190,
+        "Network": 1,
+        "Atmosphere": 0,
+        "Lens": 852.8,
+        "Paradigm": 0
+      },
+      "count": {
+        "Void": 0,
+        "Thing": 84,
+        "Kind": 0,
+        "Field": 1,
+        "Link": 117,
+        "Network": 1,
+        "Atmosphere": 0,
+        "Lens": 38,
+        "Paradigm": 0
+      },
+      "n": 2
+    }
+  }
+}
