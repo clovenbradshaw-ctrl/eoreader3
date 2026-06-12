@@ -75,7 +75,9 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc,
         <div className="sb-foot-row" data-model-trigger onClick={onModelClick}>
           <span className={'pulse' + (modelStatus === 'loading' ? ' load' : modelStatus === 'ready' ? '' : ' idle')} />
           <span className="rt">{model.name}</span>
-          <span className="model-chip">{modelStatus === 'ready' ? 'loaded' : modelStatus === 'loading' ? 'loading' : 'local'}</span>
+          <span className="model-chip">{model.provider === 'anthropic'
+            ? (modelStatus === 'ready' ? 'connected' : modelStatus === 'loading' ? 'connecting' : 'cloud')
+            : (modelStatus === 'ready' ? 'loaded' : modelStatus === 'loading' ? 'loading' : 'local')}</span>
         </div>
       </div>
     </aside>

@@ -1850,7 +1850,7 @@ function App() {
 
     // load the real model on demand if it isn't ready yet
     if (canLLM && !wasLoaded) {
-      patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name });
+      patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name, loadCloud: model.provider === 'anthropic' });
       const ok = await loadModel(model);
       AUD('step', 'model', { action: 'load', model: model.name, ok: !!ok });
       patchLast({ loading: false, typing: true });
