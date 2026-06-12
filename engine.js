@@ -7317,7 +7317,7 @@ function projectGraph(events, frame = {}) {
     }
     return out.join('').trim();
   }
-  function salientContext(doc) {
+  function salientContext(doc, query) {
     // Title-page chrome — "Heart of Darkness", "by Joseph Conrad", "Contents",
     // "I  II  III" — is short and carries no terminal punctuation. It costs
     // passage slots the model should spend on prose; skip it in the picks.
@@ -7335,15 +7335,25 @@ function projectGraph(events, frame = {}) {
       for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) picks.add(b.sentences[0].i);
       [0, 1, 2].forEach(i => doc.sentences[i] && picks.add(doc.sentences[i].i));
     }
-    // Lead with the structural portrait in reader's voice, so the model
-    // composes from what the reading noticed rather than echoing a span. The
-    // raw spans follow as evidence, but the portrait sets the task.
-    const p = graphPortrait(doc);
-    const head = p && p.heavy.length
-      ? 'What the reading came to rest on: ' + p.heavy.map(e => e.name).join(', ')
-        + (p.assertions.length ? '. It took ' + p.assertions.map(a => `${a.name} to be ${a.is}`).join(', ') : '')
-        + (p.spine.length > 1 ? '. It moved through: ' + p.spine.join(' → ') : '') + '.\n\n'
-      : '';
+    // Lead with the FOLD in the reader's voice — the integral fold of the whole
+    // document, or, when the turn scoped to a chapter ("summarize chapter 1"),
+    // the cumulative fold up to that chapter's end. The model composes from what
+    // the reading accumulated rather than echoing a span; the raw spans follow
+    // as evidence. Falls back to the structural portrait when no fold forms.
+    const f = foldForQuery(doc, query);
+    let head = '';
+    if (f && f.text) {
+      head = (f.scope === 'section'
+        ? `The document up to ${f.label}: ${f.text}`
+        : `What the whole document is about: ${f.text}`) + '\n\n';
+    } else {
+      const p = graphPortrait(doc);
+      head = p && p.heavy.length
+        ? 'What the reading came to rest on: ' + p.heavy.map(e => e.name).join(', ')
+          + (p.assertions.length ? '. It took ' + p.assertions.map(a => `${a.name} to be ${a.is}`).join(', ') : '')
+          + (p.spine.length > 1 ? '. It moved through: ' + p.spine.join(' → ') : '') + '.\n\n'
+        : '';
+    }
     const spans = [...picks].sort((a, b) => a - b).slice(0, 16).map(i => `[s${i}] ${doc.sentenceTexts[i]}`).join('\n');
     return head + spans;
   }
@@ -7579,6 +7589,243 @@ function projectGraph(events, frame = {}) {
       frame:   (() => { try { return projectGraph(doc._events).frame; } catch (e) { return null; } })(),
       defs:    collectDefsForPortrait(doc),
     };
+  }
+
+  // ── The integral fold ─────────────────────────────────────────────
+  // A FOLD is a mechanical condensation of the document read from its start up
+  // to a sentence boundary — the reading "so far", the way an integral
+  // accumulates as you move along it. The fold of the WHOLE document (boundary
+  // = the sentence count) is what answers "what is this about", and it rides
+  // into the prompt on every turn that touches the page so that question is
+  // always answerable. The fold up to a chapter's END boundary is what a
+  // question scoped to that chapter receives — "the fold up to the beginning of
+  // Ch 2" for Ch 1. No model: the heaviest figures named within the window,
+  // what the text asserts about them, and the section labels crossed — the
+  // graph's own reading, scoped to a prefix and said in words.
+
+  // The cleaned, ranked cast — the same figures answerSummary portrays
+  // (Gutenberg apparatus and the header's author/translator/language names
+  // dropped), so a fold never turns on the byline. Off the Gutenberg path this
+  // is projectEntities ranked, byte-identical.
+  function foldHeavy(doc) {
+    const { entities } = projectEntities(doc);
+    const meta = docMetadata(doc);
+    if (!meta.isGutenberg) return entities;
+    const identity = new Set();
+    for (const k of ['author', 'editor', 'translator', 'illustrator', 'language']) {
+      const v = meta.fields && meta.fields[k];
+      if (v) identity.add(String(v).toLowerCase().trim());
+    }
+    const keep = new Set(castEntities(doc).map(e => String(e.name)));
+    return entities.filter(e => keep.has(String(e.name)) && !identity.has(String(e.name).toLowerCase().trim()));
+  }
+
+  // The section spine as CUMULATIVE boundaries: each chapter-like heading with
+  // the sentence it starts at and the sentence the NEXT heading starts at (or
+  // the document's end). Chrome headings — the title repeated, a byline, a
+  // Contents line, a bare roman-numeral run — drop through the same filter the
+  // portrait's spine uses, so a fold's chapters are real chapters.
+  function foldSections(doc) {
+    const texts = doc.sentenceTexts || [];
+    const n = texts.length;
+    const titleLC = String(texts[0] || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const isChrome = (label) => {
+      const t = String(label).replace(/\s+/g, ' ').trim();
+      const lc = t.toLowerCase();
+      if (titleLC && lc === titleLC) return true;
+      if (/^(by|translated by|edited by|illustrated by|with an introduction|contents|title page|frontispiece)\b/i.test(t)) return true;
+      if (/^[ivxlcdm]+(\s+[ivxlcdm]+)+\.?$/i.test(t)) return true;     // "I  II  III" — a contents listing
+      return false;
+    };
+    const raw = [];
+    for (const s of (doc._sections || [])) {
+      if (!s || s.label == null || s.start_sentence == null) continue;
+      if (isChrome(s.label)) continue;
+      const start = s.start_sentence;
+      if (start < 0 || start >= n) continue;
+      raw.push({ label: String(s.label), start });
+    }
+    raw.sort((a, b) => a.start - b.start);
+    const out = [], seen = new Set();
+    for (let i = 0; i < raw.length; i++) {
+      const k = raw[i].label.replace(/\s+/g, ' ').trim().toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const end = i + 1 < raw.length ? raw[i + 1].start : n;
+      out.push({ label: raw[i].label, start: raw[i].start, end });
+    }
+    return out;
+  }
+
+  // The core fold: condense whatever sentences the predicate admits into the
+  // reader's-voice prose — the figures that scope turns on, what the text takes
+  // them to be, the chapters it touches, and the earliest line it opens on. The
+  // scope can be a contiguous prefix (the integral / a chapter) OR a scattered
+  // set (the region an impressionistic query surfaced) — the SAME synthesis runs
+  // over either, so "the integral of the relevant things" is just this over a
+  // set instead of a range.
+  function _foldScope(doc, inScope) {
+    if (!doc || doc.kind !== 'prose') return '';
+    const texts = doc.sentenceTexts || [];
+    const n = texts.length;
+    if (!n) return '';
+
+    // heaviest figures with a mention inside the scope
+    const heavy = foldHeavy(doc).filter(e => (e.sents || []).some(inScope)).slice(0, 5);
+    const figKeys = new Set(heavy.map(e => e.key));
+    const nameByKey = new Map(heavy.map(e => [e.key, e.name]));
+
+    // copular "X is Y" assertions about those figures, made inside the scope
+    const asserts = [], seenA = new Set();
+    for (const ev of (doc._events || [])) {
+      if (ev.op !== 'DEF' || ev.path !== 'class' || !ev.value) continue;
+      if (!inScope(ev.sentence_idx)) continue;
+      const k = normSurface(ev.target);
+      if (!figKeys.has(k) || seenA.has(k)) continue;
+      seenA.add(k);
+      asserts.push({ name: nameByKey.get(k), is: String(ev.value) });
+      if (asserts.length >= 4) break;
+    }
+
+    // section labels whose span the scope touches
+    const spine = foldSections(doc).filter(s => {
+      for (let i = s.start; i < s.end; i++) if (inScope(i)) return true;
+      return false;
+    }).map(s => s.label).slice(0, 8);
+
+    // the earliest in-scope line, so the gist has something concrete to hold
+    let opener = '';
+    for (let i = 0; i < n; i++) {
+      if (!inScope(i)) continue;
+      const t = String(texts[i] || '').trim();
+      if (t.length >= 40 && /[.!?…"”'’)]$/.test(t)) { opener = t; break; }
+    }
+
+    return prosifyFold({ figures: heavy.map(e => e.name), asserts, spine, opener });
+  }
+
+  // The fold of the prefix [0, hi): the reading up to a boundary, in words.
+  function documentFold(doc, hi) {
+    if (!doc || doc.kind !== 'prose') return '';
+    const n = (doc.sentenceTexts || []).length;
+    if (!n) return '';
+    const end = (hi == null || hi > n) ? n : (hi < 0 ? 0 : hi);
+    if (end <= 0) return '';
+    return _foldScope(doc, (i) => i != null && i >= 0 && i < end);
+  }
+
+  // The fold (integral) over an ARBITRARY set of sentences — the relevant region
+  // an impressionistic query gathered, condensed into one picture rather than
+  // handed back as raw lines.
+  function foldOver(doc, idxs) {
+    if (!doc || doc.kind !== 'prose') return '';
+    const set = new Set((idxs || []).filter(i => i != null && i >= 0));
+    if (!set.size) return '';
+    return _foldScope(doc, (i) => set.has(i));
+  }
+
+  // The fold as PROSE, not a template. The structured pieces — the figures the
+  // window turns on, what it takes them to be, the chapters it crosses, the line
+  // it opens on — are joined into flowing sentences a reader's voice would use,
+  // so the model composes over an overview rather than re-listing slots. Still
+  // mechanical: no model writes this, the wording is deterministic.
+  function _joinList(xs) {
+    const a = xs.filter(Boolean);
+    if (!a.length) return '';
+    if (a.length === 1) return a[0];
+    if (a.length === 2) return a[0] + ' and ' + a[1];
+    return a.slice(0, -1).join(', ') + ', and ' + a[a.length - 1];
+  }
+  function prosifyFold({ figures, asserts, spine, opener }) {
+    const sents = [];
+    // who/what it turns on, with what the text takes them to be folded in
+    if (figures && figures.length) {
+      let lead = `It turns mostly on ${_joinList(figures)}`;
+      if (asserts && asserts.length) {
+        lead += ` — it takes ${_joinList(asserts.map(a => `${a.name} to be ${a.is}`))}`;
+      }
+      sents.push(lead + '.');
+    } else if (asserts && asserts.length) {
+      sents.push(`It takes ${_joinList(asserts.map(a => `${a.name} to be ${a.is}`))}.`);
+    }
+    // the arc across its chapters, read as movement rather than a list
+    if (spine && spine.length > 1) {
+      const middle = spine.length > 2 ? `, by way of ${_joinList(spine.slice(1, -1))},` : '';
+      sents.push(`It runs from ${spine[0]}${middle} through to ${spine[spine.length - 1]}.`);
+    } else if (spine && spine.length === 1) {
+      sents.push(`It sits under ${spine[0]}.`);
+    }
+    // the concrete opening line, so the gist has something to hold
+    if (opener) sents.push(`It opens: “${opener}”`);
+    return sents.join(' ');
+  }
+
+  // Build (and cache, per rules revision) the integral fold of the whole
+  // document plus the cumulative fold at every chapter boundary.
+  function documentFolds(doc) {
+    if (!doc || doc.kind !== 'prose') return null;
+    if (doc._folds && doc._folds.rev === RULES_REV) return doc._folds.value;
+    const n = (doc.sentenceTexts || []).length;
+    const sections = foldSections(doc).map(s => ({ label: s.label, start: s.start, end: s.end, fold: documentFold(doc, s.end) }));
+    const value = { integral: documentFold(doc, n), sections };
+    doc._folds = { rev: RULES_REV, value };
+    return value;
+  }
+
+  // number-words and roman numerals, so "chapter two" / "part IV" resolve to an
+  // ordinal the same way "chapter 2" does
+  const _FOLD_ORDINALS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
+  function _romanToInt(s) {
+    const m = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
+    let total = 0, prev = 0;
+    for (const ch of String(s).toLowerCase().split('').reverse()) {
+      const v = m[ch]; if (!v) return 0;
+      if (v < prev) total -= v; else { total += v; prev = v; }
+    }
+    return total;
+  }
+
+  // The fold the question wants. A reference to a chapter/section — by its own
+  // label ("the Fountain"), or by ordinal ("chapter 2", "part three",
+  // "section IV") — returns the cumulative fold up to where the NEXT section
+  // begins. Everything else gets the integral fold of the whole document, so
+  // "what is this about" is always covered.
+  function foldForQuery(doc, query) {
+    const folds = documentFolds(doc);
+    if (!folds) return null;
+    const q = String(query || '');
+    const sections = folds.sections;
+    if (sections.length) {
+      const ql = ' ' + q.toLowerCase().replace(/\s+/g, ' ').trim() + ' ';
+      for (const s of sections) {
+        const lab = String(s.label).toLowerCase().replace(/\s+/g, ' ').trim();
+        if (lab.length >= 3 && ql.includes(' ' + lab + ' '))
+          return { scope: 'section', label: s.label, hi: s.end, text: s.fold };
+      }
+      const m = /\b(?:chapters?|ch|parts?|sections?|sec|books?|acts?|scenes?|cantos?)\.?\s+([0-9]+|[ivxlcdm]+|[a-z]+)\b/i.exec(q);
+      if (m) {
+        const tok = m[1].toLowerCase();
+        let idx = 0;
+        if (/^[0-9]+$/.test(tok)) idx = parseInt(tok, 10);
+        else if (_FOLD_ORDINALS[tok] != null) idx = _FOLD_ORDINALS[tok];
+        else if (/^[ivxlcdm]+$/.test(tok)) idx = _romanToInt(tok);
+        if (idx >= 1 && idx <= sections.length) {
+          const s = sections[idx - 1];
+          return { scope: 'section', label: s.label, hi: s.end, text: s.fold };
+        }
+      }
+    }
+    return { scope: 'integral', label: null, hi: (doc.sentenceTexts || []).length, text: folds.integral };
+  }
+
+  // The fold as a prompt note — the reader's standing overview of the document
+  // (or the chapter the turn scoped to), in first person, "usually right".
+  function foldNote(doc, query) {
+    const f = foldForQuery(doc, query);
+    if (!f || !f.text) return '';
+    return f.scope === 'section'
+      ? `What the document covers up to ${f.label} (your reading so far): ${f.text}`
+      : `What the document is about (your reading of the whole): ${f.text}`;
   }
 
   // ── The graph, made portable ──────────────────────────────────────
@@ -8604,7 +8851,7 @@ function projectGraph(events, frame = {}) {
   function context(doc, query, k = 6) {
     if (!doc || doc.kind === 'table') return '';
     const intent = classifyIntent(query);
-    if (intent === 'summary') return salientContext(doc);
+    if (intent === 'summary') return salientContext(doc, query);
     if (intent === 'who') return entityContext(doc);
     const hits = retrieve(doc, query, k);
     const have = new Set(hits.map(h => h.i));
@@ -8903,6 +9150,11 @@ function projectGraph(events, frame = {}) {
   function contextParts(doc, query, k = 6) {
     if (!doc || doc.kind === 'table') return { spans: [], notes: [] };
     const spans = [], notes = [], have = new Set();
+    // The fold leads the notes — the reader's standing overview of the whole
+    // document (or the chapter the turn scoped to), so "what is this about" is
+    // always answerable even on a turn whose retrieved passages are narrow.
+    const fold = foldNote(doc, query);
+    if (fold) notes.push(fold);
     // the header rides along whenever it exists — bibliographic questions
     // ("who wrote it?") are answered from here, not passage retrieval
     const metaLine = metadataNote(doc);
@@ -8956,6 +9208,8 @@ function projectGraph(events, frame = {}) {
     for (const h of retrieveScope(ds, query, k)) push(h.docId, h.i, h.t);
     for (const d of ds) {
       const texts = d.sentenceTexts || [];
+      const fold = foldNote(d, query);
+      if (fold) notes.push(`In ${d.name} — ` + fold.charAt(0).toLowerCase() + fold.slice(1));
       const metaLine = metadataNote(d);
       if (metaLine) notes.push(`In ${d.name} — ` + metaLine.charAt(0).toLowerCase() + metaLine.slice(1));
       for (const s of entityEvidence(d, query)) push(d.id, s.i, s.t);
@@ -9780,6 +10034,70 @@ function projectGraph(events, frame = {}) {
     return out.slice(0, k);
   }
 
+  /* ---------- Impression query (embedding as a fuzzy graph query) ----------
+     The embedder is not a tangent generator — it's another way to QUERY the
+     graph: impressionistically, by meaning rather than by the words the question
+     happened to use. Seeded from the question's embedding, impressionQuery
+     gathers the sentences the page reads as related (cosine ≥ floor) — the
+     "relevant region" — then does two things the lexical path can't:
+
+       • hands back the top related sentences VERBATIM (citable spans), and
+       • folds the WHOLE region into one note — the INTEGRAL of the relevant
+         things, not the raw lines. The region first closes over the figures it
+         touches (their other mentions join it), so the integral covers a figure's
+         whole footprint, not just the sentences cosine happened to rank. That
+         closure is the "self-re-prompting": an impression of a name pulls the
+         rest of that name into the fold.
+
+     No embedder ⇒ an empty result (the lexical spans/notes answer exactly as
+     before — parity floor). Reuses _docVecCache, so it costs only the query
+     embedding. */
+  async function impressionQuery(doc, query, opts = {}) {
+    const empty = { spans: [], idxs: [], fold: '' };
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return empty;
+    if (!doc || doc.kind !== 'prose') return empty;
+    let vecs; try { vecs = await docSentVectors(doc); } catch (e) { vecs = null; }
+    if (!vecs || !vecs.length) return empty;
+    let qv; try { qv = await window.EOEmbed.embedQuery(query); } catch (e) { qv = null; }
+    if (!qv) return empty;
+    const texts = doc.sentenceTexts || [];
+    const chromeSet = (doc._chrome && doc._chrome.length) ? new Set(doc._chrome) : null;
+    const floor = isFinite(opts.floor) ? opts.floor : SEM_FLOOR;
+    const region = Math.max(1, Math.min(opts.region || 12, 24));   // how wide the relevant region may be
+    const spanK = Math.max(1, Math.min(opts.spans || 4, 8));       // verbatim spans handed back
+    // the impressionistic hits: every sentence the page reads as related
+    const scored = [];
+    for (let i = 0; i < vecs.length; i++) {
+      if (chromeSet && chromeSet.has(i)) continue;
+      const s = _cosineNorm(qv, vecs[i]);
+      if (s >= floor) scored.push({ i, t: texts[i], sim: +s.toFixed(4) });
+    }
+    if (!scored.length) return empty;
+    scored.sort((a, b) => b.sim - a.sim);
+    const relevant = scored.slice(0, region);
+    const relSet = new Set(relevant.map(r => r.i));
+    // close the region over the figures it touches — the integral should cover a
+    // name's whole footprint, not just the lines cosine ranked (self-re-prompting)
+    if (opts.expand !== false) {
+      const heavy = foldHeavy(doc).filter(e => (e.sents || []).some(i => relSet.has(i))).slice(0, 4);
+      for (const e of heavy) for (const i of (e.sents || [])) if (i >= 0 && i < vecs.length) relSet.add(i);
+    }
+    return {
+      spans: relevant.slice(0, spanK),
+      idxs: [...relSet].sort((a, b) => a - b),
+      fold: foldOver(doc, [...relSet]),
+    };
+  }
+
+  // The impression as a prompt note — the integral of the related material in
+  // the reader's voice, marked as a semantic read (impression, not the words of
+  // the question), so the model weighs it as understanding, not quotation.
+  function impressionNote(fold) {
+    const f = String(fold || '').trim();
+    if (!f) return '';
+    return 'Related by impression (a semantic read of the page, not the words of the question — usually relevant, sometimes a tangent), gathered into one picture: ' + f;
+  }
+
   async function retrieveHybrid(docs, q, k = 6) {
     const ds = scopeDocs(docs);
     const lex = retrieveScope(ds, q, k).map(h => ({ ...h }));
@@ -10004,6 +10322,11 @@ function projectGraph(events, frame = {}) {
     // Talker-facing prose composer: see talkerPortrait (WI-5) and
     // the mechanical grounder groundTalkerOutput (WI-6).
     graphPortrait, graphSnapshot, talkerPortrait, groundTalkerOutput, evaDraft,
+    // the integral fold: a cumulative, mechanical condensation of the document
+    // read up to a boundary — the whole-document fold answers "what is this
+    // about" and rides every grounded turn; a chapter question gets the fold up
+    // to where the next chapter begins.
+    documentFold, documentFolds, foldForQuery, foldNote, foldOver,
     // ingestion audit: every word's fate (indexed / stopword / dropped), the
     // inverted index actually built, and per-span coverage — the glass box over
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
@@ -10041,6 +10364,10 @@ function projectGraph(events, frame = {}) {
     answerConfirm, answerConfirmScope, splitDraft, holdsSpeakerSlot,
     // the embedder as a wandering reader: associative, δ-gated neighbors (no-op without an embedder)
     associativeNeighbors,
+    // impression query: the embedder as a fuzzy graph query — the question
+    // gathers a semantically-related region, handed back as verbatim spans plus
+    // the INTEGRAL (fold) of that region as a note (no-op without an embedder)
+    impressionQuery, impressionNote,
     // the inference void: mark what the reader ADDED across two cited spans
     markInferred,
     // reconsideration: does a draft read as a refusal / non-answer (plan SEG),

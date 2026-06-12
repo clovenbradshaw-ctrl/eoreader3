@@ -1395,6 +1395,30 @@ function App() {
     // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
     const wm = buildWMForTurn(scope, q);
     const primaryDoc = window.EOEngine.routePrimary(scope, q) || scope[0];
+    // IMPRESSION QUERY (the embedder as a fuzzy graph query): alongside the
+    // lexical retrieval, query the page by MEANING — gather the semantically
+    // related region and hand the model both the verbatim related spans AND the
+    // integral (fold) of that region as a note. Lightweight: only when the
+    // embedder is already resident (warmed in the background), reusing the cached
+    // sentence vectors. No embedder ⇒ nothing (the lexical paths answer as before).
+    if (window.EOEmbed && window.EOEmbed.ready() && primaryDoc && primaryDoc.kind === 'prose'
+        && window.EOEngine.impressionQuery) {
+      try {
+        const imp = await window.EOEngine.impressionQuery(primaryDoc, q, { spans: 4, region: 12 });
+        if (imp && (imp.fold || imp.spans.length)) {
+          AUD('step', 'impression', { region: imp.idxs.length, spans: imp.spans.map(s => 's' + s.i) });
+          const note = window.EOEngine.impressionNote(imp.fold);
+          if (parts) {
+            if (note) parts.notes = [...parts.notes, note];
+            for (const s of imp.spans)
+              if (!parts.spans.some(x => x.docId === primaryDoc.id && x.idx === s.i))
+                parts.spans.push({ docId: primaryDoc.id, idx: s.i, tag: 's' + s.i, text: s.t });
+          } else if (ctx) {
+            ctx += (note ? '\n\n' + note : '') + '\n' + imp.spans.map(s => `[s${s.i}] ${s.t}`).join('\n');
+          }
+        }
+      } catch (e) { eoWarn('impression', e); }
+    }
     // THE SHAPE PASS (two-stage answering): a small first call characterizes
     // the turn — a director's note on what the user is actually after — and
     // the answer pass speaks freely with that note as guidance, not a leash.

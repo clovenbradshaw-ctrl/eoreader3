@@ -86,6 +86,64 @@ the same treatment — tagged *"the user said this reply missed their
 question"* — so a rejected answer can't keep re-entering the prompt as
 something that simply happened.
 
+### The integral fold (what is this about, always answerable)
+
+A model handed only the passages a question retrieved can answer that question
+but not the prior one — *"what is this document about?"* — because no single
+retrieval carries the whole. So every turn that touches the page also carries
+the document's **integral fold**: a mechanical, cumulative condensation read
+from the start up to a boundary, the way an integral accumulates as you move
+along it. The fold of the *whole* document (boundary = the last sentence) is
+the standing overview; it rides into the grounded prompt as the leading note
+(*"What the document is about, your reading of the whole: …"*), so "what is this
+about" is answerable on any turn, not just an explicit `summarize`.
+
+The fold is the graph's own reading, scoped to a prefix and said in **prose** —
+the heaviest figures the window turns on (with what the text takes them to be
+folded into the same sentence), the arc across the chapters it crosses, and an
+opening line to anchor the gist, joined into flowing sentences rather than a slot
+template. No model touches it (`documentFold` / `documentFolds`, `prosifyFold`,
+cached per rules-revision on the doc).
+
+And it is **cumulative**, so a chapter scopes it: ask about Ch 1 and you get the
+fold *up to the beginning of Ch 2* — the reading so far, with figures introduced
+only in later chapters absent. A chapter reference is read mechanically
+(`foldForQuery`): its own heading ("the Fountain") or an ordinal ("chapter 2",
+"part three", "section IV") selects the section whose end boundary the fold runs
+to. A turn with no chapter reference gets the integral fold of the whole.
+Chapter boundaries are the same standalone-heading structure the rest of the
+reader leverages — "structure is what folds leverage."
+
+### The impression query (embedding as a fuzzy query into the graph)
+
+The embedder isn't a tangent generator — it's **another way to query the graph**:
+impressionistically, by *meaning* rather than by the words the question happened
+to use. Seeded from the question's embedding, `impressionQuery` gathers the
+sentences the page reads as related (cosine ≥ a floor) — the **relevant region** —
+then does two things the lexical path can't:
+
+- it hands the model the top related sentences **verbatim** (citable spans), and
+- it folds the **whole region into one note** — the **integral of the relevant
+  things**, not the raw lines. This reuses the same fold operator the integral
+  fold uses (`foldOver`, which condenses *any* set of sentences, not just a
+  `[0, hi)` prefix).
+
+Before folding, the region **closes over the figures it touches** — a name the
+impression surfaced pulls its other mentions into the set — so the integral
+covers a figure's whole footprint, not just the sentences cosine happened to
+rank. That closure is the self-re-prompting: an impression of a name re-queries
+the graph for the rest of that name.
+
+So the model receives the verbatim related spans *and* a synthesized note —
+*"related by impression… gathered into one picture"* — that reads as the reader's
+understanding of the relevant material, weighed as a note (usually right,
+sometimes a tangent), not as quotation. It's lightweight: it fires only when the
+embedder is already resident (the same MiniLM the rest of the app warms in the
+background), reusing the cached sentence vectors, so it costs only the query
+embedding, and it's recorded as its own `impression` audit step. With no embedder
+it is a clean no-op (`impressionQuery` returns nothing and the lexical
+spans/notes answer exactly as before — the parity floor holds).
+
 ### When you push back (conversational repair)
 
 Not every turn is content. "you're not listening to what i'm saying",

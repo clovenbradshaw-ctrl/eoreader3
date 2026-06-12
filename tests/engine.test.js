@@ -1181,6 +1181,99 @@ await group('typing — richer & more consistent person evidence', async () => {
   ok(true, 'singular_they is a tunable register rule (bridge wired)');
 });
 
+// ── the integral fold: "what is this about" is always answerable, and a
+// chapter question gets the fold up to the beginning of the next chapter ──
+await group('fold — the integral reading of a document', async () => {
+  const CHAPTERED = `The Tower at Harrow
+
+Chapter One
+
+Edith kept the lamp at Voss Point. The keeper trusted her with the seaward light. Every night Edith climbed the stairs.
+
+Chapter Two
+
+Sefton arrived from the mainland in a small boat. Sefton argued with the keeper about the crossing. Marlow was waiting for him, he said.
+
+Chapter Three
+
+The storm took the shutter by midnight. Edith and Sefton sat close to the lamp.`;
+  const doc = await E.parseDocument('chaptered.txt', CHAPTERED, 'ch');
+
+  // the document always carries an integral fold and knows its chapters
+  const folds = E.documentFolds(doc);
+  ok(folds && folds.integral, 'a document carries an integral fold of the whole');
+  ok(folds.sections.length >= 3, 'the fold knows the chapter boundaries');
+  ok(/Edith/.test(folds.integral), 'the integral fold names a figure from the document');
+
+  // "what is this about" gets the whole-document fold
+  const all = E.foldForQuery(doc, 'what is this document about?');
+  eq(all.scope, 'integral', 'a whole-document question gets the integral fold');
+  ok(/Sefton/.test(all.text), 'the integral fold names a figure introduced later in the document');
+
+  // asking about Ch 1 gets the fold UP TO the beginning of Ch 2
+  const f1 = E.foldForQuery(doc, 'what is chapter 1 about?');
+  eq(f1.scope, 'section', 'a chapter question scopes the fold to a section');
+  ok(/Edith/.test(f1.text), 'the chapter-1 fold names a figure from chapter 1');
+  ok(!/Sefton/.test(f1.text), 'the chapter-1 fold stops at the start of chapter 2 (Sefton, introduced there, is absent)');
+  ok(f1.hi <= folds.integral.length || f1.hi < (doc.sentenceTexts || []).length, 'the chapter-1 boundary is before the document end');
+
+  // an ordinal word resolves the same way ("chapter two")
+  const f2 = E.foldForQuery(doc, 'summarize chapter two');
+  eq(f2.scope, 'section', 'an ordinal-word chapter reference scopes to a section');
+  ok(/Sefton/.test(f2.text), 'the chapter-2 fold names Sefton, introduced in chapter 2');
+
+  // the fold rides into the grounded context as a note on an ordinary turn
+  const parts = E.contextParts(doc, 'who tends the seaward light?', 6);
+  ok(parts.notes.some(nt => /reading of the whole/.test(nt) && /Edith/.test(nt)),
+    'the integral fold rides into the grounded context as the leading note');
+
+  // and a summary turn's blob leads with the fold
+  const ctx = E.context(doc, 'summarize this', 6);
+  ok(/whole document is about/.test(ctx) && /Edith/.test(ctx), 'the summary context leads with the fold');
+
+  // the fold reads as prose, not a slot template
+  ok(/turns mostly on/.test(folds.integral), 'the fold reads as prose');
+  ok(!/It states that .*;.*;/.test(folds.integral), 'the fold is not a semicolon-joined slot list');
+});
+
+// ── impression query: the embedder as a fuzzy query into the graph — verbatim
+// related spans PLUS the integral (fold) of the relevant region as a note ──
+await group('impression query — embedding as a fuzzy graph query', async () => {
+  const sandbox = loadEngine();
+  const SE = sandbox.EOEngine;
+  const voss = await SE.parseDocument('voss.txt', VOSS, 'v');
+
+  // foldOver: the integral over an ARBITRARY set of relevant sentences, in prose
+  const someFold = SE.foldOver(voss, [2, 3, 4, 5]);
+  ok(typeof someFold === 'string' && someFold.length > 0, 'foldOver folds an arbitrary set into prose');
+  const emptyFold = SE.foldOver(voss, []);
+  eq(emptyFold, '', 'foldOver of nothing is empty');
+
+  // no embedder ⇒ a clean no-op (the lexical paths answer as before)
+  const none = await SE.impressionQuery(voss, 'who fears the crossing', {});
+  ok(none.spans.length === 0 && none.fold === '', 'no embedder ⇒ empty impression');
+
+  // a deterministic fake embedder: sentences on a 2-D ring, the query just off it,
+  // so the impression selects a contiguous-ish region with real entities in it.
+  const ring = (theta) => Float32Array.from([Math.cos(theta), Math.sin(theta)]);
+  sandbox.EOEmbed = {
+    ready: () => true, warm: () => {},
+    embedSentences: async (arr) => arr.map((_, i) => ring(i * 0.5)),
+    embedQuery: async () => ring(0.4),
+  };
+
+  const imp = await SE.impressionQuery(voss, 'tell me about the night', { spans: 3, region: 8 });
+  ok(imp.spans.length >= 1, 'the impression hands back verbatim related spans');
+  ok(imp.spans.every(s => typeof s.t === 'string' && s.i != null), 'spans carry verbatim text and an index');
+  ok(typeof imp.fold === 'string' && imp.fold.length > 0,
+    'the related note is the integral (fold) of the relevant things, not raw lines');
+  ok(/turns mostly on|opens|runs from|sits under/.test(imp.fold), 'the integral reads as a fold, in prose');
+  ok(imp.idxs.length >= imp.spans.length, 'the folded region covers at least the spanned sentences');
+
+  const note = SE.impressionNote(imp.fold);
+  ok(/Related by impression/.test(note) && note.includes(imp.fold), 'the impression renders as a marked note carrying the fold');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }
