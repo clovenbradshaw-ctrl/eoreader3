@@ -60,12 +60,29 @@ let _uid = 0; const uid = (p) => p + '-' + (++_uid);
 // restored id so a new upload this session can't collide with a stored one.
 const bumpUid = (ids) => { for (const id of (ids || [])) { const m = String(id).match(/-(\d+)$/); if (m) _uid = Math.max(_uid, parseInt(m[1], 10)); } };
 
+// The on-device CPU (wllama) model used as the automatic fallback: the MODELS
+// entry whose key matches EOLLM.fallbackKey(). It's the local path that still
+// runs when there's no WebGPU and when a GPU model stalls/fails.
+const cpuFallbackModel = () => {
+  const L = typeof window !== 'undefined' ? window.EOLLM : null;
+  const key = L && L.fallbackKey && L.fallbackKey();
+  return (key && window.MODELS.find(m => m.mlc === key)) || window.MODELS.find(m => m.provider === 'wllama') || null;
+};
+
 // Which local model to start on. The 0.5B is a fine phone default — small
 // download, runs anywhere — but on a desktop it's too small to phrase well, so
 // default desktops to the 1.5B "balanced" model. Either can be switched live
 // from the picker; switching now releases the old model before loading the new.
 const defaultModel = () => {
   const by = (id) => window.MODELS.find(m => m.id === id);
+  const L = typeof window !== 'undefined' ? window.EOLLM : null;
+  // No WebGPU and no Claude key → the on-device CPU model is the only local path
+  // that can actually run here (Firefox/Safari today), so default straight to it
+  // instead of a GPU model that would just fail to load.
+  if (L && L.hasWebGPU && !L.hasWebGPU() && !(L.hasAnthropicKey && L.hasAnthropicKey()) && (!L.hasWasm || L.hasWasm())) {
+    const cpu = cpuFallbackModel();
+    if (cpu) return cpu;
+  }
   const phone = typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches;
   return (phone ? by('qwen-05') : by('qwen-15')) || window.MODELS[0];
 };
@@ -140,6 +157,13 @@ function App() {
   const [modelProgress, setModelProgress] = useState(0);
   const [modelLoadText, setModelLoadText] = useState(''); // WebLLM's live status line ("12MB fetched…", "Loading GPU shaders…")
   const [anthropicKeySet, setAnthropicKeySet] = useState(!!(window.EOLLM && window.EOLLM.hasAnthropicKey && window.EOLLM.hasAnthropicKey()));
+  // Gate for the startup auto-load: flipped true once local persistence has
+  // rehydrated (or is known absent). The auto-load waits for it so it resumes
+  // the model the user actually had selected — restored from prefs — rather than
+  // racing hydration and loading the default. That race was why a refresh came
+  // back to an UNloaded model: the effect fired on mount with defaultModel(),
+  // hydration then swapped `model` to the saved one, and nothing loaded it.
+  const [bootReady, setBootReady] = useState(false);
   // Staged-ingest progress: null when idle, else { phase, stage, pct, name }.
   const [ingestStatus, setIngestStatus] = useState(null);
 
@@ -240,7 +264,7 @@ function App() {
   // induced learning all live on the device so a refresh doesn't wipe the
   // workspace. Everything is best-effort — storage may be unavailable.
   useEffect(() => {
-    if (!window.EOStore) { hydrated.current = true; return; }
+    if (!window.EOStore) { hydrated.current = true; setBootReady(true); return; }
     let cancelled = false;
     // Persist the engine's learned rules-ledger delta whenever it grows.
     window.EO_onLedgerChange = (events) => { try { window.EOStore.saveLedger(events); } catch (e) {} };
@@ -303,7 +327,7 @@ function App() {
           try { window.EOEngine.conversationField.restore(savedChat.field); } catch (e) {}
         }
       }
-      hydrated.current = true;
+      hydrated.current = true; setBootReady(true);
     })();
     return () => { cancelled = true; window.EO_onLedgerChange = null; };
   }, []);
@@ -590,16 +614,56 @@ function App() {
         return false;
       }
     }
-    if (!window.EOLLM.hasWebGPU()) { setModelStatus('idle'); return false; }
+    // wllama (CPU): no WebGPU needed. The GGUF downloads once from Hugging Face
+    // and runs on the CPU; progress streams the same way the GPU path does.
+    if (m.provider === 'wllama') {
+      if (window.EOLLM.hasWasm && !window.EOLLM.hasWasm()) { setModelStatus('idle'); showToast('This browser can’t run the on-device CPU model (no WebAssembly).'); return false; }
+      setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
+      try {
+        await window.EOLLM.load(m.mlc, (p, text) => { setModelProgress(p); if (text) setModelLoadText(text); });
+        setModelStatus('ready'); setModelLoadText(''); return true;
+      } catch (e) {
+        setModelStatus('idle'); setModelLoadText('');
+        if (!(e && e.code === 'CANCEL')) showToast(e.message || 'CPU model failed to load');
+        return false;
+      }
+    }
+    if (!window.EOLLM.hasWebGPU()) {
+      // A GPU model was selected but this browser has no WebGPU. Rather than
+      // sit idle (mechanical-only), drop to the on-device CPU model.
+      setModelStatus('idle');
+      if (window.EO_CPU_FALLBACK !== 'off') return fallbackToCPU();
+      return false;
+    }
     setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
     try {
       await window.EOLLM.load(m.mlc, (p, text) => { setModelProgress(p); if (text) setModelLoadText(text); });
       setModelStatus('ready'); setModelLoadText(''); return true;
     } catch (e) {
       setModelStatus('idle'); setModelLoadText('');
-      if (!(e && e.code === 'CANCEL')) showToast(e.message || 'Model failed to load');  // a user cancel is not an error
+      if (e && e.code === 'CANCEL') return false;  // a user cancel is not an error
+      // A GPU model that stalled or failed to load leaves chat with no phrasing.
+      // Fall to the on-device CPU model so answers still get worded (the user's
+      // "backup ready when the GPU ones haven't loaded or are stalled").
+      const cpu = cpuFallbackModel();
+      if (window.EO_CPU_FALLBACK !== 'off' && cpu && cpu.id !== m.id && window.EOLLM.hasWasm && window.EOLLM.hasWasm()) {
+        showToast('The GPU model ' + (e.code === 'STALL' ? 'stalled' : 'wouldn’t load') + ' — switching to the on-device CPU model.');
+        return fallbackToCPU();
+      }
+      showToast(e.message || 'Model failed to load');
       return false;
     }
+  };
+  // Switch the active model to the on-device CPU model and load it. The single
+  // resident-engine invariant means we can't hold a warm CPU model beside a live
+  // GPU one — so the switch happens at the moment it's needed (no WebGPU at
+  // startup, or a GPU stall/failure), with the runtime pre-warmed for speed.
+  const fallbackToCPU = async () => {
+    const cpu = cpuFallbackModel();
+    if (!cpu) return false;
+    if (window.EOLLM && window.EOLLM.hasWasm && !window.EOLLM.hasWasm()) return false;
+    setModel(cpu); setModelStatus('idle');
+    return loadModel(cpu);
   };
   // Save (or clear) the Claude API key from the model popover. Saving a key for
   // the currently-selected Anthropic model immediately loads it.
@@ -636,20 +700,34 @@ function App() {
     loadModel(model);
   };
 
-  // auto-load on startup so the demo is live with the actual model. The default
-  // (MODELS[0]) is the smallest, most mobile-friendly model, so it begins
-  // downloading right away on phones too rather than waiting for the first turn.
+  // auto-load on startup so the app is live with the actual model. Waits for
+  // bootReady (hydration done) so it RESUMES the model the user last selected —
+  // restored from prefs — instead of the default. Weights are cached (WebLLM
+  // cache / wllama useCache), so this re-instantiates fast and re-downloads
+  // nothing: a refresh comes back to a loaded model.
   useEffect(() => {
-    if (!window.EOLLM) return;
-    // A persisted Anthropic selection auto-loads if its key is already stored;
-    // a local model auto-loads when WebGPU is available.
-    if (model.provider === 'anthropic') { if (window.EOLLM.hasAnthropicKey()) loadModel(model); }
-    else if (window.EOLLM.hasWebGPU()) loadModel(model);
+    if (!bootReady || !window.EOLLM) return;
+    if (model.provider === 'anthropic') {
+      // A persisted Claude selection resumes if its key is stored; otherwise stay
+      // idle and let the popover collect the key.
+      if (window.EOLLM.hasAnthropicKey()) loadModel(model);
+    } else if (model.provider === 'wllama') {
+      loadModel(model);                      // on-device CPU — no WebGPU needed
+    } else if (window.EOLLM.hasWebGPU()) {
+      loadModel(model);
+      // Keep the CPU backup READY: pre-import the wllama runtime (small, cached)
+      // in the background so a later GPU stall can switch to it without also
+      // paying the runtime fetch. The model weights still download on switch.
+      if (window.EO_CPU_FALLBACK !== 'off') { try { window.EOLLM.prewarmFallback && window.EOLLM.prewarmFallback(); } catch (e) {} }
+    } else {
+      // A GPU model with no WebGPU here → drop straight to the on-device CPU model.
+      if (window.EO_CPU_FALLBACK !== 'off') fallbackToCPU();
+    }
     // Warm the structure-layer embedding reader in the background so the first
     // escalation isn't also paying the (one-time, cached) model download. Inert
     // if embed.js is absent or the model fails to load — routing stays lexical.
     try { if (window.EOEmbed && window.EOEmbed.warm) window.EOEmbed.warm(); } catch (e) {}
-  }, []);
+  }, [bootReady]);
 
   // ---- responsive: collapse the sidebar to an off-canvas drawer on phones and
   // keep the body to a single pane (side-by-side split doesn't fit a phone). ----
@@ -1830,7 +1908,10 @@ function App() {
     const doc = backingDoc();
     const scope = scopeList();   // explicit source chips, else the focused doc
     const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
-      ? window.EOLLM.hasAnthropicKey() : window.EOLLM.hasWebGPU()));
+      ? window.EOLLM.hasAnthropicKey()
+      : model.provider === 'wllama'
+      ? (!window.EOLLM.hasWasm || window.EOLLM.hasWasm())
+      : window.EOLLM.hasWebGPU()));
     const wasLoaded = canLLM && window.EOLLM.isLoaded(model.mlc);
 
     // Resolve this turn's budget at the deepest stop (thinkingBudget clamps to
@@ -1860,7 +1941,7 @@ function App() {
 
     // load the real model on demand if it isn't ready yet
     if (canLLM && !wasLoaded) {
-      patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name, loadCloud: model.provider === 'anthropic' });
+      patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name, loadCloud: model.provider === 'anthropic', loadCpu: model.provider === 'wllama' });
       const ok = await loadModel(model);
       AUD('step', 'model', { action: 'load', model: model.name, ok: !!ok });
       patchLast({ loading: false, typing: true });
@@ -2089,16 +2170,16 @@ function App() {
             </div>
           )}
           <button className="tb-pill" onClick={() => setAuditOpen(true)} title="Glass box — the extracted graph and every step the chat takes, exportable as JSONL">
-            <Icon name="activity" size={15} /> Glass box{auditCount ? ' · ' + auditCount : ''}
+            <Icon name="activity" size={15} /> <span className="tb-pill-lbl">Glass box{auditCount ? ' · ' + auditCount : ''}</span>
             {auditEnabled && <span className="dot rec" title="Recording" />}
           </button>
           {docs.some(d => d.kind === 'prose') && (
-            <button className="tb-pill" onClick={() => setGraphAuditOpen(true)} title="Ingestion audit — the graph as it is built, word by word, in reading order, with full provenance">
-              <Icon name="book" size={15} /> Ingestion
+            <button className="tb-pill tb-pill-adv" onClick={() => setGraphAuditOpen(true)} title="Ingestion audit — the graph as it is built, word by word, in reading order, with full provenance">
+              <Icon name="book" size={15} /> <span className="tb-pill-lbl">Ingestion</span>
             </button>
           )}
-          <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> {enabledRules} rules on</button>
-          {window.EVO_SANDBOX && <button className="tb-pill" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> Sandbox</button>}
+          <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> <span className="tb-pill-lbl">{enabledRules} rules on</span></button>
+          {window.EVO_SANDBOX && <button className="tb-pill tb-pill-adv" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> <span className="tb-pill-lbl">Sandbox</span></button>}
         </header>
 
         <div className="body" ref={bodyRef}>

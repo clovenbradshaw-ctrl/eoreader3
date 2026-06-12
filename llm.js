@@ -115,14 +115,176 @@
     return full;
   }
 
+  // ---- wllama (CPU / WebAssembly) backend ---------------------------------
+  // A third backend alongside WebLLM (GPU) and Anthropic (cloud): llama.cpp
+  // compiled to WebAssembly, running a GGUF model on the CPU with NO WebGPU.
+  // This is the dependable local fallback for the two cases that leave the GPU
+  // path empty — a browser without WebGPU (Firefox/Safari today) and a GPU
+  // model whose download stalls or fails — so chat still gets phrasing instead
+  // of dropping silently to mechanical-only. A model whose key is prefixed
+  // 'wllama:' is served here; every call site threading mlcKey through
+  // load()/streamChat()/isLoaded() keeps working unchanged.
+  //
+  // Pinned to an exact version (like the WebLLM import) so a floating major
+  // can't change the loader/stream API under us. Everything network-facing is
+  // overridable on window for self-hosting or to track a new release without a
+  // code change: EO_WLLAMA (inject the module {Wllama, wasmPaths}, also the
+  // test seam), EO_WLLAMA_VERSION, EO_WLLAMA_CDN, EO_WLLAMA_WASM, and
+  // EO_WLLAMA_MODELS (the id→GGUF registry).
+  const WLLAMA_PREFIX = 'wllama:';
+  const WLLAMA_VERSION = '3.4.1';
+  const isWllama = (key) => typeof key === 'string' && key.indexOf(WLLAMA_PREFIX) === 0;
+  const wllamaId = (key) => String(key).slice(WLLAMA_PREFIX.length);
+  // id → GGUF source, centralized here the way WebLLM's prebuiltAppConfig keys
+  // are: data.jsx references a short, stable id ('wllama:qwen25-05b'). Small
+  // Q4_K_M quants chosen to stay usable on a CPU; weights download once from
+  // Hugging Face (its resolve endpoint sends browser-friendly CORS) and are
+  // cached on the device (useCache) so a refresh re-instantiates without
+  // re-downloading.
+  const WLLAMA_MODELS = (typeof window !== 'undefined' && window.EO_WLLAMA_MODELS) || {
+    'smollm2-360m': { name: 'SmolLM2 360M', url: 'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf' },
+    'qwen25-05b':   { name: 'Qwen2.5 0.5B', url: 'https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf' },
+    'llama32-1b':   { name: 'Llama 3.2 1B', url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf' },
+  };
+  const wllamaSource = (key) => WLLAMA_MODELS[wllamaId(key)] || null;
+  const wllamaModels = () => Object.assign({}, WLLAMA_MODELS);
+  // The CPU model used for the automatic fallback (no WebGPU / GPU stall). 0.5B
+  // is a sane balance of quality and CPU speed; override with EO_CPU_FALLBACK_ID.
+  function fallbackKey() {
+    const id = (typeof window !== 'undefined' && window.EO_CPU_FALLBACK_ID) || 'qwen25-05b';
+    if (WLLAMA_MODELS[id]) return WLLAMA_PREFIX + id;
+    const first = Object.keys(WLLAMA_MODELS)[0];
+    return first ? WLLAMA_PREFIX + first : null;
+  }
+  const hasWasm = () => typeof WebAssembly === 'object' && typeof WebAssembly.instantiate === 'function';
+  // Quiet logger: wllama is chatty on stdout otherwise. Errors still surface.
+  const WLLAMA_LOGGER = { debug() {}, log() {}, warn() {}, error(...a) { try { console.error(...a); } catch (_) {} } };
+
+  let wllamaMod = null;     // memoized { Wllama, wasmPaths }
+  let activeWllama = null;  // the resident wllama instance (freed on unload/cancel)
+  async function importWllama() {
+    if (wllamaMod) return wllamaMod;
+    if (typeof window !== 'undefined' && window.EO_WLLAMA) { wllamaMod = window.EO_WLLAMA; return wllamaMod; }
+    const ver = (typeof window !== 'undefined' && window.EO_WLLAMA_VERSION) || WLLAMA_VERSION;
+    const esmBase = (typeof window !== 'undefined' && window.EO_WLLAMA_CDN) || ('https://esm.run/@wllama/wllama@' + ver);
+    const cdnEsm = 'https://cdn.jsdelivr.net/npm/@wllama/wllama@' + ver + '/esm';
+    const work = (async () => {
+      const m = await import(esmBase);
+      const Wllama = m.Wllama || (m.default && m.default.Wllama) || m.default;
+      // Prefer the package's own CDN wasm map (encodes the right paths for THIS
+      // version); fall back to the documented esm/ layout. Either is overridable.
+      let wasmPaths = (typeof window !== 'undefined' && window.EO_WLLAMA_WASM) || null;
+      if (!wasmPaths) { try { const c = await import(cdnEsm + '/wasm-from-cdn.js'); wasmPaths = c.default || c.WasmFromCDN || c; } catch (_) {} }
+      if (!wasmPaths) wasmPaths = {
+        'single-thread/wllama.wasm': cdnEsm + '/single-thread/wllama.wasm',
+        'multi-thread/wllama.wasm': cdnEsm + '/multi-thread/wllama.wasm',
+      };
+      return { Wllama, wasmPaths };
+    })();
+    let to;
+    const timeout = new Promise((_, rej) => { to = setTimeout(() => rej(Object.assign(new Error('Loading the CPU model runtime from the CDN timed out — check your connection or any content blocker, then try again.'), { code: 'IMPORT_TIMEOUT' })), IMPORT_TIMEOUT_MS); });
+    try { wllamaMod = await Promise.race([work, timeout]); }
+    finally { clearTimeout(to); }
+    return wllamaMod;
+  }
+
+  // Pre-import the runtime (small JS + wasm) WITHOUT loading a model, so the
+  // later switch-to-CPU pays only the model download, not the runtime fetch +
+  // compile. This is the cheap "keep a backup ready" step: a single resident
+  // engine is the architecture's invariant, so we can't hold a warm CPU model
+  // alongside a live GPU one — but we CAN have the runtime cached and ready.
+  async function prewarmFallback() { try { return await importWllama(); } catch (e) { return null; } }
+
+  // Build (and resolve to) a resident wllama engine for `mlcKey`. Mirrors the
+  // WebLLM build: progress is gated on the load token so a superseded build goes
+  // inert, and the instance frees itself (exit) if a newer load supersedes it.
+  async function buildWllama(mlcKey, onProgress, myToken) {
+    const { Wllama, wasmPaths } = await importWllama();
+    if (typeof Wllama !== 'function') throw new Error('The CPU model runtime (wllama) did not load.');
+    const src = wllamaSource(mlcKey);
+    if (!src) throw new Error('Unknown on-device model: ' + mlcKey);
+    // Multi-thread needs SharedArrayBuffer, which needs cross-origin isolation
+    // (COOP+COEP). Without it wllama runs single-thread; we only pass n_threads
+    // when isolation is present so we never trip an unsupported multi-thread path.
+    const isolated = (typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated);
+    const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+    const instance = new Wllama(wasmPaths, { parallelDownloads: 3, logger: WLLAMA_LOGGER });
+    activeWllama = instance;
+    const loadOpts = {
+      n_ctx: (typeof window !== 'undefined' && +window.EO_WLLAMA_NCTX) || 4096,
+      useCache: true,
+      progressCallback: ({ loaded, total }) => {
+        if (myToken !== loadToken) return;                 // superseded → go inert
+        const p = total ? loaded / total : 0;
+        if (onProgress) onProgress(p, total ? 'Downloading the on-device model — ' + Math.round(p * 100) + '%' : 'Downloading the on-device model…');
+      },
+    };
+    if (isolated) loadOpts.n_threads = Math.min(4, Math.max(1, cores - 1));
+    await instance.loadModelFromUrl(src.url, loadOpts);
+    if (myToken !== loadToken) { try { await instance.exit(); } catch (_) {} if (activeWllama === instance) activeWllama = null; throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' }); }
+    if (onProgress) onProgress(1, '');
+    return {
+      wllama: instance,
+      unload: async () => { try { await instance.exit(); } finally { if (activeWllama === instance) activeWllama = null; } },
+    };
+  }
+
+  // Stream a turn from a resident wllama instance. wllama ≥3 is OpenAI-shaped —
+  // createChatCompletion({ messages, stream:true, onData }) with chunks like
+  // chunk.choices[0].delta.content — but older builds streamed cumulative text
+  // via onNewToken(…, currentText). We pass BOTH callbacks and a superset of
+  // option names and tolerate every chunk shape, so a version bump can't break
+  // the stream (the same defensive stance clearCache takes across WebLLM
+  // versions). Returns the full raw text; deltas go to onDelta.
+  async function streamWllama({ instance, messages, temperature, maxTokens, onDelta }) {
+    if (!instance || typeof instance.createChatCompletion !== 'function')
+      throw new Error('The CPU model is not ready.');
+    let full = '', prevCumulative = '';
+    const emit = (s) => { if (s) { full += s; if (onDelta) onDelta(s); } };
+    const onChunk = (chunk) => {
+      if (chunk == null) return;
+      if (typeof chunk === 'string') { emit(chunk); return; }
+      // cumulative-text shape: currentText grows each chunk → emit the delta
+      if (typeof chunk.currentText === 'string') { const d = chunk.currentText.slice(prevCumulative.length); prevCumulative = chunk.currentText; emit(d); return; }
+      const c = chunk.choices && chunk.choices[0];
+      if (!c) return;
+      if (c.delta && c.delta.content != null) emit(c.delta.content);
+      else if (c.text != null) emit(c.text);
+      else if (c.message && c.message.content != null) emit(c.message.content);
+    };
+    const nPredict = Math.max(16, (maxTokens | 0) || 256);
+    const temp = typeof temperature === 'number' ? temperature : 0.4;
+    const opts = {
+      messages, stream: true,
+      onData: onChunk,
+      onNewToken: (_t, _p, currentText) => { if (typeof currentText === 'string') onChunk({ currentText }); },
+      nPredict, max_tokens: nPredict,
+      temperature: temp, top_k: 40, top_p: 0.9,
+      sampling: { temp, top_k: 40, top_p: 0.9 },
+    };
+    const res = await instance.createChatCompletion(opts);
+    // If the streaming callbacks never fired (non-streaming build, or a shape we
+    // didn't pre-wire), recover the final text from the return value.
+    if (!full && res != null) {
+      if (typeof res === 'string') emit(res);
+      else if (typeof res.currentText === 'string') emit(res.currentText);
+      else if (res.choices && res.choices[0]) emit((res.choices[0].message && res.choices[0].message.content) || res.choices[0].text || '');
+      else if (typeof res[Symbol.asyncIterator] === 'function') { for await (const ch of res) onChunk(ch); }
+    }
+    return full;
+  }
+
   // Stream a chat completion, routing by the model key: the Claude API for an
-  // 'anthropic:' key, the resident WebLLM engine otherwise. Returns the full
-  // raw text; deltas go to onDelta. The single point where the two backends
-  // diverge — everything above (prompt assembly, think gating, audit) is shared.
+  // 'anthropic:' key, the resident wllama (CPU) engine for a 'wllama:' key, the
+  // resident WebLLM (GPU) engine otherwise. Returns the full raw text; deltas go
+  // to onDelta. The single point where the backends diverge — everything above
+  // (prompt assembly, think gating, audit) is shared.
   async function streamChat({ mlcKey, messages, temperature, maxTokens, onDelta }) {
     if (isAnthropic(mlcKey))
       return streamAnthropic({ model: anthropicModelId(mlcKey), messages, maxTokens, onDelta });
     const eng = await load(mlcKey);
+    if ((eng && eng.wllama) || isWllama(mlcKey))
+      return streamWllama({ instance: eng && eng.wllama, messages, temperature, maxTokens, onDelta });
     let full = '';
     const res = await eng.chat.completions.create({ messages, temperature, max_tokens: maxTokens, stop: STOP_SEQUENCES, stream: true });
     for await (const chunk of res) {
@@ -294,6 +456,29 @@
       enginePromise = Promise.resolve({ anthropic: true });
       return enginePromise;
     }
+    // wllama (CPU): no WebGPU needed, so this branch sits ABOVE the WebGPU gate.
+    // Same release-then-build, token-guarded, retry-on-stall shape as the GPU
+    // path, so a switch frees the prior engine and a superseded build goes inert.
+    if (isWllama(mlcKey)) {
+      if (loadedModel === mlcKey && enginePromise) return enginePromise;
+      if (enginePromise) {
+        const prev = enginePromise; enginePromise = null; loadedModel = null;
+        try { const eng = await prev; if (eng && eng.unload) await eng.unload(); } catch (e) {}
+      }
+      loadedModel = mlcKey;
+      const myToken = ++loadToken;
+      loadingActive = true;
+      const attempt = buildWllama(mlcKey, onProgress, myToken);
+      enginePromise = attempt;
+      try { await attempt; }
+      catch (e) {
+        if (myToken === loadToken) { enginePromise = null; loadedModel = null; }
+        throw e;
+      } finally {
+        if (myToken === loadToken) loadingActive = false;
+      }
+      return enginePromise;
+    }
     if (!hasWebGPU()) throw new Error('WebGPU is not available in this browser. Chrome/Edge 113+ or a WebGPU-enabled browser is required for the local model.');
     if (loadedModel === mlcKey && enginePromise) return enginePromise;
     // Switching models: release the resident engine FIRST. A larger model
@@ -348,6 +533,8 @@
     if (c) c();                                        // settle the in-flight build as CANCEL first
     const w = activeWorker; activeWorker = null;
     if (w) { try { w.terminate(); } catch (_) {} }     // then hard-stop the worker so the download halts now
+    const lw = activeWllama; activeWllama = null;
+    if (lw && lw.exit) { try { lw.exit(); } catch (_) {} }   // free the CPU runtime too
     return true;
   }
 
@@ -821,5 +1008,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, load, cancelLoad, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();

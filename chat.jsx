@@ -420,6 +420,16 @@ function Message({ msg, onCite }) {
                     <div className="ml-row"><span className="ml-spin" /> Connecting to {msg.loadName || 'Claude'}…</div>
                     <div className="ml-note">Over the Anthropic API — nothing downloads to your device; your key stays in this browser.</div>
                   </React.Fragment>
+                // The on-device CPU model (wllama): it DOES download once and cache,
+                // but it runs on the CPU via WebAssembly, not the GPU — so the note
+                // says so. The progress bar is the same download progress.
+                : msg.loadCpu
+                ? <React.Fragment>
+                    <div className="ml-row"><span className="ml-spin" /> Loading {msg.loadName || 'on-device model'} on the CPU… <b>{Math.round((msg.loadPct || 0) * 100)}%</b></div>
+                    <div className="ml-bar"><div className="ml-fill" style={{ width: Math.round((msg.loadPct || 0) * 100) + '%' }} /></div>
+                    {msg.loadText && <div className="ml-status">{msg.loadText}</div>}
+                    <div className="ml-note">First time only — runs entirely on your CPU (no GPU needed), downloads once, then cached on your device.</div>
+                  </React.Fragment>
                 : <React.Fragment>
                     <div className="ml-row"><span className="ml-spin" /> Loading {msg.loadName || 'local model'}… <b>{Math.round((msg.loadPct || 0) * 100)}%</b></div>
                     <div className="ml-bar"><div className="ml-fill" style={{ width: Math.round((msg.loadPct || 0) * 100) + '%' }} /></div>

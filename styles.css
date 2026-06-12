@@ -58,6 +58,12 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
+  /* mobile polish: no grey tap flash, no font auto-inflation, no rubber-band
+     pull-to-refresh hijacking a scroll inside the app shell. */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overscroll-behavior-y: none;
 }
 button { font-family: inherit; cursor: pointer; }
 ::selection { background: var(--accent-tint-2); }
@@ -659,8 +665,11 @@ table.grid .member td:first-child { padding-left: 30px; }
 .lang-adv-rules .rule-group-label { margin-top: 4px; }
 
 /* model menu (popover) */
-.popover { position: absolute; z-index: 95; background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r); box-shadow: var(--sh-lg); padding: 6px; min-width: 280px; }
+.popover { position: absolute; z-index: 95; background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r); box-shadow: var(--sh-lg); padding: 6px; min-width: 280px; max-height: min(70vh, 560px); overflow-y: auto; overscroll-behavior: contain; }
 .popover .ph { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); padding: 7px 10px 4px; }
+/* bottom-sheet affordances — inert on desktop, used by the mobile media query */
+.pop-backdrop { display: none; }
+.pop-grab { display: none; }
 .pop-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--r-sm); cursor: pointer; }
 .pop-item:hover { background: var(--bg-subtle); }
 .pop-item .pi-main { flex: 1; }
@@ -909,69 +918,110 @@ table.grid .member td:first-child { padding-left: 30px; }
   .ingest-banner .ib-fill.indet { width: 100%; left: 0; }
 }
 
+/* The model popover slides up from the bottom edge as a sheet on phones. */
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
 /* ============================================================ RESPONSIVE / MOBILE
    On phones the sidebar becomes an off-canvas drawer over a backdrop, the body
-   collapses to a single pane (the app forces chat/doc instead of split), and
-   the touch targets / type sizes relax for small screens. */
+   collapses to a single pane (the app forces chat/doc instead of split), the
+   model picker becomes a bottom sheet, the topbar's action pills go icon-only,
+   and the touch targets / type sizes relax for small screens. Safe-area insets
+   keep content clear of the notch and home indicator. */
 @media (max-width: 760px) {
   /* full-height layout that survives the mobile URL-bar resize, and tracks the
      soft keyboard via --app-height (set from visualViewport in app.jsx) so the
-     composer stays pinned just above the on-screen keyboard. */
-  .app { height: 100vh; height: 100dvh; height: var(--app-height, 100dvh); }
+     composer stays pinned just above the on-screen keyboard. Clamp width so a
+     stray wide child can never introduce a horizontal scroll of the whole app. */
+  .app { height: 100vh; height: 100dvh; height: var(--app-height, 100dvh); width: 100vw; max-width: 100vw; overflow-x: hidden; }
 
-  /* sidebar → slide-over drawer */
+  /* sidebar → slide-over drawer, clear of the notch */
   .sidebar {
     position: fixed; top: 0; left: 0; bottom: 0; z-index: 100;
     width: min(86vw, var(--sidebar-w)); box-shadow: var(--sh-lg);
+    padding-top: env(safe-area-inset-top);
     transition: transform .26s cubic-bezier(.4,0,.2,1);
   }
   .sidebar.collapsed { margin-left: 0; transform: translateX(-100%); box-shadow: none; }
   .sb-backdrop { position: fixed; inset: 0; z-index: 99; background: rgba(22,24,28,.42); animation: fade .18s ease; }
 
-  /* topbar: tighten and drop the secondary subtitle */
-  .topbar { padding: 0 8px; gap: 6px; }
+  /* topbar: tighten, truncate the title, and collapse the action pills to
+     icon-only so four of them fit on a phone without overlapping. A horizontal
+     scroll is the safety net if a future pill is added. */
+  .topbar { padding: 0 6px; gap: 5px; overflow-x: auto; scrollbar-width: none; }
+  .topbar::-webkit-scrollbar { display: none; }
+  .tb-title { display: block; min-width: 0; max-width: 42vw; flex-shrink: 1;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tb-title .sub { display: none; }
+  .tb-btn, .tb-pill, .view-seg, .tb-spacer { flex-shrink: 0; }
+  .tb-spacer { flex: 1; }
   /* the split toggle is meaningless when only one pane shows at a time */
   .topbar-seg button:nth-child(2) { display: none; }
-  .tb-pill { padding: 5px 9px; }
+  .tb-pill { padding: 8px 9px; gap: 4px; }
+  .tb-pill-lbl { display: none; }       /* icon-only on mobile */
+  /* bigger, finger-sized chrome targets */
+  .tb-btn { width: 38px; height: 38px; }
+  .view-seg button { padding: 8px 12px; }
 
   /* single pane — no draggable divider on touch */
   .divider { display: none; }
 
-  /* chat: edge-to-edge, larger tap area */
+  /* chat: edge-to-edge, larger tap area, never overflowing horizontally */
   .chat-inner,
   .pane-chat.narrow .chat-inner,
   .pane-chat.wide .chat-inner { max-width: 100%; padding: 16px 14px 10px; }
+  .msg-asst { overflow-wrap: anywhere; }
+  .msg-asst pre { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .bubble-user { max-width: 92%; overflow-wrap: anywhere; }
   .composer,
   .pane-chat.narrow .composer,
   .pane-chat.wide .composer { max-width: 100%; padding: 0 12px; }
-  .composer-wrap { padding: 8px 0 12px; }
-  .composer textarea { font-size: 16px; } /* >=16px stops iOS zoom-on-focus */
-  .bubble-user { max-width: 92%; }
+  /* keep the composer clear of the home indicator */
+  .composer-wrap { padding: 8px 0 calc(10px + env(safe-area-inset-bottom)); }
+  .composer textarea { font-size: 16px; -webkit-text-size-adjust: 100%; } /* >=16px stops iOS zoom-on-focus */
   .msg-actions { opacity: 1; } /* no hover on touch — keep actions visible */
+  .msg-actions button { width: 34px; height: 34px; }
 
   /* the segmented mode control can wrap on narrow composers */
   .composer-bar { flex-wrap: wrap; row-gap: 8px; }
+  .send-btn { width: 42px; height: 42px; }   /* comfortable thumb target */
 
   /* hero */
   .hero { padding: 16px 14px; }
   .hero h1 { font-size: 26px; }
   .hero .lede { font-size: 14px; margin-bottom: 20px; }
-  .composer textarea { -webkit-text-size-adjust: 100%; }
 
   /* document / table views */
   .doc-tabs { height: 42px; }
   .prose { padding: 22px 16px 64px; }
   .prose .doc-h1 { font-size: 23px; }
   .prose .doc-p { font-size: 16px; line-height: 1.7; }
-  .tableview { padding: 12px 12px 48px; overflow-x: auto; }
+  .tableview { padding: 12px 12px 48px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .pivot-controls { gap: 10px; padding: 10px; }
 
-  /* overlays go full-bleed */
-  .drawer { width: 100vw; }
+  /* drawers go full-bleed, clear of the safe areas, with a roomier close target */
+  .drawer { width: 100vw; padding-bottom: env(safe-area-inset-bottom); }
+  .drawer-head { padding-top: calc(12px + env(safe-area-inset-top)); }
   .ent-modal { width: 94vw; max-height: 88vh; }
-  .popover { left: 8px !important; right: 8px; min-width: 0; width: auto; max-width: calc(100vw - 16px); }
-  .toast { left: 12px; right: 12px; transform: none; bottom: 14px; justify-content: center; }
+
+  /* the model picker becomes a bottom sheet: full-width, slides up from the
+     bottom edge, scrolls inside, and sits above its own scrim. The inline
+     left/bottom anchor from the trigger is overridden (hence !important). */
+  .popover {
+    position: fixed !important;
+    left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important;
+    width: 100% !important; min-width: 0; max-width: 100%;
+    max-height: 84dvh; border-radius: var(--r-lg) var(--r-lg) 0 0;
+    padding: 6px 10px calc(10px + env(safe-area-inset-bottom));
+    box-shadow: 0 -14px 44px rgba(20,22,28,.26);
+    animation: sheet-up .24s cubic-bezier(.4,0,.2,1);
+    z-index: 110;
+  }
+  .pop-backdrop { display: block; position: fixed; inset: 0; z-index: 109; background: rgba(22,24,28,.42); animation: fade .18s ease; }
+  .pop-grab { display: block; width: 38px; height: 4px; border-radius: 999px; background: var(--border-strong); margin: 6px auto 8px; }
+  .pop-item { padding: 12px 12px; }      /* finger-sized model rows */
+  .pop-key input { font-size: 16px; }    /* no iOS zoom on the key field */
+
+  .toast { left: 12px; right: 12px; transform: none; bottom: calc(14px + env(safe-area-inset-bottom)); justify-content: center; }
 }
 
 /* ============================================================ Audit drawer
