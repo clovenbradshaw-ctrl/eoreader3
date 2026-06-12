@@ -2775,6 +2775,18 @@ function rolesFromDescription(desc) {
   return [...new Set(out)].slice(0, 3);
 }
 
+/* A naming-bridge class gloss often opens with a comparative anaphor — "the
+   same person who runs the DMC and who then hires his own firm" — whose
+   anchor lives back in the source sentence, not in an answer. Rendered as a
+   copula ("Tom Turner is the same person who runs the DMC…") it reads
+   circular, and a small phrasing model truncates at the first clause,
+   dropping the payload ("…and who then hires his own firm, NDP"). Strip the
+   "same" at RENDER time only — the stored DEF keeps the page's own words,
+   and provenance still points at the source sentence. */
+function deAnaphorDef(s) {
+  return String(s == null ? '' : s).replace(/^the\s+same\s+(\p{L})/iu, 'the $1');
+}
+
 // Strip noise off a candidate entity surface:
 //   - trailing punctuation (curly quotes, ellipses, commas)
 //   - leading adverbial heads ("When Michael" → "Michael")
@@ -2797,6 +2809,11 @@ function cleanEntitySurface(surf) {
     while (s.endsWith(close) && !s.includes(open)) s = s.slice(0, -1).trim();
     while (s.startsWith(open) && !s.includes(close)) s = s.slice(1).trim();
   }
+  // An internal colon is structure (a headline lead-in: "Downtown Business
+  // Owners:  You Cannot…"), never part of a name — keep the lead. Requires
+  // whitespace after the colon so times and verse refs ("12:30") survive.
+  const colonSplit = s.match(/^(.+?):\s/);
+  if (colonSplit) s = colonSplit[1].trim();
   // Split at internal sentence-boundary punctuation followed by whitespace
   // and a non-space character. "Princess! Go" → "Princess".
   const splitMatch = s.match(/^(.+?)[!?]\s+\S/);
@@ -3472,7 +3489,35 @@ async function extractEoGraph(text, onProgress) {
   // it splits sentences mid-clause, truncates names ("Prince\nNicholas
   // Bolkónski" → "Chief Prince"), and severs attributions from their
   // quotes. Blank lines (real paragraph breaks) survive as boundaries.
-  text = String(text).replace(/\r\n?/g, '\n').replace(/([^\n])\n(?!\n)/g, '$1 ');
+  text = String(text).replace(/\r\n?/g, '\n');
+  // BUT a title-shaped line is structure, not a wrapped clause: a headline
+  // pasted with a single newline before the body ("Downtown Business Owners:
+  // You Cannot Afford…\nIf you own a business downtown…") would be glued into
+  // the first sentence by the unwrap, and Title Case read as one giant proper
+  // noun mints phantom entities ("Mistakes If", "Keep Paying") that pollute
+  // the cast. Promote such a line to its own paragraph BEFORE unwrapping:
+  // nearly every word capitalized (lowercase only for title function words),
+  // no terminal punctuation, 3–16 words, and a next line that starts a fresh
+  // sentence. Hard-wrapped prose fails the Title Case ratio or the
+  // capitalized-next-line check, so genuine wraps still unwrap.
+  {
+    const TITLE_LOWER = new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'as', 'vs', 'via', 'per']);
+    const lines = text.split('\n');
+    for (let li = 0; li < lines.length - 1; li++) {
+      const L = lines[li].trim(), next = lines[li + 1].trim();
+      if (!L || !next) continue;                                   // blank already separates
+      if (/[.!?…;:,'"”’)\]]$/.test(L)) continue;                   // ends punctuated → wrapped prose
+      if (!/^["“'‘(]?[\p{Lu}\d]/u.test(next)) continue;            // wrap continuations start lowercase
+      const words = L.split(/\s+/);
+      if (words.length < 3 || words.length > 16) continue;
+      const titleish = words.filter(w => /^["“'‘(]?[\p{Lu}\d]/u.test(w)
+        || TITLE_LOWER.has(w.toLowerCase().replace(/[^\p{L}]+/gu, ''))).length;
+      if (titleish / words.length < 0.9) continue;
+      lines[li] += '\n';                                           // promote to paragraph boundary
+    }
+    text = lines.join('\n');
+  }
+  text = text.replace(/([^\n])\n(?!\n)/g, '$1 ');
   // Segment by paragraph FIRST, then by sentence within each paragraph.
   // compromise merges sentences across blank lines when dialogue
   // punctuation confuses it, producing mega-"sentences" spanning three
@@ -4259,6 +4304,43 @@ async function extractEoGraph(text, onProgress) {
 
     const admitted = [];           // [{ surface, type, key }] for this sentence
     const seen = new Set();
+    // Nested ink: the tagger emits both a compound and its inner span from the
+    // same characters (places yields "Tennessee" AND "Tennessee Highway
+    // Patrol" for one mention of the latter). One stretch of ink is ONE
+    // mention — counted twice it hands the modifier's mass to a different
+    // referent, and the state ends up outranking the agency named after it.
+    // A SINGLE-TOKEN, non-person candidate whose every occurrence in this
+    // sentence sits inside a longer candidate (itself a usable multi-word
+    // name) is the longer name's ink, not its own. Multi-token sub-spans
+    // ("District Management" ⊂ "District Management Corporation") keep the
+    // old path — they fuse into the compound by gravity, so the mass stays
+    // on the one referent — and persons keep it too: a clipped person span
+    // fuses into the full name the same way.
+    const _nestUnion = [...peopleArr, ...placesArr, ...orgsArr, ...properArr].map(s => String(s).trim()).filter(Boolean);
+    const coveredByLongerInk = (surfRaw) => {
+      const s = String(surfRaw).trim();
+      if (!s || /\s/.test(s)) return false;             // single-token candidates only
+      const longer = [];
+      for (const o of _nestUnion) {
+        if (o.length <= s.length || !o.includes(s)) continue;
+        const oc = cleanEntitySurface(o.replace(/['’]s$/, ''));
+        if (oc && /\s/.test(oc)) longer.push(o);
+      }
+      if (!longer.length) return false;
+      let i = sentText.indexOf(s);
+      if (i === -1) return false;                       // can't locate: never skip on a guess
+      while (i !== -1) {
+        let inside = false;
+        for (const o of longer) {
+          for (let j = sentText.indexOf(o); j !== -1 && !inside; j = sentText.indexOf(o, j + 1))
+            if (i >= j && i + s.length <= j + o.length) inside = true;
+          if (inside) break;
+        }
+        if (!inside) return false;                      // it stands on its own somewhere
+        i = sentText.indexOf(s, i + 1);
+      }
+      return true;
+    };
     // Is this surface inside quoted speech? Words capitalized at quote
     // start ("Impossible!", "Father!") read as proper nouns to NER but
     // are usually exclamations or vocatives. Quote-interior SINGLE words
@@ -4277,6 +4359,7 @@ async function extractEoGraph(text, onProgress) {
     };
     const addEnts = (arr, type) => {
       for (const surfRaw of arr) {
+        if (type !== 'person' && coveredByLongerInk(surfRaw)) continue;
         const noPoss = surfRaw.replace(/['’]s$/, '').trim();
         const cleaned = cleanEntitySurface(noPoss);
         if (!cleaned) continue;
@@ -4329,9 +4412,34 @@ async function extractEoGraph(text, onProgress) {
             // pull uses, so the guard can never disagree with the force it gates.
             const substSiteTokens = [...site.tokens].filter(t => t.length >= 3 && !STOP.has(t));
             const minContent = Math.min(substCandTokens.length, substSiteTokens.length);
-            const strongEvidence = substShared.length >= 2
+            let strongEvidence = substShared.length >= 2
               || (minContent > 0 && substShared.length === minContent)
               || foldDiacritics(cleaned) === foldDiacritics(site.name);
+            // Single-token containment is PERSON-shaped evidence ("Tse" ⊂
+            // "Tse Chi Lop", "Corman" ⊂ "David Corman" — given name and
+            // surname both serve as short forms). For places, orgs and things
+            // the only honest short form keeps the HEAD (final) token: "the
+            // Partnership" shortens "Nashville Downtown Partnership", but
+            // "Nashville" ⊂ "Nashville Downtown Partnership" is the city the
+            // org is named AFTER — a leading-modifier match that fused the
+            // document's protagonist into its hometown (and "Tennessee" into
+            // "Tennessee Highway Patrol"). And a longer arrival containing an
+            // established single-token site ("Nashville Banner" over
+            // "Nashville") is a new compound, never a re-mention. Both
+            // directions gated here; persons exempt; diacritic-equality and
+            // ≥2-shared-token merges untouched.
+            if (strongEvidence && substShared.length < 2 && minContent === 1
+                && type !== 'person' && site.type !== 'person'
+                && foldDiacritics(cleaned) !== foldDiacritics(site.name)) {
+              if (substCandTokens.length === 1) {
+                const siteHead = String(site.name).toLowerCase().split(/\s+/)
+                  .filter(w => w.length >= 3 && !STOP.has(w)).pop();
+                if (siteHead && foldDiacritics(substCandTokens[0]) !== foldDiacritics(siteHead))
+                  strongEvidence = false;
+              } else if (substSiteTokens.length === 1) {
+                strongEvidence = false;
+              }
+            }
             if (!strongEvidence) continue;
             const overlap = shared.length / Math.sqrt(Math.max(1, candTokens.size) * Math.max(1, site.tokens.size));
             const force = (site.mass + site.momentum) * overlap;
@@ -5293,19 +5401,38 @@ async function extractEoGraph(text, onProgress) {
     const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const insByRef = new Map();
     for (const ev of events) if (ev.op === 'INS' && ev.referent_id) insByRef.set(ev.referent_id, ev);
+    // Every live (non-absorbed) site's forms, for the nested-name redaction in
+    // the scan below: "Nashville" must not collect sightings from sentences
+    // whose only ink is "Nashville Downtown Partnership" — the substring scan
+    // would hand the compound's sentences (and so its mass) to the shorter
+    // name, and the projection then leads the portrait with the wrong
+    // protagonist (the city outranking the org named after it).
+    const liveForms = [];
+    for (const [k2, s2] of sites) {
+      if (surfaceAlias.has(k2)) continue;
+      for (const f of new Set([s2.name, ...(s2.forms ? s2.forms.keys() : [])])) if (f) liveForms.push({ key: k2, form: String(f) });
+    }
     for (const [key, site] of sites) {
       if (surfaceAlias.has(key)) continue;                    // absorbed into another body
       const sighted = new Set(sightSents.get(key) || []);
       for (const si of (sigSents.get(key) || [])) sighted.add(si);
       // Capture has recall holes (a tagger missing a bare surname is not the
       // name failing to return). The evidence of record is the page: scan the
-      // prose spans for any sighted FORM of the name, whole-word.
+      // prose spans for any sighted FORM of the name, whole-word — but ink
+      // already belonging to a LONGER live name is redacted first, so a short
+      // name only earns the sentences where it stands on its own.
       {
         const forms = [...new Set([site.name, ...(site.forms ? site.forms.keys() : [])])].filter(Boolean);
         const res = forms.map(f => new RegExp('(^|[^A-Za-z0-9_])' + escRe(f) + '($|[^A-Za-z0-9_])'));
+        const redact = liveForms
+          .filter(lf => lf.key !== key && forms.some(f =>
+            lf.form.length > f.length && new RegExp('(^|[^A-Za-z0-9_])' + escRe(f) + '($|[^A-Za-z0-9_])').test(lf.form)))
+          .map(lf => new RegExp(escRe(lf.form), 'g'));
         for (let si = 0; si < sentenceTexts.length; si++) {
           if (chromeSet.has(si) || sighted.has(si)) continue;
-          if (res.some(re => re.test(sentenceTexts[si]))) sighted.add(si);
+          let t = sentenceTexts[si];
+          for (const re of redact) t = t.replace(re, ' ');
+          if (res.some(re => re.test(t))) sighted.add(si);
         }
       }
       const sis = [...sighted].sort((a, b) => a - b);
@@ -7449,18 +7576,45 @@ function projectGraph(events, frame = {}) {
     }
     return false;
   }
+  // Discourse glue for the ellipsis reader below: connectives, negation,
+  // acknowledgers, light auxiliaries and meta-discourse verbs that carry no
+  // topic of their own. Routing-only (like QA_STOP), never identity-bearing.
+  // Deliberately EXCLUDES gratitude words ("thanks") so "thanks, that helps"
+  // keeps reading as chit-chat, and greetings never reach here (no wh-token).
+  const FOLLOWUP_GLUE = new Set(('but so and or yet though although still anyway ok okay oh well hmm huh '
+    + 'no not yes yeah nope do don does is are was be being mean means meant come go on again really '
+    + 'actually exactly specifically explain elaborate clarify expand justify elucidate rephrase simplify').split(' '));
   // Conversation continuity (mechanical, ruliad-driven). A turn that resolves to
   // no subject of its own still belongs to the page when it CONTINUES the prior
-  // grounded turn: it carries an anaphor — a pronoun drawn from the ruliad's
-  // anaphor_pronouns class, not a hand-written list — and names no new, off-page
-  // entity that would pull the topic elsewhere. "tell me more about it", "and
-  // what about her?". Inert unless the caller supplies ctx.prevGrounded, so batch
-  // callers (parity, bench) see exactly the prior routing.
+  // grounded turn, three ways:
+  //   1. it carries an anaphor — a pronoun drawn from the ruliad's
+  //      anaphor_pronouns class, not a hand-written list ("tell me more about
+  //      it", "and what about her?");
+  //   2. it points at the page as a PLACE through locative deixis ("the
+  //      craziest stuff in there") — prepositional only, so a bare "hi there"
+  //      never matches;
+  //   3. it is ELLIPTICAL: a short turn made entirely of function words and
+  //      discourse glue that still asks something ("but why not?", "explain
+  //      why"). With no content tokens of its own it cannot introduce a new
+  //      topic — the only thing it can be doing is continuing the one on the
+  //      table. The wh/meta-token requirement keeps bare acknowledgments
+  //      ("okay", "yes") in chat, where they belong.
+  // In every case the turn must name no new, off-page entity that would pull
+  // the topic elsewhere. Inert unless the caller supplies grounding context:
+  // ctx.prevGrounded (last turn was on the page) or ctx.everGrounded (some
+  // earlier turn was — so one mis-routed turn can't strand the rest of the
+  // conversation off the page). Batch callers (parity, bench) pass no ctx and
+  // see exactly the prior routing.
   function continuesPrior(doc, q, ctx) {
-    if (!ctx || !ctx.prevGrounded) return false;
+    if (!ctx || !(ctx.prevGrounded || ctx.everGrounded)) return false;
     if (referents(doc, q).antimatter.length) return false;      // introduced a new, absent subject
-    const toks = String(q).toLowerCase().replace(/[’']/g, "'").match(/[\p{L}]+/gu) || [];
-    return toks.some(t => ANAPHOR_PRONOUNS.has(t));
+    const ql = String(q).toLowerCase().replace(/[’']/g, "'");
+    const toks = ql.match(/[\p{L}]+/gu) || [];
+    if (toks.some(t => ANAPHOR_PRONOUNS.has(t))) return true;
+    if (/\b(?:in|inside|from|within)\s+(?:there|here)\b/.test(ql)) return true;
+    return toks.length > 0 && toks.length <= 8
+      && /(?:^|\s)(?:why|how|what|when|where|who|whom|whose|which|explain|elaborate|clarify|expand|justify|mean|meaning)\b/.test(ql)
+      && toks.every(t => STOP.has(t) || PRONOUNS.has(t) || FOLLOWUP_GLUE.has(t));
   }
   function referencesDoc(doc, q, ctx) {
     if (!doc) return false;
@@ -7776,11 +7930,11 @@ function projectGraph(events, frame = {}) {
     if (figures && figures.length) {
       let lead = `It mostly centers on ${_joinList(figures)}`;
       if (asserts && asserts.length) {
-        lead += ` — it takes ${_joinList(asserts.map(a => `${a.name} to be ${a.is}`))}`;
+        lead += ` — it takes ${_joinList(asserts.map(a => `${a.name} to be ${deAnaphorDef(a.is)}`))}`;
       }
       sents.push(lead + '.');
     } else if (asserts && asserts.length) {
-      sents.push(`It takes ${_joinList(asserts.map(a => `${a.name} to be ${a.is}`))}.`);
+      sents.push(`It takes ${_joinList(asserts.map(a => `${a.name} to be ${deAnaphorDef(a.is)}`))}.`);
     }
     // the arc across its chapters, read as movement rather than a list
     if (spine && spine.length > 1) {
@@ -8279,7 +8433,7 @@ function projectGraph(events, frame = {}) {
     if (a && b) parts.push(`The piece returns most often to ${a.name} and ${b.name}; their paths through the document carry most of the weight.`);
     else if (a) parts.push(`The piece returns most often to ${a.name}.`);
     for (const as of (p.assertions || []).slice(0, 2)) {
-      if (as && as.name && as.is) parts.push(`The reading takes ${as.name} to be ${as.is}.`);
+      if (as && as.name && as.is) parts.push(`The reading takes ${as.name} to be ${deAnaphorDef(as.is)}.`);
     }
     return parts.join(' ');
   }
@@ -8956,7 +9110,7 @@ function projectGraph(events, frame = {}) {
     if (da && da.picked.length) {
       heads.push('What the page asserts about ' + da.subject + ':');
       for (const d of da.picked)
-        heads.push(`- ${d.subject} ${d.path === 'role' ? '' : 'is '}${d.is}` + (d.sent != null ? ` [s${d.sent}]` : '') + '.');
+        heads.push(`- ${d.subject} ${d.path === 'role' ? '' : 'is '}${deAnaphorDef(d.is)}` + (d.sent != null ? ` [s${d.sent}]` : '') + '.');
     }
     // A kin-shaped ask opens with the resolved possessive — the kin sentence
     // alone says WHOSE only through a pronoun a small model cannot read; the
@@ -9260,7 +9414,7 @@ function projectGraph(events, frame = {}) {
     const da = defineAssertions(doc, query);
     if (da && da.picked.length)
       notes.push('About ' + da.subject + ': ' + da.picked
-        .map(d => `${d.subject} ${d.path === 'role' ? '' : 'is '}${d.is}` + (d.sent != null ? ` [s${d.sent}]` : ''))
+        .map(d => `${d.subject} ${d.path === 'role' ? '' : 'is '}${deAnaphorDef(d.is)}` + (d.sent != null ? ` [s${d.sent}]` : ''))
         .join('; ') + '.');
     const asked = kinAsked(query);
     if (asked.length) {
@@ -9567,7 +9721,7 @@ function projectGraph(events, frame = {}) {
       return ` {{cite:${doc.id}:${i}:s${i}}}`;
     };
     const text = da.picked
-      .map(d => `${d.subject} ${d.path === 'role' ? '' : 'is '}${d.is}` + cite(d.sent) + '.')
+      .map(d => `${d.subject} ${d.path === 'role' ? '' : 'is '}${deAnaphorDef(d.is)}` + cite(d.sent) + '.')
       .join(' ');
     return {
       text, cites,
@@ -10429,7 +10583,8 @@ function projectGraph(events, frame = {}) {
     // answer mechanically so it resolves to the void rather than wandering to chat.
     if (referentsScope(ds, q).antimatter.length)
       return { decision: 'mechanical', confidence: 'high', reason: 'antimatter-void', primary: routePrimary(ds, q, ctx), intent };
-    // continuity — an anaphoric follow-up to a prior grounded turn stays on the page.
+    // continuity — an anaphoric, deictic ("in there") or elliptical ("but why
+    // not?") follow-up to a grounded conversation stays on the page.
     if (ds.some(d => continuesPrior(d, q, ctx)))
       return { decision: 'mechanical', confidence: 'high', reason: 'continuity', primary: routePrimary(ds, q, ctx), intent };
     // A doc-directed-looking question with NO lexical signal is the prime case for
