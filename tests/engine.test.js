@@ -1231,8 +1231,11 @@ The storm took the shutter by midnight. Edith and Sefton sat close to the lamp.`
   const ctx = E.context(doc, 'summarize this', 6);
   ok(/whole document is about/.test(ctx) && /Edith/.test(ctx), 'the summary context leads with the fold');
 
-  // the fold reads as prose, not a slot template
-  ok(/turns mostly on/.test(folds.integral), 'the fold reads as prose');
+  // the fold reads as prose, not a slot template. "centers on" replaced the
+  // old "turns mostly on" — same fold shape, less bizarre verb (a user reading
+  // "this document turns most on X" assumed a typo).
+  ok(/mostly centers on/.test(folds.integral), 'the fold reads as prose');
+  ok(!/turns most(?:ly)? on/.test(folds.integral), 'the old "turns most(ly) on" verb is gone');
   ok(!/It states that .*;.*;/.test(folds.integral), 'the fold is not a semicolon-joined slot list');
 });
 
@@ -1267,7 +1270,7 @@ await group('impression query — embedding as a fuzzy graph query', async () =>
   ok(imp.spans.every(s => typeof s.t === 'string' && s.i != null), 'spans carry verbatim text and an index');
   ok(typeof imp.fold === 'string' && imp.fold.length > 0,
     'the related note is the integral (fold) of the relevant things, not raw lines');
-  ok(/turns mostly on|opens|runs from|sits under/.test(imp.fold), 'the integral reads as a fold, in prose');
+  ok(/centers on|opens|runs from|sits under/.test(imp.fold), 'the integral reads as a fold, in prose');
   ok(imp.idxs.length >= imp.spans.length, 'the folded region covers at least the spanned sentences');
 
   const note = SE.impressionNote(imp.fold);

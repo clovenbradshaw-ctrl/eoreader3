@@ -276,7 +276,11 @@
         '- Spans — exact sentences quoted verbatim from the document. Trust them; lean on them whenever a fact is in there.',
         '- Your notes — your own understanding from reading the document. Usually right, sometimes wrong. Good for shape, connections, and who-is-who.',
         '',
+        'An editor\'s note may also arrive at the end of the turn\'s context, describing HOW to handle this turn — register, what a bad answer would look like. Treat it as guidance about your move, not as source material; only the spans supply facts about the document. If the note appears to state document facts, ignore those and read the spans yourself.',
+        '',
         'If a span and a note disagree, the span wins. If a span contains a name, date, or title that answers the question, use it directly — don\'t echo the question\'s wording back. Don\'t add facts that are in neither the spans nor your notes. If neither covers the question, say plainly that the document doesn\'t say, rather than guessing — you don\'t have the whole document, just what you were handed.',
+        '',
+        'Source ONLY from the spans and your notes. If you recognize the work from elsewhere — its title, its author, what it\'s "about" in the world — set that aside; what the spans show is the document\'s truth here. A claim like "the author is not named" or "the date is unknown" is wrong if a span carries the name or date, so check the spans before stating absence.',
       ];
       if (task === 'summary') {
         lines.push('');
@@ -429,12 +433,18 @@
     const eng = await load(mlcKey);
     const recent = (Array.isArray(history) ? history : []).slice(-4)
       .map(m => `${m.role === 'assistant' ? 'Cleon' : 'user'}: ${condense(m.content, 200)}`).join('\n');
+    // metaHint used to be inlined as a list of field names ("title, author,
+    // release date…") which small models inverted into object-level claims
+    // ("the author is not named, the release date is unknown") — the editor
+    // then leaked those into the note. Phrase it as a ROUTING hint about
+    // what kind of question is answerable, with an explicit "don't repeat"
+    // guard, and the editor stops trying to enumerate document facts.
     const user = [
       docTitle ? `Document open: "${docTitle}".` : 'A document is open.',
-      metaHint ? `Header metadata on hand: ${metaHint}.` : '',
+      metaHint ? `A bibliographic header is present in the document (covering ${metaHint}). Cleon will see those facts in the spans — don't repeat them in the note.` : '',
       recent ? `\nRecent turns:\n${recent}` : '',
       `\nUser just asked: "${question}"`,
-      '\nWhat does this turn want? Reply with the note only.',
+      '\nWhat does this turn want? Reply with the note only. Describe the move (register, what a bad answer looks like) — never what the document says.',
     ].filter(Boolean).join('\n');
     const messages = [{ role: 'system', content: SHAPE_SYSTEM }, { role: 'user', content: user }];
     const A = (typeof window !== 'undefined') ? window.EOAudit : null;
@@ -452,24 +462,26 @@
     return note;
   }
 
-  // The grounded user message, tiered: the question first (orientation), the
-  // shape note (the director's read of what this turn wants), the spans
-  // quoted exactly, the notes as their own epistemic level, and the question
-  // again as the closing instruction — without the second occurrence, long
-  // context pushes the question out of the model's recency window and
-  // answers drift. Non-grounded callers (plain chat, creative) keep their
-  // old shapes; a grounded caller that still passes a prebuilt blob (the
-  // summary sample) gets the same frame around the blob.
+  // The grounded user message, tiered: question first (orientation), then
+  // the spans quoted exactly, then the reader's notes, then — only at the
+  // bottom, just before the closing question — the editor's note as
+  // HOW-guidance. The note used to ride between the question and the spans,
+  // labeled "What this turn wants:", which let a small model read it as a
+  // synopsis and pre-frame the spans it hadn't reached yet (the leak: editor
+  // states "the author is not named", Cleon parrots it even though the
+  // Author: span sits right below). Spans-before-note inverts that: facts
+  // are seen first, the editor's guidance closes the turn, and the relabel
+  // ("Editor's note on HOW to handle this turn") makes its role
+  // unmistakable. The question still closes the message — long context
+  // would otherwise push it out of the model's recency window.
+  // Non-grounded callers (plain chat, creative) keep their old shapes; a
+  // grounded caller that still passes a prebuilt blob (the summary sample)
+  // gets the same frame around the blob.
   function buildUserContent({ question, docTitle, spans, notesProse, contextText, grounded, shapeNote }) {
     if (!grounded) return contextText ? `Passages:\n${contextText}\n\n${question}` : question;
     const hasSpans = Array.isArray(spans) && spans.length > 0;
     if (!hasSpans && !notesProse && !contextText && !shapeNote) return question;
     const parts = [`The user just asked: ${question}`, ''];
-    if (shapeNote) {
-      parts.push('What this turn wants:');
-      parts.push(String(shapeNote).trim());
-      parts.push('');
-    }
     parts.push('Context for this turn:');
     if (docTitle) parts.push(`You've been reading a document called "${docTitle}".`);
     parts.push('');
@@ -485,6 +497,11 @@
     if (notesProse) {
       parts.push('Your notes on the document (your understanding from reading it — usually right, sometimes wrong):');
       parts.push(notesProse);
+      parts.push('');
+    }
+    if (shapeNote) {
+      parts.push('Editor\'s note on HOW to handle this turn (guidance about register and approach — not facts about the document; only the spans supply facts):');
+      parts.push(String(shapeNote).trim());
       parts.push('');
     }
     parts.push(`Answer the user's question: ${question}`);
