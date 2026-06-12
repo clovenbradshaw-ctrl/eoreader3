@@ -7772,6 +7772,48 @@ function projectGraph(events, frame = {}) {
     return value;
   }
 
+  // The nine-cell terrain histogram for a scope. Walk the events the predicate
+  // admits, address each to its Site (Domain × Time) via eoSiteOfEvent, bucket
+  // into the grid. Each cell carries the events it received (sorted heaviest
+  // first) and the summed mass — ev.mass when present, else a count of 1. Pure
+  // read over doc._events: no operator written, no site deposited beyond the
+  // existing extraction-time stamp. The whole-document call caches on the doc
+  // per RULES_REV the way documentFolds does; a scoped walk (a chapter, an
+  // impression region) recomputes. Returns a map keyed by the nine grid names
+  // — Void/Thing/Kind, Field/Link/Network, Atmosphere/Lens/Paradigm — each
+  // cell `{ events, mass }`. The histogram is `cells[name].mass` for each.
+  function _terrainsScope(doc, inScope) {
+    const cells = {};
+    for (const s of EO_SITES) cells[s] = { events: [], mass: 0 };
+    for (const ev of (doc._events || [])) {
+      if (inScope && !inScope(ev.sentence_idx)) continue;
+      const s = eoSiteOfEvent(ev);
+      if (!s || !cells[s]) continue;
+      const w = (ev.mass != null && Number.isFinite(ev.mass)) ? ev.mass : 1;
+      cells[s].events.push(ev);
+      cells[s].mass += w;
+    }
+    for (const s of EO_SITES) {
+      cells[s].events.sort((a, b) => {
+        const ma = (a.mass != null && Number.isFinite(a.mass)) ? a.mass : 1;
+        const mb = (b.mass != null && Number.isFinite(b.mass)) ? b.mass : 1;
+        return mb - ma;
+      });
+      cells[s].mass = +cells[s].mass.toFixed(2);
+    }
+    return cells;
+  }
+  function foldTerrains(doc, inScope) {
+    if (!doc || doc.kind !== 'prose' || !doc._events) return null;
+    if (inScope == null) {
+      if (doc._terrains && doc._terrains.rev === RULES_REV) return doc._terrains.value;
+      const value = _terrainsScope(doc, null);
+      doc._terrains = { rev: RULES_REV, value };
+      return value;
+    }
+    return _terrainsScope(doc, inScope);
+  }
+
   // number-words and roman numerals, so "chapter two" / "part IV" resolve to an
   // ordinal the same way "chapter 2" does
   const _FOLD_ORDINALS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
@@ -10327,6 +10369,10 @@ function projectGraph(events, frame = {}) {
     // about" and rides every grounded turn; a chapter question gets the fold up
     // to where the next chapter begins.
     documentFold, documentFolds, foldForQuery, foldNote, foldOver,
+    // the nine-cell terrain histogram (Site × Time) of a scope — the
+    // read-only projection that decides which cells the fold should author.
+    // No operator, no event-record write: pure read over doc._events.
+    foldTerrains,
     // ingestion audit: every word's fate (indexed / stopword / dropped), the
     // inverted index actually built, and per-span coverage — the glass box over
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
