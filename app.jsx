@@ -1930,6 +1930,15 @@ function App() {
     setMessages(m => [...m, { role: 'user', text: q }, { role: 'assistant', typing: true, turnId }]);
     setBusy(true); ensureChat(q);
 
+    // Paint the send immediately. The user's bubble and the typing indicator are
+    // committed above, but everything that follows on this turn — routing, graph
+    // traversal, retrieval, prompt building in the detached runners — is heavy
+    // synchronous work that would otherwise block the browser from painting that
+    // feedback, so a send feels frozen while the turn churns. Yield one macrotask
+    // so React flushes and the browser paints the bubble + "…" before the work
+    // starts; the turn then proceeds, lagging on its own without holding the UI.
+    await new Promise(res => setTimeout(res, 0)); // yield to paint
+
     // CHAT WITH WIKIPEDIA: when enrichment is on, pull the salient term's
     // article and INGEST it into the graph as a citable source before reading,
     // so this turn grounds on it (and cites it), not on a sidecar card. The
