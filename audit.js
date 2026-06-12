@@ -133,9 +133,32 @@
     } catch (e) { return false; }
   }
 
+  /* One pretty-printed JSON document holding every recorded turn in full —
+     routing, retrieval, and (the point of this export) the exact prompt the
+     model saw and its raw output on each call. `list` defaults to all turns. */
+  function toJSON(list) {
+    return JSON.stringify({
+      schema: SCHEMA,
+      exportedAt: new Date().toISOString(),
+      turns: (list || turns).map(publicTurn),
+    }, null, 2);
+  }
+
+  function downloadJSON(filename, list) {
+    const name = filename || ('cleon-prompts-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json');
+    try {
+      const blob = new Blob([toJSON(list)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      return true;
+    } catch (e) { return false; }
+  }
+
   window.EOAudit = {
     SCHEMA, isEnabled, setEnabled, begin, step, set, end,
-    all, count, clear, restore, subscribe, toJSONL, download, publicTurn,
+    all, count, clear, restore, subscribe, toJSONL, toJSON, download, downloadJSON, publicTurn,
     // convenience for llm.js — records the model call as an 'llm' step
     llm: (data) => step('llm', data),
   };

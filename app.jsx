@@ -131,6 +131,7 @@ function App() {
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
   const [modelProgress, setModelProgress] = useState(0);
   const [modelLoadText, setModelLoadText] = useState(''); // WebLLM's live status line ("12MB fetched…", "Loading GPU shaders…")
+  const [anthropicKeySet, setAnthropicKeySet] = useState(!!(window.EOLLM && window.EOLLM.hasAnthropicKey && window.EOLLM.hasAnthropicKey()));
   // Staged-ingest progress: null when idle, else { phase, stage, pct, name }.
   const [ingestStatus, setIngestStatus] = useState(null);
 
@@ -564,6 +565,21 @@ function App() {
   // ---- model: load the real local model for the demo ----
   const loadModel = async (m) => {
     if (!window.EOLLM) { showToast('Local model module unavailable.'); return false; }
+    // Claude: no WebGPU and no download — just needs the API key. Without one,
+    // stay idle and let the model popover collect it (it shows a key field for
+    // an Anthropic model). With one, "loading" resolves instantly.
+    if (m.provider === 'anthropic') {
+      if (!window.EOLLM.hasAnthropicKey()) { setModelStatus('idle'); return false; }
+      setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
+      try {
+        await window.EOLLM.load(m.mlc);
+        setModelStatus('ready'); setModelLoadText(''); return true;
+      } catch (e) {
+        setModelStatus('idle'); setModelLoadText('');
+        showToast(e.message || 'Could not connect to Claude');
+        return false;
+      }
+    }
     if (!window.EOLLM.hasWebGPU()) { setModelStatus('idle'); return false; }
     setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
     try {
@@ -575,7 +591,28 @@ function App() {
       return false;
     }
   };
+  // Save (or clear) the Claude API key from the model popover. Saving a key for
+  // the currently-selected Anthropic model immediately loads it.
+  const setAnthropicKey = (k) => {
+    if (!window.EOLLM || !window.EOLLM.setAnthropicKey) return;
+    const saved = window.EOLLM.setAnthropicKey(k);
+    setAnthropicKeySet(!!saved);
+    if (saved && model && model.provider === 'anthropic') loadModel(model);
+    else if (!saved && model && model.provider === 'anthropic') setModelStatus('idle');
+  };
   const pickModel = (m) => { setModel(m); setModelStatus('idle'); loadModel(m); };
+  // Download every recorded turn — including the exact prompt the model saw and
+  // its raw output on each call — as one JSON file, straight from the chat page.
+  // Empty when audit recording is paused (the dot next to the title is off).
+  const exportPrompts = () => {
+    const A = window.EOAudit;
+    if (!A || !A.count || A.count() === 0) {
+      showToast(A && A.isEnabled && !A.isEnabled() ? 'Recording is paused — turn it on in Audit, then ask again.' : 'No turns recorded yet.');
+      return;
+    }
+    const ok = A.downloadJSON && A.downloadJSON();
+    showToast(ok ? 'Exported ' + A.count() + ' turn' + (A.count() === 1 ? '' : 's') + ' with all prompts.' : 'Could not export the prompts.');
+  };
   // Stop an in-flight download. Terminates the worker so it halts immediately
   // rather than running on in the background.
   const cancelModel = () => {
@@ -593,7 +630,11 @@ function App() {
   // (MODELS[0]) is the smallest, most mobile-friendly model, so it begins
   // downloading right away on phones too rather than waiting for the first turn.
   useEffect(() => {
-    if (window.EOLLM && window.EOLLM.hasWebGPU()) loadModel(model);
+    if (!window.EOLLM) return;
+    // A persisted Anthropic selection auto-loads if its key is already stored;
+    // a local model auto-loads when WebGPU is available.
+    if (model.provider === 'anthropic') { if (window.EOLLM.hasAnthropicKey()) loadModel(model); }
+    else if (window.EOLLM.hasWebGPU()) loadModel(model);
     // Warm the structure-layer embedding reader in the background so the first
     // escalation isn't also paying the (one-time, cached) model download. Inert
     // if embed.js is absent or the model fails to load — routing stays lexical.
@@ -1681,32 +1722,42 @@ function App() {
           try { contradictions = window.EOEngine.checkAssertionsScope(scope, fullForChecks) || []; }
           catch (e) { eoWarn('assertion-check', e); }
         }
+        // The user asked for this: when the model's draft trips a binding or
+        // consistency check, KEEP the model's answer and flag it rather than
+        // silently swapping in the mechanical reading. The mechanical reading
+        // still rides along as the click-to-view "Exact mechanical reading"
+        // panel (settle attaches it for any 'model…' decision), so the page's
+        // own answer is never lost — the model's phrasing just leads, wearing
+        // an honest caveat badge.
+        const flagModel = (reason, note) => {
+          const flagged = { ...bound,
+            audit: { ...(bound.audit || {}), status: 'warn',
+              note: note + (bound.audit && bound.audit.note ? ' ' + bound.audit.note : '') } };
+          settle(flagged, 'model (flagged: ' + reason + ')');
+        };
         if (!bound.audit.grounded) {
-          // Unmoored: the phrasing matched no passage — use the mechanical answer.
-          // Reconsideration (Phase 5): at the deepest depth, read a factual draft
-          // that binds nothing as a question the page does not address, not a
-          // failed answer — the mechanical reading surfaces that silence/void.
+          // Unmoored: the phrasing matched no passage. Kept and flagged; the
+          // mechanical reading is one click away.
           if (budget && budget.replan) AUD('step', 'plan-seg', { from: 'factual', to: 'question-about-silence', reason: 'the draft bound to nothing on the page' });
-          AUD('step', 'veto', { decision: 'mechanical', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
-          settle(window.EOEngine.answerScope(scope, q), 'mechanical (veto)');
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
+          flagModel('unbound', 'Phrased by the model, but it didn’t bind to any passage in the document — kept and flagged. The exact mechanical reading is one click away.');
         } else if (contradictions.length) {
-          AUD('step', 'veto', { decision: 'mechanical', reason: 'contradicts-assertion',
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'contradicts-assertion',
             contradictions: contradictions.map(c => ({ subject: c.subject, is: c.is, sent: c.sent, claim: c.claim, docId: c.docId })),
             boundGrounded: true, boundCovers: bound.audit.covers });
-          settle(window.EOEngine.answerScope(scope, q), 'mechanical (contradicted the page)');
+          flagModel('contradicts-assertion', 'Kept the model’s answer, but it conflicts with what the page asserts (see the trace) — flagged. The page’s mechanical reading is one click away.');
         } else if (relationMismatches.length) {
-          // A claim whose relation contradicts its deposited edge is held,
-          // not waved through — the inversion fix. Mechanical answer +
-          // legible trace, mirroring the assertion and kin vetoes.
-          AUD('step', 'veto', { decision: 'mechanical', reason: 'relation-mismatch',
+          // A claim whose relation contradicts its deposited edge: kept but
+          // flagged, mirroring the assertion and kin flags.
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'relation-mismatch',
             relationMismatches: relationMismatches.map(m => ({ kind: m.kind, claim: m.claim, docId: m.docId })),
             boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
-          settle(window.EOEngine.answerScope(scope, q), 'mechanical (relation mismatch)');
+          flagModel('relation-mismatch', 'Kept the model’s answer, but one claim’s relation doesn’t match the page’s recorded edge — flagged. The mechanical reading is one click away.');
         } else if (kinMismatches.length) {
-          AUD('step', 'veto', { decision: 'mechanical', reason: 'kin-subject-mismatch',
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'kin-subject-mismatch',
             kinMismatches: kinMismatches.map(m => ({ possessor: m.possessor, kin: m.kin, sent: m.sent, claim: m.claim, docId: m.docId })),
             boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
-          settle(window.EOEngine.answerScope(scope, q), 'mechanical (kin subject mismatch)');
+          flagModel('kin-subject-mismatch', 'Kept the model’s answer, but it may hang a role on the wrong person (kin vs possessor) — flagged. The mechanical reading is one click away.');
         } else if (invented.length) {
           // Grounded, but names term(s) the page doesn't contain: KEEP the draft,
           // strike those terms as voids, downgrade the badge to an honest caveat.
@@ -1768,7 +1819,8 @@ function App() {
 
     const doc = backingDoc();
     const scope = scopeList();   // explicit source chips, else the focused doc
-    const canLLM = !!(window.EOLLM && window.EOLLM.hasWebGPU());
+    const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
+      ? window.EOLLM.hasAnthropicKey() : window.EOLLM.hasWebGPU()));
     const wasLoaded = canLLM && window.EOLLM.isLoaded(model.mlc);
 
     // Resolve this turn's budget at the deepest stop (thinkingBudget clamps to
@@ -2047,7 +2099,7 @@ function App() {
             <React.Fragment>
               {showChat && (
                 <div style={{ flexBasis: showDocPane ? (splitRatio * 100) + '%' : '100%', flexGrow: showDocPane ? 0 : 1, flexShrink: 0, display: 'flex', minWidth: 0 }}>
-                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} />
+                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} />
                 </div>
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}
@@ -2071,7 +2123,9 @@ function App() {
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
       {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
       {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
-                     status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel} />}
+                     status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel}
+                     webgpu={!!(window.EOLLM && window.EOLLM.hasWebGPU && window.EOLLM.hasWebGPU())}
+                     anthropicKeySet={anthropicKeySet} onSetAnthropicKey={setAnthropicKey} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (
         <EntityModal doc={d} name={entityModal.name} onCite={flashCitation} onEntity={(n) => setEntityModal({ docId: d.id, name: n })}
           onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />

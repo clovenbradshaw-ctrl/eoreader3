@@ -16,6 +16,122 @@
 
   const hasWebGPU = () => typeof navigator !== 'undefined' && !!navigator.gpu;
 
+  // ---- Anthropic (Claude) backend ----------------------------------------
+  // A second backend alongside the local WebLLM models: route a turn to the
+  // Claude API instead of the user's GPU. A model whose key is prefixed
+  // 'anthropic:' (e.g. 'anthropic:claude-opus-4-8') is served here, so every
+  // existing call site that threads `model.mlc` through load()/phrase()/
+  // isLoaded() keeps working unchanged. This is the path that still works when
+  // there's no WebGPU or the model CDN is blocked — the two usual reasons local
+  // loading fails — so it doubles as the fallback for those.
+  const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+  const ANTHROPIC_KEY_LS = 'eo-anthropic-key';
+  let anthropicKey = null;
+  try { anthropicKey = (typeof localStorage !== 'undefined' && localStorage.getItem(ANTHROPIC_KEY_LS)) || null; } catch (_) {}
+  const isAnthropic = (key) => typeof key === 'string' && key.indexOf('anthropic:') === 0;
+  const anthropicModelId = (key) => String(key).slice('anthropic:'.length);
+  const hasAnthropicKey = () => !!anthropicKey;
+  // Store (or clear, with a falsy value) the API key. Persisted to localStorage
+  // so it survives reloads — the same device-local storage the rest of the app
+  // uses; the key never leaves the browser except on the call to Anthropic.
+  function setAnthropicKey(k) {
+    anthropicKey = (k && String(k).trim()) || null;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        if (anthropicKey) localStorage.setItem(ANTHROPIC_KEY_LS, anthropicKey);
+        else localStorage.removeItem(ANTHROPIC_KEY_LS);
+      }
+    } catch (_) {}
+    return anthropicKey;
+  }
+
+  // Stream a turn from the Claude API, emitting text deltas to onDelta and
+  // returning the full text. The messages array is the same OpenAI-style shape
+  // assembleMessages() builds for WebLLM; here the single leading `system`
+  // message becomes Anthropic's top-level `system` and the rest map to the
+  // user/assistant turns. Uses fetch + SSE directly (no SDK import) so this
+  // path carries no CDN dependency — exactly what makes it a dependable
+  // fallback when the model CDN is the thing that's failing. Note: Opus/Sonnet
+  // 4.x reject `temperature`, so it is deliberately not sent.
+  async function streamAnthropic({ model, messages, maxTokens, onDelta }) {
+    if (!anthropicKey) throw Object.assign(new Error('Add your Anthropic API key to use Claude.'), { code: 'NOKEY' });
+    const system = (messages || []).filter(m => m && m.role === 'system').map(m => m.content).filter(Boolean).join('\n\n');
+    const msgs = (messages || []).filter(m => m && m.role !== 'system')
+      .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') }));
+    const body = {
+      model,
+      // Claude is more expansive than the small local models; floor the cap so a
+      // grounded answer sized for a 0.5B model (as low as ~180) isn't truncated.
+      max_tokens: Math.max(1024, (maxTokens | 0) || 1024),
+      stream: true,
+      messages: msgs.length ? msgs : [{ role: 'user', content: ' ' }],
+    };
+    if (system) body.system = system;
+    let resp;
+    try {
+      resp = await fetch(ANTHROPIC_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': anthropicKey,
+          'anthropic-version': '2023-06-01',
+          // Anthropic gates browser (CORS) calls behind this opt-in header.
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      throw Object.assign(new Error('Could not reach the Claude API — check your connection.'), { code: 'ANTHROPIC_NET' });
+    }
+    if (!resp.ok || !resp.body) {
+      let msg = `Claude API error (${resp.status}).`;
+      if (resp.status === 401) msg = 'Claude rejected the API key (401). Check the key and try again.';
+      else { try { const j = await resp.json(); if (j && j.error && j.error.message) msg = j.error.message; } catch (_) {} }
+      throw Object.assign(new Error(msg), { code: 'ANTHROPIC', status: resp.status });
+    }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', full = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line.indexOf('data:') !== 0) continue;          // skip `event:` lines and blanks
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+        let evt; try { evt = JSON.parse(data); } catch (_) { continue; }
+        if (evt.type === 'content_block_delta' && evt.delta && evt.delta.type === 'text_delta') {
+          const d = evt.delta.text || '';
+          if (d) { full += d; if (onDelta) onDelta(d); }
+        } else if (evt.type === 'error') {
+          throw Object.assign(new Error((evt.error && evt.error.message) || 'Claude streaming error.'), { code: 'ANTHROPIC' });
+        }
+      }
+    }
+    return full;
+  }
+
+  // Stream a chat completion, routing by the model key: the Claude API for an
+  // 'anthropic:' key, the resident WebLLM engine otherwise. Returns the full
+  // raw text; deltas go to onDelta. The single point where the two backends
+  // diverge — everything above (prompt assembly, think gating, audit) is shared.
+  async function streamChat({ mlcKey, messages, temperature, maxTokens, onDelta }) {
+    if (isAnthropic(mlcKey))
+      return streamAnthropic({ model: anthropicModelId(mlcKey), messages, maxTokens, onDelta });
+    const eng = await load(mlcKey);
+    let full = '';
+    const res = await eng.chat.completions.create({ messages, temperature, max_tokens: maxTokens, stop: STOP_SEQUENCES, stream: true });
+    for await (const chunk of res) {
+      const d = chunk.choices?.[0]?.delta?.content || '';
+      if (d) { full += d; if (onDelta) onDelta(d); }
+    }
+    return full;
+  }
+
   // The model runtime won't load forever: a dead/blocked CDN (esm.run) used to
   // leave the import pending with no signal, which looked exactly like a frozen
   // download. Race the import against a timeout so it fails loudly instead.
@@ -162,6 +278,22 @@
   // retried once — resuming from the shards already cached, so only the missing
   // bytes refetch — before the error surfaces.
   async function load(mlcKey, onProgress) {
+    // Claude needs no download — "loading" is just confirming a key is present.
+    // Release any resident WebGPU engine first so switching backends frees the
+    // GPU, then mark this the resident model with a sentinel engine so
+    // isLoaded() reports true.
+    if (isAnthropic(mlcKey)) {
+      if (loadedModel === mlcKey && enginePromise) return enginePromise;
+      if (!anthropicKey) throw Object.assign(new Error('Add your Anthropic API key to use Claude.'), { code: 'NOKEY' });
+      if (enginePromise) {
+        const prev = enginePromise; enginePromise = null; loadedModel = null;
+        try { const eng = await prev; if (eng && eng.unload) await eng.unload(); } catch (e) {}
+      }
+      loadToken++;                       // supersede any in-flight WebLLM build
+      loadedModel = mlcKey;
+      enginePromise = Promise.resolve({ anthropic: true });
+      return enginePromise;
+    }
     if (!hasWebGPU()) throw new Error('WebGPU is not available in this browser. Chrome/Edge 113+ or a WebGPU-enabled browser is required for the local model.');
     if (loadedModel === mlcKey && enginePromise) return enginePromise;
     // Switching models: release the resident engine FIRST. A larger model
@@ -439,7 +571,6 @@
   ].join('\n');
 
   async function shapePass({ mlcKey, question, history, docTitle, metaHint }) {
-    const eng = await load(mlcKey);
     const recent = (Array.isArray(history) ? history : []).slice(-4)
       .map(m => `${m.role === 'assistant' ? 'Cleon' : 'user'}: ${condense(m.content, 200)}`).join('\n');
     // metaHint used to be inlined as a list of field names ("title, author,
@@ -460,8 +591,7 @@
     const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     let full = '';
     try {
-      const res = await eng.chat.completions.create({ messages, temperature: 0.3, max_tokens: 90, stop: STOP_SEQUENCES, stream: true });
-      for await (const chunk of res) full += chunk.choices?.[0]?.delta?.content || '';
+      full = await streamChat({ mlcKey, messages, temperature: 0.3, maxTokens: 90 });
     } catch (e) {
       if (A && A.step) try { A.step('llm', { mode: 'shape', grounded: false, mlcKey, system: SHAPE_SYSTEM, messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })), output: full, error: String((e && e.message) || e), ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0) }); } catch (_) {}
       throw e;
@@ -644,7 +774,6 @@
   // shape layer set the ceiling from the best-fit archetype's length; unset, the
   // depth-scaled default applies (parity).
   async function phrase({ mlcKey, question, contextText, history, mode, task, grounded, onToken, budget, workingMemory, depth, sysOverride, spans, notes, docTitle, shapeNote, maxTokens, provenanceKeys }) {
-    const eng = await load(mlcKey);
     // Thinking depth (1 reflex … 3 deepest) shapes the grounded phrasing and how
     // much room the answer gets. Absent/1 ⇒ today's prompt and token caps (parity).
     const lvl = Math.min(3, Math.max(1, (depth | 0) || 1));
@@ -679,11 +808,7 @@
     let full = '';
     const gate = makeThinkFilter(onToken);
     try {
-      const res = await eng.chat.completions.create({ messages, temperature, max_tokens, stop: STOP_SEQUENCES, stream: true });
-      for await (const chunk of res) {
-        const d = chunk.choices?.[0]?.delta?.content || '';
-        if (d) { full += d; gate.feed(d); }
-      }
+      full = await streamChat({ mlcKey, messages, temperature, maxTokens: max_tokens, onDelta: (d) => gate.feed(d) });
       gate.flush();
     } catch (e) {
       recLLM(full, { error: String((e && e.message) || e) });   // record the failed attempt, then let the caller handle it
@@ -696,5 +821,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, load, cancelLoad, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, load, cancelLoad, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
