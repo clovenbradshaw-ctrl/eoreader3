@@ -321,7 +321,7 @@ function RulesDrawer({ rules, langModes, learnedByLang, onToggle, onInstall, onS
 }
 
 /* ============================================================ Model popover */
-function ModelPopover({ models, current, onPick, onClose, anchor, status, progress, loadText, onReset, onCancel }) {
+function ModelPopover({ models, current, onPick, onClose, anchor, status, progress, loadText, onReset, onCancel, webgpu, anthropicKeySet, onSetAnthropicKey }) {
   const ref = window.useDialog(onClose);
   React.useEffect(() => {
     // Close only on a genuine outside press. A containment check on mousedown
