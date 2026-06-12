@@ -502,11 +502,19 @@ function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, place
             </button>
           ))}
         </div>
-        {canEnrich && onToggleEnrich && (
-          <button type="button" className={'comp-btn enrich' + (enrich ? ' on' : '')} aria-pressed={!!enrich}
-            title="Wikipedia enrichment — attach an encyclopaedia + dictionary card to your message. Sends the looked-up term (not the document) to Wikipedia & Wiktionary through the proxy."
-            onClick={onToggleEnrich}>
-            <Icon name="book" size={15} /> Wikipedia
+        {onToggleEnrich && (
+          <button type="button" role="switch" aria-checked={!!enrich} disabled={!canEnrich}
+            className={'wiki-toggle' + (enrich ? ' on' : '')}
+            title={canEnrich
+              ? (enrich
+                  ? 'Wikipedia is ON — your message pulls the relevant article into the graph and cites it. Click to turn off.'
+                  : 'Wikipedia is OFF — turn on to chat with Wikipedia: your message pulls the relevant article into the graph and cites it.')
+              : 'Wikipedia lookups are off — set window.EO_REFERENCE_PROXY to enable.'}
+            onClick={() => canEnrich && onToggleEnrich()}>
+            <Icon name="book" size={14} />
+            <span className="wiki-toggle-label">Wikipedia</span>
+            <span className="wiki-toggle-state">{enrich ? 'On' : 'Off'}</span>
+            <span className="wiki-switch" aria-hidden="true"><span className="wiki-knob" /></span>
           </button>
         )}
         <div className="comp-spacer" />
