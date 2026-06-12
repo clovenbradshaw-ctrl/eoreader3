@@ -1160,47 +1160,42 @@ The storm took the shutter by midnight. Edith and Sefton sat close to the lamp.`
   ok(!/It states that .*;.*;/.test(folds.integral), 'the fold is not a semicolon-joined slot list');
 });
 
-// ── stray thoughts: a lightweight associative RAG, seeded by the prompt and
-// re-seeded by each thought it surfaces (no-op without an embedder) ──
-await group('stray thoughts — the prompt stirs the page', async () => {
-  const RING = `Ring of Notes
-
-Tokenzero alphazero betazero drifts onward.
-Tokenone alphaone betaone drifts onward.
-Tokentwo alphatwo betatwo drifts onward.
-Tokenthree alphathree betathree drifts onward.
-Tokenfour alphafour betafour drifts onward.
-Tokenfive alphafive betafive drifts onward.`;
+// ── impression query: the embedder as a fuzzy query into the graph — verbatim
+// related spans PLUS the integral (fold) of the relevant region as a note ──
+await group('impression query — embedding as a fuzzy graph query', async () => {
   const sandbox = loadEngine();
   const SE = sandbox.EOEngine;
-  const doc = await SE.parseDocument('ring.txt', RING, 'ring');
+  const voss = await SE.parseDocument('voss.txt', VOSS, 'v');
 
-  // no embedder ⇒ the drift is a clean no-op (parity floor)
-  const none = await SE.strayThoughts(doc, 'tell me a stray thought', { hops: 3 });
-  ok(Array.isArray(none) && none.length === 0, 'no embedder ⇒ no stray thoughts');
+  // foldOver: the integral over an ARBITRARY set of relevant sentences, in prose
+  const someFold = SE.foldOver(voss, [2, 3, 4, 5]);
+  ok(typeof someFold === 'string' && someFold.length > 0, 'foldOver folds an arbitrary set into prose');
+  const emptyFold = SE.foldOver(voss, []);
+  eq(emptyFold, '', 'foldOver of nothing is empty');
 
-  // a deterministic fake embedder: sentences live on a 2-D ring (adjacent ones
-  // are near), the query sits just off it — enough graded structure to drift.
+  // no embedder ⇒ a clean no-op (the lexical paths answer as before)
+  const none = await SE.impressionQuery(voss, 'who fears the crossing', {});
+  ok(none.spans.length === 0 && none.fold === '', 'no embedder ⇒ empty impression');
+
+  // a deterministic fake embedder: sentences on a 2-D ring, the query just off it,
+  // so the impression selects a contiguous-ish region with real entities in it.
   const ring = (theta) => Float32Array.from([Math.cos(theta), Math.sin(theta)]);
   sandbox.EOEmbed = {
     ready: () => true, warm: () => {},
-    embedSentences: async (arr) => arr.map((_, i) => ring(i * 0.6)),
-    embedQuery: async () => ring(0.3),
+    embedSentences: async (arr) => arr.map((_, i) => ring(i * 0.5)),
+    embedQuery: async () => ring(0.4),
   };
 
-  const stray = await SE.strayThoughts(doc, 'tell me a stray thought', { hops: 3, branch: 1 });
-  ok(stray.length >= 1, 'with an embedder the prompt surfaces stray thoughts');
-  ok(stray.length <= 3, 'the drift is bounded by the hop budget');
-  const idxs = stray.map(s => s.i);
-  ok(new Set(idxs).size === idxs.length, 'a stray thought is never repeated (the chain converges)');
-  eq(stray[0].via, null, 'the first stray thought is seeded by the question itself');
-  let chained = true;
-  for (let k = 1; k < stray.length; k++) if (stray[k].via !== stray[k - 1].i) chained = false;
-  ok(chained, 'each later thought re-prompts from the one before it (self re-prompting)');
+  const imp = await SE.impressionQuery(voss, 'tell me about the night', { spans: 3, region: 8 });
+  ok(imp.spans.length >= 1, 'the impression hands back verbatim related spans');
+  ok(imp.spans.every(s => typeof s.t === 'string' && s.i != null), 'spans carry verbatim text and an index');
+  ok(typeof imp.fold === 'string' && imp.fold.length > 0,
+    'the related note is the integral (fold) of the relevant things, not raw lines');
+  ok(/turns mostly on|opens|runs from|sits under/.test(imp.fold), 'the integral reads as a fold, in prose');
+  ok(imp.idxs.length >= imp.spans.length, 'the folded region covers at least the spanned sentences');
 
-  // it rides the prompt as a marked, cited tier
-  const note = SE.strayThoughtsNote(stray, doc);
-  ok(/Stray thoughts/.test(note) && /\[s\d+\]/.test(note), 'stray thoughts render as a cited, marked note');
+  const note = SE.impressionNote(imp.fold);
+  ok(/Related by impression/.test(note) && note.includes(imp.fold), 'the impression renders as a marked note carrying the fold');
 });
 
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

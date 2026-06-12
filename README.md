@@ -114,27 +114,35 @@ to. A turn with no chapter reference gets the integral fold of the whole.
 Chapter boundaries are the same standalone-heading structure the rest of the
 reader leverages — "structure is what folds leverage."
 
-### Stray thoughts (a lightweight associative RAG)
+### The impression query (embedding as a fuzzy query into the graph)
 
-A prompt doesn't only retrieve what it names — it **stirs** the page. Seeded from
-the question's own embedding, `strayThoughts` pulls the nearest sentence the
-question never reaches in words (a tangent, not an answer), then **re-seeds from
-that thought** to pull the next, and so on: a short self-re-prompting drift, the
-way one stray thought triggers another. Each hop is similarity-floored, kept
-lexically distinct from the question (so it stays *stray*), δ-gated against the
-document's own gravity (a line near everything is no real pull), and
-de-duplicated — so the chain converges and stops on its own (budgeted to a few
-hops).
+The embedder isn't a tangent generator — it's **another way to query the graph**:
+impressionistically, by *meaning* rather than by the words the question happened
+to use. Seeded from the question's embedding, `impressionQuery` gathers the
+sentences the page reads as related (cosine ≥ a floor) — the **relevant region** —
+then does two things the lexical path can't:
 
-The drift rides the prompt as its **own low-confidence tier** —
-*"stray thoughts… usually tangential, occasionally the key; ignore the ones that
-don't earn their place"* — each line cited, so a thought the model actually leans
-on binds like any other span. It's lightweight: it fires only when the embedder
-is already resident (the same MiniLM the rest of the app warms in the
+- it hands the model the top related sentences **verbatim** (citable spans), and
+- it folds the **whole region into one note** — the **integral of the relevant
+  things**, not the raw lines. This reuses the same fold operator the integral
+  fold uses (`foldOver`, which condenses *any* set of sentences, not just a
+  `[0, hi)` prefix).
+
+Before folding, the region **closes over the figures it touches** — a name the
+impression surfaced pulls its other mentions into the set — so the integral
+covers a figure's whole footprint, not just the sentences cosine happened to
+rank. That closure is the self-re-prompting: an impression of a name re-queries
+the graph for the rest of that name.
+
+So the model receives the verbatim related spans *and* a synthesized note —
+*"related by impression… gathered into one picture"* — that reads as the reader's
+understanding of the relevant material, weighed as a note (usually right,
+sometimes a tangent), not as quotation. It's lightweight: it fires only when the
+embedder is already resident (the same MiniLM the rest of the app warms in the
 background), reusing the cached sentence vectors, so it costs only the query
-embedding. With no embedder it is a clean no-op (`strayThoughts` returns nothing
-and the lexical paths answer exactly as before — the parity floor holds), and it
-recorded as its own `stray` audit step so the drift is inspectable.
+embedding, and it's recorded as its own `impression` audit step. With no embedder
+it is a clean no-op (`impressionQuery` returns nothing and the lexical
+spans/notes answer exactly as before — the parity floor holds).
 
 ### When you push back (conversational repair)
 

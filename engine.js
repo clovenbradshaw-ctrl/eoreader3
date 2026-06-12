@@ -7614,26 +7614,29 @@ function projectGraph(events, frame = {}) {
     return out;
   }
 
-  // The fold of the prefix [0, hi): the reading up to a boundary, in words.
-  function documentFold(doc, hi) {
+  // The core fold: condense whatever sentences the predicate admits into the
+  // reader's-voice prose — the figures that scope turns on, what the text takes
+  // them to be, the chapters it touches, and the earliest line it opens on. The
+  // scope can be a contiguous prefix (the integral / a chapter) OR a scattered
+  // set (the region an impressionistic query surfaced) — the SAME synthesis runs
+  // over either, so "the integral of the relevant things" is just this over a
+  // set instead of a range.
+  function _foldScope(doc, inScope) {
     if (!doc || doc.kind !== 'prose') return '';
     const texts = doc.sentenceTexts || [];
     const n = texts.length;
     if (!n) return '';
-    const end = (hi == null || hi > n) ? n : (hi < 0 ? 0 : hi);
-    if (end <= 0) return '';
-    const inRange = (i) => i != null && i >= 0 && i < end;
 
-    // heaviest figures whose mentions fall inside the window
-    const heavy = foldHeavy(doc).filter(e => (e.sents || []).some(inRange)).slice(0, 5);
+    // heaviest figures with a mention inside the scope
+    const heavy = foldHeavy(doc).filter(e => (e.sents || []).some(inScope)).slice(0, 5);
     const figKeys = new Set(heavy.map(e => e.key));
     const nameByKey = new Map(heavy.map(e => [e.key, e.name]));
 
-    // copular "X is Y" assertions about those figures, made within the window
+    // copular "X is Y" assertions about those figures, made inside the scope
     const asserts = [], seenA = new Set();
     for (const ev of (doc._events || [])) {
       if (ev.op !== 'DEF' || ev.path !== 'class' || !ev.value) continue;
-      if (!inRange(ev.sentence_idx)) continue;
+      if (!inScope(ev.sentence_idx)) continue;
       const k = normSurface(ev.target);
       if (!figKeys.has(k) || seenA.has(k)) continue;
       seenA.add(k);
@@ -7641,17 +7644,41 @@ function projectGraph(events, frame = {}) {
       if (asserts.length >= 4) break;
     }
 
-    // section labels whose heading falls in the window
-    const spine = foldSections(doc).filter(s => s.start < end).map(s => s.label).slice(0, 8);
+    // section labels whose span the scope touches
+    const spine = foldSections(doc).filter(s => {
+      for (let i = s.start; i < s.end; i++) if (inScope(i)) return true;
+      return false;
+    }).map(s => s.label).slice(0, 8);
 
-    // an opening line anchors the gist on something concrete the model can quote
+    // the earliest in-scope line, so the gist has something concrete to hold
     let opener = '';
-    for (let i = 0; i < end; i++) {
+    for (let i = 0; i < n; i++) {
+      if (!inScope(i)) continue;
       const t = String(texts[i] || '').trim();
       if (t.length >= 40 && /[.!?…"”'’)]$/.test(t)) { opener = t; break; }
     }
 
     return prosifyFold({ figures: heavy.map(e => e.name), asserts, spine, opener });
+  }
+
+  // The fold of the prefix [0, hi): the reading up to a boundary, in words.
+  function documentFold(doc, hi) {
+    if (!doc || doc.kind !== 'prose') return '';
+    const n = (doc.sentenceTexts || []).length;
+    if (!n) return '';
+    const end = (hi == null || hi > n) ? n : (hi < 0 ? 0 : hi);
+    if (end <= 0) return '';
+    return _foldScope(doc, (i) => i != null && i >= 0 && i < end);
+  }
+
+  // The fold (integral) over an ARBITRARY set of sentences — the relevant region
+  // an impressionistic query gathered, condensed into one picture rather than
+  // handed back as raw lines.
+  function foldOver(doc, idxs) {
+    if (!doc || doc.kind !== 'prose') return '';
+    const set = new Set((idxs || []).filter(i => i != null && i >= 0));
+    if (!set.size) return '';
+    return _foldScope(doc, (i) => set.has(i));
   }
 
   // The fold as PROSE, not a template. The structured pieces — the figures the
@@ -9872,90 +9899,68 @@ function projectGraph(events, frame = {}) {
     return out.slice(0, k);
   }
 
-  /* ---------- Stray thoughts (a lightweight associative RAG) ----------
-     A prompt doesn't only retrieve what it names — it STIRS the page. Seeded
-     from the question's own embedding, strayThoughts pulls the nearest sentence
-     the question never reaches in words (a tangent, not an answer), then re-seeds
-     from THAT thought to pull the next, and so on: a short self-re-prompting
-     drift, the way one stray thought triggers another. Each hop is similarity-
-     floored, kept lexically distinct from the question (so it stays "stray"),
-     δ-gated against the doc's own gravity (a line near everything is no pull),
-     and de-duplicated, so the chain converges and stops. The thoughts ride the
-     prompt as their own low-confidence tier, legible as association rather than
-     retrieval. No embedder ⇒ [] (degrades to the lexical paths — parity floor).
-     Reuses _docVecCache, so the drift costs only the query embedding. */
-  const STRAY_SIM_FLOOR = 0.30;   // below this cosine, not a real associative pull
-  const STRAY_LEX_MAX = 0.30;     // above this overlap with the question, not "stray"
-  async function strayThoughts(doc, query, opts = {}) {
-    const out = [];
-    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return out;
-    if (!doc || doc.kind !== 'prose') return out;
-    const hops = Math.max(1, Math.min(opts.hops || 3, 6));      // length of the drift
-    const branch = Math.max(1, Math.min(opts.branch || 1, 3));  // how many it may split into per hop
+  /* ---------- Impression query (embedding as a fuzzy graph query) ----------
+     The embedder is not a tangent generator — it's another way to QUERY the
+     graph: impressionistically, by meaning rather than by the words the question
+     happened to use. Seeded from the question's embedding, impressionQuery
+     gathers the sentences the page reads as related (cosine ≥ floor) — the
+     "relevant region" — then does two things the lexical path can't:
+
+       • hands back the top related sentences VERBATIM (citable spans), and
+       • folds the WHOLE region into one note — the INTEGRAL of the relevant
+         things, not the raw lines. The region first closes over the figures it
+         touches (their other mentions join it), so the integral covers a figure's
+         whole footprint, not just the sentences cosine happened to rank. That
+         closure is the "self-re-prompting": an impression of a name pulls the
+         rest of that name into the fold.
+
+     No embedder ⇒ an empty result (the lexical spans/notes answer exactly as
+     before — parity floor). Reuses _docVecCache, so it costs only the query
+     embedding. */
+  async function impressionQuery(doc, query, opts = {}) {
+    const empty = { spans: [], idxs: [], fold: '' };
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return empty;
+    if (!doc || doc.kind !== 'prose') return empty;
     let vecs; try { vecs = await docSentVectors(doc); } catch (e) { vecs = null; }
-    if (!vecs || !vecs.length) return out;
-    let seed; try { seed = await window.EOEmbed.embedQuery(query); } catch (e) { seed = null; }
-    if (!seed) return out;
+    if (!vecs || !vecs.length) return empty;
+    let qv; try { qv = await window.EOEmbed.embedQuery(query); } catch (e) { qv = null; }
+    if (!qv) return empty;
     const texts = doc.sentenceTexts || [];
-    const qTokens = new Set(tok(String(query || '')));
     const chromeSet = (doc._chrome && doc._chrome.length) ? new Set(doc._chrome) : null;
-    const dim = vecs[0].length;
-    const globalC = (() => {
-      const v = new Float64Array(dim);
-      for (const r of vecs) for (let d = 0; d < dim; d++) v[d] += r[d];
-      let n = 0; for (let d = 0; d < dim; d++) n += v[d] * v[d]; n = Math.sqrt(n) || 1;
-      for (let d = 0; d < dim; d++) v[d] /= n;
-      return v;
-    })();
-    const visited = new Set();
-    const nearest = (seedVec, fromIdx) => {
-      let best = null;
-      for (let j = 0; j < vecs.length; j++) {
-        if (visited.has(j) || j === fromIdx) continue;
-        if (chromeSet && chromeSet.has(j)) continue;
-        const sim = _cosineNorm(seedVec, vecs[j]);
-        if (sim < STRAY_SIM_FLOOR) continue;
-        // a stray thought is one the question doesn't already reach in words
-        const jt = tok(texts[j] || ''); let shared = 0; for (const t of jt) if (qTokens.has(t)) shared++;
-        const lex = jt.length ? shared / jt.length : 0;
-        if (lex > STRAY_LEX_MAX) continue;
-        // δ gate: a sentence near the whole document (flat) is not a real pull
-        const baseline = Math.max(1e-6, _cosineNorm(vecs[j], globalC));
-        if (sim < baseline) continue;
-        if (!best || sim > best.sim) best = { i: j, t: texts[j], sim: +sim.toFixed(4), lex: +lex.toFixed(3) };
-      }
-      return best;
-    };
-    // the cascade: the question seeds the first thought; each thought re-prompts
-    // the next, branching at most `branch` ways per hop.
-    let frontier = [{ vec: seed, via: null }];
-    for (let h = 0; h < hops && out.length < hops; h++) {
-      const next = [];
-      for (const f of frontier) {
-        const found = nearest(f.vec, f.via);
-        if (!found) continue;
-        visited.add(found.i);
-        out.push({ i: found.i, t: found.t, sim: found.sim, via: f.via, hop: h });
-        next.push({ vec: vecs[found.i], via: found.i });
-        if (next.length >= branch || out.length >= hops) break;
-      }
-      if (!next.length) break;
-      frontier = next;
+    const floor = isFinite(opts.floor) ? opts.floor : SEM_FLOOR;
+    const region = Math.max(1, Math.min(opts.region || 12, 24));   // how wide the relevant region may be
+    const spanK = Math.max(1, Math.min(opts.spans || 4, 8));       // verbatim spans handed back
+    // the impressionistic hits: every sentence the page reads as related
+    const scored = [];
+    for (let i = 0; i < vecs.length; i++) {
+      if (chromeSet && chromeSet.has(i)) continue;
+      const s = _cosineNorm(qv, vecs[i]);
+      if (s >= floor) scored.push({ i, t: texts[i], sim: +s.toFixed(4) });
     }
-    return out;
+    if (!scored.length) return empty;
+    scored.sort((a, b) => b.sim - a.sim);
+    const relevant = scored.slice(0, region);
+    const relSet = new Set(relevant.map(r => r.i));
+    // close the region over the figures it touches — the integral should cover a
+    // name's whole footprint, not just the lines cosine ranked (self-re-prompting)
+    if (opts.expand !== false) {
+      const heavy = foldHeavy(doc).filter(e => (e.sents || []).some(i => relSet.has(i))).slice(0, 4);
+      for (const e of heavy) for (const i of (e.sents || [])) if (i >= 0 && i < vecs.length) relSet.add(i);
+    }
+    return {
+      spans: relevant.slice(0, spanK),
+      idxs: [...relSet].sort((a, b) => a - b),
+      fold: foldOver(doc, [...relSet]),
+    };
   }
 
-  // The drift as a prompt note — its own low-confidence tier, marked as
-  // association ("usually tangential, occasionally the key"), each line cited so
-  // a thought the model actually leans on is bound like any other span.
-  function strayThoughtsNote(stray, doc) {
-    if (!stray || !stray.length) return '';
-    const texts = (doc && doc.sentenceTexts) || [];
-    const lines = stray.map(s => {
-      const from = s.via == null ? 'the question' : `“${String(texts[s.via] || '').replace(/\s+/g, ' ').trim().slice(0, 36)}…”`;
-      return `- drifting from ${from}: ${String(s.t).replace(/\s+/g, ' ').trim()} [s${s.i}]`;
-    });
-    return 'Stray thoughts — lines the page pulled toward as you read this, by association rather than by the words of the question (usually tangential, occasionally the key; ignore the ones that don’t earn their place):\n' + lines.join('\n');
+  // The impression as a prompt note — the integral of the related material in
+  // the reader's voice, marked as a semantic read (impression, not the words of
+  // the question), so the model weighs it as understanding, not quotation.
+  function impressionNote(fold) {
+    const f = String(fold || '').trim();
+    if (!f) return '';
+    return 'Related by impression (a semantic read of the page, not the words of the question — usually relevant, sometimes a tangent), gathered into one picture: ' + f;
   }
 
   async function retrieveHybrid(docs, q, k = 6) {
@@ -10186,7 +10191,7 @@ function projectGraph(events, frame = {}) {
     // read up to a boundary — the whole-document fold answers "what is this
     // about" and rides every grounded turn; a chapter question gets the fold up
     // to where the next chapter begins.
-    documentFold, documentFolds, foldForQuery, foldNote,
+    documentFold, documentFolds, foldForQuery, foldNote, foldOver,
     // ingestion audit: every word's fate (indexed / stopword / dropped), the
     // inverted index actually built, and per-span coverage — the glass box over
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
@@ -10221,10 +10226,10 @@ function projectGraph(events, frame = {}) {
     answerConfirm, answerConfirmScope, splitDraft, holdsSpeakerSlot,
     // the embedder as a wandering reader: associative, δ-gated neighbors (no-op without an embedder)
     associativeNeighbors,
-    // stray thoughts: a lightweight associative RAG — the question seeds a short
-    // self-re-prompting drift of embedding-near, lexically-distinct lines that
-    // ride the prompt as their own low-confidence tier (no-op without an embedder)
-    strayThoughts, strayThoughtsNote,
+    // impression query: the embedder as a fuzzy graph query — the question
+    // gathers a semantically-related region, handed back as verbatim spans plus
+    // the INTEGRAL (fold) of that region as a note (no-op without an embedder)
+    impressionQuery, impressionNote,
     // the inference void: mark what the reader ADDED across two cited spans
     markInferred,
     // reconsideration: does a draft read as a refusal / non-answer (plan SEG),
