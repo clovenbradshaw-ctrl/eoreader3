@@ -3489,6 +3489,69 @@ function _yieldToBrowser() {
   return new Promise(r => setTimeout(r, 0));
 }
 
+// ── Ingest memory governor ──────────────────────────────────────────────────
+// A ceiling on how much heap the staged parse is allowed to ride at before it
+// stops pushing new work and waits for the collector to catch up. The browser
+// gives no way to HARD-cap a heap, but we can cap the RATE: between chunks,
+// while usage sits above the budget, the parse HOLDS — in growing beats — so the
+// transient garbage each slice sheds is reclaimed before the next slice
+// allocates more. The parse then plateaus near the budget and simply takes
+// longer, instead of spiking in one blast and killing the tab. "A few moments"
+// beats "page unresponsive."
+//   performance.memory is Chromium-only; on Firefox/Safari/Node the readout is
+//   null and the governor is entirely inert — parsing runs exactly as before,
+//   so the golden-parity tests (no readout, no onProgress) never throttle.
+const _MEM = {
+  capBytes: 0,                        // 0 ⇒ auto (a fraction of the heap's own ceiling)
+  autoFrac: 0.6,                      // auto cap = this × jsHeapSizeLimit
+  fallbackBytes: 768 * 1024 * 1024,   // budget when the ceiling is unknown
+  maxBeats: 24,                       // stop holding after this many beats — never hang a parse
+};
+// Set an explicit ceiling in megabytes (or 0/null to return to the auto cap).
+function setIngestMemoryCap(mb) {
+  _MEM.capBytes = (typeof mb === 'number' && mb > 0) ? Math.floor(mb * 1024 * 1024) : 0;
+  return _MEM.capBytes;
+}
+function _memReadout() {
+  try {
+    const m = (typeof performance !== 'undefined') && performance.memory;
+    if (!m || !m.usedJSHeapSize) return null;
+    return { used: m.usedJSHeapSize, limit: m.jsHeapSizeLimit || 0 };
+  } catch (e) { return null; }
+}
+function _memCap(readout) {
+  if (_MEM.capBytes > 0) return _MEM.capBytes;
+  const limit = readout && readout.limit;
+  return limit ? Math.floor(limit * _MEM.autoFrac) : _MEM.fallbackBytes;
+}
+const _mb = b => Math.round(b / (1024 * 1024));
+// Current memory posture, for the UI (an honest readout, never an estimate).
+// supported:false off Chromium — callers should hide the meter rather than lie.
+function ingestMemoryInfo() {
+  const r = _memReadout();
+  if (!r) return { supported: false };
+  const cap = _memCap(r);
+  return { supported: true, usedMB: _mb(r.used), capMB: _mb(cap), limitMB: _mb(r.limit), over: r.used > cap };
+}
+// Cooperative yield with the memory ceiling folded in. Always hands the thread
+// back (a paint + a GC window); then, while over budget, holds in growing beats
+// and reports `stage:'easing'` so the UI can show the plateau honestly. The
+// phase/done/total ride through unchanged, so the progress bar holds its place
+// while the parse eases rather than jumping back to zero.
+async function _breathe(onProgress, phase, done, total) {
+  await _yieldToBrowser();
+  const r0 = _memReadout();
+  if (!r0) return;                          // no readout (non-Chromium) ⇒ inert
+  const cap = _memCap(r0);
+  if (r0.used <= cap) return;               // under budget ⇒ nothing to ease
+  for (let beat = 0; beat < _MEM.maxBeats; beat++) {
+    const r = _memReadout() || r0;
+    if (onProgress) onProgress({ phase, stage: 'easing', done, total, usedMB: _mb(r.used), capMB: _mb(cap) });
+    if (r.used <= cap) break;
+    await new Promise(res => setTimeout(res, Math.min(48 * (beat + 1), 280)));
+  }
+}
+
 // Staged, chunked prose extraction, walked in the medium's own order:
 // EXISTENCE → STRUCTURE → SIGNIFICANCE. Nothing in a later phase may run
 // before the one beneath it has settled — the same law the rule layers obey.
@@ -3633,7 +3696,7 @@ async function extractEoGraph(text, onProgress) {
     for (const s of paraDocs) { sentenceDocs.push(s); sentParaSolo.push(paraDocs.length === 1); if (TRANSCRIPT) sentTurn.push(_turnIdx); }
     if (onProgress && performance.now() - _segClock > 24) {
       onProgress({ phase: 'existence', stage: 'segmenting', done: _pi + 1, total: _paras.length });
-      await _yieldToBrowser(); _segClock = performance.now();
+      await _breathe(onProgress, 'existence', _pi + 1, _paras.length); _segClock = performance.now();
     }
   }
   const sentCount = sentenceDocs.length;
@@ -5425,7 +5488,7 @@ async function extractEoGraph(text, onProgress) {
       const last = i + 1 === sentenceDocs.length;
       if (onProgress && (last || performance.now() - _readClock > 24)) {
         onProgress({ phase: 'structure', stage: 'reading', done: i + 1, total: sentenceDocs.length });
-        await _yieldToBrowser(); _readClock = performance.now();
+        await _breathe(onProgress, 'structure', i + 1, sentenceDocs.length); _readClock = performance.now();
       }
     }
   }
@@ -5577,7 +5640,7 @@ async function extractEoGraph(text, onProgress) {
 
   // ── Significance: project mass, momentum and prominence over the settled
   // structure — only now, with existence and structure complete beneath it. ──
-  if (onProgress) { onProgress({ phase: 'significance', stage: 'projecting' }); await _yieldToBrowser(); }
+  if (onProgress) { onProgress({ phase: 'significance', stage: 'projecting' }); await _breathe(onProgress, 'significance'); }
   // No batch reconciliation: gravity resolution happened inline per sentence.
   // The embedding reconciler and the LLM tiebreak run automatically after
   // this warm pass — cold pass first, then EVA deposits on whatever stalled.
@@ -11063,6 +11126,9 @@ function projectGraph(events, frame = {}) {
 
   window.EOEngine = {
     parseDocument, projectEntities, entityDetail, retrieve, answer,
+    // the staged-ingest memory governor: an honest heap readout for the UI and
+    // an explicit MB ceiling the parse will plateau under (auto when unset).
+    ingestMemoryInfo, setIngestMemoryCap,
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
     applyRules, voidInvented, isCreativeCompose, dedupeSentences,
     // the extracted graph: a portrait, and a portable per-doc snapshot (explorer + export)
