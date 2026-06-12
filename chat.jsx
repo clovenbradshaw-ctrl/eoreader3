@@ -410,10 +410,22 @@ function Message({ msg, onCite }) {
         {msg.auditId && <ThinkingBlock auditId={msg.auditId} />}
         {msg.loading
           ? <div className="model-loading">
-              <div className="ml-row"><span className="ml-spin" /> Loading {msg.loadName || 'local model'}… <b>{Math.round((msg.loadPct || 0) * 100)}%</b></div>
-              <div className="ml-bar"><div className="ml-fill" style={{ width: Math.round((msg.loadPct || 0) * 100) + '%' }} /></div>
-              {msg.loadText && <div className="ml-status">{msg.loadText}</div>}
-              <div className="ml-note">First time only — the model downloads once, then runs on your GPU and is cached.</div>
+              {msg.loadCloud
+                // Claude runs over the Anthropic API: nothing downloads, there's no
+                // GPU cache, and the load resolves instantly with no progress — so
+                // a percentage bar and "downloads once… on your GPU" note would be
+                // flatly wrong (and read as "it's downloading the model"). Show a
+                // plain connecting state instead, mirroring the model popover.
+                ? <React.Fragment>
+                    <div className="ml-row"><span className="ml-spin" /> Connecting to {msg.loadName || 'Claude'}…</div>
+                    <div className="ml-note">Over the Anthropic API — nothing downloads to your device; your key stays in this browser.</div>
+                  </React.Fragment>
+                : <React.Fragment>
+                    <div className="ml-row"><span className="ml-spin" /> Loading {msg.loadName || 'local model'}… <b>{Math.round((msg.loadPct || 0) * 100)}%</b></div>
+                    <div className="ml-bar"><div className="ml-fill" style={{ width: Math.round((msg.loadPct || 0) * 100) + '%' }} /></div>
+                    {msg.loadText && <div className="ml-status">{msg.loadText}</div>}
+                    <div className="ml-note">First time only — the model downloads once, then runs on your GPU and is cached.</div>
+                  </React.Fragment>}
             </div>
           : msg.typing ? <div className="typing"><span /><span /><span /></div>
           : <React.Fragment>
