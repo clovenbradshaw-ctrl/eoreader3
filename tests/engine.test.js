@@ -518,6 +518,16 @@ group('repair — pushback routes to repair, not retrieval', () => {
   eq(band("you didn't answer my question").reason, 'repair:frustration', 'a dodge complaint → frustration');
   eq(E.repairSignal("i don't understand the ending"), null, '"…understand the ending" is a content question, not repair');
   eq(E.repairSignal("i'm confused about the company"), null, '"…confused about X" is a content question, not repair');
+  // …including when the user points at ONE line of the reply: "your last
+  // sentence" is the reply, not the page (the observed trace answered "i dont
+  // understand your last sentence" with two lines that merely shared "last",
+  // then refused it as a note-echo). The "your <X>" object takes a positional
+  // adjective; "the last sentence" stays a page reference, like "the ending".
+  eq(band("i don't understand your last sentence").reason, 'repair:frustration', '"your last sentence" is the reply → frustration');
+  eq(band('i dont get your last sentence').reason, 'repair:frustration', '"i dont get your last sentence" → frustration');
+  eq((E.repairSignal('i dont understand your second sentence') || {}).kind, 'frustration', '"your second sentence" → frustration');
+  eq((E.repairSignal('i dont understand your point') || {}).kind, 'frustration', '"your point" → frustration');
+  eq(E.repairSignal('i dont understand the last sentence'), null, '"the last sentence" stays a page reference, not repair');
   // SUPPORT / EVIDENCE — asking what in the text backs the prior claim. Re-read
   // the reply's substance; don't lexically dump on a shared word (the observed
   // trace answered "what parts gave you that impression specifically?" with
