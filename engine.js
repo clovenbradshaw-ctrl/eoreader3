@@ -7207,11 +7207,14 @@ function projectGraph(events, frame = {}) {
     // NON-UNDERSTANDING / NON-ANSWER — the previous REPLY didn't land: the user
     // can't parse it, or it dodged the ask. Still about the exchange, so it must
     // not be dragged onto the page by the shared word ("i don't understand your
-    // answer" was answered with three unrelated lines that merely contained
-    // "understand"). Anchored to the reply — bare, or "it/that/this/you/your
-    // answer/what you said" — so a genuine content ask ("i don't understand the
-    // ending") still routes to the text.
-    if (/^(?:but |so |sorry,? |wait,? |um,? |uh,? )?i (?:do|did)?\s*n'?t (?:understand|get|follow|parse|see)(?: it| that| this| you| your (?:answer|reply|response|point)| what you (?:said|mean|meant|wrote)| the (?:answer|reply|response|point)| any of (?:it|that|this))?[.!? ]*$/.test(raw)
+    // last sentence" was answered with two unrelated lines that merely shared
+    // "last", then refused as a note-echo). Anchored to the reply — bare, or
+    // "it/that/this/you", or "your <answer|last sentence|point|…>", or "what you
+    // said" — so a genuine content ask about the PAGE ("i don't understand the
+    // ending") still routes to the text. The "your <X>" object takes an optional
+    // positional adjective ("your last/second/final sentence") because that is
+    // how people point at one line of a reply they just read.
+    if (/^(?:but |so |sorry,? |wait,? |um,? |uh,? )?i (?:do|did)?\s*n'?t (?:understand|get|follow|parse|see)(?: it| that| this| you| your (?:last |first |second |third |final |latest |whole |entire )?(?:answer|reply|response|point|sentence|line|statement|wording|conclusion)| what you (?:said|mean|meant|wrote)| the (?:answer|reply|response|point)| any of (?:it|that|this))?[.!? ]*$/.test(raw)
         || /^(?:but |so )?i'?m (?:confused|lost|not following)[.!? ]*$/.test(raw)
         || /\b(?:that|this|it|none of (?:this|that|it)|your (?:answer|reply|response))\s+(?:does|did)?\s*n'?t make (?:any )?sense\b/.test(t)
         || /\bmakes no sense\b/.test(t)
