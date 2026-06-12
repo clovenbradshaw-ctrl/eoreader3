@@ -128,6 +128,12 @@ function App() {
   // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
   const [graphAuditOpen, setGraphAuditOpen] = useState(false);
   const [sandboxOpen, setSandboxOpen] = useState(false);
+  // Device-local preferences, gathered in the Settings drawer. Theme is
+  // 'system' | 'light' | 'dark' (system follows the OS); reduce-motion mutes
+  // animation. Both persist with prefs and apply to <html> via the effects below.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState('system');
+  const [reduceMotion, setReduceMotion] = useState(false);
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
   const [auditCount, setAuditCount] = useState(0);
   // Glass-box export toggles: include the extraction half (graph + processing)
@@ -272,6 +278,8 @@ function App() {
         if (typeof prefs.exportIngestion === 'boolean') setExportIngestion(prefs.exportIngestion);
         if (typeof prefs.exportOutput === 'boolean') setExportOutput(prefs.exportOutput);
         if (typeof prefs.wikiEnrich === 'boolean') setWikiEnrich(prefs.wikiEnrich);
+        if (prefs.theme === 'system' || prefs.theme === 'light' || prefs.theme === 'dark') setTheme(prefs.theme);
+        if (typeof prefs.reduceMotion === 'boolean') setReduceMotion(prefs.reduceMotion);
         // Restored docs were parsed under the saved modes, so suppress the
         // re-parse the same way rule toggles do (batched into one render).
         if (prefs.langModes && typeof prefs.langModes === 'object') { suppressReparse.current = true; setLangModes(prefs.langModes); }
@@ -330,8 +338,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich });
-  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion });
+  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -342,6 +350,32 @@ function App() {
     const save = () => { if (!hydrated.current) return; clearTimeout(t); t = setTimeout(() => window.EOStore.saveAudit(window.EOAudit.all()), 600); };
     const off = window.EOAudit.subscribe(save);
     return () => { clearTimeout(t); off(); };
+  }, []);
+
+  // Apply the theme to <html data-theme>. In 'system' mode, follow the OS and
+  // re-resolve when it flips. The early inline script in index.html sets the
+  // first paint; this keeps it in sync as the preference changes.
+  useEffect(() => {
+    const apply = () => (window.EOTheme ? window.EOTheme.apply(theme) : null);
+    apply();
+    if (theme !== 'system' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const on = () => apply();
+    mq.addEventListener ? mq.addEventListener('change', on) : mq.addListener(on);
+    return () => { mq.removeEventListener ? mq.removeEventListener('change', on) : mq.removeListener(on); };
+  }, [theme]);
+  useEffect(() => {
+    try { document.documentElement.classList.toggle('reduce-motion', !!reduceMotion); } catch (e) {}
+  }, [reduceMotion]);
+
+  // The one destructive affordance: wipe every device-local trace and reload
+  // cold. hydrated is flipped off first so the debounced persistence effects
+  // can't re-save state on the way out.
+  const clearLocalData = useCallback(async () => {
+    hydrated.current = false;
+    try { if (window.EOAudit && window.EOAudit.clear) window.EOAudit.clear(); } catch (e) {}
+    try { if (window.EOStore && window.EOStore.clearAll) await window.EOStore.clearAll(); } catch (e) {}
+    try { location.reload(); } catch (e) {}
   }, []);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2400); };
@@ -2150,6 +2184,7 @@ function App() {
         onUpload={() => fileRef.current && fileRef.current.click()}
         chats={chats} activeChat={activeChat} onNewChat={newChat} onSelectChat={selectChat}
         model={model} onModelClick={() => setModelOpen(o => !o)} onRulesClick={() => setRulesOpen(true)}
+        onSettingsClick={() => setSettingsOpen(true)}
         enabledRules={enabledRules} modelStatus={modelStatus}
         projects={projects} activeProject={activeProject}
         onSelectProject={selectProject} onNewProject={newProject}
@@ -2211,6 +2246,9 @@ function App() {
         learnedByLang={window.EOEngine && window.EOEngine.learnedVerbsByLang ? window.EOEngine.learnedVerbsByLang() : {}}
         onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
       {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
+      {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)}
+        theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
+        onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}

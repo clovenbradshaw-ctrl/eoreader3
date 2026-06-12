@@ -60,6 +60,19 @@ const HTML = `<!doctype html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
+<!-- Theme before first paint (mirrors index.html); kept in sync by settings.jsx. -->
+<script>
+  (function () {
+    try {
+      var p = JSON.parse(localStorage.getItem('cleon.prefs') || '{}') || {};
+      var t = p.theme || 'system';
+      var dark = t === 'dark' || (t !== 'light' && window.matchMedia
+        && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      if (p.reduceMotion) document.documentElement.classList.add('reduce-motion');
+    } catch (e) {}
+  })();
+</script>
 </head>
 <body>
 <div id="root"></div>

@@ -47,6 +47,64 @@
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   --sidebar-w: 272px;
+
+  color-scheme: light;
+}
+
+/* Dark theme. <html data-theme="dark"> is set before first paint by the inline
+   script in index.html and kept in sync by settings.jsx (system mode resolves
+   to light/dark via prefers-color-scheme). The palette overrides only the
+   design tokens; every surface reads them through var(), so the whole app
+   re-skins from this one block. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:            #15171c;
+  --bg-sidebar:    #1a1d23;
+  --bg-subtle:     #242831;   /* hover */
+  --bg-sunken:     #1b1e24;
+  --border:        #2a2f38;
+  --border-strong: #3b414c;
+  --text:          #e8eaef;
+  --text-2:        #aab1bd;
+  --text-3:        #8b929e;
+  --accent:        #5b9bf0;
+  --accent-hover:  #74acf4;
+  --accent-tint:   #1b2a40;
+  --accent-tint-2: #244166;
+  --user-bubble:   #262b33;
+
+  /* evidence — the grounding voice */
+  --evidence:      #45b3c0;
+  --evidence-ink:  #8ad6df;
+  --evidence-tint: #14292c;
+  --evidence-tint-2:#1d383c;
+
+  /* warm paper — the reading surface, dimmed for night */
+  --paper:         #1d1b16;
+  --paper-2:       #23201a;
+  --paper-line:    #34301f;
+  --paper-ink:     #e9e2d2;
+
+  --good-fg:#7fcf8e; --good-bd:#2f5236; --good-bg:#16231a;
+  --warn-fg:#e3c570; --warn-bd:#564b27; --warn-bg:#241f12;
+  --bad-fg: #ef9a8c; --bad-bd: #5a342c; --bad-bg: #241613;
+  --void-fg:#9aa0aa; --void-bd:#3b414c; --void-bg:#1f2329;
+
+  --sh-sm: 0 1px 2px rgba(0,0,0,.45);
+  --sh:    0 6px 22px rgba(0,0,0,.55);
+  --sh-lg: 0 20px 56px rgba(0,0,0,.65);
+}
+
+/* Reduce motion — toggled on <html> from Settings (and pre-applied by the head
+   script). Near-instant timings keep behavior intact while muting animation. */
+:root.reduce-motion *,
+:root.reduce-motion *::before,
+:root.reduce-motion *::after {
+  animation-duration: .001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .001ms !important;
+  scroll-behavior: auto !important;
 }
 
 * { box-sizing: border-box; }
@@ -802,6 +860,40 @@ table.grid .member td:first-child { padding-left: 30px; }
 .mini-btn.on { background: var(--accent-tint); color: var(--accent); border-color: var(--accent-tint-2); }
 .mini-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .mini-btn.primary:hover { background: var(--accent-hover); }
+.mini-btn.danger { background: var(--bad-fg); color: #fff; border-color: var(--bad-fg); }
+.mini-btn.danger-outline { color: var(--bad-fg); border-color: var(--bad-bd); }
+.mini-btn.danger-outline:hover { background: var(--bad-bg); color: var(--bad-fg); border-color: var(--bad-fg); }
+.mini-btn:disabled { opacity: .5; cursor: default; }
+
+/* ---- Settings drawer ---- */
+.set-body { padding: 6px 18px 40px; }
+.set-section { padding: 14px 0; border-bottom: 1px solid var(--border); }
+.set-section:last-child { border-bottom: 0; }
+.set-h {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--text-3); font-weight: 650; margin: 6px 0 6px;
+}
+.set-row { display: flex; align-items: center; gap: 18px; padding: 11px 0; }
+.set-row-main { flex: 1; min-width: 0; }
+.set-label { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.set-sub { font-size: 12.5px; color: var(--text-2); line-height: 1.5; margin-top: 2px; }
+.set-seg {
+  display: inline-flex; flex-shrink: 0; border: 1px solid var(--border);
+  border-radius: var(--r-pill); padding: 2px; background: var(--bg-subtle);
+}
+.set-seg button {
+  border: 0; background: transparent; color: var(--text-2); font: inherit;
+  font-size: 12.5px; font-weight: 550; padding: 5px 13px; border-radius: var(--r-pill);
+}
+.set-seg button.on { background: var(--bg); color: var(--text); box-shadow: var(--sh-sm); font-weight: 600; }
+.set-note {
+  display: flex; gap: 9px; align-items: flex-start; margin: 4px 0 6px;
+  background: var(--good-bg); border: 1px solid var(--good-bd); color: var(--good-fg);
+  border-radius: var(--r); padding: 10px 12px; font-size: 12.5px; line-height: 1.5;
+}
+.set-note.warn { background: var(--warn-bg); border-color: var(--warn-bd); color: var(--warn-fg); }
+.set-note svg { flex-shrink: 0; margin-top: 1px; }
+.set-confirm { display: flex; gap: 8px; flex-shrink: 0; }
 
 /* author / import panel */
 .author-sec { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 20px 2px 8px; }
