@@ -1105,6 +1105,57 @@ await group('typing — richer & more consistent person evidence', async () => {
   ok(true, 'singular_they is a tunable register rule (bridge wired)');
 });
 
+// ── the integral fold: "what is this about" is always answerable, and a
+// chapter question gets the fold up to the beginning of the next chapter ──
+await group('fold — the integral reading of a document', async () => {
+  const CHAPTERED = `The Tower at Harrow
+
+Chapter One
+
+Edith kept the lamp at Voss Point. The keeper trusted her with the seaward light. Every night Edith climbed the stairs.
+
+Chapter Two
+
+Sefton arrived from the mainland in a small boat. Sefton argued with the keeper about the crossing. Marlow was waiting for him, he said.
+
+Chapter Three
+
+The storm took the shutter by midnight. Edith and Sefton sat close to the lamp.`;
+  const doc = await E.parseDocument('chaptered.txt', CHAPTERED, 'ch');
+
+  // the document always carries an integral fold and knows its chapters
+  const folds = E.documentFolds(doc);
+  ok(folds && folds.integral, 'a document carries an integral fold of the whole');
+  ok(folds.sections.length >= 3, 'the fold knows the chapter boundaries');
+  ok(/Edith/.test(folds.integral), 'the integral fold names a figure from the document');
+
+  // "what is this about" gets the whole-document fold
+  const all = E.foldForQuery(doc, 'what is this document about?');
+  eq(all.scope, 'integral', 'a whole-document question gets the integral fold');
+  ok(/Sefton/.test(all.text), 'the integral fold names a figure introduced later in the document');
+
+  // asking about Ch 1 gets the fold UP TO the beginning of Ch 2
+  const f1 = E.foldForQuery(doc, 'what is chapter 1 about?');
+  eq(f1.scope, 'section', 'a chapter question scopes the fold to a section');
+  ok(/Edith/.test(f1.text), 'the chapter-1 fold names a figure from chapter 1');
+  ok(!/Sefton/.test(f1.text), 'the chapter-1 fold stops at the start of chapter 2 (Sefton, introduced there, is absent)');
+  ok(f1.hi <= folds.integral.length || f1.hi < (doc.sentenceTexts || []).length, 'the chapter-1 boundary is before the document end');
+
+  // an ordinal word resolves the same way ("chapter two")
+  const f2 = E.foldForQuery(doc, 'summarize chapter two');
+  eq(f2.scope, 'section', 'an ordinal-word chapter reference scopes to a section');
+  ok(/Sefton/.test(f2.text), 'the chapter-2 fold names Sefton, introduced in chapter 2');
+
+  // the fold rides into the grounded context as a note on an ordinary turn
+  const parts = E.contextParts(doc, 'who tends the seaward light?', 6);
+  ok(parts.notes.some(nt => /reading of the whole/.test(nt) && /Edith/.test(nt)),
+    'the integral fold rides into the grounded context as the leading note');
+
+  // and a summary turn's blob leads with the fold
+  const ctx = E.context(doc, 'summarize this', 6);
+  ok(/whole document is about/.test(ctx) && /Edith/.test(ctx), 'the summary context leads with the fold');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

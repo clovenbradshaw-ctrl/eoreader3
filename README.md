@@ -86,6 +86,32 @@ the same treatment — tagged *"the user said this reply missed their
 question"* — so a rejected answer can't keep re-entering the prompt as
 something that simply happened.
 
+### The integral fold (what is this about, always answerable)
+
+A model handed only the passages a question retrieved can answer that question
+but not the prior one — *"what is this document about?"* — because no single
+retrieval carries the whole. So every turn that touches the page also carries
+the document's **integral fold**: a mechanical, cumulative condensation read
+from the start up to a boundary, the way an integral accumulates as you move
+along it. The fold of the *whole* document (boundary = the last sentence) is
+the standing overview; it rides into the grounded prompt as the leading note
+(*"What the document is about, your reading of the whole: …"*), so "what is this
+about" is answerable on any turn, not just an explicit `summarize`.
+
+The fold is the graph's own reading, scoped to a prefix and said in words — the
+heaviest figures named inside the window, what the text asserts about them, the
+chapter labels crossed, and an opening line to anchor the gist. No model touches
+it (`documentFold` / `documentFolds`, cached per rules-revision on the doc).
+
+And it is **cumulative**, so a chapter scopes it: ask about Ch 1 and you get the
+fold *up to the beginning of Ch 2* — the reading so far, with figures introduced
+only in later chapters absent. A chapter reference is read mechanically
+(`foldForQuery`): its own heading ("the Fountain") or an ordinal ("chapter 2",
+"part three", "section IV") selects the section whose end boundary the fold runs
+to. A turn with no chapter reference gets the integral fold of the whole.
+Chapter boundaries are the same standalone-heading structure the rest of the
+reader leverages — "structure is what folds leverage."
+
 ### When you push back (conversational repair)
 
 Not every turn is content. "you're not listening to what i'm saying",
