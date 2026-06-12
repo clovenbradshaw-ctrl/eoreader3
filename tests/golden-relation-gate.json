@@ -1,0 +1,427 @@
+{
+ "schema": "relation-gate-parallel-golden/1",
+ "embedder": "Xenova/all-MiniLM-L6-v2 (q8, vendored)",
+ "generated": "tools/predictive/parallel-golden.js",
+ "perDoc": [
+  {
+   "docId": "ndp",
+   "items": [
+    {
+     "draft": "The Association cannot afford its bills.",
+     "tagged": null,
+     "off": {
+      "text": "The Association cannot afford its bills.",
+      "grounded": false,
+      "status": "warn"
+     },
+     "on": {
+      "text": "The Association cannot afford its bills.",
+      "grounded": false,
+      "status": "warn",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [
+       {
+        "kind": "foreign-subject",
+        "claim": "The Association cannot afford its bills.",
+        "edge": "Downtown business owners —pay→ the Nashville Downtown Partnership.",
+        "sent": 1
+       }
+      ],
+      "envelope": null
+     }
+    },
+    {
+     "draft": "Downtown owners pay an annual assessment to the Partnership.",
+     "tagged": null,
+     "off": {
+      "text": "Downtown owners pay an annual assessment to the Partnership. {{cite:ndp:1:s1}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "Downtown owners pay an annual assessment to the Partnership. {{cite:ndp:1:s1}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [],
+      "envelope": {
+       "checked": 1,
+       "leaks": 0,
+       "rows": [
+        {
+         "idx": 1,
+         "cos": 0.87,
+         "band": "strong"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "draft": "The Partnership pays downtown business owners an annual assessment.",
+     "tagged": null,
+     "off": {
+      "text": "The Partnership pays downtown business owners an annual assessment. {{cite:ndp:1:s1}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "The Partnership pays downtown business owners an annual assessment. {{cite:ndp:1:s1}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [
+       {
+        "kind": "inverted",
+        "claim": "The Partnership pays downtown business owners an annual assessment.",
+        "edge": "Downtown business owners —pay→ the Nashville Downtown Partnership.",
+        "sent": 1
+       }
+      ],
+      "envelope": {
+       "checked": 1,
+       "leaks": 0,
+       "rows": [
+        {
+         "idx": 1,
+         "cos": 0.87,
+         "band": "strong"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "draft": "Tom Turner hires his own firm to manage downtown security.",
+     "tagged": null,
+     "off": {
+      "text": "Tom Turner hires his own firm to manage downtown security. {{cite:ndp:5:s5}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "Tom Turner hires his own firm to manage downtown security. {{cite:ndp:5:s5}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [],
+      "envelope": {
+       "checked": 1,
+       "leaks": 1,
+       "rows": [
+        {
+         "idx": 5,
+         "cos": 0.57,
+         "band": "leak"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "draft": "NDP hired Tom Turner to run the District Management Corporation.",
+     "tagged": null,
+     "off": {
+      "text": "NDP hired Tom Turner to run the District Management Corporation. {{cite:ndp:7:s7}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "NDP hired Tom Turner to run the District Management Corporation. {{cite:ndp:7:s7}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [
+       {
+        "kind": "inverted",
+        "claim": "NDP hired Tom Turner to run the District Management Corporation.",
+        "edge": "Tom Turner —hires→ NDP",
+        "sent": 4
+       }
+      ],
+      "envelope": {
+       "checked": 1,
+       "leaks": 1,
+       "rows": [
+        {
+         "idx": 7,
+         "cos": 0.51,
+         "band": "leak"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "draft": "Tom Turner is the president of the Nashville Downtown Partnership. The Metro Council will vote on the contract next month.",
+     "tagged": "Tom Turner is the president of the Nashville Downtown Partnership [s6]. The Metro Council will vote on the contract next month [s10].",
+     "off": {
+      "text": "Tom Turner is the president of the Nashville Downtown Partnership. {{cite:ndp:6:s6}} The Metro Council will vote on the contract next month. {{cite:ndp:10:s10}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "Tom Turner is the president of the Nashville Downtown Partnership. {{cite:ndp:6:s6}} The Metro Council will vote on the contract next month. {{cite:ndp:10:s10}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 2,
+      "held": [],
+      "mismatches": [],
+      "envelope": {
+       "checked": 2,
+       "leaks": 0,
+       "rows": [
+        {
+         "idx": 6,
+         "cos": 1,
+         "band": "strong"
+        },
+        {
+         "idx": 10,
+         "cos": 1,
+         "band": "strong"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "draft": "The Metro Council will vote on the contract next month.",
+     "tagged": "The Metro Council will vote on the contract next month [s2].",
+     "off": {
+      "text": "The Metro Council will vote on the contract next month. {{cite:ndp:10:s10}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "The Metro Council will vote on the contract next month.",
+      "grounded": false,
+      "status": "warn",
+      "keyed": 1,
+      "held": [
+       {
+        "key": 2,
+        "claim": "The Metro Council will vote on the contract next month."
+       }
+      ],
+      "mismatches": [],
+      "envelope": null
+     }
+    }
+   ]
+  },
+  {
+   "docId": "dispatch",
+   "items": [
+    {
+     "draft": "Ruiz argued that the timbers were unsafe.",
+     "tagged": null,
+     "off": {
+      "text": "Ruiz argued that the timbers were unsafe. {{cite:dispatch:3:s3}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "Ruiz argued that the timbers were unsafe. {{cite:dispatch:3:s3}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [
+       {
+        "kind": "foreign-subject",
+        "claim": "Ruiz argued that the timbers were unsafe.",
+        "edge": "Vance —argued→ the timbers",
+        "sent": 3
+       }
+      ],
+      "envelope": {
+       "checked": 1,
+       "leaks": 0,
+       "rows": [
+        {
+         "idx": 3,
+         "cos": 0.71,
+         "band": "impressionistic"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "draft": "Vance argued that the timbers were unsafe and the cost of repair unbearable.",
+     "tagged": null,
+     "off": {
+      "text": "Vance argued that the timbers were unsafe and the cost of repair unbearable. {{cite:dispatch:3:s3}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "Vance argued that the timbers were unsafe and the cost of repair unbearable. {{cite:dispatch:3:s3}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [],
+      "envelope": {
+       "checked": 1,
+       "leaks": 0,
+       "rows": [
+        {
+         "idx": 3,
+         "cos": 1,
+         "band": "strong"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "draft": "Alderman Vance opened for the motion to demolish.",
+     "tagged": "Alderman Vance opened for the motion to demolish [s2].",
+     "off": {
+      "text": "Alderman Vance opened for the motion to demolish. {{cite:dispatch:2:s2}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "Alderman Vance opened for the motion to demolish. {{cite:dispatch:2:s2}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 1,
+      "held": [],
+      "mismatches": [],
+      "envelope": {
+       "checked": 1,
+       "leaks": 0,
+       "rows": [
+        {
+         "idx": 2,
+         "cos": 0.85,
+         "band": "strong"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "docId": "liberty",
+   "items": [
+    {
+     "draft": "The essay concerns the nature and limits of the power which can be legitimately exercised by society over the individual.",
+     "tagged": null,
+     "off": {
+      "text": "The essay concerns the nature and limits of the power which can be legitimately exercised by society over the individual. {{cite:liberty:54:s54}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "The essay concerns the nature and limits of the power which can be legitimately exercised by society over the individual. {{cite:liberty:54:s54}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [],
+      "envelope": {
+       "checked": 1,
+       "leaks": 1,
+       "rows": [
+        {
+         "idx": 54,
+         "cos": 0.48,
+         "band": "leak"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "draft": "Society protects the majority against the tyranny of the individual.",
+     "tagged": null,
+     "off": {
+      "text": "Society protects the majority against the tyranny of the individual.",
+      "grounded": false,
+      "status": "warn"
+     },
+     "on": {
+      "text": "Society protects the majority against the tyranny of the individual.",
+      "grounded": false,
+      "status": "warn",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [],
+      "envelope": null
+     }
+    }
+   ]
+  },
+  {
+   "docId": "treatise",
+   "items": [
+    {
+     "draft": "A thermometer must absorb a little heat before it can report any.",
+     "tagged": null,
+     "off": {
+      "text": "A thermometer must absorb a little heat before it can report any. {{cite:treatise:2:s2}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "A thermometer must absorb a little heat before it can report any. {{cite:treatise:2:s2}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [],
+      "envelope": {
+       "checked": 1,
+       "leaks": 0,
+       "rows": [
+        {
+         "idx": 2,
+         "cos": 0.84,
+         "band": "strong"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "draft": "The reading is a negotiation between the instrument and the world.",
+     "tagged": null,
+     "off": {
+      "text": "The reading is a negotiation between the instrument and the world. {{cite:treatise:3:s3}}",
+      "grounded": true,
+      "status": "clean"
+     },
+     "on": {
+      "text": "The reading is a negotiation between the instrument and the world. {{cite:treatise:3:s3}}",
+      "grounded": true,
+      "status": "clean",
+      "keyed": 0,
+      "held": [],
+      "mismatches": [],
+      "envelope": {
+       "checked": 1,
+       "leaks": 0,
+       "rows": [
+        {
+         "idx": 3,
+         "cos": 0.8,
+         "band": "strong"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

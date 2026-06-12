@@ -92,6 +92,9 @@ const RULESETS = [
   { id: 'cross-check', group: 'Chatting & grounding', phase: 'chat', name: 'Source Cross-Check', glyph: '⇄',
     layer: 'significance', mass: 4, src: 'add-on', installed: false, enabled: false, locked: false,
     desc: 'When a table and a prose source are tagged together, a third pass compares them and flags disagreements instead of silently picking one.' },
+  { id: 'relation-gate', group: 'Chatting & grounding', phase: 'chat', name: 'Relation Gate', glyph: '⇋',
+    layer: 'significance', value: 1, mass: 4, src: 'add-on', installed: false, enabled: false, locked: false, live: true,
+    desc: 'The inversion fix. Provenance binds at generation (the model tags each claim with the span it used; the old binder serves only unkeyed claims), and every claim’s subject–predicate–object is checked against the relations the page deposited — a claim whose agency inverts against its edge (“the Association cannot afford” when the OWNERS pay), names the wrong speaker, or hangs the act on a figure the edge doesn’t carry is held and flagged, never waved through with a clean cite. Off ships today’s behavior byte-identical.' },
   { id: 'convention-proposals', group: 'Chatting & grounding', phase: 'chat', name: 'Convention Proposals', glyph: '✎',
     layer: 'structure', value: 3, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
     desc: 'Lets the local model propose reading conventions from registered friction — repeated shapes the reading hit and could not consume (a “LABEL:” line bound to no speaker, a *** line read as a sentence). It proposes in one plain sentence citing engine-minted spans; it never commits: a proposal is a signal until an independent document or your one-tap Confirm corroborates it past the admission threshold (the model can never be its own witness). The value is the per-session proposal budget; runs only at idle and never blocks a turn. Review pending proposals in the Glass box.' },
@@ -199,7 +202,7 @@ const LANGUAGES = [
 const LANG_SHARED_PARSING = ['attribution', 'reconcile'];
 
 // Tier 3 — grounding: cross-cutting QA conventions (RULESETS ids), chat phase.
-const GROUNDING_IDS = ['auditor', 'cite-binding', 'paraphrase', 'void', 'inference-void', 'two-voice', 'mode-policy', 'cross-check'];
+const GROUNDING_IDS = ['auditor', 'cite-binding', 'paraphrase', 'void', 'inference-void', 'two-voice', 'mode-policy', 'cross-check', 'relation-gate'];
 
 /* ---------------- rule-pack schema + LLM authoring prompt ---------------- */
 const RULE_PACK_SCHEMA = {
