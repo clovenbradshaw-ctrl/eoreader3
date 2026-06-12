@@ -6,7 +6,11 @@ are **grounded** — every claim is bound to the exact line it came from and
 audited mechanically, not by the language model.
 
 Everything runs locally. Documents never leave your browser, and the optional
-language model runs on your own GPU via WebGPU.
+language model runs on your own device — on the GPU via WebGPU where it's
+available, and otherwise on the CPU via WebAssembly (llama.cpp/wllama), so a
+browser without WebGPU (Firefox/Safari today) still gets worded answers, not
+just mechanical ones. A cloud option (the Claude API, with your own key) is
+there too. The model only phrases; the grounding is mechanical either way.
 
 ## Running it
 
@@ -18,8 +22,16 @@ python3 -m http.server 8000
 ```
 
 Open `index.html` through a server (not `file://`) so the engine and component
-scripts load. A WebGPU-capable browser (Chrome/Edge 113+) is needed for the
-local model; without one, grounded answers and pivots still work mechanically.
+scripts load. A WebGPU-capable browser (Chrome/Edge 113+) runs the GPU models;
+without WebGPU the app falls back to an on-device **CPU model** (llama.cpp via
+WebAssembly) so answers are still phrased — and grounded answers and pivots work
+mechanically regardless of any model.
+
+The CPU model runs single-threaded out of the box. To unlock multi-threaded CPU
+inference (faster), serve the app cross-origin-isolated — with
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` headers. Without them it simply
+stays single-thread; nothing breaks.
 
 ### Optional production build
 
@@ -37,8 +49,12 @@ npm run build      # → ./dist  (serve dist/index.html)
 
 Documents, the running chat, rule toggles, and the engine's induced learning are
 saved on the device (IndexedDB + localStorage), so a refresh keeps your
-workspace — nothing is uploaded. Set `window.EO_DEBUG = true` in the console to
-surface errors that resilience catches otherwise swallow.
+workspace — nothing is uploaded. The **selected model** is remembered too, and
+the app re-loads it on startup once persistence has rehydrated, so a refresh
+comes back to a loaded model rather than the default — and because the weights
+are cached (WebLLM's cache / the CPU model's `useCache`), that re-load
+re-downloads nothing. Set `window.EO_DEBUG = true` in the console to surface
+errors that resilience catches otherwise swallow.
 
 The one deliberate exception is the **reference desk / chat-with-Wikipedia**
 (`external.js`): when you explicitly ask — by clicking an entity's desk, or by
@@ -60,16 +76,24 @@ The intelligence is **mechanical**; the language model only phrases things.
   extraction) and tables, does retrieval, decides whether a message is about the
   open document (`referencesDoc`), binds `[sN]` citations, and computes the
   grounded / coverage / stable audit. Deterministic; no model involved.
-- **`llm.js`** — optional local model (WebLLM / WebGPU, e.g. Qwen2.5). It holds
-  the conversation and phrases answers. On a document question it's handed the
-  retrieved **spans** (verbatim sentences, trusted) and its own **notes** (the
-  graph's reading — assertions, kin records, header metadata, working memory —
-  "usually right, sometimes wrong"), preceded by a small **shape pass**: a
-  director's-note call that characterizes what the turn wants before the
-  answer pass writes. Reasoning-model `<think>` blocks are gated out of the
-  stream and the answer (the audit keeps them verbatim). Output is checked
-  and re-cited mechanically — the model never writes its own citations and
-  never overrides the page.
+- **`llm.js`** — the optional model layer, with three interchangeable backends
+  behind one interface (`load`/`phrase`/`isLoaded`, routed by the model key):
+  **WebLLM** on the GPU (WebGPU, e.g. Qwen2.5), an on-device **CPU** model
+  (llama.cpp via WebAssembly / wllama, a `wllama:` key — GGUF weights pulled once
+  from Hugging Face and cached), and **Claude** over the Anthropic API (an
+  `anthropic:` key). The CPU model is also the automatic **fallback**: with no
+  WebGPU it's the default local path, and if a GPU model's download stalls or
+  fails the app switches to it so chat keeps getting phrased answers instead of
+  dropping to mechanical-only (the runtime is pre-warmed in the background so the
+  switch is quick). Whichever backend, it holds the conversation and phrases
+  answers. On a document question it's handed the retrieved **spans** (verbatim
+  sentences, trusted) and its own **notes** (the graph's reading — assertions,
+  kin records, header metadata, working memory — "usually right, sometimes
+  wrong"), preceded by a small **shape pass**: a director's-note call that
+  characterizes what the turn wants before the answer pass writes. Reasoning-model
+  `<think>` blocks are gated out of the stream and the answer (the audit keeps
+  them verbatim). Output is checked and re-cited mechanically — the model never
+  writes its own citations and never overrides the page.
 - **`pivot.jsx`** — deterministic pivot/fold over tables (totals, counts,
   grouping) driven by a small natural-language → spec parser.
 - **`audit.js`** — the audit recorder (`window.EOAudit`). Records each chat

@@ -2,11 +2,29 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
+<!-- viewport-fit=cover lets the page extend under the notch/home indicator so
+     the safe-area-inset() padding in styles.css can keep content clear of them;
+     interactive-widget=resizes-content shrinks the layout for the soft keyboard. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+<meta name="theme-color" content="#ffffff" />
+<meta name="color-scheme" content="light" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Cleon" />
 <title>Cleon</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<!-- model CDNs: the WebLLM/wllama runtimes (jsdelivr) and the on-device CPU
+     model weights (Hugging Face). Pre-connecting shaves the first-load handshake. -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+<link rel="preconnect" href="https://huggingface.co" crossorigin />
+<!-- NOTE: the on-device CPU model (wllama / llama.cpp in WebAssembly) runs
+     single-threaded out of the box. To unlock multi-threaded CPU inference it
+     needs SharedArrayBuffer, which requires cross-origin isolation — serve the
+     app with `Cross-Origin-Opener-Policy: same-origin` and
+     `Cross-Origin-Embedder-Policy: require-corp`. Absent those headers it simply
+     falls back to single-thread; nothing breaks. -->
 <link rel="stylesheet" href="styles.css" />
 <!-- Theme, before first paint. Reads the persisted UI prefs (the same
      localStorage key store.js writes) and pins <html data-theme> so the

@@ -79,6 +79,42 @@ function loadLLMWithWorker({ webllm, stallMs, workerOnError }) {
   return { LLM: sandbox.window.EOLLM, workers };
 }
 
+// A FAKE wllama runtime, injected via the window.EO_WLLAMA seam, so the CPU
+// backend (load → loadModelFromUrl, streamChat → createChatCompletion) runs in
+// Node with no CDN and no real WASM. The fake records loads/chats/exits and
+// streams whatever chunks the test's `stream(opts)` supplies — the point is to
+// exercise every chunk shape streamWllama tolerates (OpenAI delta, choices.text,
+// cumulative currentText, and recover-from-return).
+function makeFakeWllama(behavior = {}) {
+  const calls = { loads: [], chats: [], exits: 0 };
+  class FakeWllama {
+    constructor(paths, cfg) { this.paths = paths; this.cfg = cfg; }
+    async loadModelFromUrl(url, opts) {
+      calls.loads.push({ url, opts });
+      if (behavior.loadDelayMs) await new Promise(r => setTimeout(r, behavior.loadDelayMs));
+      if (opts && opts.progressCallback) { opts.progressCallback({ loaded: 50, total: 100 }); opts.progressCallback({ loaded: 100, total: 100 }); }
+    }
+    async createChatCompletion(opts) {
+      calls.chats.push(opts);
+      if (behavior.stream) behavior.stream(opts);
+      return behavior.finalReturn;
+    }
+    async exit() { calls.exits++; }
+  }
+  return { mod: { Wllama: FakeWllama, wasmPaths: { default: 'fake.wasm' } }, calls };
+}
+// Like loadLLMWith, but for the CPU path: no navigator.gpu (hasWebGPU must be
+// false — the CPU path can't depend on it), WebAssembly present (hasWasm true),
+// and the fake runtime on window.EO_WLLAMA.
+function loadLLMWithWllama(mod) {
+  const window = { EO_WLLAMA: mod };
+  const sandbox = { window, console, performance, setTimeout, clearTimeout, navigator: {}, WebAssembly: { instantiate() {} } };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'llm.js'), 'utf8'), sandbox, { filename: 'llm.js' });
+  return sandbox.window.EOLLM;
+}
+
 let pass = 0, fail = 0; const fails = [];
 function ok(cond, msg) { if (cond) { pass++; } else { fail++; fails.push(msg); console.error('  ✗ ' + msg); } }
 function eq(a, b, msg) { ok(a === b, `${msg} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`); }
@@ -464,6 +500,82 @@ async function groupA(name, fn) { console.log('• ' + name); await fn(); }
     eq(workers[0].terminated, true, 'the worker is terminated so the download halts immediately');
     eq(LLM.isLoaded('Cancellable'), false, 'a canceled model never reports loaded');
     eq(LLM.cancelLoad(), false, 'cancelLoad is a no-op when nothing is loading (can\'t tear down a ready model)');
+  });
+
+  // ---- the wllama (CPU / WebAssembly) backend ----
+  // The dependable fallback that phrases when there's no WebGPU or a GPU model
+  // stalls. These pin the dispatch (a wllama: key routes to the CPU runtime, not
+  // WebGPU) and the chunk-shape tolerance, against a fake runtime.
+  group('wllama backend — key detection, registry, and the fallback key', () => {
+    ok(LLM.isWllama('wllama:qwen25-05b'), 'a wllama: key is detected');
+    ok(!LLM.isWllama('anthropic:claude-opus-4-8'), 'an anthropic key is not a wllama key');
+    ok(!LLM.isWllama('Qwen2.5-0.5B-Instruct-q4f16_1-MLC'), 'a WebLLM (GPU) key is not a wllama key');
+    ok(typeof LLM.fallbackKey() === 'string' && /^wllama:/.test(LLM.fallbackKey()), 'fallbackKey() names a wllama model');
+    const reg = LLM.wllamaModels();
+    ok(reg && Object.keys(reg).length >= 1, 'wllamaModels() exposes the id→source registry');
+    ok(Object.values(reg).every(m => m && /^https?:/.test(m.url)), 'every registry entry carries a model URL');
+  });
+
+  await groupA('a wllama model loads on the CPU (no WebGPU) and reports ready', async () => {
+    const { mod, calls } = makeFakeWllama({ stream: () => {} });
+    const LLM2 = loadLLMWithWllama(mod);
+    eq(LLM2.hasWebGPU(), false, 'the CPU path runs with no WebGPU present');
+    ok(LLM2.hasWasm(), 'hasWasm() is true when WebAssembly exists');
+    const seen = [];
+    const eng = await LLM2.load('wllama:qwen25-05b', (p, t) => seen.push([p, t]));
+    ok(eng && eng.wllama, 'load resolves to an engine carrying the wllama instance');
+    eq(LLM2.isLoaded('wllama:qwen25-05b'), true, 'isLoaded is true after the CPU model loads');
+    eq(calls.loads.length, 1, 'the GGUF is loaded exactly once');
+    ok(/huggingface\.co/.test(calls.loads[0].url), 'it loads the registry’s model URL');
+    ok(seen.some(([p]) => Math.abs(p - 1) < 1e-9), 'download progress reaches 100%');
+  });
+
+  await groupA('streamWllama tolerates every chunk shape (via phrase → streamChat)', async () => {
+    // OpenAI delta shape: chunk.choices[0].delta.content
+    let LLM2 = loadLLMWithWllama(makeFakeWllama({ stream: (opts) => {
+      opts.onData({ choices: [{ delta: { content: 'Hel' } }] });
+      opts.onData({ choices: [{ delta: { content: 'lo' } }] });
+    } }).mod);
+    let toks = [];
+    let out = await LLM2.phrase({ mlcKey: 'wllama:qwen25-05b', question: 'hi', mode: 'chat', grounded: false, history: [], onToken: d => toks.push(d) });
+    eq(out, 'Hello', 'OpenAI delta chunks stream and concatenate');
+    eq(toks.join(''), 'Hello', '…and reach onToken as deltas');
+
+    // choices[0].text shape
+    LLM2 = loadLLMWithWllama(makeFakeWllama({ stream: (opts) => {
+      opts.onData({ choices: [{ text: 'Hi ' }] });
+      opts.onData({ choices: [{ text: 'there' }] });
+    } }).mod);
+    out = await LLM2.phrase({ mlcKey: 'wllama:qwen25-05b', question: 'hi', mode: 'chat', grounded: false, history: [], onToken: () => {} });
+    eq(out, 'Hi there', 'choices[].text chunks are handled too');
+
+    // cumulative currentText via onNewToken (older streaming API): deltas are
+    // computed from the growing cumulative string.
+    LLM2 = loadLLMWithWllama(makeFakeWllama({ finalReturn: 'Hello!', stream: (opts) => {
+      opts.onNewToken('A', 'A', 'Hel');
+      opts.onNewToken('B', 'B', 'Hello');
+      opts.onNewToken('C', 'C', 'Hello!');
+    } }).mod);
+    toks = [];
+    out = await LLM2.phrase({ mlcKey: 'wllama:qwen25-05b', question: 'hi', mode: 'chat', grounded: false, history: [], onToken: d => toks.push(d) });
+    eq(out, 'Hello!', 'cumulative currentText is turned into deltas');
+    eq(toks.join(''), 'Hello!', '…with no duplication across chunks');
+
+    // no streaming callbacks fire → recover the final text from the return value
+    LLM2 = loadLLMWithWllama(makeFakeWllama({ finalReturn: 'Recovered', stream: () => {} }).mod);
+    out = await LLM2.phrase({ mlcKey: 'wllama:qwen25-05b', question: 'hi', mode: 'chat', grounded: false, history: [], onToken: () => {} });
+    eq(out, 'Recovered', 'a non-streaming build still yields its answer (recovered from the return)');
+  });
+
+  await groupA('cancelLoad frees an in-flight CPU load (CANCEL) and leaves it unloaded', async () => {
+    const { mod, calls } = makeFakeWllama({ loadDelayMs: 30, stream: () => {} });
+    const LLM2 = loadLLMWithWllama(mod);
+    const p = LLM2.load('wllama:qwen25-05b', () => {}).then(() => 'resolved', (e) => 'rejected:' + (e && e.code));
+    await new Promise(r => setTimeout(r, 5));        // load in-flight, before the GGUF resolves
+    eq(LLM2.cancelLoad(), true, 'cancelLoad reports it canceled the in-flight CPU load');
+    ok(calls.exits >= 1, 'cancel frees the CPU runtime (exit was called)');
+    eq(await p, 'rejected:CANCEL', 'the canceled CPU load rejects with a CANCEL code');
+    eq(LLM2.isLoaded('wllama:qwen25-05b'), false, 'a canceled CPU model never reports loaded');
   });
 
   // ---- interrupt: stopping a stream mid-generation ----
