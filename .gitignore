@@ -9,3 +9,6 @@ evo/proposals/*.md
 
 # local model cache for Node-side measurement (vendored MiniLM, never committed)
 .models/
+
+# Claude Code local session state (settings, agent worktrees)
+.claude/
