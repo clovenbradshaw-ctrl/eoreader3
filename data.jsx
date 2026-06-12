@@ -25,6 +25,12 @@ const MODELS = [
   { id: 'qwen-7',    name: 'Qwen2.5 7B',   detail: '~5.1 GB · needs 8 GB GPU',          mlc: 'Qwen2.5-7B-Instruct-q4f16_1-MLC' },
   { id: 'qwen3-8',   name: 'Qwen3 8B',     detail: '~5.7 GB · newest · needs 8 GB GPU', mlc: 'Qwen3-8B-q4f16_1-MLC' },
   { id: 'gemma2-9',  name: 'Gemma 2 9B',   detail: '~6.4 GB · highest quality',         mlc: 'gemma-2-9b-it-q4f16_1-MLC' },
+  // cloud · Anthropic (Claude) — needs an API key, runs no download, and works
+  // without WebGPU. The `mlc` key carries an 'anthropic:' prefix so llm.js
+  // routes it to the Claude API; the value after the colon is the exact model id.
+  { id: 'claude-opus',   name: 'Claude Opus 4.8',   detail: 'Anthropic API · most capable',   provider: 'anthropic', mlc: 'anthropic:claude-opus-4-8' },
+  { id: 'claude-sonnet', name: 'Claude Sonnet 4.6', detail: 'Anthropic API · balanced',       provider: 'anthropic', mlc: 'anthropic:claude-sonnet-4-6' },
+  { id: 'claude-haiku',  name: 'Claude Haiku 4.5',  detail: 'Anthropic API · fast & low-cost', provider: 'anthropic', mlc: 'anthropic:claude-haiku-4-5' },
 ];
 
 /* ---------------- the rule registry ----------------

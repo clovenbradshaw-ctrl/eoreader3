@@ -131,6 +131,7 @@ function App() {
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
   const [modelProgress, setModelProgress] = useState(0);
   const [modelLoadText, setModelLoadText] = useState(''); // WebLLM's live status line ("12MB fetched…", "Loading GPU shaders…")
+  const [anthropicKeySet, setAnthropicKeySet] = useState(!!(window.EOLLM && window.EOLLM.hasAnthropicKey && window.EOLLM.hasAnthropicKey()));
   // Staged-ingest progress: null when idle, else { phase, stage, pct, name }.
   const [ingestStatus, setIngestStatus] = useState(null);
 
@@ -564,6 +565,21 @@ function App() {
   // ---- model: load the real local model for the demo ----
   const loadModel = async (m) => {
     if (!window.EOLLM) { showToast('Local model module unavailable.'); return false; }
+    // Claude: no WebGPU and no download — just needs the API key. Without one,
+    // stay idle and let the model popover collect it (it shows a key field for
+    // an Anthropic model). With one, "loading" resolves instantly.
+    if (m.provider === 'anthropic') {
+      if (!window.EOLLM.hasAnthropicKey()) { setModelStatus('idle'); return false; }
+      setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
+      try {
+        await window.EOLLM.load(m.mlc);
+        setModelStatus('ready'); setModelLoadText(''); return true;
+      } catch (e) {
+        setModelStatus('idle'); setModelLoadText('');
+        showToast(e.message || 'Could not connect to Claude');
+        return false;
+      }
+    }
     if (!window.EOLLM.hasWebGPU()) { setModelStatus('idle'); return false; }
     setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
     try {
@@ -574,6 +590,15 @@ function App() {
       if (!(e && e.code === 'CANCEL')) showToast(e.message || 'Model failed to load');  // a user cancel is not an error
       return false;
     }
+  };
+  // Save (or clear) the Claude API key from the model popover. Saving a key for
+  // the currently-selected Anthropic model immediately loads it.
+  const setAnthropicKey = (k) => {
+    if (!window.EOLLM || !window.EOLLM.setAnthropicKey) return;
+    const saved = window.EOLLM.setAnthropicKey(k);
+    setAnthropicKeySet(!!saved);
+    if (saved && model && model.provider === 'anthropic') loadModel(model);
+    else if (!saved && model && model.provider === 'anthropic') setModelStatus('idle');
   };
   const pickModel = (m) => { setModel(m); setModelStatus('idle'); loadModel(m); };
   // Stop an in-flight download. Terminates the worker so it halts immediately
@@ -593,7 +618,11 @@ function App() {
   // (MODELS[0]) is the smallest, most mobile-friendly model, so it begins
   // downloading right away on phones too rather than waiting for the first turn.
   useEffect(() => {
-    if (window.EOLLM && window.EOLLM.hasWebGPU()) loadModel(model);
+    if (!window.EOLLM) return;
+    // A persisted Anthropic selection auto-loads if its key is already stored;
+    // a local model auto-loads when WebGPU is available.
+    if (model.provider === 'anthropic') { if (window.EOLLM.hasAnthropicKey()) loadModel(model); }
+    else if (window.EOLLM.hasWebGPU()) loadModel(model);
     // Warm the structure-layer embedding reader in the background so the first
     // escalation isn't also paying the (one-time, cached) model download. Inert
     // if embed.js is absent or the model fails to load — routing stays lexical.
@@ -1763,7 +1792,8 @@ function App() {
 
     const doc = backingDoc();
     const scope = scopeList();   // explicit source chips, else the focused doc
-    const canLLM = !!(window.EOLLM && window.EOLLM.hasWebGPU());
+    const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
+      ? window.EOLLM.hasAnthropicKey() : window.EOLLM.hasWebGPU()));
     const wasLoaded = canLLM && window.EOLLM.isLoaded(model.mlc);
 
     // Resolve this turn's budget at the deepest stop (thinkingBudget clamps to
@@ -2066,7 +2096,9 @@ function App() {
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
       {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
       {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
-                     status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel} />}
+                     status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel}
+                     webgpu={!!(window.EOLLM && window.EOLLM.hasWebGPU && window.EOLLM.hasWebGPU())}
+                     anthropicKeySet={anthropicKeySet} onSetAnthropicKey={setAnthropicKey} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (
         <EntityModal doc={d} name={entityModal.name} onCite={flashCitation} onEntity={(n) => setEntityModal({ docId: d.id, name: n })}
           onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />

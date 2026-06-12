@@ -339,42 +339,71 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
   }, []);
   const style = anchor ? { left: anchor.left, bottom: anchor.bottom } : { left: 16, bottom: 60 };
   const pct = Math.round((progress || 0) * 100);
+  const [keyDraft, setKeyDraft] = React.useState('');
+  const local = models.filter(m => m.provider !== 'anthropic');
+  const cloud = models.filter(m => m.provider === 'anthropic');
+  const curIsCloud = current.provider === 'anthropic';
+  const saveKey = () => { const k = keyDraft.trim(); if (k) { onSetAnthropicKey(k); setKeyDraft(''); } };
+  const row = (m) => {
+    const isCur = m.id === current.id;
+    const state = isCur ? status : 'idle';
+    const idle = m.provider === 'anthropic' ? 'Use' : 'Load';
+    return (
+      <div key={m.id} role="button" tabIndex={0} aria-pressed={isCur}
+        className={'pop-item' + (isCur ? ' sel' : '')} onClick={() => onPick(m)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(m); } }}>
+        <div className="pi-main">
+          <div className="pi-n">{m.name}</div>
+          <div className="pi-d">{m.detail}</div>
+        </div>
+        {state === 'loading' ? <span className="pi-state load">{m.provider === 'anthropic' ? '…' : pct + '%'}</span>
+          : state === 'ready' ? <span className="pi-state ok"><Icon name="check" size={13} /> {m.provider === 'anthropic' ? 'connected' : 'loaded'}</span>
+          : <span className="pi-state">{idle}</span>}
+      </div>
+    );
+  };
   return (
-    <div className="popover" role="dialog" aria-modal="true" aria-label="Choose local model"
+    <div className="popover" role="dialog" aria-modal="true" aria-label="Choose a model"
          tabIndex={-1} ref={ref} style={style}>
       <div className="ph">Local model · runs on your GPU</div>
-      {models.map(m => {
-        const isCur = m.id === current.id;
-        const state = isCur ? status : 'idle';
-        return (
-          <div key={m.id} role="button" tabIndex={0} aria-pressed={isCur}
-            className={'pop-item' + (isCur ? ' sel' : '')} onClick={() => onPick(m)}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(m); } }}>
-            <div className="pi-main">
-              <div className="pi-n">{m.name}</div>
-              <div className="pi-d">{m.detail}</div>
-            </div>
-            {state === 'loading' ? <span className="pi-state load">{pct}%</span>
-              : state === 'ready' ? <span className="pi-state ok"><Icon name="check" size={13} /> loaded</span>
-              : <span className="pi-state">Load</span>}
-          </div>
-        );
-      })}
-      {status === 'loading' && (
+      {!webgpu && <div className="pop-status wrap">WebGPU isn’t available in this browser, so local models can’t load here. Use Claude below, or try Chrome/Edge 113+.</div>}
+      {local.map(row)}
+      {status === 'loading' && !curIsCloud && (
         <div className="pop-bar"><div className="pop-fill" style={{ width: pct + '%' }} /></div>
       )}
-      {status === 'loading' && loadText && <div className="pop-status">{loadText}</div>}
-      <div className="ph" style={{ paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 4 }}>
-        {status === 'loading' ? 'Downloading ' + current.name + ' — ' + pct + '% · first time only'
-          : status === 'ready' ? current.name + ' is loaded and running on your GPU.'
-          : 'Pick a model to download it (one-time, then cached). Grounded answers work without one.'}
+      {status === 'loading' && !curIsCloud && loadText && <div className="pop-status">{loadText}</div>}
+
+      <div className="ph" style={{ paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 4 }}>Cloud · Anthropic (Claude API)</div>
+      {cloud.map(row)}
+      <div className="pop-status wrap">
+        {anthropicKeySet
+          ? 'Claude is connected. Your API key is stored only in this browser and sent only to Anthropic.'
+          : 'Add an Anthropic API key to use Claude. It’s stored only in this browser and sent only to Anthropic.'}
       </div>
-      {onCancel && status === 'loading' && (
+      <div className="pop-key">
+        <input type="password" autoComplete="off" spellCheck={false} placeholder="sk-ant-…"
+          aria-label="Anthropic API key" value={keyDraft}
+          onChange={e => setKeyDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveKey(); } }} />
+        <button type="button" onClick={saveKey} disabled={!keyDraft.trim()}>{anthropicKeySet ? 'Update' : 'Save'}</button>
+      </div>
+      {anthropicKeySet && (
+        <button type="button" className="pop-reset" onClick={() => onSetAnthropicKey('')}>
+          Disconnect Claude (clear key)
+        </button>
+      )}
+
+      <div className="ph" style={{ paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 4 }}>
+        {status === 'loading' ? (curIsCloud ? 'Connecting to ' + current.name + '…' : 'Downloading ' + current.name + ' — ' + pct + '% · first time only')
+          : status === 'ready' ? (curIsCloud ? current.name + ' is connected via the Anthropic API.' : current.name + ' is loaded and running on your GPU.')
+          : 'Pick a local model to download it (one-time, then cached) or connect Claude above. Grounded answers work without either.'}
+      </div>
+      {onCancel && status === 'loading' && !curIsCloud && (
         <button type="button" className="pop-reset" onClick={() => onCancel()}>
           Cancel download
         </button>
       )}
-      {onReset && status !== 'ready' && (
+      {onReset && status !== 'ready' && !curIsCloud && (
         <button type="button" className="pop-reset" onClick={() => onReset()}>
           Stuck downloading? Clear the cache &amp; retry
         </button>
