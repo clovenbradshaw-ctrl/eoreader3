@@ -289,7 +289,7 @@ padded for headroom and clamped to a safe window (≤ 520, so a 4096-token
 prebuild always has room for the prompt). The bound stays a *bound*: there are
 still no length prescriptions in the prompt, and the model answers as it sees
 fit beneath the cap. `EOLLM.resolveMaxTokens` applies the budget as an opt-in
-override — absent it, the depth-scaled caps are byte-identical to before, so a
+override — absent it, the default caps are byte-identical to before, so a
 session with no embedder or no loaded library answers exactly as it did
 (`app.jsx` only reaches for a shaped budget once MiniLM is already resident and
 the library has loaded, warming it in the background and never blocking a turn).
@@ -361,18 +361,18 @@ than a soup of stray capitals and timestamps.
 
 ### Thinking depth
 
-The composer's effort dial (1–3) buys *graph* work, not just more retrieval.
-Above the floor, a factual turn **walks the document graph** out from the
-entities the question names — the page's recorded assertions (DEF events), its
-drawn relations, co-occurrence — and the prompt opens with that reading before
-the verbatim passages. Depth 1 is the parity floor — byte-identical to the
-reflex pipeline — with one deliberate exception: the **propositional veto**,
-which audits every kept draft against the page's own assertions. A draft that
-denies what the page asserts ("X was not Y" while the graph holds *X is Y*)
-binds cleanly at the string layer and is caught only here, claim against
-claim — and a token-level check also *certifies* a draft that recombines
-on-page names into a false proposition, so this check is the floor of what
-"grounded" means, not a luxury the dial buys. It runs at every depth (still a
+Every turn runs at the deepest stop. A factual turn **walks the document
+graph** out from the entities the question names — the page's recorded
+assertions (DEF events), its drawn relations, co-occurrence — and the prompt
+opens with that reading before the verbatim passages. Iterative seek rounds,
+associative wandering, working-memory carry-forward, the inference void, and
+reconsideration are all live; each knob's value (in the rules drawer) is the
+ceiling the turn spends. The **propositional veto** audits every kept draft
+against the page's own assertions: a draft that denies what the page asserts
+("X was not Y" while the graph holds *X is Y*) binds cleanly at the string
+layer and is caught only here, claim against claim — and a token-level check
+also *certifies* a draft that recombines on-page names into a false
+proposition, so this check is the floor of what "grounded" means (still a
 rule; disable *Propositional Veto* to turn it off).
 
 ### Auditing the chat
@@ -387,15 +387,14 @@ over them. For each turn it records, step by step:
   `factual`, whether the page can answer, and the matter / anti-matter (void)
   referents the question names;
 - **retrieve** — the passages actually retrieved, each with its relevance score
-  (deeper turns add numbered *seek* rounds, with unseekable query terms named);
-- **traverse** — the graph walk (depth > 1): entry nodes, the assertions and
-  relations held along the walk, and the evidence sentences it gathered;
+  (turns add numbered *seek* rounds, with unseekable query terms named);
+- **traverse** — the graph walk: entry nodes, the assertions and relations
+  held along the walk, and the evidence sentences it gathered;
 - **llm** — the *exact* prompt the model saw (system + assembled history +
   passages), its parameters, and the raw text it streamed back, verbatim;
 - **veto** — the mechanical check: any invented terms, whether the phrasing
-  re-bound to the page, whether the draft contradicts a recorded assertion
-  (every depth), and whether the model's draft or the mechanical answer
-  won;
+  re-bound to the page, whether the draft contradicts a recorded assertion,
+  and whether the model's draft or the mechanical answer won;
 - **confirm / retract** — for a proposition-checking turn, each claim and the
   graph's verdict on it (confirmed / contradicted / attested-by-absence), and
   any earlier reply of the assistant's the check caused to be retracted;

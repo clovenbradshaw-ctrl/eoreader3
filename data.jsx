@@ -149,20 +149,9 @@ const RULESETS = [
 
 const RULE_GROUPS = ['Languages', 'Parsing', 'Chatting & grounding', 'Thinking depth', 'Medium constants'];
 
-/* ---------------- the thinking-depth dial ----------------
-   One user-facing effort control. Each stop sets a thinking budget for the turn
-   (EOEngine.thinkingBudget(level)); the depth-governed rules above read from it.
-   Level 1 is today's reflex — the parity floor — so turning the dial down is
-   byte-identical to current Cleon. */
-const THINKING_DEPTHS = [
-  { level: 1, id: 'reflex',  label: 'Reflex',  glyph: '·',
-    desc: 'One pass. Today’s behavior — fast and literal: retrieve once, phrase, done.' },
-  { level: 2, id: 'deeper',  label: 'Deeper',  glyph: ':',
-    desc: 'Carries the conversation’s hot context forward, keeps seeking the parts of the question it hasn’t covered, and answers in a fuller, more connected reading.' },
-  { level: 3, id: 'deepest', label: 'Deepest', glyph: '∴',
-    desc: 'Adds associative wandering and lets a turn reconsider its own plan, then writes the most thorough, synthesized answer. The most effort, the fullest trace.' },
-];
 // The depth-governed rule ids, surfaced as their own tier in the rules drawer.
+// Every turn runs at the deepest stop (thinkingBudget()'s ceiling), so these
+// knobs are always live; their values are the ceilings the turn spends.
 const DEPTH_IDS = ['max-seek-rounds', 'seek-novelty-floor', 'assoc-delta', 'assoc-coupling', 'wm-heat-floor', 'infer-bind-floor', 'replan-enabled'];
 
 /* ---------------- the three tiers of the rules drawer ----------------
@@ -317,4 +306,4 @@ D-1055,Rhee,East,2026-03-31,44000,lost`,
 ];
 
 Object.assign(window, { MODELS, RULESETS, RULE_GROUPS, RULE_PACK_SCHEMA, AUTHOR_PROMPT, EXAMPLE_PACK, EXAMPLES,
-  MEDIUM_LAWS, MEDIUM_PARAM_IDS, LANGUAGES, LANG_SHARED_PARSING, GROUNDING_IDS, THINKING_DEPTHS, DEPTH_IDS });
+  MEDIUM_LAWS, MEDIUM_PARAM_IDS, LANGUAGES, LANG_SHARED_PARSING, GROUNDING_IDS, DEPTH_IDS });

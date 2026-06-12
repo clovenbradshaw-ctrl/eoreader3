@@ -376,12 +376,10 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-const DEPTHS = (typeof window !== 'undefined' && window.THINKING_DEPTHS) || [{ level: 1, id: 'reflex', label: 'Reflex' }];
-function Composer({ value, onChange, onSend, mode, onMode, depth, onDepth, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource }) {
+function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
-  const depths = (window.THINKING_DEPTHS && window.THINKING_DEPTHS.length) ? window.THINKING_DEPTHS : DEPTHS;
   return (
     <div className="composer-box">
       <SourceChips sources={sources} addable={addable} onAddSource={onAddSource} onRemoveSource={onRemoveSource} />
@@ -398,16 +396,6 @@ function Composer({ value, onChange, onSend, mode, onMode, depth, onDepth, onAtt
             </button>
           ))}
         </div>
-        {onDepth && (
-          <div className="mode-seg depth-seg" role="group" aria-label="Thinking depth" title="How hard Cleon thinks on this turn">
-            {depths.map(d => (
-              <button key={d.id} type="button" className={(depth === d.level ? 'on depth-' + d.id : '')}
-                aria-pressed={depth === d.level} title={d.label + ' — ' + d.desc} onClick={() => onDepth(d.level)}>
-                {d.label}
-              </button>
-            ))}
-          </div>
-        )}
         <div className="comp-spacer" />
         <button className="send-btn" aria-label="Send message" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>
       </div>
@@ -449,10 +437,7 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide }) {
       </div>
       <div className="composer-wrap">
         <div className="composer"><Composer {...composerProps} placeholder={narrow ? 'Ask about this document…' : 'Message Cleon…'} /></div>
-        <div className="composer-hint">Runs locally · <b>{composerProps.mode}</b> mode{(() => {
-          const d = (window.THINKING_DEPTHS || []).find(x => x.level === composerProps.depth);
-          return d && d.level > 1 ? <React.Fragment> · thinking <b>{d.label.toLowerCase()}</b></React.Fragment> : null;
-        })()}</div>
+        <div className="composer-hint">Runs locally · <b>{composerProps.mode}</b> mode</div>
       </div>
     </div>
   );

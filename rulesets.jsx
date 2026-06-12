@@ -307,7 +307,7 @@ function RulesDrawer({ rules, langModes, learnedByLang, onToggle, onInstall, onS
                     <div className="tier">
                       <div className="tier-head">
                         <div className="rule-group-label">Thinking depth · how hard a turn thinks</div>
-                        <p className="tier-sub">What the effort dial in the composer spends. Each knob’s value is its ceiling at the deepest setting; the dial scales between today’s reflex and it. Turn one off to cap that kind of effort — exportable as a “deep reading” profile.</p>
+                        <p className="tier-sub">What every turn spends. Each knob’s value is the ceiling, and the turn runs at it — iterative seek rounds, associative wander, working-memory carry-forward, the inference void, and reconsideration are all live. Turn one off to cap that kind of effort.</p>
                       </div>
                       {depth.map(r => <RuleCard key={r.id} rule={r} onToggle={onToggle} onInstall={onInstall} />)}
                     </div>
