@@ -252,7 +252,8 @@ function narrateTurn(turn) {
   const f = turn.final;
   if (f && f.engine) {
     const modelName = (turn.model && turn.model.name) || 'the local model';
-    push(/mechanical/.test(f.engine) ? 'Final answer: the document’s exact mechanical reading.'
+    push(/stopped/.test(f.engine) ? 'Stopped — you interrupted the reply before it finished.'
+      : /mechanical/.test(f.engine) ? 'Final answer: the document’s exact mechanical reading.'
       : /flag/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', kept but flagged — the page’s exact mechanical reading is one click away.'
       : /caveat/.test(f.engine) ? 'Final answer: the model’s phrasing, kept with unverified terms struck and citations bound.'
       : /model/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', with citations bound to the document.'
@@ -439,12 +440,17 @@ function Message({ msg, onCite }) {
             </div>
           : msg.typing ? <div className="typing"><span /><span /><span /></div>
           : <React.Fragment>
-              {renderAnswer(msg.text, onCite)}
+              {msg.interrupted && !(msg.text && String(msg.text).trim())
+                ? <p className="stopped-empty">Stopped before any reply.</p>
+                : renderAnswer(msg.text, onCite)}
+              {/* a user interrupt: the partial above is what streamed before Stop */}
+              {msg.interrupted && <div className="stopped-note">⏹ Stopped — you interrupted this reply{(msg.text && String(msg.text).trim()) ? '; the text above is as far as it got' : ''}.</div>}
               {/* a retraction outranks the badge the answer originally earned */}
               {msg.retracted && <div className="retract-note">⊘ Retracted — a later check against the page found a claim here unsupported.</div>}
-              <AuditBadge audit={msg.audit} />
+              {!msg.interrupted && <AuditBadge audit={msg.audit} />}
               {msg.mechanical && <MechanicalReading data={msg.mechanical} onCite={onCite} />}
             </React.Fragment>}
+        {msg.enrichment && window.ReferenceCard && <window.ReferenceCard data={msg.enrichment} />}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
             <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer|absent):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
@@ -489,10 +495,12 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource }) {
+function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, enrich, onToggleEnrich }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
+  // The reference desk is off (proxy cleared) ⇒ no toggle, the chat stays local.
+  const canEnrich = !!(window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled());
   return (
     <div className="composer-box">
       <SourceChips sources={sources} addable={addable} onAddSource={onAddSource} onRemoveSource={onRemoveSource} />
@@ -509,8 +517,17 @@ function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, place
             </button>
           ))}
         </div>
+        {canEnrich && onToggleEnrich && (
+          <button type="button" className={'comp-btn enrich' + (enrich ? ' on' : '')} aria-pressed={!!enrich}
+            title="Wikipedia enrichment — attach an encyclopaedia + dictionary card to your message. Sends the looked-up term (not the document) to Wikipedia & Wiktionary through the proxy."
+            onClick={onToggleEnrich}>
+            <Icon name="book" size={15} /> Wikipedia
+          </button>
+        )}
         <div className="comp-spacer" />
-        <button className="send-btn" aria-label="Send message" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>
+        {generating
+          ? <button className="send-btn stop" aria-label="Stop generating" title="Stop generating" onClick={onStop}><Icon name="stop" size={15} /></button>
+          : <button className="send-btn" aria-label="Send message" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>}
       </div>
     </div>
   );
@@ -559,7 +576,7 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
       <div className="composer-wrap">
         <div className="composer"><Composer {...composerProps} placeholder={narrow ? 'Ask about this document…' : 'Message Cleon…'} /></div>
         <div className="composer-hint">
-          <span>Runs locally · <b>{composerProps.mode}</b> mode</span>
+          <span>Runs locally · <b>{composerProps.mode}</b> mode{composerProps.enrich ? <span> · chatting with <b>Wikipedia</b></span> : null}</span>
           {onExportPrompts && hasTurns && (
             <button type="button" className="export-prompts" onClick={onExportPrompts}>
               <Icon name="expand" size={12} /> Export prompts (JSON)

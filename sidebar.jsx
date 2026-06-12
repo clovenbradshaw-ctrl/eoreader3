@@ -1,7 +1,7 @@
 /* ============================================================ Sidebar ===== */
 function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, onUpload,
                    chats, activeChat, onNewChat, onSelectChat, model, onModelClick, onRulesClick,
-                   enabledRules, modelStatus,
+                   onSettingsClick, enabledRules, modelStatus,
                    projects, activeProject, onSelectProject, onNewProject, onDeleteProject, onClearProject,
                    sourceIds, onToggleSource }) {
   const iconFor = (d) => d.kind === 'table' ? 'table' : 'doc';
@@ -80,6 +80,12 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, on
       </div>
 
       <div className="sb-foot">
+        {onSettingsClick && (
+          <div className="sb-foot-row" onClick={onSettingsClick}>
+            <span className="ti"><Icon name="settings" size={17} /></span>
+            <span className="rt">Settings</span>
+          </div>
+        )}
         <div className="sb-foot-row" onClick={onRulesClick}>
           <span className="ti"><Icon name="layers" size={17} /></span>
           <span className="rt">Rules</span>

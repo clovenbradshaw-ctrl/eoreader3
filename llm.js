@@ -13,6 +13,14 @@
   let activeCancel = null;   // call to reject the in-flight build promptly (user cancel)
   let loadingActive = false; // a load is genuinely in flight (gates cancelLoad)
   let workerBroken = false;  // the worker path failed to establish once — stop retrying it
+  let activeGen = null;      // the currently-streaming generation: { abort() } — set by interrupt()
+
+  // The sentinel a stopped stream throws so callers can tell a user interrupt
+  // apart from a real failure (and never retry it / never show an error). It
+  // carries whatever text had streamed so far, so the audit trace can keep the
+  // partial draft. `isAbort` is the single predicate every settle path checks.
+  const abortedError = (partial) => Object.assign(new Error('Stopped.'), { code: 'ABORTED', partial: partial || '' });
+  const isAbort = (e) => !!(e && e.code === 'ABORTED');
 
   const hasWebGPU = () => typeof navigator !== 'undefined' && !!navigator.gpu;
 
@@ -67,52 +75,72 @@
       messages: msgs.length ? msgs : [{ role: 'user', content: ' ' }],
     };
     if (system) body.system = system;
-    let resp;
+    // Interruptible: an AbortController aborts the fetch (and so the SSE read)
+    // the instant the user hits Stop, halting the request server-side instead of
+    // draining tokens into the void. Registered as the active generation so
+    // interrupt() can find it; `aborted` distinguishes a user stop from a real
+    // network drop in the catch below.
+    const ctrl = new AbortController();
+    let aborted = false, full = '';
+    const gen = { abort() { aborted = true; try { ctrl.abort(); } catch (_) {} } };
+    activeGen = gen;
     try {
-      resp = await fetch(ANTHROPIC_URL, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': anthropicKey,
-          'anthropic-version': '2023-06-01',
-          // Anthropic gates browser (CORS) calls behind this opt-in header.
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify(body),
-      });
-    } catch (e) {
-      throw Object.assign(new Error('Could not reach the Claude API — check your connection.'), { code: 'ANTHROPIC_NET' });
-    }
-    if (!resp.ok || !resp.body) {
-      let msg = `Claude API error (${resp.status}).`;
-      if (resp.status === 401) msg = 'Claude rejected the API key (401). Check the key and try again.';
-      else { try { const j = await resp.json(); if (j && j.error && j.error.message) msg = j.error.message; } catch (_) {} }
-      throw Object.assign(new Error(msg), { code: 'ANTHROPIC', status: resp.status });
-    }
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '', full = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (line.indexOf('data:') !== 0) continue;          // skip `event:` lines and blanks
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
-        let evt; try { evt = JSON.parse(data); } catch (_) { continue; }
-        if (evt.type === 'content_block_delta' && evt.delta && evt.delta.type === 'text_delta') {
-          const d = evt.delta.text || '';
-          if (d) { full += d; if (onDelta) onDelta(d); }
-        } else if (evt.type === 'error') {
-          throw Object.assign(new Error((evt.error && evt.error.message) || 'Claude streaming error.'), { code: 'ANTHROPIC' });
-        }
+      let resp;
+      try {
+        resp = await fetch(ANTHROPIC_URL, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': anthropicKey,
+            'anthropic-version': '2023-06-01',
+            // Anthropic gates browser (CORS) calls behind this opt-in header.
+            'anthropic-dangerous-direct-browser-access': 'true',
+          },
+          body: JSON.stringify(body),
+          signal: ctrl.signal,
+        });
+      } catch (e) {
+        if (aborted) throw abortedError(full);
+        throw Object.assign(new Error('Could not reach the Claude API — check your connection.'), { code: 'ANTHROPIC_NET' });
       }
+      if (!resp.ok || !resp.body) {
+        let msg = `Claude API error (${resp.status}).`;
+        if (resp.status === 401) msg = 'Claude rejected the API key (401). Check the key and try again.';
+        else { try { const j = await resp.json(); if (j && j.error && j.error.message) msg = j.error.message; } catch (_) {} }
+        throw Object.assign(new Error(msg), { code: 'ANTHROPIC', status: resp.status });
+      }
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (line.indexOf('data:') !== 0) continue;          // skip `event:` lines and blanks
+            const data = line.slice(5).trim();
+            if (!data || data === '[DONE]') continue;
+            let evt; try { evt = JSON.parse(data); } catch (_) { continue; }
+            if (evt.type === 'content_block_delta' && evt.delta && evt.delta.type === 'text_delta') {
+              const d = evt.delta.text || '';
+              if (d) { full += d; if (onDelta) onDelta(d); }
+            } else if (evt.type === 'error') {
+              throw Object.assign(new Error((evt.error && evt.error.message) || 'Claude streaming error.'), { code: 'ANTHROPIC' });
+            }
+          }
+        }
+      } catch (e) {
+        if (aborted) throw abortedError(full);   // the abort surfaces as a read error — keep the partial
+        throw e;
+      }
+      return full;
+    } finally {
+      if (activeGen === gen) activeGen = null;
     }
-    return full;
   }
 
   // ---- wllama (CPU / WebAssembly) backend ---------------------------------
@@ -239,7 +267,7 @@
   async function streamWllama({ instance, messages, temperature, maxTokens, onDelta }) {
     if (!instance || typeof instance.createChatCompletion !== 'function')
       throw new Error('The CPU model is not ready.');
-    let full = '', prevCumulative = '';
+    let full = '', prevCumulative = '', aborted = false;
     const emit = (s) => { if (s) { full += s; if (onDelta) onDelta(s); } };
     const onChunk = (chunk) => {
       if (chunk == null) return;
@@ -254,6 +282,14 @@
     };
     const nPredict = Math.max(16, (maxTokens | 0) || 256);
     const temp = typeof temperature === 'number' ? temperature : 0.4;
+    // Interruptible like the other backends: an AbortController stops generation
+    // (wllama honors abortSignal), and the partial rides out on the ABORTED
+    // sentinel so interrupt()/Stop keeps the words already streamed. Older
+    // environments without AbortController fall back to the instance's own
+    // interrupt() if present.
+    const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const gen = { abort() { aborted = true; if (ctrl) { try { ctrl.abort(); } catch (_) {} } else { try { instance.interrupt && instance.interrupt(); } catch (_) {} } } };
+    activeGen = gen;
     const opts = {
       messages, stream: true,
       onData: onChunk,
@@ -262,15 +298,24 @@
       temperature: temp, top_k: 40, top_p: 0.9,
       sampling: { temp, top_k: 40, top_p: 0.9 },
     };
-    const res = await instance.createChatCompletion(opts);
-    // If the streaming callbacks never fired (non-streaming build, or a shape we
-    // didn't pre-wire), recover the final text from the return value.
-    if (!full && res != null) {
-      if (typeof res === 'string') emit(res);
-      else if (typeof res.currentText === 'string') emit(res.currentText);
-      else if (res.choices && res.choices[0]) emit((res.choices[0].message && res.choices[0].message.content) || res.choices[0].text || '');
-      else if (typeof res[Symbol.asyncIterator] === 'function') { for await (const ch of res) onChunk(ch); }
+    if (ctrl) opts.abortSignal = ctrl.signal;
+    try {
+      const res = await instance.createChatCompletion(opts);
+      // If the streaming callbacks never fired (non-streaming build, or a shape we
+      // didn't pre-wire), recover the final text from the return value.
+      if (!full && res != null) {
+        if (typeof res === 'string') emit(res);
+        else if (typeof res.currentText === 'string') emit(res.currentText);
+        else if (res.choices && res.choices[0]) emit((res.choices[0].message && res.choices[0].message.content) || res.choices[0].text || '');
+        else if (typeof res[Symbol.asyncIterator] === 'function') { for await (const ch of res) onChunk(ch); }
+      }
+    } catch (e) {
+      if (aborted) throw abortedError(full);   // the abort surfaces as a reject — keep the partial
+      throw e;
+    } finally {
+      if (activeGen === gen) activeGen = null;
     }
+    if (aborted) throw abortedError(full);
     return full;
   }
 
@@ -285,13 +330,36 @@
     const eng = await load(mlcKey);
     if ((eng && eng.wllama) || isWllama(mlcKey))
       return streamWllama({ instance: eng && eng.wllama, messages, temperature, maxTokens, onDelta });
-    let full = '';
+    let full = '', aborted = false;
     const res = await eng.chat.completions.create({ messages, temperature, max_tokens: maxTokens, stop: STOP_SEQUENCES, stream: true });
-    for await (const chunk of res) {
-      const d = chunk.choices?.[0]?.delta?.content || '';
-      if (d) { full += d; if (onDelta) onDelta(d); }
+    // interrupt() asks WebLLM to stop generating (interruptGenerate ends the
+    // iterator); the `aborted` guard also breaks the loop immediately so no late
+    // chunk slips through. The partial rides out on the ABORTED sentinel.
+    const gen = { abort() { aborted = true; try { eng.interruptGenerate && eng.interruptGenerate(); } catch (_) {} } };
+    activeGen = gen;
+    try {
+      for await (const chunk of res) {
+        if (aborted) break;
+        const d = chunk.choices?.[0]?.delta?.content || '';
+        if (d) { full += d; if (onDelta) onDelta(d); }
+      }
+    } finally {
+      if (activeGen === gen) activeGen = null;
     }
+    if (aborted) throw abortedError(full);
     return full;
+  }
+
+  // Stop whatever turn is currently streaming (Claude SSE or WebLLM). The stream
+  // throws the ABORTED sentinel, which the UI settles as a stopped reply keeping
+  // the partial text. A no-op (false) when nothing is generating, so it can't
+  // disturb an idle app. Generation only — model DOWNLOADS are stopped by
+  // cancelLoad(); the UI calls both so Stop works at either stage.
+  function interrupt() {
+    const g = activeGen;
+    if (!g) return false;
+    try { g.abort(); } catch (_) {}
+    return true;
   }
 
   // The model runtime won't load forever: a dead/blocked CDN (esm.run) used to
@@ -998,6 +1066,13 @@
       full = await streamChat({ mlcKey, messages, temperature, maxTokens: max_tokens, onDelta: (d) => gate.feed(d) });
       gate.flush();
     } catch (e) {
+      if (isAbort(e)) {
+        // A user interrupt: flush whatever the gate held, keep the partial draft
+        // in the trace (marked interrupted), then let the caller settle it.
+        try { gate.flush(); } catch (_) {}
+        recLLM(stripThink(String(e.partial || '')).trim(), { interrupted: true });
+        throw e;
+      }
       recLLM(full, { error: String((e && e.message) || e) });   // record the failed attempt, then let the caller handle it
       throw e;
     }
@@ -1008,5 +1083,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();

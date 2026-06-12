@@ -26,6 +26,22 @@
      `Cross-Origin-Embedder-Policy: require-corp`. Absent those headers it simply
      falls back to single-thread; nothing breaks. -->
 <link rel="stylesheet" href="styles.css" />
+<!-- Theme, before first paint. Reads the persisted UI prefs (the same
+     localStorage key store.js writes) and pins <html data-theme> so the
+     palette is right on the very first frame — no light-to-dark flash. The
+     app re-applies and keeps it in sync once React mounts (settings.jsx). -->
+<script>
+  (function () {
+    try {
+      var p = JSON.parse(localStorage.getItem('cleon.prefs') || '{}') || {};
+      var t = p.theme || 'system';
+      var dark = t === 'dark' || (t !== 'light' && window.matchMedia
+        && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      if (p.reduceMotion) document.documentElement.classList.add('reduce-motion');
+    } catch (e) {}
+  })();
+</script>
 </head>
 <body>
 <div id="root"></div>
@@ -153,6 +169,7 @@
 <script type="text/babel" src="auditview.jsx"></script>
 <script type="text/babel" src="graphaudit.jsx"></script>
 <script type="text/babel" src="sandbox.jsx"></script>
+<script type="text/babel" src="settings.jsx"></script>
 <script type="text/babel" src="app.jsx"></script>
 </body>
 </html>

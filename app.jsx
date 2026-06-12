@@ -145,12 +145,22 @@ function App() {
   // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
   const [graphAuditOpen, setGraphAuditOpen] = useState(false);
   const [sandboxOpen, setSandboxOpen] = useState(false);
+  // Device-local preferences, gathered in the Settings drawer. Theme is
+  // 'system' | 'light' | 'dark' (system follows the OS); reduce-motion mutes
+  // animation. Both persist with prefs and apply to <html> via the effects below.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState('system');
+  const [reduceMotion, setReduceMotion] = useState(false);
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
   const [auditCount, setAuditCount] = useState(0);
   // Glass-box export toggles: include the extraction half (graph + processing)
   // and/or the chat half (audit turns). Persisted with prefs. Both on by default.
   const [exportIngestion, setExportIngestion] = useState(true);
   const [exportOutput, setExportOutput] = useState(true);
+  // Per-message Wikipedia enrichment (external.js reference desk): when on, a
+  // sent message gets an encyclopaedia + dictionary card for its salient term.
+  // Off by default — it is the one path that sends a term off-device.
+  const [wikiEnrich, setWikiEnrich] = useState(false);
   const [model, setModel] = useState(defaultModel);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
@@ -291,6 +301,9 @@ function App() {
         if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
         if (typeof prefs.exportIngestion === 'boolean') setExportIngestion(prefs.exportIngestion);
         if (typeof prefs.exportOutput === 'boolean') setExportOutput(prefs.exportOutput);
+        if (typeof prefs.wikiEnrich === 'boolean') setWikiEnrich(prefs.wikiEnrich);
+        if (prefs.theme === 'system' || prefs.theme === 'light' || prefs.theme === 'dark') setTheme(prefs.theme);
+        if (typeof prefs.reduceMotion === 'boolean') setReduceMotion(prefs.reduceMotion);
         // Restored docs were parsed under the saved modes, so suppress the
         // re-parse the same way rule toggles do (batched into one render).
         if (prefs.langModes && typeof prefs.langModes === 'object') { suppressReparse.current = true; setLangModes(prefs.langModes); }
@@ -349,8 +362,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput });
-  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion });
+  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -361,6 +374,32 @@ function App() {
     const save = () => { if (!hydrated.current) return; clearTimeout(t); t = setTimeout(() => window.EOStore.saveAudit(window.EOAudit.all()), 600); };
     const off = window.EOAudit.subscribe(save);
     return () => { clearTimeout(t); off(); };
+  }, []);
+
+  // Apply the theme to <html data-theme>. In 'system' mode, follow the OS and
+  // re-resolve when it flips. The early inline script in index.html sets the
+  // first paint; this keeps it in sync as the preference changes.
+  useEffect(() => {
+    const apply = () => (window.EOTheme ? window.EOTheme.apply(theme) : null);
+    apply();
+    if (theme !== 'system' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const on = () => apply();
+    mq.addEventListener ? mq.addEventListener('change', on) : mq.addListener(on);
+    return () => { mq.removeEventListener ? mq.removeEventListener('change', on) : mq.removeListener(on); };
+  }, [theme]);
+  useEffect(() => {
+    try { document.documentElement.classList.toggle('reduce-motion', !!reduceMotion); } catch (e) {}
+  }, [reduceMotion]);
+
+  // The one destructive affordance: wipe every device-local trace and reload
+  // cold. hydrated is flipped off first so the debounced persistence effects
+  // can't re-save state on the way out.
+  const clearLocalData = useCallback(async () => {
+    hydrated.current = false;
+    try { if (window.EOAudit && window.EOAudit.clear) window.EOAudit.clear(); } catch (e) {}
+    try { if (window.EOStore && window.EOStore.clearAll) await window.EOStore.clearAll(); } catch (e) {}
+    try { location.reload(); } catch (e) {}
   }, []);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2400); };
@@ -460,6 +499,16 @@ function App() {
   // if the chat takes the floor before the idle slot fires, stand down.
   const busyRef = useRef(false);
   useEffect(() => { busyRef.current = busy; }, [busy]);
+  // Generation guard: every turn captures the current value at dispatch; Stop
+  // (and the start of a fresh turn) bumps it, so any in-flight settle that wakes
+  // up afterward sees itself superseded and stands down rather than clobbering
+  // the stopped reply. The same token pattern the ingest path uses.
+  const genRef = useRef(0);
+  const genStale = (g) => genRef.current !== g;
+  // A live mirror of `messages` so stopTurn can read the in-flight turn's shape
+  // synchronously (from a click handler) without going stale on a closure.
+  const messagesRef = useRef([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
   const proposeArmed = useRef(false);
   const maybeProposeConventions = () => {
     const E = window.EOEngine;
@@ -793,7 +842,11 @@ function App() {
       const id = uid('c'); setChats(cs => [{ id, title: q.length > 32 ? q.slice(0, 32) + '…' : q }, ...cs]); setActiveChat(id);
     }
   };
-  const replaceLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch, typing: false }; return c; });
+  // A settle clears the in-flight flags by default (typing always; streaming
+  // unless the patch re-asserts it, as the streaming-start placeholders do) — so
+  // a finished reply never lingers as "generating" and the Stop affordance is
+  // never offered over a settled message.
+  const replaceLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], streaming: false, ...patch, typing: false }; return c; });
   const patchLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch }; return c; });
 
   // strip citation/void markup so prior turns read as plain text in history
@@ -1099,6 +1152,7 @@ function App() {
   // audit so it can never be mistaken for a cited, document-drawn answer —
   // the app's whole promise is that grounded and ungrounded look different. (1b)
   const runChat = async (q, history, modeTag, ctx, docOpen, mech) => {
+    const myGen = genRef.current;
     const ungroundedAudit = docOpen
       ? { status: 'plain', grounded: false, note: 'Answered from the model’s general knowledge — not drawn from the open document.' }
       : null;
@@ -1116,6 +1170,9 @@ function App() {
       try {
         full = await attempt(history, undefined);
       } catch (e1) {
+        // A user interrupt is not a model failure — never retry it (that would
+        // start a fresh stream); let it fall through to the stop handling below.
+        if (window.EOLLM.isAbort(e1) || genStale(myGen)) throw e1;
         // Most local-model failures mid-session are context / VRAM pressure,
         // not bad input. Retry once with just the last couple of turns and a
         // tight budget before giving up — recovers the common case silently.
@@ -1123,15 +1180,17 @@ function App() {
         replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
         full = await attempt(history.slice(-2), 2200);
       }
+      if (genStale(myGen)) return;                  // stopped while streaming — stopTurn owns the message
       replaceLast({ role: 'assistant', text: full, audit: ungroundedAudit, mode: modeTag, mechanical: mechPanel });
       AUD('end', { engine: 'model', text: full, audit: ungroundedAudit, cites: [] });
     } catch (e) {
+      if (window.EOLLM.isAbort(e) || genStale(myGen)) return;   // stopped — settled by stopTurn, show no error
       const msg = 'I couldn’t finish that one locally — the model likely ran out of memory or context. Try a shorter message, pick a smaller model from the switcher, or ask about an open document and I’ll answer it mechanically.';
       replaceLast({ role: 'assistant', text: msg, audit: null });
       AUD('step', 'error', { where: 'chat', fatal: true, message: String((e && e.message) || e) });
       AUD('end', { engine: 'none', text: msg, audit: null, reason: 'model-failed' });
     }
-    setBusy(false);
+    if (!genStale(myGen)) setBusy(false);
   };
 
   // ---- CONVERSATIONAL REPAIR ----
@@ -1195,6 +1254,7 @@ function App() {
     return { anchor, refinements };
   };
   const runRepairScope = async (scope, q, history, repair) => {
+    const myGen = genRef.current;
     const E = window.EOEngine;
     const { anchor, refinements } = repairAnchor();
     const priorReplies = messages.filter(m => m.role === 'assistant' && m.text && !m.typing).map(m => m.text);
@@ -1305,6 +1365,7 @@ function App() {
         // Size the budget from the reconstructed question (probe), not the
         // complaint; intent is left for the prompt match to infer (shape.js §9).
         const shapeMax = await shapeBudgetFor(probe, null, shapeNote);
+        if (genStale(myGen)) return;                  // stopped during the shape pass — stand down
         replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
         const sysOverride = window.EOLLM.systemFor('grounded', 'answer', true, 1)
           + '\n\nThe user has said your earlier replies missed their question — do not repeat any earlier reply; answer the question afresh from the spans and notes, and if they truly do not answer it, say exactly what they DO establish about the subject instead.';
@@ -1315,6 +1376,7 @@ function App() {
           mode: 'grounded', task: 'answer', grounded: true, sysOverride,
           onToken: streamInto({ mode: 'grounded' }), depth: turnBudgetRef.current && turnBudgetRef.current.level,
         });
+        if (genStale(myGen)) return;                  // stopped while streaming the repair — stopTurn owns it
         full = E.dedupeSentences(full);
         const declined = modelDeclined(full) || echoesShapeNote(full, shapeNote);
         if (!declined && !E.echoesPriorReply(full, priorReplies)) {
@@ -1337,9 +1399,11 @@ function App() {
           AUD('step', 'veto', { decision: 'mechanical', reason: declined ? 'model declined / empty' : 'the model reproduced a rejected reply' });
         }
       } catch (e) {
+        if (window.EOLLM.isAbort(e) || genStale(myGen)) return;   // stopped — leave the partial in place
         AUD('step', 'error', { where: 'repair', message: String((e && e.message) || e) });
       }
     }
+    if (genStale(myGen)) return;
     if (mech && mech.audit && mech.audit.grounded && mech.audit.status !== 'held') return settleRepair(mech, 'mechanical (repair)');
     return stuck();
   };
@@ -1440,6 +1504,7 @@ function App() {
   // citations mechanically. The seeker still decides what's there to say —
   // "who" is exact-mechanical; no ground → honest hold; the model only phrases.
   const runGroundedScope = async (scope, q, history, semanticHits) => {
+    const myGen = genRef.current;
     const intent = window.EOEngine.classifyIntent(q);
     AUD('step', 'intent', { intent });
     // CONFIRM/DENY: a proposition is checked against the graph, never phrased
@@ -1606,6 +1671,7 @@ function App() {
     // every draft claim is checked relation-against-relation. Down ⇒ every
     // step below is byte-identical to today (the parity floor).
     const gateOn = !!(window.EOEngine.relationGateEnabled && window.EOEngine.relationGateEnabled());
+    if (genStale(myGen)) return;                  // stopped during shaping — stand down
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       let full = await window.EOLLM.phrase({
@@ -1615,6 +1681,7 @@ function App() {
         grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
         depth: budget && budget.level, provenanceKeys: gateOn,
       });
+      if (genStale(myGen)) return;                  // stopped while streaming — stopTurn owns the message
       full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
       // Reconsideration (Phase 5, deepest depth): a refused summary is not a
       // summary — SEG the plan and re-route to free composition rather than
@@ -1639,6 +1706,7 @@ function App() {
       // grounded signal pointing at the page, just not the one the model
       // tried to draft.
       const refuseModel = (reason, message) => {
+        if (genStale(myGen)) return;                  // stopped — stopTurn already settled the message
         const audit = { status: 'error', grounded: false, covers: '0/1', stable: false,
           note: 'Refused — the model\'s draft failed audit (' + reason + '). Rather than substitute a mechanically-generated answer that would look like the model\'s reply, the turn surfaces the failure honestly.' };
         AUD('step', 'error', { where: 'grounded', message: 'refused: ' + reason });
@@ -1648,6 +1716,7 @@ function App() {
         setBusy(false);
       };
       const settle = (res, decision) => {
+        if (genStale(myGen)) return;                  // stopped — stopTurn already settled the message
         // Only a model-phrased answer can carry an inference void; a mechanical
         // fallback states only what the page does.
         if (decision && decision.indexOf('model') === 0) res = markInferences(res, budget);
@@ -1732,8 +1801,9 @@ function App() {
               grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
               depth: budget && budget.level, provenanceKeys: gateOn,
             });
+            if (genStale(myGen)) return;              // stopped during the stricter retry — stand down
             retry = window.EOEngine.dedupeSentences(retry);
-          } catch (e) { retry = ''; }
+          } catch (e) { if (window.EOLLM.isAbort(e) || genStale(myGen)) return; retry = ''; }
           // If the retry still echoes (or came back empty), the model can't do
           // this turn — refuse honestly rather than substitute a mechanical
           // portrait. The portrait would land as if it were the model's reply.
@@ -1860,8 +1930,11 @@ function App() {
           settle(bound, 'model + mechanical cite');
         }
       }
-    } catch (e) { AUD('step', 'error', { where: 'grounded', message: String((e && e.message) || e) }); runMechanicalScope(scope, q); return; }
-    setBusy(false);
+    } catch (e) {
+      if (window.EOLLM.isAbort(e) || genStale(myGen)) return;   // stopped — settled by stopTurn, no fallback
+      AUD('step', 'error', { where: 'grounded', message: String((e && e.message) || e) }); runMechanicalScope(scope, q); return;
+    }
+    if (!genStale(myGen)) setBusy(false);
   };
 
   // A streaming path (grounded / chat) runs DETACHED from runTurn — it is fired
@@ -1877,10 +1950,102 @@ function App() {
     setBusy(false);
   };
 
+  // ---- chat with Wikipedia (external.js knowledge augmentation) ----
+  const toggleWikiEnrich = () => setWikiEnrich(v => {
+    const next = !v;
+    if (next) { try { window.EOExternal && window.EOExternal.grantConsent && window.EOExternal.grantConsent(); } catch (e) {} }
+    return next;
+  });
+
+  // Commit an externally-sourced document into the graph WITHOUT the upload
+  // path's UI seizure (no tab focus, no layout change, no busy flip): it is a
+  // background source the turn pulled in, surfaced through the chip + the card.
+  const ingestExternalSource = async (name, text) => {
+    const dup = docsRef.current.find(d => d.name === name);
+    if (dup) return dup;
+    const id = uid('doc');
+    let doc;
+    try { doc = await window.EOEngine.parseDocument(name, text, id); }
+    catch (e) { eoWarn('external source parse', e); return null; }
+    setDocs(ds => ds.some(d => d.id === doc.id) ? ds : [...ds, doc]);
+    return doc;
+  };
+
+  // Render a Wikipedia article payload into an ingestible prose document.
+  const buildWikiDocText = (p) => {
+    const parts = [];
+    if (p.title) parts.push(p.title);
+    if (p.description) parts.push(p.description);
+    parts.push('');
+    parts.push((p.text && p.text.trim()) ? p.text.trim() : (p.intro || ''));
+    parts.push('');
+    if (p.url) parts.push('Source: ' + p.url);
+    return parts.join('\n').trim();
+  };
+
+  // Pull the salient term's article, attach the card to the live assistant
+  // message (by turnId), and ingest it as a source. Returns the doc for THIS
+  // turn's scope (state updates land for later turns). Best-effort throughout.
+  const chatWikipedia = async (q, turnId) => {
+    const X = window.EOExternal;
+    if (!X || !X.enabled || !X.enabled()) return null;
+    try { X.grantConsent && X.grantConsent(); } catch (e) {}
+    const term = (X.pickQuery && X.pickQuery(q)) || q;
+    // A vague follow-up ("tell me more", "why?") names no new subject — keep
+    // chatting against whatever Wikipedia articles are already in scope rather
+    // than pulling a spurious one. The substantive turn did the ingest.
+    if (!term || term.length < 3 || /^(more|it|that|this|them|those|they|he|she|why|how|ok|okay|yes|no|sure|tell|again|continue|else|next|so|and|but)$/i.test(term)) return null;
+    const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
+    tag({ loading: true, term });
+    let res;
+    try { res = await X.article(term); }
+    catch (e) { res = { status: 'error', error: String((e && e.message) || e) }; }
+    const base = { ...res, term, query: (res && res.query) || term };
+    tag(base);
+    if (!res || res.status !== 'hit' || !res.payload) return null;
+    const name = 'Wikipedia · ' + res.payload.title;
+    let doc = docsRef.current.find(d => d.name === name);
+    if (!doc) {
+      const text = buildWikiDocText(res.payload);
+      if (text && text.replace(/\s+/g, ' ').trim().length > 60) doc = await ingestExternalSource(name, text);
+    }
+    if (doc) { addSource(doc.id); tag({ ...base, ingested: { id: doc.id, name } }); }
+    return doc || null;
+  };
+
   // Outer guard around turn routing: a throw in the router itself (or in an
   // awaited router step like the escalation retrieval) must never leave busy
   // stuck true. runTurn dispatches to the detached streaming paths and returns;
   // this only catches a synchronous routing fault or a rejected await within it.
+  // Stop the turn that's mid-flight: halt the model (generation OR an in-flight
+  // download), invalidate the generation so no late settle clobbers the result,
+  // and freeze the in-progress assistant message as a STOPPED reply that keeps
+  // whatever streamed so far. Idle → no-op, so the Stop button is inert between
+  // turns. The audit trace is closed as `stopped` so the thinking panel settles.
+  const stopTurn = () => {
+    if (!busyRef.current) return;
+    // Only act on a genuine in-flight chat turn — an assistant placeholder that's
+    // still typing/loading/streaming. Other busy states (e.g. ingest enrichment)
+    // own their own lifecycle and must not have a settled reply rewritten.
+    const m = messagesRef.current || [];
+    const last = m.length ? m[m.length - 1] : null;
+    const inFlight = !!(last && last.role === 'assistant' && (last.typing || last.loading || last.streaming));
+    if (!inFlight) return;
+    genRef.current++;                                            // supersede every in-flight settle
+    try { window.EOLLM && window.EOLLM.interrupt && window.EOLLM.interrupt(); } catch (e) { eoWarn('interrupt', e); }
+    try { window.EOLLM && window.EOLLM.cancelLoad && window.EOLLM.cancelLoad(); } catch (e) {}   // also halt a model still downloading
+    setMessages(cur => {
+      if (!cur.length) return cur;
+      const c = cur.slice(); const l = c[c.length - 1];
+      if (!l || l.role !== 'assistant') return cur;
+      const partial = l.text && l.text.trim() ? l.text : '';
+      c[c.length - 1] = { ...l, typing: false, loading: false, streaming: false, interrupted: true, text: partial };
+      return c;
+    });
+    try { AUD('end', { engine: 'stopped', text: '', audit: null, reason: 'user-interrupt' }); } catch (e) {}
+    setBusy(false);
+  };
+
   const send = async (text) => {
     try { await runTurn(text); }
     catch (e) {
@@ -1896,17 +2061,33 @@ function App() {
     const q = (text != null ? text : input).trim();
     if (!q || busy) return;
     setInput('');
+    // Open a fresh generation. Stop (and any later turn) bumps this; the awaits
+    // below and the detached streaming paths all stand down once superseded.
+    const myGen = ++genRef.current;
 
     // hero: a long paste with no doc is a document to read, not a question
     const noDocs = docs.length === 0;
     if (noDocs && (q.length > 140 || /\n/.test(q))) { ingest('Pasted text.txt', q); return; }
 
     const history = historyFor();
-    setMessages(m => [...m, { role: 'user', text: q }, { role: 'assistant', typing: true }]);
+    const turnId = 'wt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    setMessages(m => [...m, { role: 'user', text: q }, { role: 'assistant', typing: true, turnId }]);
     setBusy(true); ensureChat(q);
 
-    const doc = backingDoc();
-    const scope = scopeList();   // explicit source chips, else the focused doc
+    // CHAT WITH WIKIPEDIA: when enrichment is on, pull the salient term's
+    // article and INGEST it into the graph as a citable source before reading,
+    // so this turn grounds on it (and cites it), not on a sidecar card. The
+    // freshly-parsed doc is threaded into THIS turn's scope directly (state
+    // updates are stale within the turn); best-effort — a failure degrades to
+    // whatever sources were already in scope.
+    let injectedDoc = null;
+    if (wikiEnrich && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {
+      try { injectedDoc = await chatWikipedia(q, turnId); } catch (e) { eoWarn('wiki-chat', e); }
+    }
+
+    let doc = backingDoc() || injectedDoc;
+    let scope = scopeList();   // explicit source chips, else the focused doc
+    if (injectedDoc && !scope.some(d => d.id === injectedDoc.id)) scope = [injectedDoc, ...scope];
     const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
       ? window.EOLLM.hasAnthropicKey()
       : model.provider === 'wllama'
@@ -1943,6 +2124,7 @@ function App() {
     if (canLLM && !wasLoaded) {
       patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name, loadCloud: model.provider === 'anthropic', loadCpu: model.provider === 'wllama' });
       const ok = await loadModel(model);
+      if (genStale(myGen)) return;                  // stopped during the load — stopTurn already settled
       AUD('step', 'model', { action: 'load', model: model.name, ok: !!ok });
       patchLast({ loading: false, typing: true });
     }
@@ -2017,6 +2199,7 @@ function App() {
     let semanticHits = null;
     if (route.decision === 'escalate') {
       const { hits, reader } = await window.EOEngine.retrieveHybrid(scope, q, 6);
+      if (genStale(myGen)) return;                  // stopped during the recall — stand down
       const recovered = hits.length && (reader.indexOf('embedding') >= 0 ? hits.some(h => h.semantic) : true);
       AUD('step', 'escalate', { reason: route.reason, reader, found: hits.length, recovered: !!recovered });
       if (recovered) { route.decision = 'mechanical'; route.confidence = 'recovered'; semanticHits = hits.filter(h => h.semantic).length ? hits : null; route.primary = route.primary || window.EOEngine.routePrimary(scope, q) || scope[0]; }
@@ -2123,12 +2306,20 @@ function App() {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
   }, [dragging]);
 
+  // A chat turn is generating (Stop is offered) when busy AND the last message
+  // is an in-flight assistant placeholder — never during ingest or other busy
+  // states, which own their own lifecycle.
+  const lastMsg = messages.length ? messages[messages.length - 1] : null;
+  const generating = busy && !!lastMsg && lastMsg.role === 'assistant'
+    && (lastMsg.typing || lastMsg.loading || lastMsg.streaming);
+
   const composerProps = {
-    value: input, onChange: setInput, onSend: () => send(), mode, onMode: setMode,
+    value: input, onChange: setInput, onSend: () => send(), onStop: stopTurn, generating, mode, onMode: setMode,
     onAttach: () => fileRef.current.click(), busy,
     sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     onAddSource: addSource, onRemoveSource: removeSource,
+    enrich: wikiEnrich, onToggleEnrich: toggleWikiEnrich,
   };
 
   const hasTabs = openTabs.length > 0;
@@ -2149,6 +2340,7 @@ function App() {
         onUpload={() => fileRef.current && fileRef.current.click()}
         chats={chats} activeChat={activeChat} onNewChat={newChat} onSelectChat={selectChat}
         model={model} onModelClick={() => setModelOpen(o => !o)} onRulesClick={() => setRulesOpen(true)}
+        onSettingsClick={() => setSettingsOpen(true)}
         enabledRules={enabledRules} modelStatus={modelStatus}
         projects={projects} activeProject={activeProject}
         onSelectProject={selectProject} onNewProject={newProject}
@@ -2210,6 +2402,9 @@ function App() {
         learnedByLang={window.EOEngine && window.EOEngine.learnedVerbsByLang ? window.EOEngine.learnedVerbsByLang() : {}}
         onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
       {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
+      {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)}
+        theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
+        onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}

@@ -578,6 +578,49 @@ async function groupA(name, fn) { console.log('• ' + name); await fn(); }
     eq(LLM2.isLoaded('wllama:qwen25-05b'), false, 'a canceled CPU model never reports loaded');
   });
 
+  // ---- interrupt: stopping a stream mid-generation ----
+  // Stop must halt the model and surface the ABORTED sentinel (so the UI keeps
+  // the partial and never retries or shows an error), and it must be a no-op
+  // when nothing is generating.
+  await groupA('interrupt() stops an in-flight WebLLM stream and keeps the partial', async () => {
+    let sawInterruptGenerate = false;
+    const eng = {
+      _stopped: false,
+      interruptGenerate() { sawInterruptGenerate = true; this._stopped = true; },
+      unload() {},
+      chat: { completions: { create: async () => {
+        let i = 0;
+        return { [Symbol.asyncIterator]() { return { next: async () => {
+          if (eng._stopped || i >= 50) return { done: true, value: undefined };
+          i++;
+          return { done: false, value: { choices: [{ delta: { content: 'tok' + i + ' ' } }] } };
+        } }; } };
+      } } },
+    };
+    const LLM = loadLLMWith({ stallMs: 1000, webllm: { CreateMLCEngine: () => Promise.resolve(eng) } });
+    const seen = [];
+    let threw = null, partialSeen = '';
+    try {
+      await LLM.phrase({
+        mlcKey: 'Fake-Model', question: 'hi', grounded: false,
+        onToken: (d) => { seen.push(d); if (seen.length === 1) { partialSeen = d; LLM.interrupt(); } },
+      });
+    } catch (e) { threw = e; }
+    ok(threw && LLM.isAbort(threw), 'a stopped stream throws the ABORTED sentinel');
+    ok(sawInterruptGenerate, 'interrupt() asks WebLLM to stop generating');
+    ok(threw && /tok1/.test(String(threw.partial || '')), 'the partial text rides out on the sentinel');
+    ok(seen.length < 50, 'generation halts well before the model would have finished');
+    eq(LLM.interrupt(), false, 'interrupt() is a no-op (false) once nothing is streaming');
+  });
+
+  await groupA('isAbort distinguishes a user stop from a real error', async () => {
+    const LLM = loadLLM();
+    ok(LLM.isAbort(Object.assign(new Error('x'), { code: 'ABORTED' })), 'ABORTED-coded errors are abort errors');
+    ok(!LLM.isAbort(new Error('boom')), 'an ordinary error is not an abort');
+    ok(!LLM.isAbort(null), 'null is safely not an abort');
+    eq(LLM.interrupt(), false, 'interrupt() with nothing in flight is a no-op');
+  });
+
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
   if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 })();

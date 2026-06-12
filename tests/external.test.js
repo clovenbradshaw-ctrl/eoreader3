@@ -21,12 +21,14 @@ const ROOT = path.resolve(__dirname, '..');
 const WIKI = {
   'nashville downtown partnership': { title: 'Nashville Downtown Partnership', description: 'nonprofit organization in Nashville', extract: 'The Nashville Downtown Partnership is a nonprofit organization.', thumb: 'http://img/ndp.jpg', page: 'https://en.wikipedia.org/wiki/Nashville_Downtown_Partnership' },
   'metro council': { title: 'Metropolitan Council', description: 'local government legislative body', extract: 'The Metropolitan Council is the legislative body.', page: 'https://en.wikipedia.org/wiki/Metropolitan_Council' },
+  socialism: { title: 'Socialism', description: 'range of economic and social systems', extract: 'Socialism is a political philosophy and movement.\n\nSocialist systems are divided into market and non-market forms. It has a long intellectual history.', thumb: 'http://img/soc.jpg', page: 'https://en.wikipedia.org/wiki/Socialism' },
 };
 const WIKT = {
   socialism: { Noun: ['Any of various <a href="/economic">economic</a> systems.', 'A transitional stage between capitalism and communism.'] },
 };
-const titleIndex = {};
-for (const k of Object.keys(WIKI)) titleIndex[WIKI[k].title.replace(/ /g, '_')] = WIKI[k];
+const titleIndex = {};      // underscored title → entry (summary endpoint)
+const byTitle = {};         // exact title → entry (extracts endpoint)
+for (const k of Object.keys(WIKI)) { titleIndex[WIKI[k].title.replace(/ /g, '_')] = WIKI[k]; byTitle[WIKI[k].title] = WIKI[k]; }
 
 function makeFetch(log) {
   return async function fakeFetch(full) {
@@ -42,6 +44,32 @@ function makeFetch(log) {
       const hit = WIKI[term];
       const search = hit ? [{ title: hit.title, snippet: 'a <span class="searchmatch">match</span> here' }, { title: 'Other Thing', snippet: 'aside' }] : [];
       return ok({ query: { search } });
+    }
+    // Wikipedia full-text extracts (article())
+    m = /prop=extracts/.test(inner) && /titles=([^&]+)/.exec(inner);
+    if (m) {
+      const title = decodeURIComponent(m[1]);
+      log.push({ at, kind: 'wiki-extract', term: title });
+      const e = byTitle[title];
+      const pages = e
+        ? { '1': { pageid: 1, title: e.title, extract: e.extract, description: e.description, thumbnail: e.thumb ? { source: e.thumb } : undefined } }
+        : { '-1': { missing: '' } };
+      return ok({ query: { pages } });
+    }
+    // Normalized /lookup endpoint (enrichTerm): top-level ?q=, not the ?url= proxy
+    if (full.indexOf('?url=') === -1 && /[?&]q=/.test(full)) {
+      const lm = /[?&]q=([^&]+)/.exec(full);
+      const term = decodeURIComponent(lm[1]).toLowerCase();
+      log.push({ at, kind: 'lookup', term });
+      const e = WIKI[term];
+      const d = WIKT[term];
+      const encyclopedia = e
+        ? { title: e.title, kind: 'standard', description: e.description, summary: e.extract, url: e.page, thumbnail: e.thumb || null, also_see: [] }
+        : { title: null, kind: 'not_found' };
+      const dictionary = d
+        ? { word: term, found: true, senses: Object.keys(d).map(pos => ({ part_of_speech: pos.toLowerCase(), definitions: d[pos].map(x => x.replace(/<[^>]+>/g, '')) })) }
+        : { word: term, found: false, senses: [] };
+      return ok({ query: term, found: encyclopedia.kind === 'standard' || dictionary.found, encyclopedia, dictionary, sources: [] });
     }
     // Wikipedia summary
     m = /\/page\/summary\/(.+)$/.exec(inner);
@@ -193,6 +221,43 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     ok(['hit', 'miss'].includes(results.get('mc').status), 'the second need was actually fetched');
     const askedSoc = log.some(e => e.kind === 'wikt-def' && e.term === 'socialism');
     ok(!askedSoc, 'the skipped need never touched the network');
+  });
+
+  await group('article() — full text for ingestion (chat with Wikipedia)', async () => {
+    log.length = 0;
+    const a = await X.article('socialism');
+    eq(a.status, 'hit', 'article hit');
+    eq(a.payload.title, 'Socialism', 'resolved title');
+    ok(/political philosophy/.test(a.payload.text), 'full extract text carried');
+    ok(a.payload.text.indexOf('intellectual history') !== -1, 'text is the whole article, not just the lead');
+    ok(a.payload.intro && a.payload.intro.length < a.payload.text.length, 'a short intro is derived for the card');
+    eq(a.basis.src, 'article', 'basis stamped src=article');
+    const reqs = log.length;
+    ok(reqs >= 2, 'article is search + extract (two requests)');
+    const b = await X.article('socialism');
+    eq(b.cached, true, 'second article served from the freeze');
+    eq(log.length, reqs, 'a frozen article pays no network');
+    const miss = await X.article('Nonexistent Subject Xyzzy');
+    eq(miss.status, 'miss', 'no search hit → miss, never fabricated');
+    const g = await X.article('Mrs. Mill');
+    eq(g.status, 'gated', 'article honours the private-individual gate');
+  });
+
+  await group('enrichTerm() — the normalized /lookup card', async () => {
+    log.length = 0;
+    const r = await X.enrichTerm('socialism');
+    eq(r.status, 'hit', 'lookup hit');
+    ok(r.payload.encyclopedia && r.payload.encyclopedia.title === 'Socialism', 'encyclopedia carried');
+    ok(r.payload.dictionary && r.payload.dictionary.found, 'dictionary carried');
+    eq(log.filter(e => e.kind === 'lookup').length, 1, 'one normalized server-side call');
+  });
+
+  group('pickQuery() — the salient term from a chat message', () => {
+    eq(X.pickQuery('Who is David Corman?'), 'David Corman', 'name after a wh-question');
+    eq(X.pickQuery('what is socialism?'), 'socialism', 'lowercase topic after a wh-question');
+    eq(X.pickQuery('Tell me about the Nashville Downtown Partnership'), 'Nashville Downtown Partnership', 'capitalized run after a lead-in');
+    eq(X.pickQuery('"quantum entanglement" explained'), 'quantum entanglement', 'a quoted phrase wins');
+    eq(X.pickQuery(''), null, 'empty → null');
   });
 
   await group('rate limiter — calls are spaced by the interval', async () => {

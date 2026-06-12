@@ -18,4 +18,5 @@ import '../docview.jsx';
 import '../rulesets.jsx';
 import '../auditview.jsx';
 import '../graphaudit.jsx';
+import '../settings.jsx';
 import '../app.jsx';

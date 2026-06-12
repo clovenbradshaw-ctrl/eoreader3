@@ -252,4 +252,55 @@ function ReferenceDeskBar({ entities, budget }) {
   );
 }
 
-Object.assign(window, { ReferenceDesk, ReferenceDeskBar });
+/* The card attached under a chat message when Wikipedia enrichment is on. It
+   renders the article that was pulled in — and, crucially, signals that the
+   article was INGESTED into the graph as a citable source (the "chat with
+   Wikipedia" use case): the answer above is grounded in this text, not in a
+   sidecar. Handles the loading / abstain / miss states inline. */
+function ReferenceCard({ data, onOpen }) {
+  if (!data) return null;
+  const term = data.term || data.query || '';
+  const head = (
+    <div className="refcard-head">
+      <Icon name="book" size={13} /> <span className="refcard-title">Wikipedia</span>
+      {term ? <span className="refcard-term">{term}</span> : null}
+      <span className="refcard-src">en.wikipedia.org</span>
+    </div>
+  );
+  if (data.loading) return <div className="refcard">{head}<p className="refdesk-loading">reading Wikipedia for “{term}”…</p></div>;
+  if (data.status === 'disabled') return null;
+  if (data.status === 'gated') return <div className="refcard">{head}<p className="refdesk-note">Suppressed — “{term}” reads as a private individual; the desk does not resolve people against the world.</p></div>;
+  if (data.status === 'error') return <div className="refcard">{head}<p className="refdesk-err">Couldn’t reach Wikipedia. <code>{data.error}</code></p></div>;
+  if (data.status === 'pending') return <div className="refcard">{head}<p className="refdesk-note">No frozen article, and the desk is offline.</p></div>;
+  if (data.status !== 'hit' || !data.payload) return <div className="refcard">{head}<p className="refdesk-placeholder">No Wikipedia article found for “{term}”.</p></div>;
+
+  const p = data.payload;
+  const ing = data.ingested;
+  return (
+    <div className="refcard">
+      {head}
+      <div className="refcard-body">
+        {p.thumbnail ? <img className="refdesk-thumb" alt="" src={p.thumbnail} /> : null}
+        <h4 className="refdesk-headword">{p.url ? <a href={p.url} target="_blank" rel="noopener">{p.title}</a> : p.title}</h4>
+        {p.description ? <p className="refdesk-desc">{p.description}</p> : null}
+        {p.intro ? <p className="refdesk-summary">{p.intro}</p> : null}
+        {p.also_see && p.also_see.length ? (
+          <div className="refdesk-seealso">
+            <div className="refdesk-lbl">Related</div>
+            {p.also_see.slice(0, 4).map((t, i) => <span key={i} className="refcard-rel">{t}</span>)}
+          </div>
+        ) : null}
+      </div>
+      {ing ? (
+        <div className="refcard-ingested">
+          <Icon name="check" size={12} /> Added to the graph as <b>{ing.name}</b> — the answer above is grounded in this article.
+          {onOpen ? <button type="button" className="refcard-open" onClick={() => onOpen(ing.id)}>open</button> : null}
+        </div>
+      ) : (
+        <div className="refdesk-basis">via <code>en.wikipedia.org</code>{data.cached ? ' · cached' : ''}{data.basis && data.basis.fetched_at ? ' · ' + fmtWhen(data.basis.fetched_at) : ''}</div>
+      )}
+    </div>
+  );
+}
+
+Object.assign(window, { ReferenceDesk, ReferenceDeskBar, ReferenceCard });

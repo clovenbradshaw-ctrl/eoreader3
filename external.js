@@ -59,13 +59,14 @@
     backoffMs: 800,       // base backoff; doubles each retry
     budget: 12,           // default max live lookups per prioritised batch
     cacheCap: 400,        // most-recent frozen records kept in the local store
+    lookupEndpoint: null, // the normalized server-side /lookup?q= endpoint (chat enrichment)
     fetchImpl: null,      // injectable; defaults to global fetch
     now: null,            // injectable clock; defaults to Date.now
     setTimer: null,       // injectable timer; defaults to setTimeout
     store: null,          // injectable persistence; defaults to window.EOStore
   };
   function setConfig(patch) { Object.assign(config, patch || {}); return cfg(); }
-  function cfg() { return Object.assign({ proxy: proxyBase(), enabled: !!proxyBase() }, config); }
+  function cfg() { return Object.assign({ proxy: proxyBase(), lookup: lookupBase(), enabled: !!proxyBase() }, config); }
 
   function proxyBase() {
     if (config.proxy != null) return config.proxy || '';
@@ -73,6 +74,18 @@
       return window.EO_REFERENCE_PROXY == null ? '' : String(window.EO_REFERENCE_PROXY);
     }
     return DEFAULT_PROXY;
+  }
+  // The normalized one-call endpoint (the n8n "Lookup (normalize)" node): returns
+  // { query, found, encyclopedia, dictionary, sources } server-side, so the chat
+  // enrichment is a single GET, not the desk's two proxied hops. Defaults to the
+  // same host's /lookup; clear EO_REFERENCE_LOOKUP (or the proxy) to disable.
+  function lookupBase() {
+    if (config.lookupEndpoint != null) return config.lookupEndpoint || '';
+    if (typeof window !== 'undefined' && 'EO_REFERENCE_LOOKUP' in window) {
+      return window.EO_REFERENCE_LOOKUP == null ? '' : String(window.EO_REFERENCE_LOOKUP);
+    }
+    const p = proxyBase();
+    return p ? p.replace(/\/[^/]*$/, '/lookup') : ''; // …/webhook/feed → …/webhook/lookup
   }
   const _timer = (fn, ms) => (config.setTimer || ((f, m) => setTimeout(f, m)))(fn, ms);
   const _fetch = () => config.fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
@@ -249,13 +262,18 @@
   async function rawProxyText(target) {
     const base = proxyBase();
     if (!base) { const e = new Error('reference proxy disabled'); e.disabled = true; throw e; }
+    return rawGet(base + '?url=' + encodeURIComponent(target));
+  }
+  // The actual fetch + transient-retry, on a full URL. Used by both the proxied
+  // desk hops and the direct /lookup endpoint. Throws e.disabled if no fetch.
+  async function rawGet(url) {
     const f = _fetch();
     if (!f) { const e = new Error('no fetch available'); e.disabled = true; throw e; }
     let attempt = 0;
     for (;;) {
       let res;
       try {
-        res = await f(base + '?url=' + encodeURIComponent(target));
+        res = await f(url);
       } catch (netErr) {
         if (attempt++ < config.maxRetries) { await backoff(attempt); continue; }
         throw netErr;
@@ -263,7 +281,7 @@
       if (res.ok) return res.text();
       // 429 / 5xx are transient: back off and retry. 4xx (except 429) are not.
       if ((res.status === 429 || res.status >= 500) && attempt++ < config.maxRetries) { await backoff(attempt); continue; }
-      const e = new Error('proxy returned ' + res.status); e.status = res.status; throw e;
+      const e = new Error('request returned ' + res.status); e.status = res.status; throw e;
     }
   }
   function backoff(attempt) {
@@ -452,6 +470,140 @@
   }
 
   /* ============================================================
+     Chat enrichment — one normalized call to the /lookup endpoint.
+
+     The server-side node returns { query, found, encyclopedia, dictionary,
+     sources } already tag-stripped, so a chat message's reference card is a
+     single rate-limited GET (not the desk's two proxied hops). Same freeze /
+     replay / abstain / gate discipline as lookup().
+     ============================================================ */
+  function normalizeLookup(data) {
+    if (!data || typeof data !== 'object') return null;
+    return {
+      query: data.query || null,
+      found: !!data.found,
+      encyclopedia: data.encyclopedia || null,
+      dictionary: data.dictionary || null,
+      sources: Array.isArray(data.sources) ? data.sources : [],
+    };
+  }
+
+  async function enrichTerm(q, opts) {
+    opts = opts || {};
+    q = String(q == null ? '' : q).trim();
+    if (!q) return { status: 'miss' };
+    if (!opts.allowPrivate && privateIndividual(q, opts.type)) return { status: 'gated', reason: 'private-individual', query: q };
+    const key = 'lookup|' + q.toLowerCase();
+    const mem = await loadCache();
+    if (Object.prototype.hasOwnProperty.call(mem, key)) {
+      const rec = mem[key];
+      return rec.found ? { status: 'hit', query: q, basis: rec.basis, payload: rec.payload, cached: true }
+                       : { status: 'miss', query: q, basis: rec.basis, cached: true };
+    }
+    const base = lookupBase();
+    if (!base || !_fetch()) return { status: 'disabled' };
+    if (opts.replayOnly) return { status: 'pending', query: q };
+    const url = base + (base.indexOf('?') === -1 ? '?' : '&') + 'q=' + encodeURIComponent(q);
+    try {
+      const txt = await scheduler.add(() => rawGet(url), opts.severity || 0);
+      const data = safeJSON(txt);
+      const payload = normalizeLookup(data);
+      const found = !!(payload && payload.found);
+      const basis = { src: 'lookup', term: q, url, fetched_at: new Date().toISOString(), hash: hashTag(txt || ''), schema: SCHEMA };
+      await freeze(key, { found, basis, payload: found ? payload : null });
+      return found ? { status: 'hit', query: q, basis, payload } : { status: 'miss', query: q, basis };
+    } catch (e) {
+      if (e && e.disabled) return { status: 'disabled' };
+      return { status: 'error', error: String((e && e.message) || e), query: q };
+    }
+  }
+
+  /* ============================================================
+     article() — the knowledge-augmentation fetch (chat with Wikipedia).
+
+     For ingesting a real source into the graph, the lead-paragraph summary is
+     too thin. This pulls the FULL plain-text article (search → extracts) so the
+     grounded reader has a whole document to cite. Self-contained on the feed
+     proxy (no /lookup node needed). Rate-limited, cached, gated, abstaining.
+     The text is capped so a parse stays responsive and the freeze stays small.
+     ============================================================ */
+  const ARTICLE_CAP = 24000;
+
+  function normalizeArticle(title, page, hits, fullText) {
+    const t = (page && page.title) || title;
+    const url = 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(t).replace(/ /g, '_'));
+    const text = String(fullText || '').slice(0, ARTICLE_CAP);
+    const intro = (text.split(/\n+/).find(p => p.trim().length > 0) || text.slice(0, 400)).trim();
+    return {
+      title: t, url,
+      description: (page && page.description) || null,
+      thumbnail: (page && page.thumbnail && page.thumbnail.source) || null,
+      text,
+      intro: intro.length > 600 ? intro.slice(0, 600) + '…' : intro,
+      also_see: (hits || []).slice(1, 6).map(h => h.title),
+      typeGuess: guessType((page && page.description) || ''),
+    };
+  }
+
+  async function article(q, opts) {
+    opts = opts || {};
+    q = String(q == null ? '' : q).trim();
+    if (!q) return { status: 'miss' };
+    if (!opts.allowPrivate && privateIndividual(q, opts.type)) return { status: 'gated', reason: 'private-individual', query: q };
+    const key = 'article|' + q.toLowerCase();
+    const mem = await loadCache();
+    if (Object.prototype.hasOwnProperty.call(mem, key)) {
+      const rec = mem[key];
+      return rec.found ? { status: 'hit', query: q, basis: rec.basis, payload: rec.payload, cached: true }
+                       : { status: 'miss', query: q, basis: rec.basis, cached: true };
+    }
+    if (!proxyBase() || !_fetch()) return { status: 'disabled' };
+    if (opts.replayOnly) return { status: 'pending', query: q };
+    try {
+      const searchUrl = 'https://en.wikipedia.org/w/api.php?format=json&action=query&list=search&srlimit=6&srsearch=' + encodeURIComponent(q);
+      const searchTxt = await proxyText(searchUrl, opts.severity || 0);
+      const hits = ((safeJSON(searchTxt) || {}).query || {}).search || [];
+      if (!hits.length) {
+        const basis = { src: 'article', term: q, url: searchUrl, fetched_at: new Date().toISOString(), hash: hashTag(searchTxt || ''), schema: SCHEMA };
+        await freeze(key, { found: false, basis, payload: null });
+        return { status: 'miss', query: q, basis };
+      }
+      const title = hits[0].title;
+      const exUrl = 'https://en.wikipedia.org/w/api.php?format=json&action=query&prop=extracts%7Cdescription%7Cpageimages'
+        + '&explaintext=1&exlimit=1&redirects=1&piprop=thumbnail&pithumbsize=320&titles=' + encodeURIComponent(title);
+      const exTxt = await proxyText(exUrl, opts.severity || 0);
+      const pages = (((safeJSON(exTxt) || {}).query) || {}).pages || null;
+      const page = pages ? pages[Object.keys(pages)[0]] : null;
+      const fullText = page && page.extract ? String(page.extract) : '';
+      const found = !!fullText.trim();
+      const payload = normalizeArticle(title, page, hits, fullText);
+      const basis = { src: 'article', term: q, url: exUrl, fetched_at: new Date().toISOString(), hash: hashTag(exTxt || ''), schema: SCHEMA };
+      await freeze(key, { found, basis, payload: found ? payload : null });
+      return found ? { status: 'hit', query: q, basis, payload } : { status: 'miss', query: q, basis };
+    } catch (e) {
+      if (e && e.disabled) return { status: 'disabled' };
+      return { status: 'error', error: String((e && e.message) || e), query: q };
+    }
+  }
+
+  // Pick the term worth looking up from a free-text chat message: a quoted
+  // phrase, else the longest capitalized run (after stripping a question
+  // lead-in), else the cleaned remainder. Pure — drives the chat enrichment.
+  function pickQuery(text) {
+    let t = String(text == null ? '' : text).trim();
+    if (!t) return null;
+    const quoted = /["“”'’]([^"“”'’]{2,60})["“”'’]/.exec(t);
+    if (quoted && quoted[1].trim()) return quoted[1].trim();
+    t = t.replace(/^(?:tell me about|tell me|explain|define|describe|summari[sz]e|give me|show me)\b[\s,:'-]*/i, '')
+         // strip a RUN of leading question / auxiliary words ("what is", "who was")
+         .replace(/^(?:(?:who|what|which|where|when|why|how|whose|whom|is|are|was|were|do|does|did|can|could|would|should)\b[\s,:'-]*)+/i, '')
+         .replace(/[?.!]+\s*$/, '').trim();
+    const caps = t.match(/\b[A-Z][\w'’-]+(?:\s+(?:of|the|and|de|van|von|du|la|le)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+)*\b/g) || [];
+    if (caps.length) { caps.sort((a, b) => b.length - a.length); return caps[0]; }
+    return t ? t.slice(0, 60).trim() : null;
+  }
+
+  /* ============================================================
      The prioritised, budgeted batch. Spend at most `budget` live lookups on
      the most serious needs; the rest come back `skipped` (abstain). Results
      stream through opts.onResult so the UI can fill in as the rate limiter
@@ -492,14 +644,15 @@
     SCHEMA,
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
+    enrichTerm, article, pickQuery,
     hasConsent, grantConsent, revokeConsent,
     clearCache,
     enabled: () => !!proxyBase() && !!_fetch(),
     // exposed for the test harness / introspection
     _internals: {
       createScheduler, hashTag, stripTags, normalizeWiki, normalizeWiktionary,
-      guessType, classifyOne, privateIndividual, looksAbstract, looksOrg, looksNoise,
-      proxyBase, loadCache, freeze, SOURCES,
+      normalizeLookup, normalizeArticle, guessType, classifyOne, privateIndividual,
+      looksAbstract, looksOrg, looksNoise, proxyBase, lookupBase, loadCache, freeze, SOURCES,
     },
   };
 

@@ -56,14 +56,17 @@ are cached (WebLLM's cache / the CPU model's `useCache`), that re-load
 re-downloads nothing. Set `window.EO_DEBUG = true` in the console to surface
 errors that resilience catches otherwise swallow.
 
-The one deliberate exception is the **reference desk** (`external.js`): when you
-explicitly ask to look up an entity, its *surface form* (e.g. "Nashville
-Downtown Partnership" — never the document text) is sent to Wikipedia and
-Wiktionary through the same proxy the app already uses for conventions. It is
-opt-in (a remembered consent on first use), rate-limited, prioritised, and
-gated against resolving private individuals. Clear `window.EO_REFERENCE_PROXY`
-to disable it and keep the reader strictly local. See
-`docs/external-reference-desk.md`.
+The one deliberate exception is the **reference desk / chat-with-Wikipedia**
+(`external.js`): when you explicitly ask — by clicking an entity's desk, or by
+toggling **Wikipedia** on in the chat composer — a *surface form* or a query
+term (e.g. "Nashville Downtown Partnership" — never the document text) is sent
+to Wikipedia and Wiktionary through the same proxy the app already uses for
+conventions. With the toggle on, the fetched **article is ingested into the
+graph** as a real, citable source and the grounded answer reads and cites it
+(so you can chat with Wikipedia even with no document loaded). It is opt-in (a
+remembered consent), rate-limited, prioritised, and gated against resolving
+private individuals. Clear `window.EO_REFERENCE_PROXY` to disable it and keep
+the reader strictly local. See `docs/external-reference-desk.md`.
 
 ## How it works
 
