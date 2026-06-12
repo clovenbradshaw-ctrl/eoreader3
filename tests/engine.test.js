@@ -561,6 +561,47 @@ group('repair — pushback routes to repair, not retrieval', () => {
   eq(E.repairSignal('so what happens to the helmsman?'), null, '"so <clause>" carries content — reaches the text');
 });
 
+group('continuity probe — a pronoun keeps the conversation\'s hot entity in retrieval', () => {
+  // "who do THEY provide to?" names nothing to retrieve; the hot entity (Skydio)
+  // is folded into the probe so the search keeps the thread the words dropped
+  // (the failure that let "besides MNPD, who?" lose the Skydio-supplies span).
+  eq(E.referringProbe('but besides MNPD who do they provide drones to?', 'Skydio'),
+     'but besides MNPD who do they provide drones to? Skydio', 'a pronoun subject folds in the hot entity');
+  eq(E.referringProbe('who does skydio provide drones to otherwise?', 'Skydio'),
+     'who does skydio provide drones to otherwise?', 'already named — no duplication');
+  eq(E.referringProbe('who runs the drone program', 'Skydio'),
+     'who runs the drone program', 'no referring pronoun — query verbatim');
+  eq(E.referringProbe('what do they do', null), 'what do they do', 'a cold field (null hot) is the parity floor');
+});
+
+group('false-absence guard — a blanket "the page is silent" is a non-answer, not a clean cite', () => {
+  // The motivating trace: "The document does not provide information on who
+  // besides MNPD…" bound CLEAN to an unrelated MNPD span. assertsAbsence catches
+  // the denial shape across the convey-verb family (say/mention/provide/give/
+  // specify/list…) so it routes to the honest hold. A scoped gap or contrastive
+  // partial is a real answer noting one limit, not a blanket denial.
+  ok(E.assertsAbsence('The document does not provide information on who besides MNPD receives drones from Skydio.'), '"does not provide" is an absence');
+  ok(E.assertsAbsence("The document doesn't say who the mayor is."), '"doesn\'t say" is an absence');
+  ok(E.assertsAbsence('There is no information about the budget in the document.'), '"no information about" is an absence');
+  ok(E.assertsAbsence("It doesn't contain any details on the contract."), '"doesn\'t contain any details" is an absence');
+  ok(!E.assertsAbsence('Skydio also supplies the Israeli military and Denver Police.'), 'a positive answer is not an absence');
+  ok(!E.assertsAbsence("The document doesn't name every recipient, but it lists Denver Police and Orlando."), 'a contrastive partial is a real answer');
+  ok(!E.assertsAbsence('It does not specifically mention the contract value.'), 'a scoped ("specifically") gap is not a blanket absence');
+});
+
+group('shape-note hygiene — the editor states the MOVE, never the document', () => {
+  // The note's contract forbids stating doc-facts; a small model slipped a
+  // (false) one in ("The document does not provide this information.") and it
+  // biased the grounded answer. Strip the doc-fact sentence, keep the register.
+  const note = 'Note: The user is seeking clarification on who besides MNPD receives drones from Skydio. The document does not provide this information. A bad answer would be vague or speculative.';
+  const clean = E.sanitizeShapeNote(note);
+  ok(!/does not provide/.test(clean), 'the false doc-fact sentence is stripped');
+  ok(/seeking clarification/.test(clean) && /bad answer/.test(clean), 'the user-move and register sentences are kept');
+  eq(E.sanitizeShapeNote('They want a concise summary. A bad answer would be overly detailed.'),
+     'They want a concise summary. A bad answer would be overly detailed.', 'a register-only note is unchanged');
+  ok(!/is about/.test(E.sanitizeShapeNote('The document is about drones over Nashville.')), 'a bare doc-fact note is stripped');
+});
+
 // Gutenberg texts: header metadata is parsed mechanically (even when the
 // punctuation-free header lines merge into one "sentence"), it rides the
 // notes tier so "who wrote it?" reaches the model with the name in hand,

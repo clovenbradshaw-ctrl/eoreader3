@@ -7288,6 +7288,65 @@ function projectGraph(events, frame = {}) {
       return { kind: 'refinement', content: true };
     return null;
   }
+  // ── Continuity probe: keep the thread a pronoun drops ────────────────────
+  // A follow-up whose subject is a pronoun ("who do THEY provide to?") names
+  // nothing for retrieval to grab, so lexical search keys on whatever else is
+  // in the sentence — often the contrast term ("MNPD") — and the entity the
+  // turn is actually about (the conversation's hot entity, e.g. Skydio) drops
+  // out, taking its evidence span with it. The bind/answer step already gets
+  // the hot entity; this folds it into the RETRIEVAL probe (and thus the graph
+  // walk) so the search keeps the thread. Retrieval-only: the model still sees
+  // the user's real words and resolves the pronoun from the conversation. A
+  // cold field hands hot=null ⇒ the probe is the query verbatim (parity floor).
+  function referringProbe(q, hot) {
+    const query = String(q == null ? '' : q);
+    const h = String(hot == null ? '' : hot).trim();
+    if (!h) return query;
+    const esc = h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp('\\b' + esc + '\\b', 'i').test(query)) return query;   // already named
+    if (/\b(?:they|them|their|theirs|it|its|those|these|he|him|his|she|her|hers)\b/i.test(query))
+      return (query + ' ' + h).trim();
+    return query;
+  }
+  // ── Absence claims: trust them only when the page is actually silent ──────
+  // "The document does not provide that" is a legitimate hold WHEN the page is
+  // silent — and a hallucination when the answer sits in a span the model was
+  // handed but didn't read. The mechanical binder can't tell them apart: it
+  // binds the sentence to whatever shares its words and stamps it grounded, so
+  // a false absence audits CLEAN. assertsAbsence detects the denial SHAPE — the
+  // whole reply saying the page doesn't carry it. A scoped gap ("doesn't list
+  // EVERY city") or a contrastive partial ("doesn't say X, but mentions Y") is
+  // a real answer noting one limit, not a blanket denial, so those are excluded.
+  function assertsAbsence(text) {
+    const t0 = String(text == null ? '' : text);
+    if (t0.trim().length < 4) return false;
+    const t = ' ' + t0.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, ' ').trim() + ' ';
+    if (/\b(?:every|each|all|complete|completely|full|fully|exact|exactly|precise|precisely|specific|specifically|explicitly)\b/.test(t)) return false;
+    if (/\bbut (?:it|the (?:document|page|text|article)) (?:do(?:es)?|did|still|goes|mentions?)\b/.test(t)) return false;
+    const STEM = '(?:say|state|mention|provide|give|specif|nam|list|indicat|includ|contain|offer|tell|cover|address|describ|identif|discuss|detail|answer|explain|elaborat|clarif|show|reveal|note)';
+    if (new RegExp('\\b(?:the )?(?:document|page|text|article|source|passages?|spans?|notes?|it)\\b[^.?!]{0,24}?\\b(?:do|does|did)\\s?n.?t\\s+(?:actually |really |seem to |appear to |explicitly )?' + STEM, 'i').test(t)) return true;
+    if (/\bno (?:information|mention|indication|reference|details?|specifics?|data|record) (?:about|on|regarding|as to|of|concerning|for)\b/i.test(t)) return true;
+    if (/\b(?:do|does|did)\s?n.?t\s+(?:provide|contain|include|offer|have|give|carry)\s+(?:any\s+)?(?:information|details?|mention|specifics?|reference)\b/i.test(t)) return true;
+    return false;
+  }
+  // ── The editor's note states the MOVE, never the document ────────────────
+  // The shape pass is told never to state facts about the document — but a
+  // small model sometimes slips one in ("The document does not provide this
+  // information."), and a stated (often wrong) fact in the note leaks into the
+  // grounded answer as if it were a span. Strip sentences that assert what the
+  // page does or doesn't carry; keep the ones about the user's move and the
+  // register. If that empties the note, an empty note beats a fact-claiming one.
+  function noteStatesDocFact(s) {
+    const t = String(s == null ? '' : s);
+    if (assertsAbsence(t)) return true;
+    return /\bthe (?:document|page|text|article)\b[^.?!]{0,40}?\b(?:says?|states?|mentions?|provides?|describes?|discusses?|covers?|contains?|notes?|lists?|claims?|argues?|reports?|explains?|reveals?|indicates?|shows?|is about|does not|doesn'?t|does)\b/i.test(t);
+  }
+  function sanitizeShapeNote(note) {
+    const n = String(note == null ? '' : note).trim();
+    if (!n) return '';
+    const sents = n.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+    return sents.filter(s => !noteStatesDocFact(s)).join(' ').trim();
+  }
   // The discriminating content terms of a prior REPLY, for a SUPPORT/EVIDENCE
   // repair ("what makes you say that?") — the probe that re-reads the page for
   // what BACKS the reply, since the question itself is anaphoric and carries
@@ -10848,6 +10907,12 @@ function projectGraph(events, frame = {}) {
     // kin asks answered from possessive-kin resolutions ("whose son…?"), the
     // conversational-repair reader, and the across-turn repetition guard
     answerKin, kinRecords, kinAsked, repairSignal, echoesPriorReply,
+    // continuity probe (fold the hot entity into retrieval when the turn leans
+    // on a pronoun), the absence detector (a blanket "the page is silent" reply,
+    // which is a non-answer to route to the honest hold rather than bind clean),
+    // and the shape-note sanitizer (strip sentences where the editor's note
+    // states a document fact)
+    referringProbe, assertsAbsence, sanitizeShapeNote,
     // CONFIRM/DENY: a proposition checked mechanically against the graph
     // (DEF assertions, SIG attribution slots, absence attested with ⊥ receipts),
     // and the abbreviation-aware draft splitter the binders/veto share

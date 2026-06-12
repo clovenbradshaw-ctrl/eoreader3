@@ -134,6 +134,7 @@ function narrateTurn(turn) {
         } else {
           push('Pulled the ' + n + ' most relevant passage' + (n === 1 ? '' : 's') + '.');
         }
+        if (s.folded) push('The question leaned on a pronoun, so I kept what we’d been talking about in the search.');
         break;
       }
       case 'traverse': {

@@ -61,6 +61,7 @@ function AuditStep({ s }) {
     <Line label={s.round ? 'seek ·' + s.round : 'retrieve'} kind="retrieve">
       <div className="aud-dim">k={s.k}{s.task ? ' · ' + s.task : ''} · {(s.hits || []).length} hits{s.engine ? ' · ' + s.engine : ''}{s.round ? ' · round ' + s.round : ''}{s.novelty != null ? ' · novelty ' + s.novelty : ''}{s.covered ? ' · covers ' + s.covered : ''}{s.skipped ? ' · stopped' : ''}</div>
       {s.subquery ? <div className="aud-dim">⟲ sought: {s.subquery}</div> : null}
+      {s.folded ? <div className="aud-dim">↩ folded the conversation’s hot entity into the probe: <span className="aud-cite">{s.folded}</span></div> : null}
       {(s.unseekable && s.unseekable.length) ? <div className="aud-dim">⊘ unseekable (nowhere in the sources): <span className="aud-void">{s.unseekable.join(', ')}</span></div> : null}
       {(s.hits || []).map((h, i) => (
         <div key={i} className="aud-hit"><b className="aud-score">{h.score}</b><span className="aud-cite">s{h.idx}</span><span className="aud-hit-t">{h.text}</span></div>
@@ -76,6 +77,7 @@ function AuditStep({ s }) {
   if (s.t === 'shape') return (
     <Line label="shape" kind="intent">
       {s.note ? <span className="aud-dim">“{s.note}”</span> : <span className="aud-dim">no note (shape pass empty or dropped) — answer pass ran bare</span>}
+      {s.stripped ? <div className="aud-dim">✂ stripped a sentence that stated a document fact (the note carries the move, not the page)</div> : null}
     </Line>
   );
   if (s.t === 'repair') return (

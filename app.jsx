@@ -1204,8 +1204,13 @@ function App() {
       // reasoning-preamble heuristics don't apply here — only raw think tags
       // disqualify a note.
       if (/<\/?think/i.test(note)) note = '';
-      AUD('step', 'shape', { note: note || null, ms: Math.round(performance.now() - t0) });
-      return note;
+      // The note's job is the user's MOVE, never the document's content. A small
+      // model sometimes slips a doc-fact in ("The document does not provide this
+      // information.") — often wrong, and it leaks into the grounded answer as if
+      // it were a span. Strip those sentences at the source; keep the register.
+      const clean = (window.EOEngine.sanitizeShapeNote ? window.EOEngine.sanitizeShapeNote(note) : note);
+      AUD('step', 'shape', { note: clean || null, stripped: clean !== note ? true : undefined, ms: Math.round(performance.now() - t0) });
+      return clean;
     } catch (e) { eoWarn('shape', e); return ''; }
   };
 
@@ -1241,11 +1246,16 @@ function App() {
   // Did the model decline (or leak) instead of answering? A grounded draft
   // that says the material doesn't cover it, or that arrives as raw
   // chain-of-thought (reasoning preamble / think tags the llm layer's
-  // stripping couldn't tag), falls to the mechanical answer.
+  // stripping couldn't tag), falls to the honest hold rather than getting
+  // stamped clean. The absence test is the engine's assertsAbsence (a blanket
+  // "the page is silent" reply, across the full convey-verb family — say,
+  // mention, provide, give, specify, list… — not just the original four), so a
+  // false "the document does not provide that" can no longer bind clean to an
+  // unrelated span. A scoped gap or contrastive partial is NOT an absence.
   const modelDeclined = (full) => {
     const t = String(full == null ? '' : full).trim();
     if (!t || t.length < 3) return true;
-    if (/(passages?|spans?|notes?|document)\s+(?:do|does)\s?n.?t\s+(?:say|mention|cover|answer)/i.test(t)) return true;
+    try { if (window.EOEngine.assertsAbsence && window.EOEngine.assertsAbsence(t)) return true; } catch (e) {}
     try { if (window.EOEngine.looksLeakedReasoning && window.EOEngine.looksLeakedReasoning(t)) return true; } catch (e) {}
     return false;
   };
@@ -1334,17 +1344,25 @@ function App() {
     const wantsBlob = intent === 'summary' || intent === 'who';
     const useSeek = !!(budget && budget.maxSeekRounds > 1 && !hasSemantic && !wantsBlob);
     const task = intent === 'summary' ? 'summary' : 'answer';
+    // CONTINUITY PROBE: a pronoun-subject follow-up ("who do THEY provide to?")
+    // names nothing for retrieval to grab, so the conversation's hot entity —
+    // what the turn is really about — drops out along with its evidence span
+    // (the failure that let "besides MNPD, who?" lose the Skydio list). Fold it
+    // into the RETRIEVAL probe and the graph walk below so the search keeps the
+    // thread; the model still answers the user's own words. A cold field hands
+    // back null ⇒ probeQ === q (the parity floor, and every single-turn ask).
+    const probeQ = window.EOEngine.referringProbe(q, hotEntity());
     let ctx = '', parts = null;
     if (wantsBlob) {
       ctx = window.EOEngine.contextScope(scope, q, 6);
     } else if (hasSemantic) {
       parts = window.EOEngine.partsFromHits(scope, semanticHits);
     } else if (useSeek) {
-      parts = window.EOEngine.partsFromHits(scope, seekContext(scope, q, budget));
+      parts = window.EOEngine.partsFromHits(scope, seekContext(scope, probeQ, budget));
     } else {
-      parts = window.EOEngine.contextPartsScope(scope, q, 6);
+      parts = window.EOEngine.contextPartsScope(scope, probeQ, 6);
     }
-    AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
+    AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, probeQ, 6), folded: probeQ !== q ? probeQ : undefined });
     // GRAPH TRAVERSAL (depth > 1): depth buys graph work, not just more
     // retrieval. Walk out from the entities the question names — the page's
     // assertions, its drawn relations, co-occurrence — and let the walk's
@@ -1353,7 +1371,7 @@ function App() {
     // nodes ⇒ no-op; at the floor graphHops is 0 ⇒ never runs (parity).
     if (budget && budget.graphHops > 0 && task !== 'summary') {
       try {
-        const trav = window.EOEngine.traverseScope(scope, q, budget.graphHops);
+        const trav = window.EOEngine.traverseScope(scope, probeQ, budget.graphHops);
         if (trav) {
           AUD('step', 'traverse', {
             hops: budget.graphHops, entries: trav.entries,
@@ -1378,7 +1396,7 @@ function App() {
     // Associative wandering (Phase 3, deepest depth + embedder): warm in spans the
     // page never lexically connects. No embedder ⇒ nothing kept (graph-hop only).
     if (budget && budget.assocCoupling > 0 && window.EOEmbed && window.EOEmbed.ready()) {
-      const kept = await associateKept(scope, q, budget);
+      const kept = await associateKept(scope, probeQ, budget);
       if (kept.length) {
         if (parts) {
           const add = window.EOEngine.partsFromHits(scope, kept).spans;
