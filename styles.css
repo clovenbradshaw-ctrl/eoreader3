@@ -698,6 +698,23 @@ table.grid .member td:first-child { padding-left: 30px; }
 }
 .sb-upload:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-tint); }
 
+/* upload affordance inside the Documents section: a dashed target that doubles
+   as the empty state and as an "add another" row once docs exist. The whole
+   window already accepts a drop (the veil), so this is the click path. */
+.sb-dropzone {
+  width: 100%; margin: 4px 0 2px; padding: 14px 10px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 3px; text-align: center;
+  border: 1px dashed var(--border-strong); border-radius: var(--r-sm);
+  background: transparent; color: var(--text-2); font-family: inherit;
+  transition: border-color .18s ease, background .18s ease, color .18s ease;
+}
+.sb-dropzone .dz-main { font-size: 12.5px; font-weight: 550; }
+.sb-dropzone .dz-sub { font-size: 11px; color: var(--text-3); }
+.sb-dropzone:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-tint); }
+.sb-dropzone:hover .dz-sub { color: var(--accent-hover); }
+.sb-dropzone.slim { flex-direction: row; justify-content: center; gap: 7px; padding: 8px 10px; }
+.sb-dropzone.slim .dz-main { font-weight: 500; }
+
 /* ============================================================ TOPBAR VIEW SWITCH */
 .view-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-pill); padding: 2px; background: var(--bg-subtle); }
 .view-seg button {
@@ -839,24 +856,58 @@ table.grid .member td:first-child { padding-left: 30px; }
 /* staged-ingest progress banner (existence → structure → significance) */
 .ingest-banner {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
-  z-index: 210; display: flex; align-items: center; gap: 12px;
+  z-index: 210; display: flex; align-items: center; gap: 13px;
   width: min(460px, calc(100vw - 32px));
   background: var(--bg); color: var(--text); border: 1px solid var(--border);
-  border-radius: var(--r); padding: 12px 16px; box-shadow: var(--sh-lg);
-  animation: slideup .2s ease;
+  border-radius: var(--r-lg); padding: 13px 17px; box-shadow: var(--sh-lg);
+  animation: slideup .24s cubic-bezier(.2,.8,.2,1);
+  transition: border-color .35s ease, box-shadow .35s ease;
 }
-.ingest-banner .ib-spin { width: 15px; height: 15px; border-radius: 50%; border: 2px solid var(--accent-tint-2); border-top-color: var(--accent); animation: mlspin .7s linear infinite; flex-shrink: 0; }
+.ingest-banner.easing { border-color: var(--accent-tint-2); }
+/* a calm "breathing" orb instead of a hard spinner — it pulses while reading
+   and slows to a deeper, dimmer breath while easing memory. */
+.ingest-banner .ib-orb {
+  width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; position: relative;
+  background: var(--accent); box-shadow: 0 0 0 0 var(--accent-tint-2);
+  animation: iborb 1.7s ease-in-out infinite;
+}
+.ingest-banner .ib-orb.easing { animation-duration: 2.8s; background: var(--accent-hover); }
 .ingest-banner .ib-main { flex: 1; min-width: 0; }
 .ingest-banner .ib-head { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-2); white-space: nowrap; }
-.ingest-banner .ib-phase { font-family: var(--mono); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); background: var(--accent-tint); border-radius: var(--r-pill); padding: 2px 7px; flex-shrink: 0; }
 .ingest-banner .ib-stage { color: var(--text); font-weight: 550; }
 .ingest-banner .ib-name { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; }
 .ingest-banner .ib-pct { margin-left: auto; font-family: var(--mono); color: var(--accent); flex-shrink: 0; }
-.ingest-banner .ib-bar { height: 5px; background: var(--bg-subtle); border-radius: 999px; margin-top: 8px; overflow: hidden; }
-.ingest-banner .ib-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .2s; }
-.ingest-banner .ib-fill.indet { width: 35%; animation: ibindet 1.1s ease-in-out infinite; }
-@keyframes ibindet { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+.ingest-banner .ib-mem { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--accent-hover); background: var(--accent-tint); border-radius: var(--r-pill); padding: 1px 8px; flex-shrink: 0; }
+.ingest-banner .ib-bar { height: 5px; background: var(--bg-subtle); border-radius: 999px; margin-top: 9px; overflow: hidden; position: relative; }
+.ingest-banner .ib-fill { position: relative; overflow: hidden; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s cubic-bezier(.2,.8,.2,1); }
+/* determinate fill carries a soft travelling sheen so it reads as "working" */
+.ingest-banner .ib-fill::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,.55) 50%, transparent 80%);
+  background-size: 220% 100%; animation: ibsheen 1.6s linear infinite;
+}
+.ingest-banner .ib-fill.indet { position: absolute; left: 0; width: 38%; animation: ibindet 1.25s cubic-bezier(.45,0,.55,1) infinite; }
+.ingest-banner .ib-fill.indet::after { display: none; }
+.ingest-banner .ib-fill.ease { background: var(--accent-hover); }
+/* the three-phase stepper: completed phases settle, the current one pulses */
+.ingest-banner .ib-steps { display: flex; align-items: center; gap: 14px; margin-top: 9px; }
+.ingest-banner .ib-step { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; font-family: var(--mono); letter-spacing: .02em; color: var(--text-3); transition: color .35s ease; }
+.ingest-banner .ib-step .ib-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong); transition: background .35s ease, transform .35s ease; }
+.ingest-banner .ib-step.done { color: var(--text-2); }
+.ingest-banner .ib-step.done .ib-dot { background: var(--accent); }
+.ingest-banner .ib-step.on { color: var(--accent); }
+.ingest-banner .ib-step.on .ib-dot { background: var(--accent); animation: ibpulse 1.5s ease-in-out infinite; }
+@keyframes ibindet { 0% { left: -38%; } 100% { left: 100%; } }
+@keyframes ibsheen { 0% { background-position: 120% 0; } 100% { background-position: -120% 0; } }
+@keyframes iborb { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-tint-2); opacity: .85; } 50% { box-shadow: 0 0 0 6px transparent; opacity: 1; } }
+@keyframes ibpulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 var(--accent-tint-2); } 50% { transform: scale(1.35); box-shadow: 0 0 0 4px transparent; } }
 @keyframes slideup { from { transform: translate(-50%, 10px); opacity: .4; } }
+/* readers who prefer no motion get a steady banner — no pulse, no sheen */
+@media (prefers-reduced-motion: reduce) {
+  .ingest-banner .ib-orb, .ingest-banner .ib-step.on .ib-dot,
+  .ingest-banner .ib-fill::after, .ingest-banner .ib-fill.indet { animation: none; }
+  .ingest-banner .ib-fill.indet { width: 100%; left: 0; }
+}
 
 /* ============================================================ RESPONSIVE / MOBILE
    On phones the sidebar becomes an off-canvas drawer over a backdrop, the body

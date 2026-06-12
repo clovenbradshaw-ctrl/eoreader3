@@ -78,7 +78,15 @@ const INGEST_LABEL = {
   segmenting: 'Splitting into sentences',
   reading: 'Reading the structure',
   projecting: 'Weighing what matters',
+  easing: 'Easing memory — almost there',
 };
+// The three phases of the staged parse, in the medium's own order, shown as a
+// stepper so a long ingest reads as graceful progress rather than a stall.
+const INGEST_PHASES = [
+  { id: 'existence', label: 'Find' },
+  { id: 'structure', label: 'Read' },
+  { id: 'significance', label: 'Weigh' },
+];
 
 function App() {
   const [collapsed, setCollapsed] = useState(false);
@@ -216,7 +224,8 @@ function App() {
         try {
           nd = await window.EOEngine.parseDocument(d._name || d.name, d._text, d.id, (p) => {
             if (tok !== ingestTok.current) return;
-            setIngestStatus({ phase: p.phase, stage: p.stage, pct: p.total ? p.done / p.total : null, name: d.name });
+            setIngestStatus({ phase: p.phase, stage: p.stage, pct: p.total ? p.done / p.total : null, name: d.name,
+              easing: p.stage === 'easing', usedMB: p.usedMB, capMB: p.capMB });
           });
         } catch (e) { eoWarn('re-parse failed for', d.name, e); continue; }
         if (tok !== ingestTok.current) break;
@@ -481,7 +490,8 @@ function App() {
       doc = await window.EOEngine.parseDocument(name, text, id, (p) => {
         if (tok !== ingestTok.current) return;          // superseded — stop reporting
         const pct = p.total ? p.done / p.total : null;
-        setIngestStatus({ phase: p.phase, stage: p.stage, pct, name });
+        setIngestStatus({ phase: p.phase, stage: p.stage, pct, name,
+          easing: p.stage === 'easing', usedMB: p.usedMB, capMB: p.capMB });
       });
     } catch (e) {
       if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
@@ -2055,6 +2065,7 @@ function App() {
 
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)}
         docs={docs} openTabs={openTabs} activeDoc={activeTab} onOpenDoc={openTab}
+        onUpload={() => fileRef.current && fileRef.current.click()}
         chats={chats} activeChat={activeChat} onNewChat={newChat} onSelectChat={selectChat}
         model={model} onModelClick={() => setModelOpen(o => !o)} onRulesClick={() => setRulesOpen(true)}
         enabledRules={enabledRules} modelStatus={modelStatus}
@@ -2131,21 +2142,34 @@ function App() {
           onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />
       ) : null; })()}
       {dragOver && <div className="drop-veil"><div className="drop-card"><Icon name="upload" size={26} /> Drop to read</div></div>}
-      {ingestStatus && (
-        <div className="ingest-banner">
-          <span className="ib-spin" />
-          <div className="ib-main">
-            <div className="ib-head">
-              <span className="ib-phase">{ingestStatus.phase}</span>
-              <span className="ib-stage">{INGEST_LABEL[ingestStatus.stage] || ingestStatus.stage}</span>
-              {ingestStatus.name && <span className="ib-name">· {ingestStatus.name}</span>}
-              {ingestStatus.pct != null && <b className="ib-pct">{Math.round(ingestStatus.pct * 100)}%</b>}
+      {ingestStatus && (() => {
+        const easing = !!ingestStatus.easing;
+        const curIdx = INGEST_PHASES.findIndex(p => p.id === ingestStatus.phase);
+        const indet = easing || ingestStatus.pct == null;
+        return (
+          <div className={'ingest-banner' + (easing ? ' easing' : '')} role="status" aria-live="polite">
+            <span className={'ib-orb' + (easing ? ' easing' : '')} aria-hidden="true" />
+            <div className="ib-main">
+              <div className="ib-head">
+                <span className="ib-stage">{INGEST_LABEL[ingestStatus.stage] || ingestStatus.stage}</span>
+                {ingestStatus.name && <span className="ib-name">· {ingestStatus.name}</span>}
+                {easing && ingestStatus.usedMB != null
+                  ? <span className="ib-mem" title="Holding under the memory ceiling so the tab stays stable">{ingestStatus.usedMB} / {ingestStatus.capMB} MB</span>
+                  : ingestStatus.pct != null && <b className="ib-pct">{Math.round(ingestStatus.pct * 100)}%</b>}
+              </div>
+              <div className="ib-bar"><div className={'ib-fill' + (indet ? ' indet' : '') + (easing ? ' ease' : '')}
+                style={!indet ? { width: Math.round(ingestStatus.pct * 100) + '%' } : undefined} /></div>
+              <div className="ib-steps" aria-hidden="true">
+                {INGEST_PHASES.map((p, i) => (
+                  <span key={p.id} className={'ib-step' + (curIdx > i ? ' done' : curIdx === i ? ' on' : '')}>
+                    <span className="ib-dot" />{p.label}
+                  </span>
+                ))}
+              </div>
             </div>
-            <div className="ib-bar"><div className={'ib-fill' + (ingestStatus.pct == null ? ' indet' : '')}
-              style={ingestStatus.pct != null ? { width: Math.round(ingestStatus.pct * 100) + '%' } : undefined} /></div>
           </div>
-        </div>
-      )}
+        );
+      })()}
       {toast && <div className="toast"><span className="tk"><Icon name="check" size={15} /></span>{toast}</div>}
     </div>
   );
