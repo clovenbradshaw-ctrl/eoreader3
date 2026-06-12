@@ -165,6 +165,26 @@ function AuditStep({ s }) {
       <span className="aud-dim">{s.note || 'phrasing crossed a gap the trace can’t show'}</span>
     </Line>
   );
+  if (s.t === 'relation-gate') return (
+    <Line label="relation gate" kind="veto">
+      <span className="aud-dim">{s.keyed ? <span><b>{s.keyed}</b> claim{s.keyed !== 1 ? 's' : ''} keyed at generation</span> : 'no model-supplied keys'}</span>
+      {(s.held || []).length ? <span> · <b>{s.held.length} held</b> <span className="aud-dim">(key unresolved: {s.held.map(h => 's' + h.key).join(', ')})</span></span> : null}
+      {(s.mismatches || []).length
+        ? (s.mismatches || []).map((m, i) => (
+            <div key={i} className="aud-dim">⇋ <b className="aud-void">{m.kind}</b> · the draft said: <span className="aud-void">{m.claim}</span>{m.edge ? <span> · the page holds: {m.edge}{m.sent != null ? <span> <span className="aud-cite">s{m.sent}</span></span> : null}</span> : null}</div>
+          ))
+        : <span className="aud-dim"> · no relation contradicts its edge</span>}
+    </Line>
+  );
+  if (s.t === 'envelope') return (
+    <Line label="envelope" kind="ground">
+      <span className="aud-dim">{s.checked} cited claim{s.checked !== 1 ? 's' : ''} measured against {s.checked !== 1 ? 'their' : 'its'} own span{s.checked !== 1 ? 's' : ''}</span>
+      <span> · <b>{s.strong || 0}</b> close · <b>{s.impressionistic || 0}</b> impressionistic{s.leaks ? <span> · <b className="aud-void">{s.leaks} leak{s.leaks !== 1 ? 's' : ''}</b></span> : <span> · <b>0</b> leaks</span>}</span>
+      {(s.rows || []).filter(r => r.band !== 'strong').map((r, i) => (
+        <div key={i} className="aud-dim"><span className="aud-cite">s{r.idx}</span> <span className="aud-score">{r.cos}</span> {r.band === 'leak' ? <span className="aud-void">drifted from its own citation</span> : 'impressionistic, not verbatim'}</div>
+      ))}
+    </Line>
+  );
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }
