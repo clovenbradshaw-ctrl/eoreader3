@@ -117,6 +117,67 @@ function conversations() {
   ];
 }
 
+/* ---- the conversation-entry read: anchor-annotated conversations ----
+   Each turn carries `anchor`: the analyst's call of which on-page referent
+   the question turns on — the node the walk SHOULD start from (an array
+   when more than one would do; null when the turn turns on no projected
+   referent). `continues: true` marks anaphoric follow-ups. The anchors
+   score the engine, they are never fed to it. Documents are the
+   entity-rich fixtures (journalism + the binding/narrative set), because
+   an anchor must project as a graph node to be measurable; every anchor
+   below is verified post-parse by the read's build-checks. */
+function anchorDocuments() {
+  return [
+    { id: 'ndp', name: 'NDP.txt', text: NDP },
+    { id: 'dispatch', name: 'dispatch.txt', text: fixture('stalls/dispatch.txt') },
+    { id: 'steward', name: 'steward.txt', text: fixture('binding/steward.txt') },
+    { id: 'veranda', name: 'veranda.txt', text: fixture('binding/veranda.txt') },
+    { id: 'voss', name: 'Voss.txt', text: VOSS },
+  ];
+}
+function anchorConversations() {
+  return [
+    { docId: 'ndp', turns: [
+      { q: 'who is Tom Turner', anchor: 'Tom Turner' },
+      { q: 'tell me more about him', continues: true, anchor: 'Tom Turner' },
+      { q: 'what about his role at the partnership', continues: true, anchor: 'Tom Turner' },
+      { q: 'what does the District Management Corporation do', anchor: 'District Management Corporation' },
+      { q: 'who chairs its board', continues: true, anchor: 'District Management Corporation' },
+      { q: 'who pays the assessment', anchor: 'Nashville Downtown Partnership' },
+      { q: 'has the mayor said anything', anchor: null },
+    ] },
+    { docId: 'dispatch', turns: [
+      { q: 'what did Ruiz say about the harbor', anchor: 'Ruiz' },
+      { q: 'what was her side of it', continues: true, anchor: 'Ruiz' },
+      { q: 'what did Vance argue', anchor: 'Vance' },
+      { q: 'what did he say about the cost', continues: true, anchor: 'Vance' },
+      { q: 'how did the two of them leave after the vote', continues: true, anchor: ['Vance', 'Ruiz'] },
+      { q: 'what did the engineer report', anchor: null },
+    ] },
+    { docId: 'steward', turns: [
+      { q: 'what did Dron say about the grain', anchor: 'Dron' },
+      { q: 'what did he believe about the French', continues: true, anchor: 'Dron' },
+      { q: 'what did Princess Mary decide to do', anchor: 'Princess Mary' },
+      { q: 'who was waiting for her in the storeroom', continues: true, anchor: 'Princess Mary' },
+      { q: 'what did she tell him to say to the peasants', continues: true, anchor: ['Princess Mary', 'Dron'] },
+    ] },
+    { docId: 'veranda', turns: [
+      { q: 'what did Mr. Calloway say about the estate', anchor: 'Mr. Calloway' },
+      { q: 'how long had he handled the family affairs', continues: true, anchor: 'Mr. Calloway' },
+      { q: 'what did Harriet say about selling the house', anchor: 'Harriet' },
+      { q: 'what did she refuse to do', continues: true, anchor: 'Harriet' },
+      { q: 'did the lawyer expect that answer', continues: true, anchor: 'Mr. Calloway' },
+    ] },
+    { docId: 'voss', turns: [
+      { q: 'who is Sefton trying to reach', anchor: 'Sefton' },
+      { q: 'why did he want to row tonight', continues: true, anchor: 'Sefton' },
+      { q: 'what did Edith say about the morning', anchor: 'Edith' },
+      { q: 'what did she think about Marlow', continues: true, anchor: 'Edith' },
+      { q: 'what did the keeper tell him', continues: true, anchor: 'Sefton' },
+    ] },
+  ];
+}
+
 /* ---- read 3: the claims battery ----
    final.text-shaped claims, each a single sentence a model summary could
    ship. `expect` is the analyst's call (used to score the prototype, not
@@ -151,4 +212,4 @@ function claims() {
   ];
 }
 
-module.exports = { NDP, VOSS, documents, conversations, claims, corpus, fixture, CAP };
+module.exports = { NDP, VOSS, documents, conversations, anchorDocuments, anchorConversations, claims, corpus, fixture, CAP };

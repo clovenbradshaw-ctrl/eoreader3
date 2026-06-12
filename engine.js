@@ -9504,7 +9504,8 @@ function projectGraph(events, frame = {}) {
     const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
     const multi = ds.length > 1;
     for (const p of trav.perDoc) {
-      const lines = [`This question turns on ${p.entries.join(', ')}.`];
+      const carried = (p.fieldEntries || []).map(f => f.name);
+      const lines = [`This question turns on ${[...p.entries, ...carried].join(', ')}${carried.length ? ` (${carried.join(', ')} carried by the conversation, not named in this question)` : ''}.`];
       for (const a of p.assertions.slice(0, 4))
         lines.push(`The page asserts: ${a.subject} ${a.path === 'role' ? '' : 'is '}${a.is}` + (a.sent != null ? ` [${multi ? p.docId + ':' + a.sent : 's' + a.sent}]` : '') + '.');
       if (p.edges.length)
@@ -9869,19 +9870,51 @@ function projectGraph(events, frame = {}) {
     };
   }
 
-  function traverseGraph(doc, query, hops = 1) {
+  /* The conversation field as a prior on where the walk starts. An anaphoric
+     follow-up ("what about his role") names almost nothing, so the walk used
+     to read each question as if the conversation had not happened — and died
+     at entry. But the field already holds the anchor hot: the read
+     (tools/predictive/read-conv-entry.js) measured that on 81% of follow-ups
+     whose question does not name the anchor, the anchor is hot at the dial's
+     floor and top-1 by heat. So the hot entities become entry nodes too:
+     the walk starts where the conversation has been, not only where the
+     current sentence points. Top-2 by heat at/above heatFloor, resolved onto
+     THIS doc's graph, never displacing a named entry. At the dial's floor
+     wmHeatFloor is ∞ (and graphHops 0), so parity holds; callers that pass
+     no field get exactly the old walk. */
+  const FIELD_ENTRY_CAP = 2;
+  function fieldEntriesIn(entities, namedKeys, field, heatFloor) {
+    if (!field || !isFinite(heatFloor)) return [];
+    let snap = null;
+    try { snap = (typeof field.snapshot === 'function') ? field.snapshot() : field; } catch (e) { return []; }
+    const out = [];
+    const hot = ((snap && snap.entities) || []).slice().sort((a, b) => b.heat - a.heat);
+    for (const he of hot) {
+      if (out.length >= FIELD_ENTRY_CAP) break;
+      if (!(he.heat >= heatFloor) || !he.key) continue;
+      const ent = entities.find(e => e.key === he.key)
+        || (he.key.length >= 4 ? entities.find(e => _keyWithin(he.key, e.key) || _keyWithin(e.key, he.key)) : null);
+      if (!ent || namedKeys.has(ent.key) || out.some(f => f.entity.key === ent.key)) continue;
+      out.push({ entity: ent, heat: he.heat });
+    }
+    return out;
+  }
+
+  function traverseGraph(doc, query, hops = 1, field = null, heatFloor = Infinity) {
     if (!doc || doc.kind !== 'prose' || !doc._events || !(hops > 0)) return null;
     const { entities } = projectEntities(doc);
     if (!entities.length) return null;
     const entries = namedEntitiesIn(doc, query);
-    if (!entries.length) return null;
+    const carried = fieldEntriesIn(entities, new Set(entries.map(e => e.key)), field, heatFloor);
+    if (!entries.length && !carried.length) return null;
     let edges = [];
     try { edges = projectGraph(doc._events).edges || []; } catch (e) {}
     const defs = assertionsOf(doc);
     const byKey = new Map(entities.map(e => [e.key, e]));
     const walked = new Map();   // key → { entity, hop, via }
     for (const e of entries) walked.set(e.key, { entity: e, hop: 0, via: 'named in the question' });
-    let frontier = entries.map(e => e.key);
+    for (const f of carried) walked.set(f.entity.key, { entity: f.entity, hop: 0, via: `hot in the conversation (heat ${f.heat.toFixed(2)})` });
+    let frontier = [...walked.keys()];
     for (let h = 1; h <= hops && frontier.length; h++) {
       const next = [];
       for (const key of frontier) {
@@ -9933,6 +9966,7 @@ function projectGraph(events, frame = {}) {
       .map(([i, via]) => ({ i, t: doc.sentenceTexts[i], via }));
     return {
       entries: entries.map(e => e.name),
+      fieldEntries: carried.map(f => ({ name: f.entity.name, heat: +f.heat.toFixed(3) })),
       walked: [...walked.values()].filter(w => w.hop > 0).map(w => ({ name: w.entity.name, hop: w.hop, via: w.via })),
       assertions: heldDefs,
       edges: heldEdges,
@@ -9941,16 +9975,21 @@ function projectGraph(events, frame = {}) {
   }
 
   // Traversal folded over the scope, hits tagged per source. Null when no
-  // source's graph carries an entry node for this question.
-  function traverseScope(docs, query, hops = 1) {
+  // source's graph carries an entry node for this question — named in the
+  // question or carried hot by the conversation field.
+  function traverseScope(docs, query, hops = 1, field = null, heatFloor = Infinity) {
     const ds = scopeDocs(docs).filter(d => d.kind !== 'table');
     const perDoc = [];
     for (const d of ds) {
-      let t = null; try { t = traverseGraph(d, query, hops); } catch (e) {}
+      let t = null; try { t = traverseGraph(d, query, hops, field, heatFloor); } catch (e) {}
       if (t) perDoc.push({ docId: d.id, name: d.name, ...t });
     }
     if (!perDoc.length) return null;
-    return { perDoc, entries: [...new Set(perDoc.flatMap(p => p.entries))] };
+    return {
+      perDoc,
+      entries: [...new Set(perDoc.flatMap(p => p.entries))],
+      fieldEntries: [...new Set(perDoc.flatMap(p => (p.fieldEntries || []).map(f => f.name)))],
+    };
   }
 
   // The prompt as the graph speaking. The reading presents itself — what the
@@ -9965,7 +10004,10 @@ function projectGraph(events, frame = {}) {
     const multi = ds.length > 1;
     const head = ['What the reading holds on this question (from the document\'s own graph):'];
     for (const p of trav.perDoc) {
-      const lines = [`- It turns on ${p.entries.join(', ')}.`];
+      // a carried entry is the conversation's anchor, not the question's —
+      // the prompt says so, so the model never mistakes whose focus it is
+      const carried = (p.fieldEntries || []).map(f => f.name);
+      const lines = [`- It turns on ${[...p.entries, ...carried].join(', ')}${carried.length ? ` (${carried.join(', ')} carried by the conversation, not named in this question)` : ''}.`];
       for (const a of p.assertions.slice(0, 4))
         // a role assertion is a verb phrase ("runs the DMC") — no copula
         lines.push(`- The page asserts: ${a.subject} ${a.path === 'role' ? '' : 'is '}${a.is}` + (a.sent != null ? ` [${multi ? p.docId + ':' + a.sent : 's' + a.sent}]` : '') + '.');

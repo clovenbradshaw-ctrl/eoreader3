@@ -858,6 +858,36 @@ group('traversal — scope fold and the reading context (the graph speaking)', (
   eq(E.readingContext([meeting], null, base), base, 'no traversal ⇒ context unchanged (parity)');
 });
 
+// ── The conversation field as a prior on the walk's entries ──
+// Gated by tools/predictive/read-conv-entry.js: on 81% of follow-ups whose
+// question does not name the anchor, the field already holds it hot — so the
+// hot entities seed the walk alongside the named ones.
+group('traversal — the conversation field carries the entry the question does not name', () => {
+  const F = E.conversationField;
+  F.reset();
+  F.deposit({ entities: ['Amos Dresser'] }, 1);
+  F.decayTurn();                                    // heat 0.7 — hot at the dial's floor (0.25)
+  const t = E.traverseGraph(meeting, 'tell me more about him', 2, F, 0.25);
+  ok(t && t.fieldEntries.length === 1 && t.fieldEntries[0].name === 'Amos Dresser',
+     'a question naming nothing on the page walks from the conversation\'s hot entity');
+  eq(t.entries.length, 0, 'the carried entry is never claimed as named in the question');
+  ok(t.assertions.some(a => /white minister/.test(a.is)), 'the page\'s assertion rides the carried walk');
+  eq(E.traverseGraph(meeting, 'tell me more about him', 2), null, 'no field passed ⇒ exactly the old walk (parity)');
+  eq(E.traverseGraph(meeting, 'tell me more about him', 2, F, Infinity), null, 'the dial\'s ∞ heat floor carries nothing (parity)');
+  for (let i = 0; i < 4; i++) F.decayTurn();        // 0.7^5 ≈ 0.17 < 0.25
+  eq(E.traverseGraph(meeting, 'tell me more about him', 2, F, 0.25), null, 'a cooled topic no longer seeds the walk');
+  F.reset(); F.deposit({ entities: ['Amos Dresser'] }, 1); F.decayTurn();
+  const t2 = E.traverseGraph(meeting, 'was Amos Dresser a white minister?', 2, F, 0.25);
+  ok(t2.entries.includes('Amos Dresser') && t2.fieldEntries.length === 0,
+     'a named entry is never doubled as a carried one');
+  const ts = E.traverseScope([meeting], 'what about his role', 1, F, 0.25);
+  ok(ts && ts.fieldEntries.includes('Amos Dresser'), 'scope traversal surfaces the carried entries');
+  const ctx = E.readingContext([meeting], ts, '');
+  ok(/carried by the conversation, not named in this question/.test(ctx),
+     'the prompt names the anchor as the conversation\'s, not the question\'s');
+  F.reset();
+});
+
 // ── The propositional veto: claim against claim ──
 group('assertions — the page\'s own DEF claims, resolved onto entities', () => {
   const defs = E.assertionsOf(meeting);

@@ -1384,19 +1384,24 @@ function App() {
     }
     AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
     // GRAPH TRAVERSAL (depth > 1): depth buys graph work, not just more
-    // retrieval. Walk out from the entities the question names — the page's
-    // assertions, its drawn relations, co-occurrence — and let the walk's
-    // reading head the prompt, with the sentences attached along the walk as
+    // retrieval. Walk out from the entities the question names PLUS the
+    // entities the conversation field holds hot — an anaphoric follow-up
+    // names almost nothing, but the field already carries its anchor, so
+    // the walk starts where the conversation has been. The page's
+    // assertions, its drawn relations, co-occurrence — the walk's reading
+    // heads the prompt, with the sentences attached along the walk as
     // added evidence. The walk itself is recorded as the trace. No entry
-    // nodes ⇒ no-op; at the floor graphHops is 0 ⇒ never runs (parity).
+    // nodes ⇒ no-op; at the floor graphHops is 0 and wmHeatFloor is ∞,
+    // so it never runs and nothing is carried (parity).
     if (budget && budget.graphHops > 0 && task !== 'summary') {
       try {
-        const trav = window.EOEngine.traverseScope(scope, q, budget.graphHops);
+        const trav = window.EOEngine.traverseScope(scope, q, budget.graphHops,
+          window.EOEngine.conversationField, budget.wmHeatFloor);
         if (trav) {
           AUD('step', 'traverse', {
-            hops: budget.graphHops, entries: trav.entries,
+            hops: budget.graphHops, entries: trav.entries, fieldEntries: trav.fieldEntries,
             perDoc: trav.perDoc.map(p => ({
-              docId: p.docId, entries: p.entries, walked: p.walked,
+              docId: p.docId, entries: p.entries, fieldEntries: p.fieldEntries, walked: p.walked,
               assertions: p.assertions.map(a => ({ subject: a.subject, is: a.is, sent: a.sent })),
               edges: p.edges,
               evidence: p.sentences.map(s => ({ idx: s.i, via: s.via, text: s.t })),
