@@ -343,45 +343,104 @@ function GaxEntities({ doc, report, onPick }) {
   );
 }
 
-/* ---------- Graph: assertions, relations, kin — each cited to its span ---------- */
+/* ---------- Graph: assertions, relations, kin — each cited to its span ----------
+   Each list paginates: large prose can produce tens of thousands of relations
+   (every SYN edge between referents), and rendering the whole set in one shot
+   would freeze the tab. The lists stay searchable and the totals are honest,
+   but the DOM only ever holds a bounded slice. */
 function GaxGraphTab({ doc, onPick }) {
   const E = window.EOEngine;
   const asserts = React.useMemo(() => { try { return E.assertionsOf(doc) || []; } catch (e) { return []; } }, [doc]);
   const kin = React.useMemo(() => { try { return E.kinRecords(doc) || []; } catch (e) { return []; } }, [doc]);
   const edges = React.useMemo(() => { try { return (E.graphSnapshot(doc) || {}).edges || []; } catch (e) { return []; } }, [doc]);
+
+  const [qA, setQA] = React.useState('');
+  const [qE, setQE] = React.useState('');
+  const [qK, setQK] = React.useState('');
+
+  const fAsserts = React.useMemo(() => {
+    const ql = qA.trim().toLowerCase();
+    if (!ql) return asserts;
+    return asserts.filter(a => (String(a.subject || '') + ' ' + String(a.is || '') + ' ' + String(a.path || '')).toLowerCase().includes(ql));
+  }, [asserts, qA]);
+  const fEdges = React.useMemo(() => {
+    const ql = qE.trim().toLowerCase();
+    if (!ql) return edges;
+    return edges.filter(e => (String(e.aName || '') + ' ' + String(e.bName || '') + ' ' + String(e.verb || '')).toLowerCase().includes(ql));
+  }, [edges, qE]);
+  const fKin = React.useMemo(() => {
+    const ql = qK.trim().toLowerCase();
+    if (!ql) return kin;
+    return kin.filter(k => (String(k.possessor || '') + ' ' + String(k.kin || '')).toLowerCase().includes(ql));
+  }, [kin, qK]);
+
+  const pA = useGaxPaging(fAsserts, 200);
+  const pE = useGaxPaging(fEdges, 200);
+  const pK = useGaxPaging(fKin, 200);
+
   const span = (i) => (i != null && doc.sentenceTexts ? doc.sentenceTexts[i] : null);
   const Cite = ({ i }) => i == null ? <span className="gax-dim">no span</span>
     : <button className="gax-evidence" onClick={() => onPick(i)} title="show this span in Reading"><span className="gax-sid">s{i}</span> <span className="gax-evidence-t">{span(i)}</span></button>;
+  const More = ({ p }) => p.more
+    ? <div className="gax-more"><button className="mini-btn" onClick={p.showMore}>Show {Math.min(200, p.total - p.shown).toLocaleString()} more</button><span className="gax-dim"> · {p.shown.toLocaleString()} / {p.total.toLocaleString()}</span><button className="mini-btn" onClick={p.all}>all</button></div>
+    : null;
+
   return (
     <div className="gax-pane">
       <div className="gax-sec">
         <h4>Assertions <span className="gax-dim">— what the page states outright (DEF), each shown against its source span</span></h4>
-        {asserts.length ? asserts.map((a, i) => (
-          <div key={i} className="gax-claim">
-            <div className="gax-claim-prop"><b>{a.subject}</b> is {a.is}{a.path ? <span className="gax-dim gax-mono"> · {a.path}</span> : null}</div>
-            <Cite i={a.sent} />
-          </div>
-        )) : <div className="gax-dim">none</div>}
+        {asserts.length ? (
+          <>
+            <div className="gax-toolbar">
+              <input className="gax-search" placeholder="filter assertions…" value={qA} onChange={e => setQA(e.target.value)} aria-label="Filter assertions" />
+              <div style={{ flex: 1 }} />
+              <span className="gax-dim gax-count">{fAsserts.length.toLocaleString()} of {asserts.length.toLocaleString()}</span>
+            </div>
+            {pA.slice.map((a, i) => (
+              <div key={i} className="gax-claim">
+                <div className="gax-claim-prop"><b>{a.subject}</b> is {a.is}{a.path ? <span className="gax-dim gax-mono"> · {a.path}</span> : null}</div>
+                <Cite i={a.sent} />
+              </div>
+            ))}
+            <More p={pA} />
+          </>
+        ) : <div className="gax-dim">none</div>}
       </div>
 
       <div className="gax-sec">
         <h4>Relations <span className="gax-dim">— edges drawn between referents (SYN)</span></h4>
-        <div className="gax-rels">
-          {edges.length ? edges.map((e, i) => (
-            <div key={i} className="gax-rel"><span className="gax-a">{e.aName}</span><span className="gax-verb">{e.verb || '—'}</span><span className="gax-b">{e.bName}</span>{e.weight > 1 && <span className="gax-dim gax-mono">×{e.weight}</span>}</div>
-          )) : <div className="gax-dim">none</div>}
-        </div>
+        {edges.length ? (
+          <>
+            <div className="gax-toolbar">
+              <input className="gax-search" placeholder="filter relations…" value={qE} onChange={e => setQE(e.target.value)} aria-label="Filter relations" />
+              <div style={{ flex: 1 }} />
+              <span className="gax-dim gax-count">{fEdges.length.toLocaleString()} of {edges.length.toLocaleString()}</span>
+            </div>
+            <div className="gax-rels">
+              {pE.slice.map((e, i) => (
+                <div key={i} className="gax-rel"><span className="gax-a">{e.aName}</span><span className="gax-verb">{e.verb || '—'}</span><span className="gax-b">{e.bName}</span>{e.weight > 1 && <span className="gax-dim gax-mono">×{e.weight}</span>}</div>
+              ))}
+            </div>
+            <More p={pE} />
+          </>
+        ) : <div className="gax-dim">none</div>}
       </div>
 
       {kin.length > 0 && (
         <div className="gax-sec">
           <h4>Kin <span className="gax-dim">— possessive kin resolved into the graph (the riskiest inference: a pronoun's owner)</span></h4>
-          {kin.map((k, i) => (
+          <div className="gax-toolbar">
+            <input className="gax-search" placeholder="filter kin…" value={qK} onChange={e => setQK(e.target.value)} aria-label="Filter kin" />
+            <div style={{ flex: 1 }} />
+            <span className="gax-dim gax-count">{fKin.length.toLocaleString()} of {kin.length.toLocaleString()}</span>
+          </div>
+          {pK.slice.map((k, i) => (
             <div key={i} className="gax-claim">
               <div className="gax-claim-prop"><b>{k.possessor}</b>'s {k.kin}{k.anchor ? <span className="gax-dim gax-mono"> · anchor {k.anchor}</span> : null}</div>
               <Cite i={k.sent} />
             </div>
           ))}
+          <More p={pK} />
         </div>
       )}
     </div>
