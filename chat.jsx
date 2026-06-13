@@ -834,7 +834,8 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, o
   const submit = () => { if (value.trim() && !busy) onSend(); };
   // The reference desk needs a configured proxy; in 'off' mode (or with no proxy)
   // the composer shows no Wikipedia control and the chat stays local. In 'auto'/
-  // 'on' the button is a per-message FORCE ("look it up now"), not a global toggle.
+  // 'on' the button is a per-message FORCE — take a stab on Wikipedia now (offer
+  // options for this one message), not a global toggle.
   const canEnrich = !!(window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled());
   const showWiki = canEnrich && wikiMode && wikiMode !== 'off';
   return (
@@ -855,7 +856,7 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, o
         </div>
         {showWiki && onForceEnrich && (
           <button type="button" className={'comp-btn enrich' + (forceEnrich ? ' on' : '')} aria-pressed={!!forceEnrich}
-            title="Look it up on Wikipedia now — fetch an encyclopaedia + dictionary card for this one message, bypassing the gate even in Auto. Sends only the looked-up term (not the document) to Wikipedia & Wiktionary through the proxy."
+            title="Search Wikipedia for this message now — surface matching articles to research, even in Auto (skips the gate, not the choice). Only the search term (not the document) goes to Wikipedia through the proxy; nothing is pulled in until you pick one."
             onClick={onForceEnrich}>
             <Icon name="book" size={15} /> Wikipedia
           </button>

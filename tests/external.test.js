@@ -277,6 +277,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     eq(X.pickQuery('what is socialism?'), 'socialism', 'lowercase topic after a wh-question');
     eq(X.pickQuery('Tell me about the Nashville Downtown Partnership'), 'Nashville Downtown Partnership', 'capitalized run after a lead-in');
     eq(X.pickQuery('"quantum entanglement" explained'), 'quantum entanglement', 'a quoted phrase wins');
+    // a leading acquisition frame is stripped so the stab is the subject
+    eq(X.pickQuery('search for dogs'), 'dogs', 'strips "search for" → the bare subject');
+    eq(X.pickQuery('look up Howard Shore'), 'Howard Shore', 'strips "look up" before the name');
+    eq(X.pickQuery('find the article on socialism'), 'socialism', 'strips "find the article on"');
+    eq(X.pickQuery('google quantum computing'), 'quantum computing', 'strips "google"');
     eq(X.pickQuery(''), null, 'empty → null');
   });
 
