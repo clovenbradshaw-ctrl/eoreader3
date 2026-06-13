@@ -4949,9 +4949,22 @@ async function extractEoGraph(text, onProgress) {
       // keeps them resolves to no site. A closed list (never bare all-caps,
       // which would behead "The DMC is …" to "The").
       targetRaw = targetRaw.replace(/(?:\s+(?:OC|OBE|CBE|MBE|KBE|GBE|CC|CM|CVO|CH|PC|QC|KC|FRS|FRSC|FRSL|Jr\.?|Sr\.?|II|III|IV))+$/, '').trim() || targetRaw;
+      // A subject led by a subordinating conjunction belongs to a
+      // SUBORDINATE clause: "When Shore was 13" states his age at a past
+      // moment, not the standing fact "Shore is 13" — the copula is the
+      // temporal/conditional frame's, not a predication about the subject.
+      // Promoting it is how a mechanical readout answered "what are his
+      // influences?" with "Shore is 13". Rejected outright.
+      if (/^(when|while|whenever|whilst|if|unless|though|although|because|whereas|once|after|before|until|till|as|since)\b/i.test(targetRaw)) return;
       const det = m[3] || '';
       const value = (det + m[4]).trim().replace(/[.,;:!?]+$/, '');
       if (!targetRaw || !value) return;
+      // The copula carries TENSE, and tense is meaning: "Shore was a member
+      // of Lighthouse" (1969–1972, finished) must not flatten to "Shore is a
+      // member". Recorded on the event so the readout renders the page's own
+      // tense instead of a default present.
+      const copula = m[2].toLowerCase();
+      const pastTense = /^(was|were|been|became|remained)$/.test(copula);
       const target = trimNounSpan(targetRaw) || targetRaw;
       if (target === value) return;
       if (/^(there|here|it|this|that)$/i.test(target)) return;
@@ -4979,6 +4992,7 @@ async function extractEoGraph(text, onProgress) {
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
         target, path: det ? 'class' : 'state', value,
+        copula, tense: pastTense ? 'past' : 'present',
         targetHint: hint,
         targetRaw,
         ...sentMeta, src: 'copular',
@@ -9685,12 +9699,79 @@ function projectGraph(events, frame = {}) {
     return all.slice(0, k);
   }
 
-  // The single source a turn is most about — strongest retrieval wins, falling
-  // back to the first that referencesDoc, then the first in scope. This is where
-  // a mechanical (single-doc) answer is grounded.
+  // ── Discourse precedence (B1/B1′): identity outranks lexical surface in
+  // document binding, exactly as the SYN gate makes it outrank overlap one
+  // layer down. The active discourse subject — carried across turns by the
+  // conversation field, handed in as ctx.hotEntity — HOLDS the bound
+  // document. A bare-pronoun follow-up ("what are his inspirations?") and a
+  // follow-up that names the active subject ("what are SHORE's
+  // inspirations?") both stay on the subject's document, even when a content
+  // word ("inspirations") has its strongest lexical home in another source.
+  // Lexical scoring may rank spans WITHIN the held document; it may not move
+  // the document. Switching requires the query to name a DIFFERENT subject —
+  // a genuine new referent — not a content noun whose keyword home is
+  // elsewhere. Inert without an active subject (batch/parity callers pass
+  // none), so unthreaded routing is byte-identical to today.
+  function entityCoRefersName(entity, name) {
+    const b = contentSeqOf(name);
+    if (!b.length) return false;
+    if (namesCoRefer(contentSeqOf(entity.name || entity.key || ''), b, false)) return true;
+    for (const f of (entity.surfaceForms || [])) if (namesCoRefer(contentSeqOf(f), b, false)) return true;
+    return false;
+  }
+  // The scope doc the active subject is recorded in (its entities carry a
+  // cluster co-referent with hotName). Null when no source holds it.
+  function activeSubjectDoc(ds, hotName) {
+    if (!hotName) return null;
+    for (const d of ds) {
+      if (d.kind !== 'prose') continue;
+      let ents = []; try { ents = projectEntities(d).entities || []; } catch (e) { continue; }
+      if (ents.some(e => entityCoRefersName(e, hotName))) return d;
+    }
+    return null;
+  }
+  // The query names a subject that is NOT the active one — a real entity in
+  // some scope doc, not co-referent with hotName. Returns the switch-target
+  // doc, or null (the query introduces no competing subject → the active
+  // subject holds).
+  function queryNamesOtherSubject(ds, q, hotName) {
+    for (const d of ds) {
+      if (d.kind !== 'prose') continue;
+      let ents = []; try { ents = projectEntities(d).entities || []; } catch (e) { continue; }
+      const ql = ' ' + String(q).toLowerCase().replace(/['’]s\b/g, '').replace(/[^a-z0-9'’\- ]+/g, ' ') + ' ';
+      for (const e of ents) {
+        const n = String(e.name).toLowerCase();
+        let named = n.length >= 3 && ql.includes(' ' + n + ' ');
+        if (!named) {
+          const parts = n.split(/\s+/);
+          named = parts.length > 1 && parts.some(p => p.length >= 4 && !GENERIC_VOICE_HEADS.has(p) && ql.includes(' ' + p + ' '));
+        }
+        if (named && !entityCoRefersName(e, hotName)) return d;
+      }
+    }
+    return null;
+  }
+  // Discourse binding for a turn: { doc, hold } when the active subject
+  // holds, { doc, switch } when the query names a different subject, null
+  // when there's no active subject in scope (lexical decides). Pure read.
+  function discourseBinding(ds, q, ctx) {
+    if (!ctx || !ctx.hotEntity) return null;
+    const subjDoc = activeSubjectDoc(ds, ctx.hotEntity);
+    if (!subjDoc) return null;
+    const other = queryNamesOtherSubject(ds, q, ctx.hotEntity);
+    if (other && other.id !== subjDoc.id) return { doc: other, switch: true, from: subjDoc };
+    return { doc: subjDoc, hold: true };
+  }
+
+  // The single source a turn is most about. Discourse precedence first (an
+  // active subject holds its document); only then does lexical surface
+  // decide — strongest retrieval, falling back to the first that
+  // referencesDoc, then the first in scope.
   function routePrimary(docs, query, ctx) {
     const ds = scopeDocs(docs);
     if (!ds.length) return null;
+    const bind = discourseBinding(ds, query, ctx);
+    if (bind) return bind.doc;
     let best = null, bestScore = -1;
     for (const d of ds) {
       if (d.kind === 'table') continue;
@@ -9729,7 +9810,9 @@ function projectGraph(events, frame = {}) {
     const ds = scopeDocs(docs);
     if (!ds.length) return answer(null, query);
     if (ds.length === 1) return answer(ds[0], query, opts);
-    const primary = routePrimary(ds, query) || ds[0];
+    // Discourse precedence holds the active subject's document (opts.hotEntity
+    // is the conversation field's current subject); without it, lexical wins.
+    const primary = routePrimary(ds, query, opts) || ds[0];
     if (primary.kind === 'table') return answer(primary, query);
     const voidWhitelist = new Set(referentsScope(ds, query).antimatter);
     return answer(primary, query, { ...(opts || {}), voidWhitelist });
@@ -9985,6 +10068,9 @@ function projectGraph(events, frame = {}) {
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);
       out.push({ subject, key: ent ? ent.key : k, is: String(ev.value).trim(), path: ev.path,
+                 // tense rides through so the readout renders the page's own
+                 // copula ("was a member", not a flattened "is a member")
+                 tense: ev.tense || 'present', copula: ev.copula || null,
                  sent: ev.sentence_idx != null ? ev.sentence_idx : null });
     }
     return out;
@@ -10107,8 +10193,14 @@ function projectGraph(events, frame = {}) {
       if (!seenCite.has(i)) { seenCite.add(i); cites.push({ docId: doc.id, idx: i }); }
       return ` {{cite:${doc.id}:${i}:s${i}}}`;
     };
+    // The copula is the page's, not a default present: a role reads bare
+    // ("Shore the chairman"), a class/state keeps its tense ("Shore was a
+    // member of Lighthouse").
     const text = da.picked
-      .map(d => `${d.subject} ${d.path === 'role' ? '' : 'is '}${deAnaphorDef(d.is)}` + cite(d.sent) + '.')
+      .map(d => {
+        const cop = d.path === 'role' ? '' : ((d.tense === 'past' ? 'was ' : 'is '));
+        return `${d.subject} ${cop}${deAnaphorDef(d.is)}` + cite(d.sent) + '.';
+      })
       .join(' ');
     return {
       text, cites,
@@ -11398,7 +11490,7 @@ function projectGraph(events, frame = {}) {
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
     ingestionReport, classifyTokens, evaAcrossDocs, textGraph,
     // multi-doc scope: ground a conversation against an explicit set of sources
-    referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
+    referencesScope, retrieveScope, routePrimary, discourseBinding, referentsScope, answerScope,
     contextScope, bindCitationsScope, supportProbeTerms,
     // tiered context for the notes-and-spans grounded prompt
     contextParts, contextPartsScope, partsFromHits, readingNotes,

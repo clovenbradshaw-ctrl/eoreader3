@@ -1011,7 +1011,7 @@ function App() {
       AUD('step', 'confirm', { checks: plan.checks.map(c => ({ subject: c.subject, predicate: c.predicate, negated: !!c.negated, verdict: c.verdict })) });
       try { plan = maybeRetract(scope, plan); } catch (e) { eoWarn('retract', e); }
     }
-    const primary = window.EOEngine.routePrimary(scope, q) || scope[0];
+    const primary = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
     replaceLast({ role: 'assistant', text: plan.text, audit: plan.audit, mode: mode === 'creative' ? 'creative' : 'grounded' });
     if (plan.tableSpec && primary) { openTab(primary.id); setTableSpec({ ...plan.tableSpec }); }
     if (plan.cites && plan.cites.length) setTimeout(() => flashCitation(plan.cites[0].docId, plan.cites[0].idx), 380);
@@ -1490,7 +1490,10 @@ function App() {
     }
     // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
     const wm = buildWMForTurn(scope, q);
-    const primaryDoc = window.EOEngine.routePrimary(scope, q) || scope[0];
+    // Discourse precedence: the active subject (conversation field) holds the
+    // bound document, so a follow-up never silently rebinds to whichever
+    // source has the strongest content-word overlap.
+    const primaryDoc = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
     // IMPRESSION QUERY (the embedder as a fuzzy graph query): alongside the
     // lexical retrieval, query the page by MEANING — gather the semantically
     // related region and hand the model both the verbatim related spans AND the
@@ -2000,7 +2003,7 @@ function App() {
       // reply counts, grounded or not (the trace's "someone's son is mentioned"
       // followed a PLAIN-chat miss, so prevGrounded alone would drop it).
       const hadReply = messages.some(m => m.role === 'assistant' && m.text && !m.typing && !m.loading);
-      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current, hadReply, everGrounded: everGroundedRef.current });
+      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current, hadReply, everGrounded: everGroundedRef.current, hotEntity: hotEntity() });
     } else {
       route = { decision: 'chat', confidence: 'none', reason: 'no-scope' };
     }
