@@ -718,31 +718,91 @@ table.grid .member td:first-child { padding-left: 30px; }
 table.grid tbody tr.clickable { cursor: pointer; }
 table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-/* ── Record side panel (clicked row → drawer with every field) ──
-   Reuses the shared .overlay/.drawer chrome for animation, focus trap, escape
-   key. The body is a one-column list of label → value rows. */
-.record-drawer { width: min(440px, 100vw); }
-.record-drawer .rec-eyebrow {
-  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--text-3); font-weight: 650; margin-bottom: 4px;
+/* ── Saved-view bar (switch / create / edit the table's record views) ── */
+.view-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: 12px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--r);
+  font-size: 12.5px; box-shadow: var(--sh-sm);
 }
-.record-drawer .rec-title {
-  font-family: var(--mono); font-size: 16px; font-weight: 650; letter-spacing: -.005em;
-  margin: 0; word-break: break-word;
+.view-bar .vb-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-3); }
+.view-bar select { font-family: inherit; font-size: 12.5px; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 5px 8px; background: var(--bg-sunken); color: var(--text); }
+.view-bar select:focus { outline: none; border-color: var(--accent); }
+.vb-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 5px 10px; border-radius: var(--r-pill); border: 1px solid var(--border); background: var(--bg); color: var(--text-2); }
+.vb-btn:hover { border-color: var(--border-strong); color: var(--text); }
+.vb-btn.danger:hover { border-color: var(--bad-fg); color: var(--bad-fg); }
+.vb-hint { margin-left: auto; font-size: 11px; color: var(--text-3); font-style: italic; }
+
+/* ── Record view (clicked row → every field) ──
+   Two layouts share one body: a side drawer (default, the shared
+   .overlay/.drawer chrome) and a full-width panel pinned over the table area
+   (.tabledoc is exactly the table region, so the panel is the table's width and
+   never taller than it). Fields render in 1–3 columns per the view. */
+.tabledoc { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.tabledoc > .doc-scroll { min-height: 0; }
+
+.record-drawer { width: min(460px, 100vw); }
+.record-full {
+  position: absolute; inset: 0; z-index: 12; background: var(--bg);
+  display: flex; flex-direction: column; box-shadow: var(--sh-lg);
+  animation: recordrise .2s cubic-bezier(.4,0,.2,1);
 }
+@keyframes recordrise { from { opacity: .35; transform: translateY(8px); } }
+
+.rec-eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); font-weight: 650; margin-bottom: 4px; }
+.rec-eyebrow b { color: var(--text-2); font-weight: 650; }
+.rec-title { font-family: var(--mono); font-size: 16px; font-weight: 650; letter-spacing: -.005em; margin: 0; word-break: break-word; }
+.rec-head-tools { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.rec-tool { width: 30px; height: 30px; border-radius: 7px; border: 0; background: transparent; color: var(--text-3); display: grid; place-items: center; }
+.rec-tool:hover { background: var(--bg-subtle); color: var(--text); }
+
 .record-body { padding: 4px 0 40px; }
-.rec-field {
-  display: grid; grid-template-columns: 130px 1fr; gap: 14px; align-items: baseline;
-  padding: 11px 20px; border-bottom: 1px solid var(--border);
-}
-.rec-field:last-child { border-bottom: 0; }
-.rec-label {
-  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-  color: var(--text-3); font-weight: 650; word-break: break-word;
-}
+.record-fields { display: grid; grid-template-columns: repeat(var(--rec-cols, 1), minmax(0, 1fr)); align-items: start; }
+/* one column keeps the ledger look: label | value rows, separated by rules */
+.record-fields.cols-1 .rec-field { display: grid; grid-template-columns: 130px 1fr; gap: 14px; align-items: baseline; padding: 11px 20px; border-bottom: 1px solid var(--border); }
+.record-fields.cols-1 .rec-field:last-child { border-bottom: 0; }
+/* two or three columns: stacked cards (label over value), no ragged borders */
+.record-fields:not(.cols-1) { gap: 2px 26px; padding: 8px 14px; }
+.record-fields:not(.cols-1) .rec-field { display: block; padding: 9px 6px; border-radius: var(--r-sm); }
+.record-fields:not(.cols-1) .rec-field:hover { background: var(--bg-sunken); }
+.record-fields:not(.cols-1) .rec-field .rec-label { margin-bottom: 5px; }
+.rec-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); font-weight: 650; word-break: break-word; }
 .rec-value { font-size: 13.5px; color: var(--text); word-break: break-word; }
 .rec-value.num { font-family: var(--mono); }
 .rec-empty { color: var(--text-3); }
+.rec-links { border-top: 1px solid var(--border); margin-top: 6px; }
+.rec-section { display: flex; align-items: center; gap: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); font-weight: 650; padding: 13px 20px 4px; }
+
+/* ── View editor (the customize overlay) ── */
+.view-editor { width: min(560px, 100vw); }
+.view-editor-body { padding: 0; }
+.ve-section { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.ve-section h3 { display: flex; align-items: center; gap: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); margin: 0 0 11px; font-weight: 650; }
+.ve-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-pill); overflow: hidden; }
+.ve-seg button { border: 0; background: var(--bg); color: var(--text-2); font-size: 12.5px; padding: 6px 16px; border-left: 1px solid var(--border); }
+.ve-seg button:first-child { border-left: 0; }
+.ve-seg button.on { background: var(--accent); color: #fff; }
+.ve-name { width: 100%; font-family: inherit; font-size: 14px; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 9px 11px; background: var(--bg); color: var(--text); }
+.ve-name:focus { outline: none; border-color: var(--accent); }
+.ve-field-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; }
+.ve-field-row .nm { flex: 1; font-size: 13px; word-break: break-word; }
+.ve-field-row.off .nm { color: var(--text-3); }
+.ve-mini { width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-2); display: grid; place-items: center; font-size: 13px; flex-shrink: 0; }
+.ve-mini:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
+.ve-mini:disabled { opacity: .35; }
+.ve-empty { font-size: 12.5px; color: var(--text-3); font-style: italic; }
+.ve-link { border: 1px solid var(--border); border-radius: var(--r); padding: 11px 12px; margin-bottom: 10px; background: var(--bg-sunken); }
+.ve-link-head { display: flex; gap: 8px; align-items: center; margin-bottom: 9px; }
+.ve-link-head input { flex: 1; font-family: inherit; font-size: 13px; font-weight: 600; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 6px 9px; background: var(--bg); color: var(--text); }
+.ve-link-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.ve-link label { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-3); display: block; margin-bottom: 3px; }
+.ve-link select { width: 100%; font-family: inherit; font-size: 12px; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 6px 7px; background: var(--bg); color: var(--text); }
+.ve-link select:focus, .ve-link-head input:focus { outline: none; border-color: var(--accent); }
+.ve-footer { display: flex; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
+.ve-save { flex: 1; background: var(--accent); color: #fff; border: 0; border-radius: var(--r-sm); padding: 10px; font-size: 13px; font-weight: 600; }
+.ve-save:hover { background: var(--accent-hover); }
+.ve-cancel { background: var(--bg); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 18px; font-size: 13px; }
+.ve-cancel:hover { border-color: var(--border-strong); color: var(--text); }
 
 /* ============================================================ RULES PANEL */
 .overlay { position: fixed; inset: 0; background: rgba(22,24,28,.42); z-index: 90; display: flex; justify-content: flex-end; animation: fade .18s ease; }

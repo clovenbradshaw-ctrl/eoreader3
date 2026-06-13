@@ -22,6 +22,7 @@
   const KV = 'kv';                       // one object store, keyed by name
   const LS_PREFS = 'cleo.prefs';
   const LS_LEDGER = 'cleo.ledger';
+  const LS_VIEWS = 'cleo.views';
 
   let _dbp = null;
   function openDB() {
@@ -82,20 +83,27 @@
   function savePrefs(prefs) { return lsSet(LS_PREFS, prefs || {}); }
   function loadPrefs() { return lsGet(LS_PREFS) || {}; }
 
+  // ---- saved record views (per-table layouts: full/drawer, columns, field
+  //      selection, and cross-table data links). Keyed by a table's column
+  //      signature so the same schema keeps its views across reloads and
+  //      re-imports. A small JSON blob — lives in localStorage like prefs. ----
+  function saveViews(map) { return lsSet(LS_VIEWS, map && typeof map === 'object' ? map : {}); }
+  function loadViews() { const m = lsGet(LS_VIEWS); return m && typeof m === 'object' ? m : {}; }
+
   // ---- learned rules-ledger delta ----
   function saveLedger(events) { return lsSet(LS_LEDGER, Array.isArray(events) ? events : []); }
   function loadLedger() { const e = lsGet(LS_LEDGER); return Array.isArray(e) ? e : []; }
 
   // Wipe everything (used by a "clear local data" affordance / tests).
   async function clearAll() {
-    try { localStorage.removeItem(LS_PREFS); localStorage.removeItem(LS_LEDGER); } catch (e) {}
+    try { localStorage.removeItem(LS_PREFS); localStorage.removeItem(LS_LEDGER); localStorage.removeItem(LS_VIEWS); } catch (e) {}
     try { await kvPut('docs', []); await kvPut('chat', {}); await kvPut('audit', []); } catch (e) {}
   }
 
   window.EOStore = {
     available: typeof indexedDB !== 'undefined',
     saveDocs, loadDocs, saveChat, loadChat, saveAudit, loadAudit,
-    savePrefs, loadPrefs, saveLedger, loadLedger, clearAll,
+    savePrefs, loadPrefs, saveViews, loadViews, saveLedger, loadLedger, clearAll,
     // generic IndexedDB kv (used by the external-knowledge freeze cache). Same
     // defensive contract as the rest: a storage failure resolves undefined/false,
     // never throws into the caller.
