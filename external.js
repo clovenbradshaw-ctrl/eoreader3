@@ -603,6 +603,30 @@
     return t ? t.slice(0, 60).trim() : null;
   }
 
+  // Does this turn EXPLICITLY ask to acquire an article — a lookup verb or an
+  // acquisition frame ("look up / find / pull up / search / get the article on
+  // X", or "who is / what is / tell me about <ProperName>")? A bare factual or
+  // follow-up question ("what are his inspirations?", "when was he born?") is
+  // intent: factual, NOT intent: acquire, and must never reach the fetcher.
+  // The discriminator for the who/what/tell-me frames is a proper-name target
+  // in the ORIGINAL casing — "what are his inspirations" has none, so it is
+  // factual; "who is Howard Shore" does, so it is an acquisition candidate
+  // (still gated downstream by corpus-resolution and the active-subject
+  // follow-up check — naming alone never forces a fetch). Pure.
+  function acquireIntent(text) {
+    const q = String(text == null ? '' : text);
+    const t = ' ' + q.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, ' ').trim() + ' ';
+    // explicit lookup verbs / acquisition frames — these carry their own
+    // acquisition force regardless of a capitalized target
+    if (/\b(look\s+(?:up\b|\w+\s+up\b)|pull\s+up\b|search(?:\s+for)?\b|google\b|wikipedia\b|find\s+(?:me\s+)?(?:the\s+)?(?:article|page|entry|wiki|info|information)\b|get\s+(?:me\s+)?(?:the\s+)?(?:article|page|entry|info|information)\b|read\s+(?:up\s+)?(?:on|about)\b)/.test(t)) return true;
+    // definitional / orientation frames acquire only when they name a proper
+    // subject (a capitalized target after the frame, in the original casing)
+    if (/\b(who\s+(?:is|was|are|were)|what\s+(?:is|are|was|were)|what's|tell me about)\b/.test(t)
+        && /\b(?:who\s+(?:is|was|are|were)|what\s+(?:is|are|was|were)|what's|tell\s+me\s+about)\b[^.?!,;:]*?\b\p{Lu}[\p{Ll}'’-]+/u.test(q))
+      return true;
+    return false;
+  }
+
   /* ============================================================
      Wikipedia article → ingestible document text.
 
@@ -687,7 +711,7 @@
     SCHEMA,
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
-    enrichTerm, article, pickQuery,
+    enrichTerm, article, pickQuery, acquireIntent,
     stripWikiSections, articleDocText,
     hasConsent, grantConsent, revokeConsent,
     clearCache,

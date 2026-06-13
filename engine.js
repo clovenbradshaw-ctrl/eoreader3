@@ -11491,6 +11491,7 @@ function projectGraph(events, frame = {}) {
     ingestionReport, classifyTokens, evaAcrossDocs, textGraph,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, discourseBinding, referentsScope, answerScope,
+    resolveSubjectDoc: activeSubjectDoc,
     contextScope, bindCitationsScope, supportProbeTerms,
     // tiered context for the notes-and-spans grounded prompt
     contextParts, contextPartsScope, partsFromHits, readingNotes,
