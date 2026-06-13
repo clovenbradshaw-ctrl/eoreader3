@@ -252,14 +252,47 @@ function ReferenceDeskBar({ entities, budget }) {
   );
 }
 
+/* The confirmation step before any off-device search: the proposed term, shown
+   editable, with nothing leaving the device until the reader presses Search.
+   The auto-picked subject is often not what they meant, so the term is a plain
+   input they can correct. Search (or Enter) hands the final term up to the app,
+   which performs the fetch + ingest; Dismiss clears the card and fetches nothing. */
+function ConfirmCard({ term, onConfirm, onDismiss }) {
+  const [q, setQ] = React.useState(term || '');
+  const go = () => { const t = (q || '').trim(); if (t && onConfirm) onConfirm(t); };
+  return (
+    <div className="refcard refcard-confirm">
+      <div className="refcard-head">
+        <Icon name="book" size={13} /> <span className="refcard-title">Wikipedia</span>
+        <span className="refcard-src">en.wikipedia.org</span>
+      </div>
+      <div className="refcard-confirm-body">
+        <p className="refcard-confirm-ask">Search Wikipedia and add the article to the graph? Nothing leaves your device until you press Search.</p>
+        <div className="refcard-confirm-field">
+          <Icon name="search" size={13} />
+          <input className="refcard-confirm-input" type="text" value={q} placeholder="search term"
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } }} />
+        </div>
+        <div className="refcard-confirm-actions">
+          <button type="button" className="refdesk-go small" onClick={go} disabled={!(q && q.trim())}>Search Wikipedia</button>
+          <button type="button" className="refcard-dismiss" onClick={() => onDismiss && onDismiss()}>Dismiss</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* The card pinned at the TOP of a chat message's reply when Wikipedia
-   enrichment is on. It renders the article that was pulled in — and, crucially,
-   signals that the article was INGESTED into the graph as a citable source (the
-   "chat with Wikipedia" use case): the answer below is grounded in this text,
-   not in a sidecar. Handles the loading / abstain / miss states inline. */
-function ReferenceCard({ data, onOpen }) {
+   enrichment is on. Before a fetch it shows the proposed search for
+   confirmation (ConfirmCard); once the reader confirms it renders the article
+   that was pulled in and signals that it was INGESTED into the graph as a
+   citable source. Handles the loading / abstain / miss states inline. */
+function ReferenceCard({ data, onConfirm, onDismiss, onOpen }) {
   if (!data) return null;
   const term = data.term || data.query || '';
+  // Before the fetch: the proposed search, awaiting the reader's confirmation.
+  if (data.status === 'confirm') return <ConfirmCard term={term} onConfirm={onConfirm} onDismiss={onDismiss} />;
   const head = (
     <div className="refcard-head">
       <Icon name="book" size={13} /> <span className="refcard-title">Wikipedia</span>
@@ -293,7 +326,7 @@ function ReferenceCard({ data, onOpen }) {
       </div>
       {ing ? (
         <div className="refcard-ingested">
-          <Icon name="check" size={12} /> Added to the graph as <b>{ing.name}</b> — the answer below is grounded in this article.
+          <Icon name="check" size={12} /> Added to the graph as <b>{ing.name}</b> — {ing.deferred ? 'ask a follow-up to ground on it.' : 'the answer below is grounded in this article.'}
           {onOpen ? <button type="button" className="refcard-open" onClick={() => onOpen(ing.id)}>open</button> : null}
         </div>
       ) : (

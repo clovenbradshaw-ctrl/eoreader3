@@ -2202,9 +2202,15 @@ function App() {
     return bw.length > 1 && bw.includes(aw[0]);
   };
 
-  // Pull the salient term's article, attach the card to the live assistant
-  // message (by turnId), and ingest it as a source. Returns the doc for THIS
-  // turn's scope (state updates land for later turns). Best-effort throughout.
+  // Decide whether THIS turn should offer a Wikipedia lookup, and if so surface
+  // the proposed search for confirmation rather than firing it. The acquisition
+  // gates below are unchanged — intent + identity still decide — but a passing
+  // turn now PROPOSES the search (an editable confirm card on the live assistant
+  // message) instead of silently fetching and ingesting an article for whatever
+  // term pickQuery landed on. Nothing leaves the device here; runWikiSearch does
+  // the actual fetch once the reader confirms. Always returns null (no doc
+  // grounds this turn) — the answer reads from the sources already in scope, and
+  // a confirmed article lands as a source for later turns.
   const chatWikipedia = async (q, turnId) => {
     const X = window.EOExternal;
     if (!X || !X.enabled || !X.enabled()) return null;
@@ -2241,8 +2247,27 @@ function App() {
     // Shore is active) must not silently fetch-and-swap; hold and let the turn
     // answer against the active subject rather than pulling a colliding article.
     if (hot && _termCollidesWithActive(term, hot)) return null;
-    try { X.grantConsent && X.grantConsent(); } catch (e) {}
+    // The gates passed: this turn genuinely looks like an acquisition. But the
+    // picked term is often not what the reader meant, so do NOT fetch — surface
+    // the proposed search on the reply and let them confirm or correct it.
+    // Nothing leaves the device here; runWikiSearch fires the request on click.
+    setMessages(ms => ms.map(m => m.turnId === turnId
+      ? { ...m, enrichment: { status: 'confirm', term } } : m));
+    return null;
+  };
+
+  // The confirmed fetch — the reader pressed Search on the confirm card, with
+  // the term as picked or as they corrected it. NOW the off-device request
+  // fires: pull the article, ingest it as a citable source, and stamp the card.
+  // The new source lands for the NEXT turn (React state updates after this
+  // handler), so the card says "ask a follow-up" rather than claiming the reply
+  // already shown used it. Best-effort throughout.
+  const runWikiSearch = async (turnId, rawTerm) => {
+    const X = window.EOExternal;
+    const term = String(rawTerm == null ? '' : rawTerm).trim();
+    if (!X || !X.enabled || !X.enabled() || !term) return null;
     const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
+    try { X.grantConsent && X.grantConsent(); } catch (e) {}
     tag({ loading: true, term });
     let res;
     try { res = await X.article(term); }
@@ -2256,9 +2281,12 @@ function App() {
       const text = buildWikiDocText(res.payload);
       if (text && text.replace(/\s+/g, ' ').trim().length > 60) doc = await ingestExternalSource(name, text);
     }
-    if (doc) { addSource(doc.id); tag({ ...base, ingested: { id: doc.id, name } }); }
+    if (doc) { addSource(doc.id); tag({ ...base, ingested: { id: doc.id, name, deferred: true } }); }
     return doc || null;
   };
+
+  // The reader dismissed the proposed search — clear the card, fetch nothing.
+  const dismissWikiSearch = (turnId) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: null } : m));
 
   // Outer guard around turn routing: a throw in the router itself (or in an
   // awaited router step like the escalation retrieval) must never leave busy
@@ -2330,12 +2358,12 @@ function App() {
     // starts; the turn then proceeds, lagging on its own without holding the UI.
     await new Promise(res => setTimeout(res, 0)); // yield to paint
 
-    // CHAT WITH WIKIPEDIA: when enrichment is on, pull the salient term's
-    // article and INGEST it into the graph as a citable source before reading,
-    // so this turn grounds on it (and cites it), not on a sidecar card. The
-    // freshly-parsed doc is threaded into THIS turn's scope directly (state
-    // updates are stale within the turn); best-effort — a failure degrades to
-    // whatever sources were already in scope.
+    // CHAT WITH WIKIPEDIA: when enrichment is on, consider the salient term and,
+    // if the turn looks like an acquisition, OFFER the lookup on the reply (an
+    // editable confirm card) rather than fetching — the reader confirms what to
+    // search before anything leaves the device. chatWikipedia returns no doc, so
+    // this turn reads from whatever sources are already in scope; a confirmed
+    // article is ingested by runWikiSearch and grounds later turns.
     let injectedDoc = null;
     if (wikiEnrich && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {
       try { injectedDoc = await chatWikipedia(q, turnId); } catch (e) { eoWarn('wiki-chat', e); }
@@ -2676,7 +2704,7 @@ function App() {
             <React.Fragment>
               {showChat && (
                 <div style={{ flexBasis: showDocPane ? (splitRatio * 100) + '%' : '100%', flexGrow: showDocPane ? 0 : 1, flexShrink: 0, display: 'flex', minWidth: 0 }}>
-                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} />
+                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} onConfirmWiki={runWikiSearch} onDismissWiki={dismissWikiSearch} onOpenDoc={openTab} />
                 </div>
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}
