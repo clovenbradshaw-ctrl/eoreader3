@@ -11774,19 +11774,28 @@ function projectGraph(events, frame = {}) {
         if (!entIndex.has(key)) entIndex.set(key, { name: e.name, docId: d.id, mass: e.mass, sents: (e.sents || []).map(i => ({ i, t: d.sentenceTexts[i] })) });
       }
     }
-    // One-hop neighbors of an entity key, from the projected graph edges.
-    const neighborsOf = (key) => {
-      const out = [];
-      for (const d of ds) {
-        if (!d._events) continue;
-        let g; try { g = projectGraph(d._events); } catch (e) { continue; }
-        for (const ed of (g.edges || [])) {
-          if (ed.a === key) out.push({ key: ed.b, name: ed.bName, verb: ed.verb });
-          else if (ed.b === key) out.push({ key: ed.a, name: ed.aName, verb: ed.verb });
+    // Project each doc's graph ONCE up front (projectGraph is O(events) and
+    // expensive on large texts), then index its edges by entity key so the
+    // per-hot-entity neighbour lookup below is O(1). Previously neighborsOf
+    // re-projected every doc for every hot entity, which on a long document
+    // with a populated conversation field locked the main thread long enough
+    // to trigger the browser's "page unresponsive" dialog on the second turn.
+    const neighborsByKey = new Map();
+    for (const d of ds) {
+      if (!d._events) continue;
+      let g; try { g = projectGraph(d._events); } catch (e) { continue; }
+      for (const ed of (g.edges || [])) {
+        if (ed.a) {
+          let arr = neighborsByKey.get(ed.a); if (!arr) { arr = []; neighborsByKey.set(ed.a, arr); }
+          arr.push({ key: ed.b, name: ed.bName, verb: ed.verb });
+        }
+        if (ed.b) {
+          let arr = neighborsByKey.get(ed.b); if (!arr) { arr = []; neighborsByKey.set(ed.b, arr); }
+          arr.push({ key: ed.a, name: ed.aName, verb: ed.verb });
         }
       }
-      return out;
-    };
+    }
+    const neighborsOf = (key) => neighborsByKey.get(key) || [];
     const hot = [], cold = [], hotKeys = new Set();
     for (const e of (snap.entities || [])) {
       const idx = entIndex.get(e.key);
