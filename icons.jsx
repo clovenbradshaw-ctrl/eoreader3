@@ -30,6 +30,8 @@ const ICON_PATHS = {
   arrowleft: '<path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>',
   edit:      '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   activity:  '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  stop:      '<rect x="6" y="6" width="12" height="12" rx="2.5"/>',
+  calculator:'<rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="8" y2="11"/><line x1="12" y1="11" x2="12" y2="11"/><line x1="16" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="8" y2="15"/><line x1="12" y1="15" x2="12" y2="15"/><line x1="16" y1="15" x2="16" y2="15"/>',
 };
 function Icon({ name, size = 18, style, className, strokeWidth = 1.7 }) {
   const p = ICON_PATHS[name];

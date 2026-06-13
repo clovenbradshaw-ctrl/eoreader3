@@ -508,6 +508,16 @@ const READING_RULES = {
     mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
     desc: 'Gutenberg header/license apparatus that frequency-counting surfaces as "characters" ("Project Gutenberg", "Posting Date"). Applied only when the document detects as a Gutenberg text — on any other document, a company named Foundation stays a referent.',
   },
+  gutenberg_start_markers: {
+    value: ['/\\*{3}\\s*START OF TH(?:E|IS) PROJECT GUTENBERG[^*]*\\*{3}/i'],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Regex sources (/pattern/flags form) for the Project Gutenberg START marker — the line that closes the header apparatus and opens the work. The wrapper gate matches one to switch from header to body; the match POSITION also strips the header-and-marker prefix when the marker is fused into the same sentence as the opening prose, so the body that follows is read, not swallowed. Sibling of chrome_patterns: line shapes the reading treats as apparatus, grown the same way. Empty inventory ⇒ no document is wrapper-gated (the parity floor).',
+  },
+  gutenberg_end_markers: {
+    value: ['/\\*{3}\\s*END OF TH(?:E|IS) PROJECT GUTENBERG[^*]*\\*{3}/i'],
+    mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Regex sources (/pattern/flags form) for the Project Gutenberg END marker — the line that closes the work and opens the license footer. The wrapper gate matches one to switch from body to footer; the match POSITION strips the marker-and-footer suffix when it is fused after trailing body prose. Sibling of gutenberg_start_markers. Empty inventory ⇒ the footer boundary is never gated.',
+  },
   place_org_cues: {
     value: ['street','st','road','rd','avenue','ave','lane','river','sea','ocean','bay','gulf','point','cape','harbou?r','island','isle','mount','mountain','valley','county','shire','city','town','village','company','corporation','commission','board','department','office','firm','llc','inc','ltd','co','university','college','school','hospital','church','park','square','hall','palace','castle','bridge','station','hotel','club','society','association','league','union','party','court','bank','press','times','gazette','journal','ministry','bureau','agency','institute','foundation'],
     mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
@@ -895,6 +905,7 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
     GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS,
     KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE,
+    GUTENBERG_START_RES, GUTENBERG_END_RES,
     CHROME_RES, METAPHOR_RES, TYPE_KW_ORG, TYPE_KW_PLACE, TYPE_KW_PERSON,
     NP_GENERIC_HEADS, SITE_GROUND_CUES, SITE_PATTERN_CUES;
 function rebuildLangSets() {
@@ -948,6 +959,10 @@ function rebuildLangSets() {
   TRANSCRIPT_FORMULA = new Set(mod_values('transcript_formula'));
   GENERIC_VOICE_HEADS = new Set(mod_values('generic_voice_heads'));
   GUTENBERG_BOILERPLATE = new Set(mod_values('gutenberg_boilerplate'));
+  // Wrapper-boundary markers (regex sources, like chrome_patterns). Empty
+  // inventory ⇒ matchGutenberg* never fires and no doc is wrapper-gated.
+  GUTENBERG_START_RES = compileConventionRegexes(mod_values('gutenberg_start_markers'));
+  GUTENBERG_END_RES = compileConventionRegexes(mod_values('gutenberg_end_markers'));
   const poc = mod_values('place_org_cues');
   PLACE_ORG_CUE_RE = poc.length ? new RegExp('\\b(' + poc.join('|') + ')\\b', 'i') : /$^/;
   const evam = mod_values('eva_machinery_terms');
@@ -2684,6 +2699,22 @@ function isChrome(text) {
   if (!trimmed) return false;
   for (const rx of CHROME_RES) { rx.lastIndex = 0; if (rx.test(trimmed)) return true; }
   return false;
+}
+// The Project Gutenberg wrapper markers, read from their conventions
+// (gutenberg_start_markers / gutenberg_end_markers) the way isChrome reads
+// chrome_patterns. Each returns the first regex MATCH rather than a bare
+// boolean, so the caller can both test for the marker and use the match
+// position to strip the apparatus fused into the same sentence. Empty
+// inventory ⇒ null (the convention is inert, never throws).
+function matchGutenbergStart(text) {
+  const s = String(text);
+  for (const rx of (GUTENBERG_START_RES || [])) { rx.lastIndex = 0; const m = rx.exec(s); if (m) return m; }
+  return null;
+}
+function matchGutenbergEnd(text) {
+  const s = String(text);
+  for (const rx of (GUTENBERG_END_RES || [])) { rx.lastIndex = 0; const m = rx.exec(s); if (m) return m; }
+  return null;
 }
 
 // ── De-chroming: the document-level verdict over the chrome gate ──────────
@@ -4486,11 +4517,11 @@ async function extractEoGraph(text, onProgress) {
   // bound the actual work; only sentences between them reach an emitter. The
   // header/footer still record into sentenceTexts (indices preserved, header
   // metadata stays readable by docMetadata) but mint nothing — the same
-  // transparency the chrome gate already gives a byline.
-  const GUTENBERG_START_RE = /\*{3}\s*START OF TH(?:E|IS) PROJECT GUTENBERG/i;
-  const GUTENBERG_END_RE = /\*{3}\s*END OF TH(?:E|IS) PROJECT GUTENBERG/i;
-  const _gutenbergWrapped = GUTENBERG_START_RE.test(text);   // only gate a doc that carries the marker
-  const _gutenbergHasEnd = _gutenbergWrapped && GUTENBERG_END_RE.test(text);
+  // transparency the chrome gate already gives a byline. The marker shapes
+  // live in the gutenberg_start_markers / gutenberg_end_markers conventions
+  // (read via matchGutenberg*), grown like any chrome_patterns entry.
+  const _gutenbergWrapped = !!matchGutenbergStart(text);   // only gate a doc that carries the marker
+  const _gutenbergHasEnd = _gutenbergWrapped && !!matchGutenbergEnd(text);
   // 'header' until START, 'body' through the work, 'footer' after END. A
   // non-Gutenberg paste starts in 'body' and is never gated (parity).
   let gutenbergPhase = _gutenbergWrapped ? 'header' : 'body';
@@ -4498,7 +4529,7 @@ async function extractEoGraph(text, onProgress) {
   // kin reader resolves against (a possessive determiner is a local anaphor).
   let prevSentencePersons = new Set();
   const processSentence = (sentDoc, i) => {
-    const sentText = sentDoc.text();
+    let sentText = sentDoc.text();
     sentenceTexts[i] = sentText.trim();
     const sentMeta = { sentence_idx: i };
     currentSentIdx = i;
@@ -4531,14 +4562,51 @@ async function extractEoGraph(text, onProgress) {
     // Header and footer are apparatus, not the work: gate them like chrome so
     // they mint nothing. The START/END marker lines are apparatus too.
     if (gutenbergPhase === 'header') {
-      const wasStart = GUTENBERG_START_RE.test(sentText);
-      chromeIdx.push(i);
-      if (wasStart) gutenbergPhase = 'body';
-      return;
+      const startM = matchGutenbergStart(sentText);
+      if (startM) {
+        gutenbergPhase = 'body';
+        // The START marker can be fused into the same sentence as the opening of
+        // the work when the source lacks a clean break after the marker line
+        // (no blank line, the splitter merges marker + first prose). Chroming the
+        // whole sentence then SWALLOWS the body that follows the marker — the
+        // first lines of the actual work go dark and never reach retrieval
+        // ("hits 0" on a doc whose body is plainly present). So: strip the
+        // header-and-marker prefix (everything up to and including the matched
+        // marker) and, if real prose remains after it, let the sentence fall
+        // through to the emitters on that remainder. Only chrome it when nothing
+        // but apparatus is left.
+        const afterMarker = sentText.slice(startM.index + startM[0].length).trim();
+        if (afterMarker && afterMarker.length >= 8 && !isChrome(afterMarker)) {
+          // Re-point this sentence's text at the body remainder for extraction.
+          // sentenceTexts[i] keeps the verbatim line (display/index unchanged);
+          // the emitters below read `sentText`, so narrow that to the prose.
+          sentText = afterMarker;
+          currentSentText = afterMarker;
+          // fall through to chrome gate + emitters
+        } else {
+          chromeIdx.push(i);
+          return;
+        }
+      } else {
+        chromeIdx.push(i);
+        return;
+      }
     }
-    if (gutenbergPhase === 'footer') { chromeIdx.push(i); return; }
-    if (_gutenbergHasEnd && GUTENBERG_END_RE.test(sentText)) {
-      gutenbergPhase = 'footer'; chromeIdx.push(i); return;
+    else if (gutenbergPhase === 'footer') { chromeIdx.push(i); return; }
+    const endM = (gutenbergPhase === 'body' && _gutenbergHasEnd) ? matchGutenbergEnd(sentText) : null;
+    if (endM) {
+      // Mirror of the START fusion: body prose can be fused before a glued END
+      // marker. Keep the prose that precedes the marker (everything up to the
+      // match), drop the marker-and-footer apparatus that follows.
+      const beforeMarker = sentText.slice(0, endM.index).trim();
+      gutenbergPhase = 'footer';
+      if (beforeMarker && beforeMarker.length >= 8 && !isChrome(beforeMarker)) {
+        sentText = beforeMarker;
+        currentSentText = beforeMarker;
+        // fall through to read the trailing body prose
+      } else {
+        chromeIdx.push(i); return;
+      }
     }
 
     if (isChrome(sentText)) { chromeIdx.push(i); return; }
@@ -8030,8 +8098,11 @@ function projectGraph(events, frame = {}) {
       : entities.filter(e => e.type !== 'place' && e.type !== 'org');
     const list = (ppl.length ? ppl : entities).slice(0, 8);
     if (!list.length) return { text: 'I didn’t find any named people in this document.', audit: { status: 'notes', grounded: true, covers: '1/1', stable: true, note: 'No entities surfaced under the current rules.' } };
-    const text = 'The figures who appear most often: ' + list.map(e => `${e.name} (${e.raw}) {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`).join(', ') + '.';
-    return { text, cites: list.map(e => ({ docId: doc.id, idx: e.sents[0] })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Counted directly from the document’s mentions — no model involved.' } };
+    // The prose renders the names plainly; the mention counts are bookkeeping,
+    // so they ride in the audit note (the receipt), never glued onto the names.
+    const figs = list.map(e => `${e.name} {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`);
+    const text = 'The figures who appear most often: ' + (figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]) + '.';
+    return { text, cites: list.map(e => ({ docId: doc.id, idx: e.sents[0] })), audit: { status: 'clean', grounded: true, covers: '1/1', stable: true, note: 'Counted directly from the document’s mentions (' + list.map(e => `${e.name} ×${e.raw}`).join(', ') + ') — no model involved.' } };
   }
   // ── The graph's portrait ──────────────────────────────────────────
   // A summary already exists in the graph, unstated: which sites carry the

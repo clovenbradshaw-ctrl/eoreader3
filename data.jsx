@@ -25,6 +25,14 @@ const MODELS = [
   { id: 'qwen-7',    name: 'Qwen2.5 7B',   detail: '~5.1 GB · needs 8 GB GPU',          mlc: 'Qwen2.5-7B-Instruct-q4f16_1-MLC' },
   { id: 'qwen3-8',   name: 'Qwen3 8B',     detail: '~5.7 GB · newest · needs 8 GB GPU', mlc: 'Qwen3-8B-q4f16_1-MLC' },
   { id: 'gemma2-9',  name: 'Gemma 2 9B',   detail: '~6.4 GB · highest quality',         mlc: 'gemma-2-9b-it-q4f16_1-MLC' },
+  // on-device CPU · llama.cpp via WebAssembly (wllama) — NO WebGPU required, so
+  // these run where the GPU models can't (Firefox/Safari) and stand in as the
+  // automatic fallback when a GPU model stalls. Slower than the GPU tier, but
+  // works anywhere; the GGUF downloads once from Hugging Face and is cached. The
+  // `provider:'wllama'` + `wllama:` key routes them to the CPU backend in llm.js.
+  { id: 'cpu-smol-360', name: 'SmolLM2 360M', detail: '~270 MB · CPU · fastest',   provider: 'wllama', mlc: 'wllama:smollm2-360m' },
+  { id: 'cpu-qwen-05',  name: 'Qwen2.5 0.5B', detail: '~400 MB · CPU · balanced',  provider: 'wllama', mlc: 'wllama:qwen25-05b' },
+  { id: 'cpu-llama-1',  name: 'Llama 3.2 1B', detail: '~800 MB · CPU · strongest', provider: 'wllama', mlc: 'wllama:llama32-1b' },
   // cloud · Anthropic (Claude) — needs an API key, runs no download, and works
   // without WebGPU. The `mlc` key carries an 'anthropic:' prefix so llm.js
   // routes it to the Claude API; the value after the colon is the exact model id.

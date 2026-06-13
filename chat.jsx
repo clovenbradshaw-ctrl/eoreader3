@@ -109,7 +109,7 @@ function narrateTurn(turn) {
         else if (s.primary) push('Focused on “' + s.primary.name + '” as the source to read.');
         break;
       case 'intent':
-        push(s.intent === 'who' ? 'Took it as a “who appears” question — phrased by the model over the cast, with the exact mention-count kept as the mechanical reading.'
+        push(s.intent === 'who' ? 'Took it as a “who appears” question — phrased by the model over the cast, with the exact mention-counts kept in the mechanical reading.'
           : s.intent === 'summary' ? 'Took it as a request to summarize.'
           : 'Took it as a factual question.');
         break;
@@ -161,6 +161,12 @@ function narrateTurn(turn) {
         else if (draft) push('Drafted an answer in its own words:', draft);
         break;
       }
+      case 'compute':
+        push(s.ok
+          ? 'Ran Python locally over the table' + (s.durationMs != null ? ' (' + fmtMs(s.durationMs) + ')' : '') + ' and used its result — the code and output are recorded below.'
+          : 'Ran Python locally over the table, but it returned no usable result' + (s.stderr ? ' (' + String(s.stderr).split('\n').pop() + ')' : '') + '.',
+          s.code != null ? String(s.code) : undefined);
+        break;
       case 'veto':
         if (s.decision === 'model')
           push('Checked the draft against the document — every name and claim binds to a passage — so I kept it' + (s.boundCovers ? ' (covers ' + s.boundCovers + ').' : '.'));
@@ -252,7 +258,8 @@ function narrateTurn(turn) {
   const f = turn.final;
   if (f && f.engine) {
     const modelName = (turn.model && turn.model.name) || 'the local model';
-    push(/mechanical/.test(f.engine) ? 'Final answer: the document’s exact mechanical reading.'
+    push(/stopped/.test(f.engine) ? 'Stopped — you interrupted the reply before it finished.'
+      : /mechanical/.test(f.engine) ? 'Final answer: the document’s exact mechanical reading.'
       : /flag/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', kept but flagged — the page’s exact mechanical reading is one click away.'
       : /caveat/.test(f.engine) ? 'Final answer: the model’s phrasing, kept with unverified terms struck and citations bound.'
       : /model/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', with citations bound to the document.'
@@ -354,6 +361,94 @@ function MechanicalReading({ data, onCite }) {
   );
 }
 
+/* ── "Show computation" disclosure ────────────────────────────────────────
+   A computed answer must let the human see the column names and operations it
+   came from — in this domain a confidently wrong number is worse than no
+   answer. This surfaces the executed Python and its raw result one tap away,
+   beside the audit's glass-box trace. Reuses the same collapsible shape as the
+   mechanical-reading panel; no new visual language. */
+function ComputationPanel({ data }) {
+  const [open, setOpen] = React.useState(false);
+  if (!data || !data.calls || !data.calls.length) return null;
+  return (
+    <div className={'mech compute' + (open ? ' open' : '')}>
+      <button type="button" className="mech-toggle" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <Icon name="table" size={13} className="mech-ico" />
+        <span className="mech-label">Show computation{data.calls.length > 1 ? ' (' + data.calls.length + ' runs)' : ''}</span>
+        <Icon name="chevron" size={13} className={'mech-chev' + (open ? ' open' : '')} />
+      </button>
+      {open && (
+        <div className="mech-body">
+          {data.calls.map((c, i) => (
+            <div key={i} className="compute-run">
+              <div className="raw-role">Python{c.durationMs != null ? ' · ' + c.durationMs + 'ms' : ''}{c.ok ? '' : ' · error'}</div>
+              <pre className="raw-pre">{c.code || '∅'}</pre>
+              {c.stdout ? <React.Fragment><div className="raw-role out">stdout</div><pre className="raw-pre">{c.stdout}</pre></React.Fragment> : null}
+              <div className="raw-role out">{c.ok ? 'result' : 'error'}</div>
+              <pre className="raw-pre">{c.ok ? (c.result || c.stdout || '∅') : (c.stderr || 'failed')}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── "Show the math" disclosure ───────────────────────────────────────────
+   The auditable calculator. The answer above is the result; this panel is the
+   glass box for it: the formula as typed, then every figure it used. A figure
+   that also appears in an open source carries a citation chip — click it to
+   jump to the exact line, the same as any other citation — so the reader can
+   confirm each input came from the right place. (That is the only kind of math
+   error an evaluator can't catch: right arithmetic over a wrong number.) We
+   show the operands and their sources, and the full-precision value when the
+   display was rounded — but no "verified ✓": the arithmetic is correct by
+   construction, so a checkmark there would reassure about the wrong thing. */
+function WorkedMath({ data, onCite }) {
+  const [open, setOpen] = React.useState(false);
+  if (!data) return null;
+  const ops = data.operands || [];
+  const linked = (data.cites || []).length;
+  return (
+    <div className={'mech calc' + (open ? ' open' : '')}>
+      <button type="button" className="mech-toggle" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <Icon name="calculator" size={13} className="mech-ico" />
+        <span className="mech-label">Show the math</span>
+        <Icon name="chevron" size={13} className={'mech-chev' + (open ? ' open' : '')} />
+      </button>
+      {open && (
+        <div className="mech-body">
+          <div className="calc-formula"><code>{data.shown} = {data.display}</code></div>
+          {ops.length > 0 && (
+            <div className="calc-ops">
+              {ops.map((op, i) => (
+                <div key={i} className="calc-op">
+                  <span className="calc-op-val">{op.raw}</span>
+                  {op.cite
+                    ? <React.Fragment>
+                        <button type="button" className="cite" title={'Jump to s' + op.cite.idx + ' in the document'}
+                          onClick={() => onCite(op.cite.docId, op.cite.idx)}>s{op.cite.idx}</button>
+                        <span className="calc-op-src">{op.cite.text}</span>
+                      </React.Fragment>
+                    : <span className="calc-op-lit" title="A literal in your expression — not from a document">literal</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          {data.exact && data.exact !== data.display && !data.isUnit && (
+            <div className="calc-exact">exact: <code>{data.exact}</code></div>
+          )}
+          <div className="calc-note">
+            {linked
+              ? linked + ' of ' + ops.length + ' figures link to the document above — click each to check it came from the right place. math.js did the arithmetic; the model didn’t.'
+              : 'math.js evaluated this deterministically — the model didn’t do the arithmetic.'}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Per-message render guard ──────────────────────────────────────────────
    A render error inside ONE message (an unexpected audit/marker shape from a
    model draft, a malformed citation, a content edge case) used to throw all
@@ -420,6 +515,16 @@ function Message({ msg, onCite }) {
                     <div className="ml-row"><span className="ml-spin" /> Connecting to {msg.loadName || 'Claude'}…</div>
                     <div className="ml-note">Over the Anthropic API — nothing downloads to your device; your key stays in this browser.</div>
                   </React.Fragment>
+                // The on-device CPU model (wllama): it DOES download once and cache,
+                // but it runs on the CPU via WebAssembly, not the GPU — so the note
+                // says so. The progress bar is the same download progress.
+                : msg.loadCpu
+                ? <React.Fragment>
+                    <div className="ml-row"><span className="ml-spin" /> Loading {msg.loadName || 'on-device model'} on the CPU… <b>{Math.round((msg.loadPct || 0) * 100)}%</b></div>
+                    <div className="ml-bar"><div className="ml-fill" style={{ width: Math.round((msg.loadPct || 0) * 100) + '%' }} /></div>
+                    {msg.loadText && <div className="ml-status">{msg.loadText}</div>}
+                    <div className="ml-note">First time only — runs entirely on your CPU (no GPU needed), downloads once, then cached on your device.</div>
+                  </React.Fragment>
                 : <React.Fragment>
                     <div className="ml-row"><span className="ml-spin" /> Loading {msg.loadName || 'local model'}… <b>{Math.round((msg.loadPct || 0) * 100)}%</b></div>
                     <div className="ml-bar"><div className="ml-fill" style={{ width: Math.round((msg.loadPct || 0) * 100) + '%' }} /></div>
@@ -429,10 +534,16 @@ function Message({ msg, onCite }) {
             </div>
           : msg.typing ? <div className="typing"><span /><span /><span /></div>
           : <React.Fragment>
-              {renderAnswer(msg.text, onCite)}
+              {msg.interrupted && !(msg.text && String(msg.text).trim())
+                ? <p className="stopped-empty">Stopped before any reply.</p>
+                : renderAnswer(msg.text, onCite)}
+              {/* a user interrupt: the partial above is what streamed before Stop */}
+              {msg.interrupted && <div className="stopped-note">⏹ Stopped — you interrupted this reply{(msg.text && String(msg.text).trim()) ? '; the text above is as far as it got' : ''}.</div>}
               {/* a retraction outranks the badge the answer originally earned */}
               {msg.retracted && <div className="retract-note">⊘ Retracted — a later check against the page found a claim here unsupported.</div>}
-              <AuditBadge audit={msg.audit} />
+              {!msg.interrupted && <AuditBadge audit={msg.audit} />}
+              {msg.compute && <ComputationPanel data={msg.compute} />}
+              {msg.calc && <WorkedMath data={msg.calc} onCite={onCite} />}
               {msg.mechanical && <MechanicalReading data={msg.mechanical} onCite={onCite} />}
             </React.Fragment>}
         {msg.enrichment && window.ReferenceCard && <window.ReferenceCard data={msg.enrichment} />}
@@ -480,7 +591,7 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, enrich, onToggleEnrich }) {
+function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, enrich, onToggleEnrich }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
@@ -510,7 +621,9 @@ function Composer({ value, onChange, onSend, mode, onMode, onAttach, busy, place
           </button>
         )}
         <div className="comp-spacer" />
-        <button className="send-btn" aria-label="Send message" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>
+        {generating
+          ? <button className="send-btn stop" aria-label="Stop generating" title="Stop generating" onClick={onStop}><Icon name="stop" size={15} /></button>
+          : <button className="send-btn" aria-label="Send message" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>}
       </div>
     </div>
   );
@@ -571,4 +684,4 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
   );
 }
 
-Object.assign(window, { ChatPane, Hero, Composer, Message, MessageBoundary, AuditBadge, MechanicalReading, renderAnswer, ThinkingBlock, narrateTurn });
+Object.assign(window, { ChatPane, Hero, Composer, Message, MessageBoundary, AuditBadge, MechanicalReading, ComputationPanel, renderAnswer, ThinkingBlock, narrateTurn });

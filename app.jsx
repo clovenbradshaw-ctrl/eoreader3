@@ -15,6 +15,40 @@ if (typeof window !== 'undefined') window.eoWarn = eoWarn;
 // and no-ops cleanly when it isn't. Keeps the call sites in the chat path terse.
 const AUD = (m, ...a) => { try { const A = window.EOAudit; return A && A[m] ? A[m](...a) : undefined; } catch (e) { eoWarn('audit', m, e); } };
 const auditScope = (scope) => (scope || []).map(d => ({ id: d.id, name: d.name, kind: d.kind }));
+
+// ---- computational grounding helpers (pyodide.js) ----
+// A table doc keeps no raw CSV (the parser returns columns + rows); rebuild it
+// faithfully so Python reads the same data the user sees, entirely on-device.
+const csvCell = (v) => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+const tableToCSV = (doc) => {
+  const cols = doc.columns || [];
+  const lines = [cols.map(csvCell).join(',')];
+  for (const r of (doc.rows || [])) lines.push(cols.map(c => csvCell(r[c])).join(','));
+  return lines.join('\n');
+};
+// A safe, stable filename for the in-FS CSV the model's code will read.
+const tableSlug = (doc) => (String(doc.name || 'data').replace(/\.[^.]*$/, '').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'data') + '.csv';
+// The SCHEMA the model needs to write code — column names, inferred types, and a
+// few sample rows. On the Claude path this (not the full table) is what travels:
+// the code runs locally over the whole file, but the model only sees the shape.
+const tableSchemaText = (doc, fileName) => {
+  const cols = doc.columns || [];
+  const typeOf = (c) => (doc.money || []).includes(c) ? 'money' : (doc.numeric || []).includes(c) ? 'number'
+    : (doc.date || []).includes(c) ? 'date' : 'text';
+  const colLines = cols.map(c => '  - ' + c + ' (' + typeOf(c) + ')').join('\n');
+  const sample = (doc.rows || []).slice(0, 5);
+  const sampleCSV = [cols.join(',')].concat(sample.map(r => cols.map(c => csvCell(r[c])).join(','))).join('\n');
+  return 'A CSV file named "' + fileName + '" is available in the working directory (read it with pandas: pd.read_csv("' + fileName + '")).\n'
+    + 'It has ' + (doc.rows || []).length + ' rows and these columns:\n' + colLines
+    + '\n\nThe first few rows:\n' + sampleCSV;
+};
+// Pull the first fenced Python block out of a local model's reply, mechanically
+// (the rest of Cleon extracts structure by parsing, never by trusting the model
+// to self-report). Empty string when there is no block.
+const extractPyFence = (text) => {
+  const m = /```(?:python|py)?[ \t]*\r?\n([\s\S]*?)```/i.exec(String(text || ''));
+  return m ? m[1].trim() : '';
+};
 // Re-run the (deterministic, cheap) scope retrieval purely to capture the scored
 // hits for the trace — the engine stays untouched, so this never changes routing.
 const auditHits = (scope, q, k = 6) => {
@@ -60,12 +94,29 @@ let _uid = 0; const uid = (p) => p + '-' + (++_uid);
 // restored id so a new upload this session can't collide with a stored one.
 const bumpUid = (ids) => { for (const id of (ids || [])) { const m = String(id).match(/-(\d+)$/); if (m) _uid = Math.max(_uid, parseInt(m[1], 10)); } };
 
+// The on-device CPU (wllama) model used as the automatic fallback: the MODELS
+// entry whose key matches EOLLM.fallbackKey(). It's the local path that still
+// runs when there's no WebGPU and when a GPU model stalls/fails.
+const cpuFallbackModel = () => {
+  const L = typeof window !== 'undefined' ? window.EOLLM : null;
+  const key = L && L.fallbackKey && L.fallbackKey();
+  return (key && window.MODELS.find(m => m.mlc === key)) || window.MODELS.find(m => m.provider === 'wllama') || null;
+};
+
 // Which local model to start on. The 0.5B is a fine phone default — small
 // download, runs anywhere — but on a desktop it's too small to phrase well, so
 // default desktops to the 1.5B "balanced" model. Either can be switched live
 // from the picker; switching now releases the old model before loading the new.
 const defaultModel = () => {
   const by = (id) => window.MODELS.find(m => m.id === id);
+  const L = typeof window !== 'undefined' ? window.EOLLM : null;
+  // No WebGPU and no Claude key → the on-device CPU model is the only local path
+  // that can actually run here (Firefox/Safari today), so default straight to it
+  // instead of a GPU model that would just fail to load.
+  if (L && L.hasWebGPU && !L.hasWebGPU() && !(L.hasAnthropicKey && L.hasAnthropicKey()) && (!L.hasWasm || L.hasWasm())) {
+    const cpu = cpuFallbackModel();
+    if (cpu) return cpu;
+  }
   const phone = typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches;
   return (phone ? by('qwen-05') : by('qwen-15')) || window.MODELS[0];
 };
@@ -128,6 +179,18 @@ function App() {
   // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
   const [graphAuditOpen, setGraphAuditOpen] = useState(false);
   const [sandboxOpen, setSandboxOpen] = useState(false);
+  // Device-local preferences, gathered in the Settings drawer. Theme is
+  // 'system' | 'light' | 'dark' (system follows the OS); reduce-motion mutes
+  // animation. Both persist with prefs and apply to <html> via the effects below.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState('system');
+  const [reduceMotion, setReduceMotion] = useState(false);
+  // Computational grounding (pyodide.js): when on, a computational turn may run
+  // Python locally over the loaded document (off by default). The pref persists
+  // through savePrefs like theme/reduce-motion, and is wired to EOPython on load
+  // and on change. EOPython owns its own persisted flag too, so enabled() is
+  // authoritative even before the React tree hydrates.
+  const [pythonEnabled, setPythonEnabled] = useState(() => !!(window.EOPython && window.EOPython.enabled && window.EOPython.enabled()));
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
   const [auditCount, setAuditCount] = useState(0);
   // Glass-box export toggles: include the extraction half (graph + processing)
@@ -144,6 +207,13 @@ function App() {
   const [modelProgress, setModelProgress] = useState(0);
   const [modelLoadText, setModelLoadText] = useState(''); // WebLLM's live status line ("12MB fetched…", "Loading GPU shaders…")
   const [anthropicKeySet, setAnthropicKeySet] = useState(!!(window.EOLLM && window.EOLLM.hasAnthropicKey && window.EOLLM.hasAnthropicKey()));
+  // Gate for the startup auto-load: flipped true once local persistence has
+  // rehydrated (or is known absent). The auto-load waits for it so it resumes
+  // the model the user actually had selected — restored from prefs — rather than
+  // racing hydration and loading the default. That race was why a refresh came
+  // back to an UNloaded model: the effect fired on mount with defaultModel(),
+  // hydration then swapped `model` to the saved one, and nothing loaded it.
+  const [bootReady, setBootReady] = useState(false);
   // Staged-ingest progress: null when idle, else { phase, stage, pct, name }.
   const [ingestStatus, setIngestStatus] = useState(null);
 
@@ -244,7 +314,7 @@ function App() {
   // induced learning all live on the device so a refresh doesn't wipe the
   // workspace. Everything is best-effort — storage may be unavailable.
   useEffect(() => {
-    if (!window.EOStore) { hydrated.current = true; return; }
+    if (!window.EOStore) { hydrated.current = true; setBootReady(true); return; }
     let cancelled = false;
     // Persist the engine's learned rules-ledger delta whenever it grows.
     window.EO_onLedgerChange = (events) => { try { window.EOStore.saveLedger(events); } catch (e) {} };
@@ -272,6 +342,9 @@ function App() {
         if (typeof prefs.exportIngestion === 'boolean') setExportIngestion(prefs.exportIngestion);
         if (typeof prefs.exportOutput === 'boolean') setExportOutput(prefs.exportOutput);
         if (typeof prefs.wikiEnrich === 'boolean') setWikiEnrich(prefs.wikiEnrich);
+        if (prefs.theme === 'system' || prefs.theme === 'light' || prefs.theme === 'dark') setTheme(prefs.theme);
+        if (typeof prefs.reduceMotion === 'boolean') setReduceMotion(prefs.reduceMotion);
+        if (typeof prefs.pythonEnabled === 'boolean') { setPythonEnabled(prefs.pythonEnabled); if (window.EOPython) window.EOPython.setEnabled(prefs.pythonEnabled); }
         // Restored docs were parsed under the saved modes, so suppress the
         // re-parse the same way rule toggles do (batched into one render).
         if (prefs.langModes && typeof prefs.langModes === 'object') { suppressReparse.current = true; setLangModes(prefs.langModes); }
@@ -308,7 +381,7 @@ function App() {
           try { window.EOEngine.conversationField.restore(savedChat.field); } catch (e) {}
         }
       }
-      hydrated.current = true;
+      hydrated.current = true; setBootReady(true);
     })();
     return () => { cancelled = true; window.EO_onLedgerChange = null; };
   }, []);
@@ -330,8 +403,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich });
-  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion, pythonEnabled });
+  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion, pythonEnabled]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -342,6 +415,36 @@ function App() {
     const save = () => { if (!hydrated.current) return; clearTimeout(t); t = setTimeout(() => window.EOStore.saveAudit(window.EOAudit.all()), 600); };
     const off = window.EOAudit.subscribe(save);
     return () => { clearTimeout(t); off(); };
+  }, []);
+
+  // Apply the theme to <html data-theme>. In 'system' mode, follow the OS and
+  // re-resolve when it flips. The early inline script in index.html sets the
+  // first paint; this keeps it in sync as the preference changes.
+  useEffect(() => {
+    const apply = () => (window.EOTheme ? window.EOTheme.apply(theme) : null);
+    apply();
+    if (theme !== 'system' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const on = () => apply();
+    mq.addEventListener ? mq.addEventListener('change', on) : mq.addListener(on);
+    return () => { mq.removeEventListener ? mq.removeEventListener('change', on) : mq.removeListener(on); };
+  }, [theme]);
+  useEffect(() => {
+    try { document.documentElement.classList.toggle('reduce-motion', !!reduceMotion); } catch (e) {}
+  }, [reduceMotion]);
+  // Wire the computational-grounding pref through to EOPython on change (and on
+  // load, above). EOPython.setEnabled only flips a flag — it never loads the
+  // runtime, which stays lazy until the first actual run.
+  const setPython = useCallback((v) => { setPythonEnabled(!!v); try { if (window.EOPython) window.EOPython.setEnabled(!!v); } catch (e) {} }, []);
+
+  // The one destructive affordance: wipe every device-local trace and reload
+  // cold. hydrated is flipped off first so the debounced persistence effects
+  // can't re-save state on the way out.
+  const clearLocalData = useCallback(async () => {
+    hydrated.current = false;
+    try { if (window.EOAudit && window.EOAudit.clear) window.EOAudit.clear(); } catch (e) {}
+    try { if (window.EOStore && window.EOStore.clearAll) await window.EOStore.clearAll(); } catch (e) {}
+    try { location.reload(); } catch (e) {}
   }, []);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2400); };
@@ -441,6 +544,16 @@ function App() {
   // if the chat takes the floor before the idle slot fires, stand down.
   const busyRef = useRef(false);
   useEffect(() => { busyRef.current = busy; }, [busy]);
+  // Generation guard: every turn captures the current value at dispatch; Stop
+  // (and the start of a fresh turn) bumps it, so any in-flight settle that wakes
+  // up afterward sees itself superseded and stands down rather than clobbering
+  // the stopped reply. The same token pattern the ingest path uses.
+  const genRef = useRef(0);
+  const genStale = (g) => genRef.current !== g;
+  // A live mirror of `messages` so stopTurn can read the in-flight turn's shape
+  // synchronously (from a click handler) without going stale on a closure.
+  const messagesRef = useRef([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
   const proposeArmed = useRef(false);
   const maybeProposeConventions = () => {
     const E = window.EOEngine;
@@ -595,16 +708,56 @@ function App() {
         return false;
       }
     }
-    if (!window.EOLLM.hasWebGPU()) { setModelStatus('idle'); return false; }
+    // wllama (CPU): no WebGPU needed. The GGUF downloads once from Hugging Face
+    // and runs on the CPU; progress streams the same way the GPU path does.
+    if (m.provider === 'wllama') {
+      if (window.EOLLM.hasWasm && !window.EOLLM.hasWasm()) { setModelStatus('idle'); showToast('This browser can’t run the on-device CPU model (no WebAssembly).'); return false; }
+      setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
+      try {
+        await window.EOLLM.load(m.mlc, (p, text) => { setModelProgress(p); if (text) setModelLoadText(text); });
+        setModelStatus('ready'); setModelLoadText(''); return true;
+      } catch (e) {
+        setModelStatus('idle'); setModelLoadText('');
+        if (!(e && e.code === 'CANCEL')) showToast(e.message || 'CPU model failed to load');
+        return false;
+      }
+    }
+    if (!window.EOLLM.hasWebGPU()) {
+      // A GPU model was selected but this browser has no WebGPU. Rather than
+      // sit idle (mechanical-only), drop to the on-device CPU model.
+      setModelStatus('idle');
+      if (window.EO_CPU_FALLBACK !== 'off') return fallbackToCPU();
+      return false;
+    }
     setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
     try {
       await window.EOLLM.load(m.mlc, (p, text) => { setModelProgress(p); if (text) setModelLoadText(text); });
       setModelStatus('ready'); setModelLoadText(''); return true;
     } catch (e) {
       setModelStatus('idle'); setModelLoadText('');
-      if (!(e && e.code === 'CANCEL')) showToast(e.message || 'Model failed to load');  // a user cancel is not an error
+      if (e && e.code === 'CANCEL') return false;  // a user cancel is not an error
+      // A GPU model that stalled or failed to load leaves chat with no phrasing.
+      // Fall to the on-device CPU model so answers still get worded (the user's
+      // "backup ready when the GPU ones haven't loaded or are stalled").
+      const cpu = cpuFallbackModel();
+      if (window.EO_CPU_FALLBACK !== 'off' && cpu && cpu.id !== m.id && window.EOLLM.hasWasm && window.EOLLM.hasWasm()) {
+        showToast('The GPU model ' + (e.code === 'STALL' ? 'stalled' : 'wouldn’t load') + ' — switching to the on-device CPU model.');
+        return fallbackToCPU();
+      }
+      showToast(e.message || 'Model failed to load');
       return false;
     }
+  };
+  // Switch the active model to the on-device CPU model and load it. The single
+  // resident-engine invariant means we can't hold a warm CPU model beside a live
+  // GPU one — so the switch happens at the moment it's needed (no WebGPU at
+  // startup, or a GPU stall/failure), with the runtime pre-warmed for speed.
+  const fallbackToCPU = async () => {
+    const cpu = cpuFallbackModel();
+    if (!cpu) return false;
+    if (window.EOLLM && window.EOLLM.hasWasm && !window.EOLLM.hasWasm()) return false;
+    setModel(cpu); setModelStatus('idle');
+    return loadModel(cpu);
   };
   // Save (or clear) the Claude API key from the model popover. Saving a key for
   // the currently-selected Anthropic model immediately loads it.
@@ -641,20 +794,34 @@ function App() {
     loadModel(model);
   };
 
-  // auto-load on startup so the demo is live with the actual model. The default
-  // (MODELS[0]) is the smallest, most mobile-friendly model, so it begins
-  // downloading right away on phones too rather than waiting for the first turn.
+  // auto-load on startup so the app is live with the actual model. Waits for
+  // bootReady (hydration done) so it RESUMES the model the user last selected —
+  // restored from prefs — instead of the default. Weights are cached (WebLLM
+  // cache / wllama useCache), so this re-instantiates fast and re-downloads
+  // nothing: a refresh comes back to a loaded model.
   useEffect(() => {
-    if (!window.EOLLM) return;
-    // A persisted Anthropic selection auto-loads if its key is already stored;
-    // a local model auto-loads when WebGPU is available.
-    if (model.provider === 'anthropic') { if (window.EOLLM.hasAnthropicKey()) loadModel(model); }
-    else if (window.EOLLM.hasWebGPU()) loadModel(model);
+    if (!bootReady || !window.EOLLM) return;
+    if (model.provider === 'anthropic') {
+      // A persisted Claude selection resumes if its key is stored; otherwise stay
+      // idle and let the popover collect the key.
+      if (window.EOLLM.hasAnthropicKey()) loadModel(model);
+    } else if (model.provider === 'wllama') {
+      loadModel(model);                      // on-device CPU — no WebGPU needed
+    } else if (window.EOLLM.hasWebGPU()) {
+      loadModel(model);
+      // Keep the CPU backup READY: pre-import the wllama runtime (small, cached)
+      // in the background so a later GPU stall can switch to it without also
+      // paying the runtime fetch. The model weights still download on switch.
+      if (window.EO_CPU_FALLBACK !== 'off') { try { window.EOLLM.prewarmFallback && window.EOLLM.prewarmFallback(); } catch (e) {} }
+    } else {
+      // A GPU model with no WebGPU here → drop straight to the on-device CPU model.
+      if (window.EO_CPU_FALLBACK !== 'off') fallbackToCPU();
+    }
     // Warm the structure-layer embedding reader in the background so the first
     // escalation isn't also paying the (one-time, cached) model download. Inert
     // if embed.js is absent or the model fails to load — routing stays lexical.
     try { if (window.EOEmbed && window.EOEmbed.warm) window.EOEmbed.warm(); } catch (e) {}
-  }, []);
+  }, [bootReady]);
 
   // ---- responsive: collapse the sidebar to an off-canvas drawer on phones and
   // keep the body to a single pane (side-by-side split doesn't fit a phone). ----
@@ -720,7 +887,11 @@ function App() {
       const id = uid('c'); setChats(cs => [{ id, title: q.length > 32 ? q.slice(0, 32) + '…' : q }, ...cs]); setActiveChat(id);
     }
   };
-  const replaceLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch, typing: false }; return c; });
+  // A settle clears the in-flight flags by default (typing always; streaming
+  // unless the patch re-asserts it, as the streaming-start placeholders do) — so
+  // a finished reply never lingers as "generating" and the Stop affordance is
+  // never offered over a settled message.
+  const replaceLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], streaming: false, ...patch, typing: false }; return c; });
   const patchLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch }; return c; });
 
   // strip citation/void markup so prior turns read as plain text in history
@@ -1026,6 +1197,7 @@ function App() {
   // audit so it can never be mistaken for a cited, document-drawn answer —
   // the app's whole promise is that grounded and ungrounded look different. (1b)
   const runChat = async (q, history, modeTag, ctx, docOpen, mech) => {
+    const myGen = genRef.current;
     const ungroundedAudit = docOpen
       ? { status: 'plain', grounded: false, note: 'Answered from the model’s general knowledge — not drawn from the open document.' }
       : null;
@@ -1043,6 +1215,9 @@ function App() {
       try {
         full = await attempt(history, undefined);
       } catch (e1) {
+        // A user interrupt is not a model failure — never retry it (that would
+        // start a fresh stream); let it fall through to the stop handling below.
+        if (window.EOLLM.isAbort(e1) || genStale(myGen)) throw e1;
         // Most local-model failures mid-session are context / VRAM pressure,
         // not bad input. Retry once with just the last couple of turns and a
         // tight budget before giving up — recovers the common case silently.
@@ -1050,15 +1225,17 @@ function App() {
         replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
         full = await attempt(history.slice(-2), 2200);
       }
+      if (genStale(myGen)) return;                  // stopped while streaming — stopTurn owns the message
       replaceLast({ role: 'assistant', text: full, audit: ungroundedAudit, mode: modeTag, mechanical: mechPanel });
       AUD('end', { engine: 'model', text: full, audit: ungroundedAudit, cites: [] });
     } catch (e) {
+      if (window.EOLLM.isAbort(e) || genStale(myGen)) return;   // stopped — settled by stopTurn, show no error
       const msg = 'I couldn’t finish that one locally — the model likely ran out of memory or context. Try a shorter message, pick a smaller model from the switcher, or ask about an open document and I’ll answer it mechanically.';
       replaceLast({ role: 'assistant', text: msg, audit: null });
       AUD('step', 'error', { where: 'chat', fatal: true, message: String((e && e.message) || e) });
       AUD('end', { engine: 'none', text: msg, audit: null, reason: 'model-failed' });
     }
-    setBusy(false);
+    if (!genStale(myGen)) setBusy(false);
   };
 
   // ---- CONVERSATIONAL REPAIR ----
@@ -1122,6 +1299,7 @@ function App() {
     return { anchor, refinements };
   };
   const runRepairScope = async (scope, q, history, repair) => {
+    const myGen = genRef.current;
     const E = window.EOEngine;
     const { anchor, refinements } = repairAnchor();
     const priorReplies = messages.filter(m => m.role === 'assistant' && m.text && !m.typing).map(m => m.text);
@@ -1236,6 +1414,7 @@ function App() {
         // Size the budget from the reconstructed question (probe), not the
         // complaint; intent is left for the prompt match to infer (shape.js §9).
         const shapeMax = await shapeBudgetFor(probe, null, shapeNote);
+        if (genStale(myGen)) return;                  // stopped during the shape pass — stand down
         replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
         const sysOverride = window.EOLLM.systemFor('grounded', 'answer', true, 1)
           + '\n\nThe user has said your earlier replies missed their question — do not repeat any earlier reply; answer the question afresh from the spans and notes, and if they truly do not answer it, say exactly what they DO establish about the subject instead.';
@@ -1246,6 +1425,7 @@ function App() {
           mode: 'grounded', task: 'answer', grounded: true, sysOverride,
           onToken: streamInto({ mode: 'grounded' }), depth: turnBudgetRef.current && turnBudgetRef.current.level,
         });
+        if (genStale(myGen)) return;                  // stopped while streaming the repair — stopTurn owns it
         full = E.dedupeSentences(full);
         const declined = modelDeclined(full) || echoesShapeNote(full, shapeNote);
         if (!declined && !E.echoesPriorReply(full, priorReplies)) {
@@ -1268,9 +1448,11 @@ function App() {
           AUD('step', 'veto', { decision: 'mechanical', reason: declined ? 'model declined / empty' : 'the model reproduced a rejected reply' });
         }
       } catch (e) {
+        if (window.EOLLM.isAbort(e) || genStale(myGen)) return;   // stopped — leave the partial in place
         AUD('step', 'error', { where: 'repair', message: String((e && e.message) || e) });
       }
     }
+    if (genStale(myGen)) return;
     if (mech && mech.audit && mech.audit.grounded && mech.audit.status !== 'held') return settleRepair(mech, 'mechanical (repair)');
     return stuck();
   };
@@ -1367,10 +1549,139 @@ function App() {
     } catch (e) { return false; }
   };
 
+  // COMPUTATIONAL turn (pyodide.js): the second mechanical grounding source.
+  // The model writes Python; Python run locally over the loaded CSV produces the
+  // figure; the model phrases over that result and never reports a number it
+  // computed in its own head. Two backends: Claude uses native tool_use (it
+  // decides when to compute); a local model is steered to emit a single fenced
+  // python block, which we parse out deterministically rather than trusting it
+  // to self-report. Every execution is deposited as a glass-box `compute` step
+  // and surfaced on the message. Defensive throughout: a Python failure settles
+  // as an honest answer, never a broken turn.
+  const runComputeScope = async (doc, q, history) => {
+    const myGen = genRef.current;
+    const fileName = tableSlug(doc);
+    let csv = '';
+    try { csv = tableToCSV(doc); } catch (e) { eoWarn('compute csv', e); }
+    const files = [{ name: fileName, data: csv }];
+    const schema = tableSchemaText(doc, fileName);
+    const calls = [];   // every Python execution this turn — for the audit and the message panel
+
+    // Run one code block locally, recording it as a `compute` step (the code, its
+    // stdout/stderr, the structured result, the duration) so a computed figure is
+    // as traceable as a cited line.
+    const execPython = async (code) => {
+      let res;
+      try { res = await window.EOPython.run({ code, files, timeoutMs: 15000 }); }
+      catch (e) { res = { ok: false, stdout: '', stderr: String((e && e.message) || e), result: '', durationMs: 0, truncated: false }; }
+      const rec = { code: String(code || ''), ok: !!res.ok, stdout: res.stdout || '', stderr: res.stderr || '',
+                    result: res.result || '', durationMs: res.durationMs || 0, truncated: !!res.truncated };
+      calls.push(rec);
+      AUD('step', 'compute', rec);
+      return res;
+    };
+    const payload = () => ({ fileName, columns: doc.columns || [], calls: calls.slice() });
+    const computedAudit = (ok) => ok
+      ? { status: 'computed', grounded: true, covers: '1/1', stable: true,
+          note: 'Computed locally with Python over “' + doc.name + '”. The code and its output are in the glass box and below.' }
+      : { status: 'warn', grounded: false, covers: null,
+          note: 'Tried to compute with Python, but it did not return a usable result. The code and any error are below.' };
+
+    try {
+      // ---- Claude API path: native tool_use ----
+      if (window.EOLLM.isAnthropic && window.EOLLM.isAnthropic(model.mlc)) {
+        const tools = [{
+          name: 'run_python',
+          description: 'Run Python (pandas is available) locally over the loaded CSV to compute an answer. The CSV file is already in the working directory; the data never leaves the device. Use this for any counting, summing, grouping, sorting, joining, or rate calculation over the data. The code\'s printed output and return value are given back to you.',
+          input_schema: { type: 'object', properties: {
+            code: { type: 'string', description: 'Python source to execute. Read the CSV with pandas and print or return the result.' },
+          }, required: ['code'] },
+        }];
+        const system = 'You are Cleon, answering a question about a tabular document the user loaded. You have a run_python tool that executes Python (with pandas) locally over the data, on the user\'s device.\n\n'
+          + schema + '\n\n'
+          + 'When the question needs any calculation over the data, call run_python with code that computes it and prints or returns the answer, then state the answer in plain words and name the columns and the operation you used. If no calculation is needed, just answer. Never invent a number; every figure must come from the tool output.';
+        const msgs = (history || []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content)
+          .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) }));
+        msgs.push({ role: 'user', content: q });
+        patchLast({ typing: true });
+        const modelId = String(model.mlc).replace(/^anthropic:/, '');
+        const out = await window.EOLLM.runAnthropicTools({
+          model: modelId, system, messages: msgs, tools, maxTokens: 1024, maxSteps: 5,
+          runTool: async (name, input) => {
+            if (name !== 'run_python' || !input || !input.code) return { ok: false, stderr: 'no code provided' };
+            const r = await execPython(input.code);
+            return { ok: r.ok, stdout: r.stdout, stderr: r.stderr, result: r.result, durationMs: r.durationMs };
+          },
+        });
+        if (genStale(myGen)) return;
+        const ranOk = calls.length ? calls[calls.length - 1].ok : true;
+        const ok = ranOk && !!(out.text && out.text.trim());
+        const text = (out.text || '').trim()
+          || (calls.length ? 'I ran the computation but came back without a phrased answer. The raw result is below.' : 'I could not produce an answer.');
+        const audit = calls.length ? computedAudit(ok) : { status: 'plain', grounded: false, covers: null, note: 'Answered without computing — no calculation was needed.' };
+        replaceLast({ role: 'assistant', text, audit, mode: 'grounded', compute: calls.length ? payload() : null });
+        AUD('end', { engine: calls.length ? 'compute' : 'compute-none', text, audit: calls.length ? audit : null, cites: [] });
+        setBusy(false);
+        return;
+      }
+
+      // ---- Local-model path: the fenced-block convention ----
+      // First pass: the model emits a single fenced python block iff a
+      // computation is needed; otherwise it answers in words. We parse the
+      // fence out mechanically rather than relying on the model to self-report.
+      const fenceSys = 'You are Cleon. The user asked about a CSV table loaded locally on this device. You can run Python (pandas available) over it.\n\n'
+        + schema + '\n\n'
+        + 'If answering needs a calculation over the data (counting, summing, grouping, sorting, rates, joins), reply with ONE fenced Python code block and nothing else. The code must read "' + fileName + '" with pandas and print the answer. If no calculation is needed, answer the question in plain words instead, with no code block.';
+      let first = '';
+      try { first = await window.EOLLM.phrase({ mlcKey: model.mlc, question: q, contextText: schema, history, mode: 'chat', grounded: false, sysOverride: fenceSys }); }
+      catch (e) { if (window.EOLLM.isAbort(e) || genStale(myGen)) return; first = ''; }
+      if (genStale(myGen)) return;
+      const code = extractPyFence(first);
+      if (!code) {
+        const text = (first || '').trim() || 'I could not produce an answer.';
+        const audit = { status: 'plain', grounded: false, covers: null, note: 'Answered without computing — no calculation was needed.' };
+        replaceLast({ role: 'assistant', text, audit, mode: 'grounded' });
+        AUD('end', { engine: 'compute-none', text, audit: null, cites: [] });
+        setBusy(false);
+        return;
+      }
+      const r = await execPython(code);
+      if (genStale(myGen)) return;
+      // Second pass: phrase over the execution result, streamed in. The result
+      // rides as the only material; the model states the figure, names the
+      // columns/operation, and never invents.
+      const resultBlock = 'Python was run locally over the table. Here is exactly what it produced:\n\n'
+        + '[code]\n' + code + '\n\n[stdout]\n' + (r.stdout || '(none)') + '\n\n[result]\n' + (r.result || '(none)')
+        + (r.ok ? '' : '\n\n[error]\n' + (r.stderr || 'failed'));
+      const phraseSys = 'You are Cleon. A computation was just run locally over the user\'s CSV. State the answer in plain words, using ONLY the numbers in the result below. Name the columns and the operation. Do not invent any figure. If the computation failed, say so plainly and briefly.';
+      replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
+      let answer = '';
+      try { answer = await window.EOLLM.phrase({ mlcKey: model.mlc, question: q, contextText: resultBlock, history, mode: 'chat', grounded: false, sysOverride: phraseSys, onToken: streamInto({ mode: 'grounded' }) }); }
+      catch (e) { if (window.EOLLM.isAbort(e) || genStale(myGen)) return; answer = ''; }
+      if (genStale(myGen)) return;
+      const text = (answer || '').trim()
+        || (r.ok ? ('The computation returned:\n\n' + (r.result || r.stdout || '(no output)')) : ('The computation failed: ' + (r.stderr || 'unknown error')));
+      const audit = computedAudit(r.ok);
+      replaceLast({ role: 'assistant', text, audit, mode: 'grounded', compute: payload() });
+      AUD('end', { engine: 'compute', text, audit, cites: [] });
+      setBusy(false);
+    } catch (e) {
+      if (window.EOLLM.isAbort(e) || genStale(myGen)) return;   // stopped — settled by stopTurn
+      eoWarn('compute', e);
+      AUD('step', 'error', { where: 'compute', message: String((e && e.message) || e) });
+      const text = 'I hit a problem running the computation: ' + String((e && e.message) || e) + '.';
+      const audit = calls.length ? computedAudit(false) : null;
+      replaceLast({ role: 'assistant', text, audit, mode: 'grounded', compute: calls.length ? payload() : null });
+      AUD('end', { engine: 'compute-error', text, audit, cites: [] });
+      setBusy(false);
+    }
+  };
+
   // Document-referencing turn: feed the model the relevant passages and bind
   // citations mechanically. The seeker still decides what's there to say —
   // "who" is exact-mechanical; no ground → honest hold; the model only phrases.
   const runGroundedScope = async (scope, q, history, semanticHits) => {
+    const myGen = genRef.current;
     const intent = window.EOEngine.classifyIntent(q);
     AUD('step', 'intent', { intent });
     // CONFIRM/DENY: a proposition is checked against the graph, never phrased
@@ -1540,6 +1851,7 @@ function App() {
     // every draft claim is checked relation-against-relation. Down ⇒ every
     // step below is byte-identical to today (the parity floor).
     const gateOn = !!(window.EOEngine.relationGateEnabled && window.EOEngine.relationGateEnabled());
+    if (genStale(myGen)) return;                  // stopped during shaping — stand down
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       let full = await window.EOLLM.phrase({
@@ -1549,6 +1861,7 @@ function App() {
         grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
         depth: budget && budget.level, provenanceKeys: gateOn,
       });
+      if (genStale(myGen)) return;                  // stopped while streaming — stopTurn owns the message
       full = window.EOEngine.dedupeSentences(full);   // small models loop; drop repeats
       // Reconsideration (Phase 5, deepest depth): a refused summary is not a
       // summary — SEG the plan and re-route to free composition rather than
@@ -1573,6 +1886,7 @@ function App() {
       // grounded signal pointing at the page, just not the one the model
       // tried to draft.
       const refuseModel = (reason, message) => {
+        if (genStale(myGen)) return;                  // stopped — stopTurn already settled the message
         const audit = { status: 'error', grounded: false, covers: '0/1', stable: false,
           note: 'Refused — the model\'s draft failed audit (' + reason + '). Rather than substitute a mechanically-generated answer that would look like the model\'s reply, the turn surfaces the failure honestly.' };
         AUD('step', 'error', { where: 'grounded', message: 'refused: ' + reason });
@@ -1582,6 +1896,7 @@ function App() {
         setBusy(false);
       };
       const settle = (res, decision) => {
+        if (genStale(myGen)) return;                  // stopped — stopTurn already settled the message
         // Only a model-phrased answer can carry an inference void; a mechanical
         // fallback states only what the page does.
         if (decision && decision.indexOf('model') === 0) res = markInferences(res, budget);
@@ -1666,8 +1981,9 @@ function App() {
               grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
               depth: budget && budget.level, provenanceKeys: gateOn,
             });
+            if (genStale(myGen)) return;              // stopped during the stricter retry — stand down
             retry = window.EOEngine.dedupeSentences(retry);
-          } catch (e) { retry = ''; }
+          } catch (e) { if (window.EOLLM.isAbort(e) || genStale(myGen)) return; retry = ''; }
           // If the retry still echoes (or came back empty), the model can't do
           // this turn — refuse honestly rather than substitute a mechanical
           // portrait. The portrait would land as if it were the model's reply.
@@ -1794,8 +2110,11 @@ function App() {
           settle(bound, 'model + mechanical cite');
         }
       }
-    } catch (e) { AUD('step', 'error', { where: 'grounded', message: String((e && e.message) || e) }); runMechanicalScope(scope, q); return; }
-    setBusy(false);
+    } catch (e) {
+      if (window.EOLLM.isAbort(e) || genStale(myGen)) return;   // stopped — settled by stopTurn, no fallback
+      AUD('step', 'error', { where: 'grounded', message: String((e && e.message) || e) }); runMechanicalScope(scope, q); return;
+    }
+    if (!genStale(myGen)) setBusy(false);
   };
 
   // A streaming path (grounded / chat) runs DETACHED from runTurn — it is fired
@@ -1928,6 +2247,35 @@ function App() {
   // awaited router step like the escalation retrieval) must never leave busy
   // stuck true. runTurn dispatches to the detached streaming paths and returns;
   // this only catches a synchronous routing fault or a rejected await within it.
+  // Stop the turn that's mid-flight: halt the model (generation OR an in-flight
+  // download), invalidate the generation so no late settle clobbers the result,
+  // and freeze the in-progress assistant message as a STOPPED reply that keeps
+  // whatever streamed so far. Idle → no-op, so the Stop button is inert between
+  // turns. The audit trace is closed as `stopped` so the thinking panel settles.
+  const stopTurn = () => {
+    if (!busyRef.current) return;
+    // Only act on a genuine in-flight chat turn — an assistant placeholder that's
+    // still typing/loading/streaming. Other busy states (e.g. ingest enrichment)
+    // own their own lifecycle and must not have a settled reply rewritten.
+    const m = messagesRef.current || [];
+    const last = m.length ? m[m.length - 1] : null;
+    const inFlight = !!(last && last.role === 'assistant' && (last.typing || last.loading || last.streaming));
+    if (!inFlight) return;
+    genRef.current++;                                            // supersede every in-flight settle
+    try { window.EOLLM && window.EOLLM.interrupt && window.EOLLM.interrupt(); } catch (e) { eoWarn('interrupt', e); }
+    try { window.EOLLM && window.EOLLM.cancelLoad && window.EOLLM.cancelLoad(); } catch (e) {}   // also halt a model still downloading
+    setMessages(cur => {
+      if (!cur.length) return cur;
+      const c = cur.slice(); const l = c[c.length - 1];
+      if (!l || l.role !== 'assistant') return cur;
+      const partial = l.text && l.text.trim() ? l.text : '';
+      c[c.length - 1] = { ...l, typing: false, loading: false, streaming: false, interrupted: true, text: partial };
+      return c;
+    });
+    try { AUD('end', { engine: 'stopped', text: '', audit: null, reason: 'user-interrupt' }); } catch (e) {}
+    setBusy(false);
+  };
+
   const send = async (text) => {
     try { await runTurn(text); }
     catch (e) {
@@ -1943,6 +2291,9 @@ function App() {
     const q = (text != null ? text : input).trim();
     if (!q || busy) return;
     setInput('');
+    // Open a fresh generation. Stop (and any later turn) bumps this; the awaits
+    // below and the detached streaming paths all stand down once superseded.
+    const myGen = ++genRef.current;
 
     // hero: a long paste with no doc is a document to read, not a question
     const noDocs = docs.length === 0;
@@ -1952,6 +2303,15 @@ function App() {
     const turnId = 'wt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     setMessages(m => [...m, { role: 'user', text: q }, { role: 'assistant', typing: true, turnId }]);
     setBusy(true); ensureChat(q);
+
+    // Paint the send immediately. The user's bubble and the typing indicator are
+    // committed above, but everything that follows on this turn — routing, graph
+    // traversal, retrieval, prompt building in the detached runners — is heavy
+    // synchronous work that would otherwise block the browser from painting that
+    // feedback, so a send feels frozen while the turn churns. Yield one macrotask
+    // so React flushes and the browser paints the bubble + "…" before the work
+    // starts; the turn then proceeds, lagging on its own without holding the UI.
+    await new Promise(res => setTimeout(res, 0)); // yield to paint
 
     // CHAT WITH WIKIPEDIA: when enrichment is on, pull the salient term's
     // article and INGEST it into the graph as a citable source before reading,
@@ -1968,7 +2328,10 @@ function App() {
     let scope = scopeList();   // explicit source chips, else the focused doc
     if (injectedDoc && !scope.some(d => d.id === injectedDoc.id)) scope = [injectedDoc, ...scope];
     const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
-      ? window.EOLLM.hasAnthropicKey() : window.EOLLM.hasWebGPU()));
+      ? window.EOLLM.hasAnthropicKey()
+      : model.provider === 'wllama'
+      ? (!window.EOLLM.hasWasm || window.EOLLM.hasWasm())
+      : window.EOLLM.hasWebGPU()));
     const wasLoaded = canLLM && window.EOLLM.isLoaded(model.mlc);
 
     // Resolve this turn's budget at the deepest stop (thinkingBudget clamps to
@@ -1996,15 +2359,53 @@ function App() {
     // recording is paused → the panel renders nothing.)
     if (auditId) patchLast({ auditId });
 
+    // DETERMINISTIC ARITHMETIC (mechanical, no model). A turn that is
+    // essentially a math expression is evaluated by math.js; figures that also
+    // appear in an open source are bound to their line so the worked math is
+    // checkable. Non-math turns return null here and fall through to ordinary
+    // routing. Runs before the model loads — a sum shouldn't wake a model.
+    let calc = null;
+    try { calc = (window.EOCompute && window.EOCompute.detect) ? window.EOCompute.detect(q, scope) : null; }
+    catch (e) { eoWarn('calc', e); }
+    if (calc) {
+      lastGroundedRef.current = false;
+      AUD('step', 'route', { referencing: calc.cites.length > 0, reason: 'calculation', path: 'calc' });
+      AUD('step', 'calculation', { shown: calc.shown, eval: calc.eval, display: calc.display, result: calc.result, operands: calc.operands, cites: calc.cites });
+      replaceLast({ role: 'assistant', text: calc.text, audit: null, mode: 'grounded', calc });
+      AUD('end', { engine: 'mechanical', text: calc.text, audit: calc.audit, cites: calc.cites });
+      setBusy(false);
+      return;
+    }
+
     // load the real model on demand if it isn't ready yet
     if (canLLM && !wasLoaded) {
-      patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name, loadCloud: model.provider === 'anthropic' });
+      patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name, loadCloud: model.provider === 'anthropic', loadCpu: model.provider === 'wllama' });
       const ok = await loadModel(model);
+      if (genStale(myGen)) return;                  // stopped during the load — stopTurn already settled
       AUD('step', 'model', { action: 'load', model: model.name, ok: !!ok });
       patchLast({ loading: false, typing: true });
     }
     const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
     AUD('set', { modelReady: ready });
+
+    // COMPUTATION: the opt-in second mechanical source (pyodide.js). When the
+    // toggle is on, a model is ready, and a tabular source is in scope, give the
+    // turn the option to COMPUTE — the EO engine grounds prose but structurally
+    // cannot sum a column or group a CSV. The model still only phrases; Python
+    // run locally produces the figure, and the code + its output ride into the
+    // audit and onto the message. The model decides whether a computation is
+    // needed (native tool_use for Claude, a parsed fenced block for a local
+    // model), so a non-computational table question still answers in words.
+    if (mode !== 'creative' && ready && window.EOPython && window.EOPython.enabled && window.EOPython.enabled()) {
+      const pyDoc = scope.find(d => d && d.kind === 'table' && Array.isArray(d.rows) && d.rows.length);
+      if (pyDoc) {
+        AUD('step', 'route', { referencing: true, path: 'compute', reason: 'computation toggle',
+          primary: { id: pyDoc.id, name: pyDoc.name, kind: pyDoc.kind } });
+        lastGroundedRef.current = true; everGroundedRef.current = true;
+        runComputeScope(pyDoc, q, history).catch(turnFailed('compute'));
+        return;
+      }
+    }
 
     // CREATIVE: free composition (needs the model). Phrases over doc passages
     // if one is open, otherwise writes freely. Never cited.
@@ -2074,6 +2475,7 @@ function App() {
     let semanticHits = null;
     if (route.decision === 'escalate') {
       const { hits, reader } = await window.EOEngine.retrieveHybrid(scope, q, 6);
+      if (genStale(myGen)) return;                  // stopped during the recall — stand down
       const recovered = hits.length && (reader.indexOf('embedding') >= 0 ? hits.some(h => h.semantic) : true);
       AUD('step', 'escalate', { reason: route.reason, reader, found: hits.length, recovered: !!recovered });
       if (recovered) { route.decision = 'mechanical'; route.confidence = 'recovered'; semanticHits = hits.filter(h => h.semantic).length ? hits : null; route.primary = route.primary || window.EOEngine.routePrimary(scope, q) || scope[0]; }
@@ -2180,8 +2582,15 @@ function App() {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
   }, [dragging]);
 
+  // A chat turn is generating (Stop is offered) when busy AND the last message
+  // is an in-flight assistant placeholder — never during ingest or other busy
+  // states, which own their own lifecycle.
+  const lastMsg = messages.length ? messages[messages.length - 1] : null;
+  const generating = busy && !!lastMsg && lastMsg.role === 'assistant'
+    && (lastMsg.typing || lastMsg.loading || lastMsg.streaming);
+
   const composerProps = {
-    value: input, onChange: setInput, onSend: () => send(), mode, onMode: setMode,
+    value: input, onChange: setInput, onSend: () => send(), onStop: stopTurn, generating, mode, onMode: setMode,
     onAttach: () => fileRef.current.click(), busy,
     sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
@@ -2207,6 +2616,7 @@ function App() {
         onUpload={() => fileRef.current && fileRef.current.click()}
         chats={chats} activeChat={activeChat} onNewChat={newChat} onSelectChat={selectChat}
         model={model} onModelClick={() => setModelOpen(o => !o)} onRulesClick={() => setRulesOpen(true)}
+        onSettingsClick={() => setSettingsOpen(true)}
         enabledRules={enabledRules} modelStatus={modelStatus}
         projects={projects} activeProject={activeProject}
         onSelectProject={selectProject} onNewProject={newProject}
@@ -2228,16 +2638,16 @@ function App() {
             </div>
           )}
           <button className="tb-pill" onClick={() => setAuditOpen(true)} title="Glass box — the extracted graph and every step the chat takes, exportable as JSONL">
-            <Icon name="activity" size={15} /> Glass box{auditCount ? ' · ' + auditCount : ''}
+            <Icon name="activity" size={15} /> <span className="tb-pill-lbl">Glass box{auditCount ? ' · ' + auditCount : ''}</span>
             {auditEnabled && <span className="dot rec" title="Recording" />}
           </button>
           {docs.some(d => d.kind === 'prose') && (
-            <button className="tb-pill" onClick={() => setGraphAuditOpen(true)} title="Ingestion audit — the graph as it is built, word by word, in reading order, with full provenance">
-              <Icon name="book" size={15} /> Ingestion
+            <button className="tb-pill tb-pill-adv" onClick={() => setGraphAuditOpen(true)} title="Ingestion audit — the graph as it is built, word by word, in reading order, with full provenance">
+              <Icon name="book" size={15} /> <span className="tb-pill-lbl">Ingestion</span>
             </button>
           )}
-          <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> {enabledRules} rules on</button>
-          {window.EVO_SANDBOX && <button className="tb-pill" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> Sandbox</button>}
+          <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> <span className="tb-pill-lbl">{enabledRules} rules on</span></button>
+          {window.EVO_SANDBOX && <button className="tb-pill tb-pill-adv" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> <span className="tb-pill-lbl">Sandbox</span></button>}
         </header>
 
         <div className="body" ref={bodyRef}>
@@ -2268,6 +2678,10 @@ function App() {
         learnedByLang={window.EOEngine && window.EOEngine.learnedVerbsByLang ? window.EOEngine.learnedVerbsByLang() : {}}
         onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
       {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
+      {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)}
+        theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
+        pythonEnabled={pythonEnabled} onPythonEnabled={setPython} pythonAvailable={!!window.EOPython}
+        onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}

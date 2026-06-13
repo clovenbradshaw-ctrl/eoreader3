@@ -6,7 +6,11 @@ are **grounded** — every claim is bound to the exact line it came from and
 audited mechanically, not by the language model.
 
 Everything runs locally. Documents never leave your browser, and the optional
-language model runs on your own GPU via WebGPU.
+language model runs on your own device — on the GPU via WebGPU where it's
+available, and otherwise on the CPU via WebAssembly (llama.cpp/wllama), so a
+browser without WebGPU (Firefox/Safari today) still gets worded answers, not
+just mechanical ones. A cloud option (the Claude API, with your own key) is
+there too. The model only phrases; the grounding is mechanical either way.
 
 ## Running it
 
@@ -18,8 +22,16 @@ python3 -m http.server 8000
 ```
 
 Open `index.html` through a server (not `file://`) so the engine and component
-scripts load. A WebGPU-capable browser (Chrome/Edge 113+) is needed for the
-local model; without one, grounded answers and pivots still work mechanically.
+scripts load. A WebGPU-capable browser (Chrome/Edge 113+) runs the GPU models;
+without WebGPU the app falls back to an on-device **CPU model** (llama.cpp via
+WebAssembly) so answers are still phrased — and grounded answers and pivots work
+mechanically regardless of any model.
+
+The CPU model runs single-threaded out of the box. To unlock multi-threaded CPU
+inference (faster), serve the app cross-origin-isolated — with
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` headers. Without them it simply
+stays single-thread; nothing breaks.
 
 ### Optional production build
 
@@ -37,8 +49,12 @@ npm run build      # → ./dist  (serve dist/index.html)
 
 Documents, the running chat, rule toggles, and the engine's induced learning are
 saved on the device (IndexedDB + localStorage), so a refresh keeps your
-workspace — nothing is uploaded. Set `window.EO_DEBUG = true` in the console to
-surface errors that resilience catches otherwise swallow.
+workspace — nothing is uploaded. The **selected model** is remembered too, and
+the app re-loads it on startup once persistence has rehydrated, so a refresh
+comes back to a loaded model rather than the default — and because the weights
+are cached (WebLLM's cache / the CPU model's `useCache`), that re-load
+re-downloads nothing. Set `window.EO_DEBUG = true` in the console to surface
+errors that resilience catches otherwise swallow.
 
 The one deliberate exception is the **reference desk / chat-with-Wikipedia**
 (`external.js`): when you explicitly ask — by clicking an entity's desk, or by
@@ -52,6 +68,21 @@ remembered consent), rate-limited, prioritised, and gated against resolving
 private individuals. Clear `window.EO_REFERENCE_PROXY` to disable it and keep
 the reader strictly local. See `docs/external-reference-desk.md`.
 
+A second, separate opt-in is **computational grounding** (`pyodide.js`,
+`window.EOPython`): turned on in Settings, it lets Cleon run Python locally over
+a loaded CSV to answer questions a prose reader structurally can't — sum a
+column, count rows, group and sort. It is off by default and the runtime (loaded
+from `cdn.jsdelivr.net`, the same CDN as the models) is fetched only on the
+first actual run, never at page load. Python runs in a Web Worker with network
+egress blocked, so executed code cannot reach the network and document content
+never leaves the device on the local-model path. The model still only phrases:
+mechanical execution produces the figure, and the exact code, its stdout, and
+its result are deposited in the glass-box audit (a `compute` step) and shown on
+the message. On the Claude API path the model sees only the table's **schema**
+(column names, types, a few sample rows) and the `code` it writes; that code
+runs locally over the whole file, so the full data is not sent — it travels
+under the same consent as any other Claude turn, no wider.
+
 ## How it works
 
 The intelligence is **mechanical**; the language model only phrases things.
@@ -60,18 +91,35 @@ The intelligence is **mechanical**; the language model only phrases things.
   extraction) and tables, does retrieval, decides whether a message is about the
   open document (`referencesDoc`), binds `[sN]` citations, and computes the
   grounded / coverage / stable audit. Deterministic; no model involved.
-- **`llm.js`** — optional local model (WebLLM / WebGPU, e.g. Qwen2.5). It holds
-  the conversation and phrases answers. On a document question it's handed the
-  retrieved **spans** (verbatim sentences, trusted) and its own **notes** (the
-  graph's reading — assertions, kin records, header metadata, working memory —
-  "usually right, sometimes wrong"), preceded by a small **shape pass**: a
-  director's-note call that characterizes what the turn wants before the
-  answer pass writes. Reasoning-model `<think>` blocks are gated out of the
-  stream and the answer (the audit keeps them verbatim). Output is checked
-  and re-cited mechanically — the model never writes its own citations and
-  never overrides the page.
+- **`llm.js`** — the optional model layer, with three interchangeable backends
+  behind one interface (`load`/`phrase`/`isLoaded`, routed by the model key):
+  **WebLLM** on the GPU (WebGPU, e.g. Qwen2.5), an on-device **CPU** model
+  (llama.cpp via WebAssembly / wllama, a `wllama:` key — GGUF weights pulled once
+  from Hugging Face and cached), and **Claude** over the Anthropic API (an
+  `anthropic:` key). The CPU model is also the automatic **fallback**: with no
+  WebGPU it's the default local path, and if a GPU model's download stalls or
+  fails the app switches to it so chat keeps getting phrased answers instead of
+  dropping to mechanical-only (the runtime is pre-warmed in the background so the
+  switch is quick). Whichever backend, it holds the conversation and phrases
+  answers. On a document question it's handed the retrieved **spans** (verbatim
+  sentences, trusted) and its own **notes** (the graph's reading — assertions,
+  kin records, header metadata, working memory — "usually right, sometimes
+  wrong"), preceded by a small **shape pass**: a director's-note call that
+  characterizes what the turn wants before the answer pass writes. Reasoning-model
+  `<think>` blocks are gated out of the stream and the answer (the audit keeps
+  them verbatim). Output is checked and re-cited mechanically — the model never
+  writes its own citations and never overrides the page.
 - **`pivot.jsx`** — deterministic pivot/fold over tables (totals, counts,
   grouping) driven by a small natural-language → spec parser.
+- **`compute.js`** — the auditable calculator (`window.EOCompute`). When a turn
+  is essentially a math expression ("15% of $240,000", "sqrt(144)+3^2"), math.js
+  evaluates it deterministically (BigNumber precision, so money doesn't drift)
+  and the model is bypassed entirely — the number you see is the engine's, never
+  the model's mental arithmetic. Figures that also appear in an open source are
+  bound to the exact line they came from, so the chat's **Show the math** panel
+  lets you check each input (the one error an evaluator can't catch: right
+  arithmetic over a wrong number). Non-math turns return null and fall through to
+  ordinary routing. Deterministic; no model involved.
 - **`audit.js`** — the audit recorder (`window.EOAudit`). Records each chat
   turn's pipeline step by step and exports it as JSONL. In-memory; deterministic;
   no model involved.

@@ -45,6 +45,14 @@ function AuditStep({ s }) {
   );
   if (s.t === 'intent') return <Line label="intent" kind="intent"><b>{s.intent}</b></Line>;
   if (s.t === 'model') return <Line label="model" kind="model">{s.action} {s.model} {s.ok ? '✓ loaded' : '✗ failed'}</Line>;
+  if (s.t === 'calculation') return (
+    <Line label="calc" kind="answer">
+      <code className="aud-calc">{s.shown} = {s.display}</code>
+      {(s.operands && s.operands.length)
+        ? <span className="aud-dim"> · {s.operands.map(op => op.raw + (op.cite ? ' (s' + op.cite.idx + ')' : '')).join(', ')}</span>
+        : null}
+    </Line>
+  );
   if (s.t === 'ground') return (
     <Line label="ground" kind="ground">
       <b>{s.hasGround ? 'has ground' : 'no ground'}</b>
@@ -101,6 +109,21 @@ function AuditStep({ s }) {
         {s.filtered != null && (
           <div className="aud-out"><span className="aud-role out">shown</span><pre>{s.filtered || '∅ (entirely think content — fell to the mechanical answer)'}</pre></div>
         )}
+      </div>
+      {s.ms != null && <span className="aud-dt">{s.ms}ms</span>}
+    </div>
+  );
+  if (s.t === 'compute') return (
+    <div className="aud-step">
+      <span className="aud-st compute">compute</span>
+      <div className="aud-sb">
+        <div className="aud-dim">python · pandas{s.durationMs != null ? ' · ' + s.durationMs + 'ms' : ''}{s.ok ? '' : ' · ⚠ error'}{s.truncated ? ' · truncated' : ''}</div>
+        <details className="aud-det" open>
+          <summary>code run locally</summary>
+          <div className="aud-msg"><span className="aud-role">python</span><pre>{s.code || '∅'}</pre></div>
+        </details>
+        {s.stdout ? <div className="aud-out"><span className="aud-role out">stdout</span><pre>{s.stdout}</pre></div> : null}
+        <div className="aud-out"><span className="aud-role out">{s.ok ? 'result' : 'error'}</span><pre>{s.ok ? (s.result || s.stdout || '∅') : (s.stderr || '∅')}</pre></div>
       </div>
       {s.ms != null && <span className="aud-dt">{s.ms}ms</span>}
     </div>
