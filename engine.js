@@ -7733,12 +7733,18 @@ function projectGraph(events, frame = {}) {
     if (!s || /\?/.test(s)) return false;
     const parts = splitDraft(s).map(p => p.trim()).filter(Boolean);
     if (!parts.length) return false;
-    // a pronoun + 's is the copula ("he's not a speaker"); a Name + 's is a
-    // possessive ("Edith's kettle…") and must NOT read as a proposition. The
-    // Name run admits digit words ("Speaker 4 was…"), like _CAP_RUN.
+    // EVERY clause must parse as a checkable proposition — copular ("Edith was
+    // the keeper"), article-led ("The treaty was signed in 1776"), OR
+    // verb-predicate ("Mara Velasquez founded Veldmar", "Shakespeare wrote
+    // Hamlet"). Delegating to parseProposition keeps the router and the checker
+    // in lockstep: anything classifyIntent sends to 'confirm' is something
+    // answerConfirm can actually check, so a transitive-verb or article-led
+    // assertion can never slip through to the grounded-QA path and be stamped
+    // "grounded" on retrieval coverage rather than truth. A demonstrative or
+    // wh-led clause ("That is wrong", "Which one…") is conversation, not a claim.
     return parts.every(p =>
-      /^(?:(?:[Hh]e|[Ss]he|[Ii]t|[Tt]hey)(?:\s+(?:is|was|are|were)\b|['’]s\s)|\p{Lu}[\p{L}’'\-]*(?:\s+(?:\p{Lu}[\p{L}’'\-]*|\d+))*\s+(?:is|was|are|were)\b)/u.test(p)
-      && !/^(?:What|Which|Whose|Where|When|Why|How|Who|That|This|There)\b/.test(p));
+      !/^(?:What|Which|Whose|Where|When|Why|How|Who|That|This|There)\b/.test(p)
+      && parseProposition(p) != null);
   }
   // A generative ask for an artistic form — "write a song/poem/story about
   // this". Distinct from "write a report/essay/summary" (those are overviews,
@@ -9236,9 +9242,17 @@ function projectGraph(events, frame = {}) {
     const cov = coverage(query, support.map(s => s.t).join(' '));
     const full = cov.n >= cov.d;
     const cites = support.map(s => ({ docId: doc.id, idx: s.i }));
-    // COVERAGE GATES THE BADGE. Thin coverage is HELD, not grounded: a "covers
-    // 1/4" answer must not wear the same green chip as a "covers 3/3" one.
-    if (cov.d && cov.n / cov.d < COVERAGE_FLOOR) return {
+    // COVERAGE GATES THE BADGE — but a STRONG lexical hit overrides a thin
+    // ratio. A long, multi-clause question inflates the denominator (every
+    // content term counts), so a single sentence that genuinely answers it can
+    // land under the floor on raw token ratio while still being the right line.
+    // When the best supporting line is a strong lexical match — the same ≥0.5
+    // bar routeTurn/referencesDoc already call a confident, answer-now hit —
+    // holding it as "ungrounded" would contradict the router that sent the turn
+    // here. So HOLD only when coverage is thin AND no strong anchor carries it;
+    // a "covers 1/4" answer on weak hits still must not wear the green chip.
+    const topScore = support.reduce((m, s) => Math.max(m, s.score || 0), 0);
+    if (cov.d && cov.n / cov.d < COVERAGE_FLOOR && topScore < 0.5) return {
       text, cites,
       audit: { status: 'held', grounded: false, covers: `${cov.n}/${cov.d}`, stable: true,
         note: 'These are the closest lines I found, but they don’t cover your question — holding rather than calling this grounded.' },
@@ -9322,19 +9336,51 @@ function projectGraph(events, frame = {}) {
   // a Name run may carry digit words ("Speaker 4", "Apollo 11") — the digits
   // are part of the label, and a transcript's voices are named exactly this way
   const _CAP_RUN = '\\p{Lu}[\\p{L}’\'\\-]*(?:\\s+(?:\\p{Lu}[\\p{L}’\'\\-]*|\\d+))*';
+  // A proposition can also lead with an article-led noun phrase ("The treaty
+  // was signed…", "A delegate spoke…") — a real common-noun head after the
+  // article, NOT a discourse filler ("the thing is…", "the point is…"). The
+  // head stays lower-case, so a proper-name run ("The Hague") still parses as
+  // a _CAP_RUN name rather than an article phrase.
+  const _ART_SUBJ = '(?:[Tt]he|[Aa]n?)\\s+\\p{Ll}[\\p{Ll}’\'\\-]*(?:\\s+\\p{Ll}[\\p{Ll}’\'\\-]*)*';
+  const _PROP_SUBJ = '(?:' + _CAP_RUN + '|' + _ART_SUBJ + '|[Hh]e|[Ss]he|[Ii]t|[Tt]hey)';
+  const _PROP_FILLER = new Set('thing things point problem problems fact facts truth idea ideas question questions answer answers deal issue issues reason reasons way ways case cases matter matters trouble catch kicker difference rest'.split(' '));
+  // The finite verb that heads a verb-predicate proposition ("Mara FOUNDED
+  // Veldmar", "Shakespeare WROTE Hamlet"): a regular -ed past or a closed set
+  // of common irregular pasts. Bare-stem imperatives ("tell", "list", "show")
+  // and function words never match, so an INSTRUCTION is never read as a CLAIM
+  // — only an assertion the page can actually be checked against.
+  const _IRREG_PAST = new Set('wrote made built led ran won lost sold bought gave took held met sent drew spoke knew grew became left kept told brought drove chose rose broke spent paid founded signed'.split(' '));
+  function _isPredVerb(w) {
+    const x = String(w == null ? '' : w).toLowerCase().replace(/[^a-z]/g, '');
+    return _IRREG_PAST.has(x) || /^[a-z]{3,}ed$/.test(x);
+  }
+  // Does an ordered token phrase sit as a CONTIGUOUS run inside a token list?
+  // The DEF check uses this instead of unordered set-membership: a predicate's
+  // head words must appear TOGETHER and IN ORDER in the page's own assertion,
+  // so a value that merely happens to contain both words apart ("the minister
+  // kept a white dog") no longer false-confirms "the white minister".
+  function _phraseRun(needle, hay) {
+    if (!needle.length || needle.length > hay.length) return false;
+    for (let i = 0; i + needle.length <= hay.length; i++) {
+      let ok = true;
+      for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) { ok = false; break; }
+      if (ok) return true;
+    }
+    return false;
+  }
   function parseProposition(sent) {
     let s = String(sent == null ? '' : sent).trim().replace(/[.?!]+\s*$/, '');
     let m = _CONFIRM_META_RE.exec(s); if (m) s = s.slice(m[0].length).trim();
     for (let i = 0; i < 3; i++) { m = _CONFIRM_FRAME_RE.exec(s); if (m && m[0].length) s = s.slice(m[0].length).trim(); else break; }
     s = s.replace(/[,;]?\s*(?:right|correct|true|no|yes)\s*$/i, '').trim();
-    let subject = null, negated = false, predicate = null;
+    let subject = null, negated = false, predicate = null, verbal = false;
     // interrogative: "Is SUBJ (not) PRED" — the copula leads
-    m = new RegExp('^(?:[Ii]s|[Ww]as|[Aa]re|[Ww]ere)\\s+((?:' + _CAP_RUN + ')|[Hh]e|[Ss]he|[Ii]t|[Tt]hey)\\s+(not\\s+)?(.+)$', 'u').exec(s);
+    m = new RegExp('^(?:[Ii]s|[Ww]as|[Aa]re|[Ww]ere)\\s+(' + _PROP_SUBJ + ')\\s+(not\\s+)?(.+)$', 'u').exec(s);
     if (m) { subject = m[1]; negated = !!m[2]; predicate = m[3]; }
     if (!subject) {
       // declarative: "SUBJ is (not|never) PRED" / "SUBJ isn't PRED" / "he's (not) PRED"
-      m = new RegExp('^((?:' + _CAP_RUN + ')|[Hh]e|[Ss]he|[Ii]t|[Tt]hey)\\s+(?:is|was|are|were)\\s+(not\\s+|never\\s+)?(.+)$', 'u').exec(s)
-        || new RegExp('^((?:' + _CAP_RUN + ')|[Hh]e|[Ss]he|[Ii]t|[Tt]hey)\\s+(?:isn’?\'?t|wasn’?\'?t|aren’?\'?t|weren’?\'?t)\\s+()(.+)$', 'u').exec(s)
+      m = new RegExp('^(' + _PROP_SUBJ + ')\\s+(?:is|was|are|were)\\s+(not\\s+|never\\s+)?(.+)$', 'u').exec(s)
+        || new RegExp('^(' + _PROP_SUBJ + ')\\s+(?:isn’?\'?t|wasn’?\'?t|aren’?\'?t|weren’?\'?t)\\s+()(.+)$', 'u').exec(s)
         || new RegExp('^([Hh]e|[Ss]he|[Ii]t|[Tt]hey)[’\']s\\s+(not\\s+)?(.+)$', 'u').exec(s);
       if (m) {
         subject = m[1];
@@ -9349,10 +9395,24 @@ function projectGraph(events, frame = {}) {
       m = new RegExp('^((?:' + _CAP_RUN + ')|[Hh]e|[Ss]he|[Tt]hey)\\s+(never\\s+|did\\s+not\\s+|didn’?\'?t\\s+|not\\s+)?(?:spoke|speaks?)\\b', 'u').exec(s2);
       if (m) { subject = m[1]; negated = !!m[2]; predicate = 'a speaker'; }
     }
+    if (!subject) {
+      // verb-predicate form: "SUBJ <finite verb> <object>" ("Mara Velasquez
+      // founded Veldmar", "Shakespeare wrote Hamlet"). A negating auxiliary
+      // ("did not" / "never") flips it and frees the verb to be a base stem;
+      // otherwise the verb must carry finite morphology (so a bare instruction
+      // — "Tell me everything" — is never mistaken for a claim about "Tell").
+      const mv = new RegExp('^(' + _PROP_SUBJ + ')\\s+(did\\s+not\\s+|didn’?\'?t\\s+|does\\s+not\\s+|doesn’?\'?t\\s+|never\\s+)?([a-z][a-z’\'\\-]*)\\s+(\\S.*)$', 'u').exec(s);
+      if (mv && (!!mv[2] || _isPredVerb(mv[3]))) {
+        subject = mv[1]; negated = !!mv[2]; predicate = (mv[3] + ' ' + mv[4]).trim(); verbal = true;
+      }
+    }
     if (!subject || !predicate) return null;
-    predicate = predicate.replace(/^(?:a|an|the)\s+/i, '').trim();
+    // an article-led subject must have a real noun head, not a discourse filler
+    // ("the thing is…", "the point is…") that only looks like a proposition.
+    if (/^(?:the|an?)\s/i.test(subject) && _PROP_FILLER.has(subject.trim().split(/\s+/).pop().toLowerCase())) return null;
+    if (!verbal) predicate = predicate.replace(/^(?:a|an|the)\s+/i, '').trim();
     if (!predicate) return null;
-    return { subject: subject.trim(), negated, predicate };
+    return { subject: subject.trim(), negated, predicate, verbal };
   }
   function answerConfirm(doc, query, opts = {}) {
     if (!doc || doc.kind !== 'prose') return null;
@@ -9385,11 +9445,54 @@ function projectGraph(events, frame = {}) {
       if (!ent && !body.includes(name.toLowerCase())) return null;   // absent subject → the anti-matter void answers instead
       const subject = ent ? ent.name : name;
       const subjKey = ent ? ent.key : k;
+      // VERB-PREDICATE claim ("X founded Y", "The treaty established Z") — the
+      // graph holds no copula DEF for a transitive verb, so it is checked
+      // against the PROSE directly, never against lexical overlap. A single
+      // sentence that mentions the subject, then the verb, then the object IN
+      // ORDER and unnegated, asserts it (confirmed, cited). Anything less is
+      // silence — attested as silence (⊥ with a receipt), so a false premise
+      // comes back unattested instead of stamped "grounded" by retrieval.
+      if (p.verbal) {
+        const texts = doc.sentenceTexts || [];
+        const vtok = tok(p.predicate);
+        const verb = vtok[0], objToks = vtok.slice(1);
+        const sents = ent ? ent.sents
+          : texts.map((_, i) => i).filter(i => (texts[i] || '').toLowerCase().includes(subject.toLowerCase()));
+        let hit = null;
+        for (const i of sents) {
+          const raw = texts[i] || '';
+          const st = tok(raw);
+          const vi = verb ? st.indexOf(verb) : -1;
+          if (vi < 0) continue;
+          let pos = vi + 1, ok = objToks.length > 0;
+          for (const t of objToks) { const at = st.indexOf(t, pos); if (at < 0) { ok = false; break; } pos = at + 1; }
+          if (!ok) continue;
+          if (/\b(?:not|never|cannot|no longer)\b|n['’]t\b/i.test(raw)) continue;  // a denial isn't a confirmation
+          hit = i; break;
+        }
+        if (hit != null && !p.negated) {
+          lines.push(`Yes — the page states this: “${texts[hit]}”${cite(hit)}`);
+          checks.push({ ...p, subject, verdict: 'confirmed' }); evidenced++;
+        } else if (hit != null && p.negated) {
+          lines.push(`No — the page does state that ${subject} ${p.predicate}.${cite(hit)} The denial contradicts the page.`);
+          checks.push({ ...p, subject, verdict: 'contradicted' }); evidenced++;
+        } else if (p.negated) {
+          lines.push(`Nothing on the page asserts that ${subject} ${p.predicate}, so the denial stands unchallenged. {{absent:${doc.id}:no sentence asserts that ${subject} ${p.predicate}}}`);
+          checks.push({ ...p, subject, verdict: 'confirmed-by-absence' }); evidenced++;
+        } else {
+          lines.push(`The page never asserts that ${subject} ${p.predicate}. I checked every line that mentions ${subject}, and none makes that claim. {{absent:${doc.id}:no sentence asserts that ${subject} ${p.predicate}}}`);
+          checks.push({ ...p, subject, verdict: 'unattested' }); bump('warn');
+        }
+        continue;
+      }
       const predHead = tok(p.predicate).slice(0, 2);
-      // 1) the page's own DEF assertions — claim against claim
+      // 1) the page's own DEF assertions — claim against claim. The predicate's
+      // head words must sit TOGETHER and IN ORDER inside the page's assertion (a
+      // contiguous phrase), not merely co-occur unordered — otherwise a value
+      // that happens to contain both head words apart would false-confirm.
       const held = predHead.length ? defs.find(d =>
         (d.key === subjKey || (subjKey.length >= 4 && (_keyWithin(subjKey, d.key) || _keyWithin(d.key, subjKey))))
-        && (() => { const isToks = new Set(tok(d.is)); return predHead.every(t => isToks.has(t)); })()) : null;
+        && _phraseRun(predHead, tok(d.is))) : null;
       if (held) {
         if (!p.negated) lines.push(`Yes — the page itself asserts ${subject} is ${held.is}.${cite(held.sent)}`);
         else lines.push(`No — the page itself asserts ${subject} is ${held.is}${cite(held.sent)} — the denial contradicts the page.`);

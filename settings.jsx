@@ -24,7 +24,7 @@ window.EOTheme = { apply: applyTheme };
 
 function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                          pythonEnabled, onPythonEnabled, pythonAvailable,
-                         onClearData, storageOK }) {
+                         groundingInfo, onGroundingInfo, onClearData, storageOK }) {
   const dialogRef = window.useDialog(onClose);
   const [confirmClear, setConfirmClear] = React.useState(false);
 
@@ -89,6 +89,20 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
               </div>
             </section>
           )}
+
+          <section className="set-section">
+            <h3 className="set-h">Answers</h3>
+
+            <div className="set-row">
+              <div className="set-row-main">
+                <div className="set-label">Grounding details</div>
+                <div className="set-sub">Show the “grounded · covers · stable” badge and its note beneath each answer. Turn off for a cleaner reply; citations and the glass-box trace are unaffected.</div>
+              </div>
+              <button className={'switch' + (groundingInfo !== false ? ' on' : '')} role="switch"
+                      aria-checked={groundingInfo !== false} aria-label="Grounding details"
+                      onClick={() => onGroundingInfo(groundingInfo === false)} />
+            </div>
+          </section>
 
           <section className="set-section">
             <h3 className="set-h">Privacy &amp; data</h3>
