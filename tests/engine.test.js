@@ -8,7 +8,9 @@
    behaviour-preserving.
    ============================================================ */
 'use strict';
-const { loadEngine, VOSS, CSV } = require('./harness');
+const fs = require('fs');
+const path = require('path');
+const { loadEngine, VOSS, CSV, ROOT } = require('./harness');
 const ENG = loadEngine();
 const E = ENG.EOEngine;
 const parsePivot = (q, doc) => ENG.parsePivot(q, doc);
@@ -1140,6 +1142,40 @@ await group('graph portrait — widened surface stays additive', async () => {
   const snap = E.graphSnapshot(voss);
   ok(['tail', 'nulls', 'signals', 'defs'].every(k => k in snap), 'graphSnapshot surfaces tail/nulls/signals/defs');
   eq(snap.schema, 'cleo-graph/1', 'snapshot schema unchanged');
+});
+
+// ── portrait relations: predicates between NAMED figures, never coref noise ──
+// Regression for the pg5200 (Metamorphosis) summary that read "God thought,
+// Gregor Samsa; … Mrs. Samsa checking. Gregor Samsa" — relations reconstructed
+// through mis-resolved pronouns ("she … it" → the protagonist) and verbs that
+// trapped clause/sentence punctuation. A relation is portrayed only when the
+// text states it with BOTH parties named at least once; the verb is a clean
+// predicate. The named-on-both-ends relation survives ("Edith thought Marlow").
+await group('portrait — relations are named predicates, not coref noise', async () => {
+  const PRON = /^(he|she|it|they|him|her|them|his|hers|its|their|theirs|this|that|these|those|who|whom|i|we|you|us|me)$/i;
+  const cleanVerb = (v) => /^[\p{L}][\p{L}\s'’-]*$/u.test(v);
+  const namedBothEnds = (doc, ed) => (ed.eventSeqs || []).some(sq => {
+    const ev = doc._events.find(e => e.seq === sq);
+    return ev && ev.s != null && ev.o != null && !PRON.test(String(ev.s).trim()) && !PRON.test(String(ev.o).trim());
+  });
+  const assertClean = (doc, label) => {
+    for (const ed of E.graphPortrait(doc).heavyEdges) {
+      ok(cleanVerb(ed.verb), `${label}: relation verb is a clean predicate, no punctuation (got ${JSON.stringify(ed.verb)})`);
+      ok(namedBothEnds(doc, ed), `${label}: relation [${ed.aName} ${ed.verb} ${ed.bName}] is stated with both figures named, not via coreference`);
+    }
+  };
+  // Positive: the golden named relation is kept and stays clean.
+  const vossEdges = E.graphPortrait(voss).heavyEdges;
+  ok(vossEdges.some(ed => /Edith/.test(ed.aName) && /Marlow/.test(ed.bName) && ed.verb === 'thought'),
+     'a named relation survives: Edith thought Marlow');
+  assertClean(voss, 'voss');
+  // The reported corpus itself: before the fix this portrait drew "God thought,
+  // Gregor Samsa" and "Mrs. Samsa checking. Gregor Samsa" off pronoun coref.
+  const pg5200Path = path.join(ROOT, 'evo/corpus/pg5200.txt');
+  if (fs.existsSync(pg5200Path)) {
+    const meta = await E.parseDocument('pg5200.txt', fs.readFileSync(pg5200Path, 'utf8'), 'pg5200');
+    assertClean(meta, 'pg5200');
+  }
 });
 
 // ── talker portrait + the one LLM step + mechanical EVA (WI-5) ────────

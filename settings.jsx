@@ -24,15 +24,60 @@ window.EOTheme = { apply: applyTheme };
 
 function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                          pythonEnabled, onPythonEnabled, pythonAvailable,
-                         groundingInfo, onGroundingInfo, onClearData, storageOK }) {
+                         groundingInfo, onGroundingInfo, wikiMode, onWikiMode,
+                         onClearData, storageOK }) {
   const dialogRef = window.useDialog(onClose);
   const [confirmClear, setConfirmClear] = React.useState(false);
+  // Local storage health: how much of the origin's quota the cached model
+  // shards (and everything else Cleon keeps) are using, plus whether the
+  // browser has promised not to evict them. Surfaces the "no hard
+  // redownload" guarantee: a persisted origin's models stay cached across
+  // sessions; a best-effort origin can be wiped under storage pressure.
+  const [storage, setStorage] = React.useState(null);
+  const [persisted, setPersisted] = React.useState(null);
+  React.useEffect(() => {
+    const L = window.EOLLM;
+    let alive = true;
+    (async () => {
+      try {
+        const est = L && L.storageEstimate ? await L.storageEstimate() : null;
+        if (alive) setStorage(est);
+      } catch (_) {}
+      try {
+        if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.persisted === 'function') {
+          const ok = await navigator.storage.persisted();
+          if (alive) setPersisted(!!ok);
+        }
+      } catch (_) {}
+    })();
+    return () => { alive = false; };
+  }, []);
+  const fmtMB = (n) => {
+    if (!n || !isFinite(n)) return '0 MB';
+    if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+    return Math.round(n / (1024 * 1024)) + ' MB';
+  };
+  const askPersist = async () => {
+    try {
+      const L = window.EOLLM;
+      const ok = L && L.persistStorage ? await L.persistStorage() : false;
+      setPersisted(!!ok);
+    } catch (_) {}
+  };
 
   const THEMES = [
     { id: 'system', label: 'System' },
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
   ];
+
+  // Reference desk (Wikipedia) — a tri-state mirroring the answer-mode control.
+  const WIKI_MODES = [
+    { id: 'off', label: 'Off', sub: 'Never contacts Wikipedia. Fully local.' },
+    { id: 'auto', label: 'Auto', sub: 'Looks something up only when you ask to (a “look up X” style request) and it isn’t already in your documents.' },
+    { id: 'on', label: 'On', sub: 'Attaches a Wikipedia + Wiktionary card to every message.' },
+  ];
+  const wikiSub = (WIKI_MODES.find(w => w.id === wikiMode) || WIKI_MODES[1]).sub;
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -105,6 +150,23 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
           </section>
 
           <section className="set-section">
+            <h3 className="set-h">Reference desk</h3>
+
+            <div className="set-row">
+              <div className="set-row-main">
+                <div className="set-label">Wikipedia reference desk</div>
+                <div className="set-sub">{wikiSub}</div>
+              </div>
+              <div className="set-seg" role="group" aria-label="Wikipedia reference desk">
+                {WIKI_MODES.map(w => (
+                  <button key={w.id} className={wikiMode === w.id ? 'on' : ''}
+                          aria-pressed={wikiMode === w.id} onClick={() => onWikiMode(w.id)}>{w.label}</button>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="set-section">
             <h3 className="set-h">Privacy &amp; data</h3>
 
             <div className={'set-note' + (storageOK ? '' : ' warn')}>
@@ -113,6 +175,23 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                 ? 'Saved on this device only — nothing is uploaded. A refresh keeps your workspace.'
                 : 'Local storage is unavailable here, so this session won’t persist after you close the tab.'}</span>
             </div>
+
+            {storage && (
+              <div className="set-row">
+                <div className="set-row-main">
+                  <div className="set-label">Storage on this device</div>
+                  <div className="set-sub">
+                    {fmtMB(storage.usage)}{storage.quota ? ' of ' + fmtMB(storage.quota) + ' available' : ''} —
+                    {' '}covers everything Cleon keeps, including any model weights you’ve downloaded so they don’t fetch again.
+                    {persisted === true && ' This origin is persistent, so the cache won’t be evicted under storage pressure.'}
+                    {persisted === false && ' This origin is best-effort, so the browser may evict cached models. Mark persistent to keep them.'}
+                  </div>
+                </div>
+                {persisted === false && (
+                  <button className="mini-btn" onClick={askPersist}>Mark persistent</button>
+                )}
+              </div>
+            )}
 
             <div className="set-row">
               <div className="set-row-main">

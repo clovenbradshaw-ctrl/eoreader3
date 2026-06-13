@@ -2,28 +2,118 @@
 
 const ENT_COLOR = { person: '#2a6fdb', place: '#1f8a5b', org: '#8a6a16', thing: '#6b7280' };
 
-/* highlight known entity names inside a sentence (explore mode) */
-function highlightEntities(text, byType, onEntity) {
+/* Compile the entity highlighter ONCE per projection, not once per sentence.
+   The old highlightEntities rebuilt an alternation regex on every call; over a
+   long document in explore mode that was thousands of recompiles per render. */
+function buildEntityMatcher(byType) {
   const all = [];
   for (const [cls, names] of Object.entries(byType || {})) for (const n of names) all.push({ n, cls });
+  if (!all.length) return null;
   all.sort((a, b) => b.n.length - a.n.length);
-  if (!all.length) return text;
   const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp('\\b(' + all.map(e => esc(e.n)).join('|') + ')\\b', 'g');
+  const cls = new Map(all.map(e => [e.n, e.cls]));
+  return { re, cls };
+}
+
+/* Highlight known entity names inside one sentence using a prebuilt matcher. */
+function renderWithEntities(text, matcher, onEntity) {
+  if (!matcher) return text;
+  const { re, cls } = matcher;
+  re.lastIndex = 0;
   const out = []; let last = 0, m, k = 0;
   while ((m = re.exec(text)) !== null) {
     const name = m[0];
     if (m.index > last) out.push(text.slice(last, m.index));
-    const hit = all.find(e => e.n === name);
-    out.push(<span key={k++} className={'ent ' + (hit ? hit.cls : '')} onClick={(e) => { e.stopPropagation(); onEntity && onEntity(name); }}>{name}</span>);
+    out.push(<span key={k++} className={'ent ' + (cls.get(name) || '')} onClick={(e) => { e.stopPropagation(); onEntity && onEntity(name); }}>{name}</span>);
     last = m.index + name.length;
+    if (re.lastIndex === m.index) re.lastIndex++;   // never spin on a zero-width hit
   }
   if (last < text.length) out.push(text.slice(last));
-  return out;
+  return out.length ? out : text;
 }
+
+// How the document is sliced for rendering. A very long paragraph is broken
+// into rows of at most ROW_SENTENCES spans so one mega-paragraph can't mount
+// thousands of nodes at once; rows are grouped into pages, and pages are
+// revealed a few per frame. This keeps the tab responsive while a big document
+// streams in — and, because every page eventually mounts, citations and the
+// browser's Find still reach the whole text once it has settled.
+const ROW_SENTENCES = 25;   // max spans in one <p> — caps a mega-paragraph
+const PAGE_ROWS = 8;        // rows per memoized page (≤ 200 spans/page)
+const INITIAL_PAGES = 4;    // shown on first paint (fills a screen, stays snappy)
+const STEP_PAGES = 4;       // pages added per animation frame thereafter
+
+/* One revealed page: a memoized slab of rows. It only re-renders when its own
+   props change — crucially, `flash` is the flashed sentence index ONLY when it
+   falls inside this page (else -1), so following a citation re-renders just the
+   one page that owns it, not the whole document. */
+const ProsePage = React.memo(function ProsePage({ rows, startRow, docId, explore, matcher, flash, onEntity, onCite }) {
+  return rows.map((r, j) => {
+    const key = startRow + j;
+    if (r.type === 'h1') return <h1 key={key} className="doc-h1">{r.text}</h1>;
+    if (r.type === 'h2') return <div key={key} className="doc-h2">{r.text}</div>;
+    return (
+      <p key={key} className="doc-p">
+        {r.sentences.map(s => (
+          <span key={s.i} id={'sent-' + docId + '-' + s.i} className={'sent' + (flash === s.i ? ' flash' : '')}>
+            {explore && <span className="sidx" title="cite this sentence" onClick={() => onCite(docId, s.i)}>s{s.i}</span>}
+            {explore ? renderWithEntities(s.t, matcher, onEntity) : s.t}{' '}
+          </span>
+        ))}
+      </p>
+    );
+  });
+});
 
 function ProseDoc({ doc, explore, onEntity, activeEntity, flashSent, onCite }) {
   const proj = window.EOEngine.projectEntities(doc);
+  // Keep the per-page callbacks stable so React.memo can actually skip pages:
+  // onEntity from the app isn't memoized, so route both through refs.
+  const onEntityRef = React.useRef(onEntity); onEntityRef.current = onEntity;
+  const onCiteRef = React.useRef(onCite); onCiteRef.current = onCite;
+  const stableEntity = React.useCallback((n) => onEntityRef.current && onEntityRef.current(n), []);
+  const stableCite = React.useCallback((d, i) => onCiteRef.current && onCiteRef.current(d, i), []);
+
+  const matcher = React.useMemo(() => (explore ? buildEntityMatcher(proj.byType) : null), [proj, explore]);
+
+  // Flatten blocks into render rows (splitting any over-long paragraph), then
+  // group rows into pages with their sentence-index span (for flash routing).
+  const pages = React.useMemo(() => {
+    const rows = [];
+    for (const b of (doc.blocks || [])) {
+      if (b.type === 'h1' || b.type === 'h2') { rows.push({ type: b.type, text: b.text }); continue; }
+      const ss = b.sentences || [];
+      if (ss.length <= ROW_SENTENCES) { rows.push({ type: 'p', sentences: ss }); continue; }
+      for (let i = 0; i < ss.length; i += ROW_SENTENCES) rows.push({ type: 'p', sentences: ss.slice(i, i + ROW_SENTENCES) });
+    }
+    const out = [];
+    for (let i = 0; i < rows.length; i += PAGE_ROWS) {
+      const slice = rows.slice(i, i + PAGE_ROWS);
+      let lo = Infinity, hi = -Infinity;
+      for (const r of slice) if (r.type === 'p') for (const s of r.sentences) { if (s.i < lo) lo = s.i; if (s.i > hi) hi = s.i; }
+      out.push({ start: i, rows: slice, lo: lo === Infinity ? null : lo, hi: hi === -Infinity ? null : hi });
+    }
+    return out;
+  }, [doc]);
+
+  // Progressive reveal: start with a few pages, then add a few per frame until
+  // the whole document is mounted. Resets when the open document changes.
+  const [visible, setVisible] = React.useState(INITIAL_PAGES);
+  React.useEffect(() => { setVisible(INITIAL_PAGES); }, [doc.id]);
+  React.useEffect(() => {
+    if (visible >= pages.length) return;
+    const raf = requestAnimationFrame(() => setVisible(v => Math.min(pages.length, v + STEP_PAGES)));
+    return () => cancelAnimationFrame(raf);
+  }, [visible, pages.length, doc.id]);
+  // Following a citation may target a sentence below the reveal frontier — jump
+  // the frontier so the node exists for the scroll-into-view to find.
+  React.useEffect(() => {
+    if (flashSent == null) return;
+    const idx = pages.findIndex(p => p.lo != null && flashSent >= p.lo && flashSent <= p.hi);
+    if (idx >= 0) setVisible(v => Math.max(v, Math.min(pages.length, idx + 2)));
+  }, [flashSent, pages]);
+
   return (
     <div className={'doc-scroll' + (explore ? ' explore-on' : '')}>
       {explore && (
@@ -40,20 +130,17 @@ function ProseDoc({ doc, explore, onEntity, activeEntity, flashSent, onCite }) {
       )}
       {explore && window.ReferenceDeskBar && <window.ReferenceDeskBar entities={proj.entities} />}
       <div className="prose">
-        {doc.blocks.map((b, bi) => {
-          if (b.type === 'h1') return <h1 key={bi} className="doc-h1">{b.text}</h1>;
-          if (b.type === 'h2') return <div key={bi} className="doc-h2">{b.text}</div>;
-          return (
-            <p key={bi} className="doc-p">
-              {b.sentences.map(s => (
-                <span key={s.i} id={'sent-' + doc.id + '-' + s.i} className={'sent' + (flashSent === s.i ? ' flash' : '')}>
-                  {explore && <span className="sidx" title="cite this sentence" onClick={() => onCite(doc.id, s.i)}>s{s.i}</span>}
-                  {explore ? highlightEntities(s.t, proj.byType, onEntity) : s.t}{' '}
-                </span>
-              ))}
-            </p>
-          );
-        })}
+        {pages.slice(0, visible).map(pg => (
+          <ProsePage key={pg.start} startRow={pg.start} rows={pg.rows} docId={doc.id}
+            explore={explore} matcher={matcher}
+            flash={(flashSent != null && pg.lo != null && flashSent >= pg.lo && flashSent <= pg.hi) ? flashSent : -1}
+            onEntity={stableEntity} onCite={stableCite} />
+        ))}
+        {visible < pages.length && (
+          <div className="prose-more" role="status" aria-live="polite">
+            <span className="pm-orb" aria-hidden="true" /> Reading the rest of the document… {Math.round(visible / pages.length * 100)}%
+          </div>
+        )}
       </div>
     </div>
   );
@@ -264,7 +351,7 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
       {!cur ? <div className="empty-doc">No document open</div>
         : cur.kind === 'entity' ? <EntityView doc={cur.doc} name={cur.name} onCite={onCite} onEntity={onEntity} />
         : cur.kind === 'table' ? <TableDoc doc={cur.doc} initialSpec={tableSpec} />
-        : <ProseDoc doc={cur.doc} explore={explore} onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={onCite} />}
+        : <ProseDoc key={cur.doc.id} doc={cur.doc} explore={explore} onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={onCite} />}
     </aside>
   );
 }

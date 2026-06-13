@@ -513,7 +513,14 @@ async function groupA(name, fn) { console.log('• ' + name); await fn(); }
     ok(typeof LLM.fallbackKey() === 'string' && /^wllama:/.test(LLM.fallbackKey()), 'fallbackKey() names a wllama model');
     const reg = LLM.wllamaModels();
     ok(reg && Object.keys(reg).length >= 1, 'wllamaModels() exposes the id→source registry');
-    ok(Object.values(reg).every(m => m && /^https?:/.test(m.url)), 'every registry entry carries a model URL');
+    // Each entry exposes a mirror list as `urls` (an array of equivalent
+    // download sources tried in order). A single-URL legacy shape is still
+    // accepted via the `url` shorthand; the contract is "at least one
+    // resolvable URL on every entry".
+    ok(Object.values(reg).every(m => {
+      const list = (m && m.urls && m.urls.length ? m.urls : (m && m.url ? [m.url] : []));
+      return list.length > 0 && list.every(u => /^https?:/.test(u));
+    }), 'every registry entry carries at least one model URL (urls[] or url)');
   });
 
   await groupA('a wllama model loads on the CPU (no WebGPU) and reports ready', async () => {

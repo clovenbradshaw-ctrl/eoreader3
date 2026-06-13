@@ -321,8 +321,9 @@ function RulesDrawer({ rules, langModes, learnedByLang, onToggle, onInstall, onS
 }
 
 /* ============================================================ Model popover */
-function ModelPopover({ models, current, onPick, onClose, anchor, status, progress, loadText, onReset, onCancel, webgpu, anthropicKeySet, onSetAnthropicKey }) {
+function ModelPopover({ models, current, onPick, onClose, anchor, status, progress, loadText, onReset, onCancel, webgpu, anthropicKeySet, onSetAnthropicKey, onUploadModel }) {
   const ref = window.useDialog(onClose);
+  const uploadRef = React.useRef(null);
   React.useEffect(() => {
     // Close only on a genuine outside press. A containment check on mousedown
     // (instead of a bare window 'click' → onClose) means a press on a model
@@ -340,8 +341,28 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
   const style = anchor ? { left: anchor.left, bottom: anchor.bottom } : { left: 16, bottom: 60 };
   const pct = Math.round((progress || 0) * 100);
   const [keyDraft, setKeyDraft] = React.useState('');
+  // Per-row "cached on this device" flags — drives the badge that tells a
+  // reader the row is a fast re-instantiate (no download) rather than a
+  // multi-gig fetch. Queried on open (and after a load completes, since a
+  // freshly-finished download flips a row from uncached to cached); cheap
+  // best-effort lookup, no flicker if it never resolves.
+  const [cached, setCached] = React.useState({});
+  React.useEffect(() => {
+    const L = window.EOLLM;
+    if (!L || !L.cacheStatus) return;
+    let alive = true;
+    (async () => {
+      const out = {};
+      for (const m of models) {
+        try { const s = await L.cacheStatus(m.mlc); if (s && s.cached) out[m.id] = true; } catch (_) {}
+      }
+      if (alive) setCached(out);
+    })();
+    return () => { alive = false; };
+  }, [models, status]);
   const gpu = models.filter(m => !m.provider);
-  const cpu = models.filter(m => m.provider === 'wllama');
+  const cpu = models.filter(m => m.provider === 'wllama' && !m.uploaded);
+  const uploaded = models.filter(m => m.provider === 'wllama' && m.uploaded);
   const cloud = models.filter(m => m.provider === 'anthropic');
   const curIsCloud = current.provider === 'anthropic';
   const curIsCpu = current.provider === 'wllama';
@@ -350,13 +371,21 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
   const row = (m) => {
     const isCur = m.id === current.id;
     const state = isCur ? status : 'idle';
-    const idle = m.provider === 'anthropic' ? 'Use' : 'Load';
+    const isCached = !!cached[m.id];
+    // A cached row is a fast re-instantiate (bytes on disk); the action label
+    // shifts to "Use" so the reader knows there's no fresh download coming.
+    const idle = m.provider === 'anthropic' ? 'Use' : (isCached ? 'Use' : 'Load');
     return (
       <div key={m.id} role="button" tabIndex={0} aria-pressed={isCur}
         className={'pop-item' + (isCur ? ' sel' : '')} onClick={() => onPick(m)}
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(m); } }}>
         <div className="pi-main">
-          <div className="pi-n">{m.name}</div>
+          <div className="pi-n">
+            {m.name}
+            {isCached && state !== 'ready' && (
+              <span className="pi-cached" title="Already cached on this device — no download needed">cached</span>
+            )}
+          </div>
           <div className="pi-d">{m.detail}</div>
         </div>
         {state === 'loading' ? <span className="pi-state load">{m.provider === 'anthropic' ? '…' : pct + '%'}</span>
@@ -398,7 +427,22 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
             <div className="ph" style={{ paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 4 }}>On your CPU · WebAssembly · no GPU needed</div>
             {cpu.map(row)}
             <div className="pop-status wrap">Runs the model on your CPU — works in any browser and stands in automatically when a GPU model stalls. Slower than the GPU tier; downloads once, then cached.</div>
-            {status === 'loading' && curIsCpu && loadBar}
+            {status === 'loading' && curIsCpu && !current.uploaded && loadBar}
+          </React.Fragment>
+        )}
+
+        {onUploadModel && (
+          <React.Fragment>
+            <div className="ph" style={{ paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 4 }}>Upload your own · GGUF</div>
+            {uploaded.map(row)}
+            <input ref={uploadRef} type="file" accept=".gguf,application/octet-stream"
+              style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files && e.target.files[0]; if (f) onUploadModel(f); e.target.value = ''; }} />
+            <button type="button" className="pop-reset" onClick={() => uploadRef.current && uploadRef.current.click()}>
+              Choose a .gguf file…
+            </button>
+            <div className="pop-status wrap">Loads a GGUF you already have on disk into the on-device CPU runtime — handy for a model that isn’t listed above. Kept for this session only; a refresh forgets it.</div>
+            {status === 'loading' && curIsCpu && current.uploaded && loadBar}
           </React.Fragment>
         )}
 

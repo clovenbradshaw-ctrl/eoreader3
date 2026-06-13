@@ -1,50 +1,279 @@
 /* ============================================================ Chat pane ==== */
-const CITE_RE = /\{\{(cite|void|infer|absent):([^}]*)\}\}/g;
+/* ── Markdown rendering for Cleo's replies ────────────────────────────────
+   Cleo's drafts are written by a language model, which speaks Markdown
+   natively — headings, bullet/numbered lists, fenced code, blockquotes, and
+   inline **bold** / *italic* / `code` / [links]. The reply ALSO carries this
+   app's own citation markers ({{cite:…}}, {{void:…}}, {{infer:…}}, {{absent:…}}),
+   which are not Markdown: they render to interactive chips wired to onCite. We
+   therefore can't hand the text to an HTML-emitting Markdown library and lose
+   the click targets — so this is a small, dependency-free renderer that emits
+   React elements directly and treats the citation markers as first-class inline
+   tokens alongside the Markdown ones.
 
-function renderAnswer(text, onCite) {
-  return String(text).split('\n\n').map((block, bi) => {
-    const parts = []; let last = 0, m; CITE_RE.lastIndex = 0;
-    while ((m = CITE_RE.exec(block)) !== null) {
-      if (m.index > last) parts.push(renderBold(block.slice(last, m.index), bi + '-' + last));
-      if (m[1] === 'cite') {
-        const [docId, idx, label] = m[2].split(':');
-        parts.push(<button key={m.index} type="button" className="cite" title={'Jump to ' + label + ' in the document'}
-          onClick={() => onCite(docId, parseInt(idx, 10))}>{label}</button>);
-      } else if (m[1] === 'infer') {
-        // The inference void: a claim the reader phrased across two cited spans the
-        // page never connects. A third chip, between grounded and held.
-        const [docId, pair, label] = m[2].split(':');
-        const b = parseInt(String(pair || '').split('+')[1], 10);
-        parts.push(<button key={m.index} type="button" className="cite infer"
-          title="Inferred — the field linked these spans; the page never states the connection outright"
-          onClick={() => onCite(docId, b)}>{label}</button>);
-      } else if (m[1] === 'absent') {
-        // Absence attestation: a negative claim ("never mentioned as a
-        // speaker") cites ⊥ with the receipt of what was scanned — no single
-        // line can support a claim about the whole document, but a full scan
-        // of the event log can. The receipt rides in the tooltip.
-        const i = m[2].indexOf(':');
-        const receipt = i >= 0 ? m[2].slice(i + 1) : m[2];
-        parts.push(<span key={m.index} className="cite absent"
-          title={'Absence attested mechanically — ' + receipt}>⊥</span>);
-      } else {
-        parts.push(<span key={m.index} className="cite void" title="This term appears nowhere in the sources">{m[2]}</span>);
-      }
-      last = m.index + m[0].length;
-    }
-    if (last < block.length) parts.push(renderBold(block.slice(last), bi + '-end'));
-    return <p key={bi}>{parts}</p>;
-  });
-}
-/* lightweight **bold** */
-function renderBold(s, key) {
-  const out = []; let last = 0, m, k = 0; const re = /\*\*([^*]+)\*\*/g;
-  while ((m = re.exec(s)) !== null) {
-    if (m.index > last) out.push(s.slice(last, m.index));
-    out.push(<strong key={key + '-' + k++}>{m[1]}</strong>); last = m.index + m[0].length;
+   Two properties matter as much as coverage:
+   • Streaming-safe — replies arrive token by token, so the text is routinely
+     mid-construct (an unclosed **, a half-written ``` fence). Every inline
+     matcher is anchored on its closing delimiter, so an unterminated construct
+     renders as the literal characters typed so far and resolves once its closer
+     streams in. Nothing throws on partial input.
+   • Citation-faithful — the marker grammar and the chip markup are exactly the
+     ones the old renderer used; only the surrounding prose gained structure. */
+
+/* A single citation/void/infer/absent marker → its chip. Kept identical to the
+   original renderer so grounded-answer chips are byte-for-byte the same. */
+function renderCite(kind, payload, key, onCite) {
+  if (kind === 'cite') {
+    const [docId, idx, label] = payload.split(':');
+    return <button key={key} type="button" className="cite" title={'Jump to ' + label + ' in the document'}
+      onClick={() => onCite(docId, parseInt(idx, 10))}>{label}</button>;
   }
-  if (last < s.length) out.push(s.slice(last));
+  if (kind === 'infer') {
+    // The inference void: a claim the reader phrased across two cited spans the
+    // page never connects. A third chip, between grounded and held.
+    const [docId, pair, label] = payload.split(':');
+    const b = parseInt(String(pair || '').split('+')[1], 10);
+    return <button key={key} type="button" className="cite infer"
+      title="Inferred — the field linked these spans; the page never states the connection outright"
+      onClick={() => onCite(docId, b)}>{label}</button>;
+  }
+  if (kind === 'absent') {
+    // Absence attestation: a negative claim ("never mentioned as a speaker")
+    // cites ⊥ with the receipt of what was scanned — no single line can support
+    // a claim about the whole document, but a full scan of the event log can.
+    // The receipt rides in the tooltip.
+    const i = payload.indexOf(':');
+    const receipt = i >= 0 ? payload.slice(i + 1) : payload;
+    return <span key={key} className="cite absent" title={'Absence attested mechanically — ' + receipt}>⊥</span>;
+  }
+  return <span key={key} className="cite void" title="This term appears nowhere in the sources">{payload}</span>;
+}
+
+/* ── Inline pass ──────────────────────────────────────────────────────────
+   Scans a run of text for the earliest inline construct, renders the literal
+   text before it, renders the construct (recursing for the nestable ones), and
+   continues. Rules are tried in precedence order so a tie at the same index
+   resolves correctly (e.g. `**` opens strong, not two ems). `code` and the
+   citation markers are leaves — their content is literal and never re-parsed.
+   The emphasis bodies forbid a leading/trailing space (`\S(?:[\s\S]*?\S)?`),
+   so `a * b * c` and other stray asterisks aren't turned into emphasis. */
+const INLINE_RULES = [
+  { kind: 'code',     re: /`([^`\n]+)`/g },
+  { kind: 'cite',     re: /\{\{(cite|void|infer|absent):([^}]*)\}\}/g },
+  { kind: 'image',    re: /!\[([^\]]*)\]\(([^\s)]+)\)/g },
+  { kind: 'link',     re: /\[([^\]]+)\]\(([^\s)]+)\)/g },
+  { kind: 'strongem', re: /\*\*\*(\S(?:[\s\S]*?\S)?)\*\*\*/g },
+  { kind: 'strong',   re: /\*\*(\S(?:[\s\S]*?\S)?)\*\*/g },
+  { kind: 'strong',   re: /__(\S(?:[\s\S]*?\S)?)__/g, guard: notIntraWord },
+  { kind: 'em',       re: /\*(\S(?:[\s\S]*?\S)?)\*/g },
+  { kind: 'em',       re: /_(\S(?:[\s\S]*?\S)?)_/g, guard: notIntraWord },
+  { kind: 'strike',   re: /~~(\S(?:[\s\S]*?\S)?)~~/g },
+];
+// Underscore emphasis only at a word boundary, so snake_case and __dunder__
+// identifiers in prose aren't mangled into emphasis. (Done in JS rather than a
+// regex lookbehind, which older Safari can't even parse.)
+function notIntraWord(s, m) {
+  const before = m.index > 0 ? s[m.index - 1] : ' ';
+  const after = m.index + m[0].length < s.length ? s[m.index + m[0].length] : ' ';
+  return !/\w/.test(before) && !/\w/.test(after);
+}
+
+function nextInline(s, from) {
+  let best = null;
+  for (const rule of INLINE_RULES) {
+    rule.re.lastIndex = from;
+    let m;
+    while ((m = rule.re.exec(s)) !== null) {
+      if (rule.guard && !rule.guard(s, m)) { rule.re.lastIndex = m.index + 1; continue; }
+      break;
+    }
+    if (m && (best === null || m.index < best.index)) best = { kind: rule.kind, index: m.index, m };
+  }
+  return best;
+}
+
+function renderInline(text, key, onCite) {
+  const s = String(text == null ? '' : text);
+  const out = [];
+  let i = 0, k = 0;
+  while (i < s.length) {
+    const hit = nextInline(s, i);
+    if (!hit) { pushText(out, s.slice(i), key + ':t' + k++); break; }
+    if (hit.index > i) pushText(out, s.slice(i, hit.index), key + ':t' + k++);
+    out.push(renderInlineToken(hit, key + ':n' + k++, onCite));
+    i = hit.index + hit.m[0].length;
+  }
   return <React.Fragment key={key}>{out}</React.Fragment>;
+}
+
+function renderInlineToken(hit, key, onCite) {
+  const m = hit.m;
+  switch (hit.kind) {
+    case 'code':     return <code key={key} className="md-code-inline">{m[1]}</code>;
+    case 'cite':     return renderCite(m[1], m[2], key, onCite);
+    case 'image':    return renderLink(m[2], m[1] || m[2], key, onCite);   // show alt/url as a link — never fetch remote media into the chat
+    case 'link':     return renderLink(m[2], m[1], key, onCite);
+    case 'strongem': return <strong key={key}><em>{renderInline(m[1], key + 'i', onCite)}</em></strong>;
+    case 'strong':   return <strong key={key}>{renderInline(m[1], key + 'i', onCite)}</strong>;
+    case 'em':       return <em key={key}>{renderInline(m[1], key + 'i', onCite)}</em>;
+    case 'strike':   return <del key={key}>{renderInline(m[1], key + 'i', onCite)}</del>;
+    default:         return <React.Fragment key={key}>{m[0]}</React.Fragment>;
+  }
+}
+
+function renderLink(href, label, key, onCite) {
+  // Only benign schemes become real anchors; anything else (javascript:, data:,
+  // …) degrades to its label text so a model can't emit a live dangerous link.
+  // Opens in a new tab with the opener/referrer severed.
+  const safe = /^(https?:\/\/|mailto:|\/|#)/i.test(String(href || ''));
+  const inner = renderInline(label, key + 'i', onCite);
+  return safe
+    ? <a key={key} className="md-link" href={href} target="_blank" rel="noopener noreferrer nofollow">{inner}</a>
+    : <React.Fragment key={key}>{inner}</React.Fragment>;
+}
+
+// Literal text: a single newline inside a block is a soft line break (rendered
+// as <br>), so a reply's own line structure is preserved the way chat reads.
+function pushText(out, text, key) {
+  const segs = String(text).split('\n');
+  for (let j = 0; j < segs.length; j++) {
+    if (j > 0) out.push(<br key={key + 'br' + j} />);
+    if (segs[j]) out.push(<React.Fragment key={key + 's' + j}>{segs[j]}</React.Fragment>);
+  }
+}
+
+/* ── Block pass ───────────────────────────────────────────────────────────
+   Splits the reply into block-level constructs. Line-oriented and forgiving:
+   an unterminated fence renders everything after it as code (exactly what a
+   half-streamed ``` block should look like), and anything unrecognized is a
+   paragraph. */
+function startsBlock(line) {
+  return /^\s{0,3}(```|~~~)/.test(line)
+    || /^\s{0,3}#{1,6}\s/.test(line)
+    || /^\s{0,3}>/.test(line)
+    || /^\s{0,3}([-*+]|\d{1,9}[.)])\s+/.test(line)
+    || /^\s{0,3}([-*_])([ \t]*\1){2,}\s*$/.test(line);
+}
+
+function mdBlocks(src) {
+  const lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*$/.test(line)) { i++; continue; }
+
+    // fenced code — ``` or ~~~ (optional info string); runs to the matching
+    // closing fence or, mid-stream, to the end of what's arrived so far.
+    const fence = line.match(/^\s{0,3}(```+|~~~+)([^`]*)$/);
+    if (fence) {
+      const mark = fence[1][0], len = fence[1].length, body = [];
+      i++;
+      while (i < lines.length) {
+        const close = lines[i].match(/^\s{0,3}(```+|~~~+)\s*$/);
+        if (close && close[1][0] === mark && close[1].length >= len) { i++; break; }
+        body.push(lines[i]); i++;
+      }
+      blocks.push({ type: 'code', text: body.join('\n') });
+      continue;
+    }
+
+    // heading — # … ###### (trailing #'s stripped)
+    const h = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
+    if (h) { blocks.push({ type: 'heading', level: h[1].length, text: h[2] }); i++; continue; }
+
+    // horizontal rule — ---, ***, ___ (3+)
+    if (/^\s{0,3}([-*_])([ \t]*\1){2,}\s*$/.test(line)) { blocks.push({ type: 'hr' }); i++; continue; }
+
+    // blockquote — consecutive > lines, recursively parsed
+    if (/^\s{0,3}>/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s{0,3}>/.test(lines[i])) { buf.push(lines[i].replace(/^\s{0,3}>\s?/, '')); i++; }
+      blocks.push({ type: 'quote', children: mdBlocks(buf.join('\n')) });
+      continue;
+    }
+
+    // list — ordered or unordered, with indentation-based nesting
+    if (/^\s{0,3}([-*+]|\d{1,9}[.)])\s+/.test(line)) {
+      const list = collectList(lines, i);
+      blocks.push(list.node); i = list.next; continue;
+    }
+
+    // paragraph — runs to a blank line or the start of another block
+    const para = [];
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !startsBlock(lines[i])) { para.push(lines[i]); i++; }
+    blocks.push({ type: 'para', text: para.join('\n') });
+  }
+  return blocks;
+}
+
+function collectList(lines, start) {
+  const head = lines[start].match(/^(\s*)([-*+]|\d{1,9}[.)])\s+/);
+  const base = head[1].length, ordered = /\d/.test(head[2]);
+  const items = [];
+  let i = start;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*$/.test(line)) {                 // blank: continue only if the list resumes right below
+      const nxt = lines[i + 1];
+      if (nxt == null || /^\s*$/.test(nxt) || !/^\s*([-*+]|\d{1,9}[.)])\s+/.test(nxt)) break;
+      i++; continue;
+    }
+    const m = line.match(/^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/);
+    if (!m) break;                            // not a list line → list ends
+    const indent = m[1].length;
+    if (indent < base) break;                 // dedented out of this list
+    if (indent >= base + 2 && items.length) { // deeper → a nested list under the last item
+      const sub = collectList(lines, i);
+      items[items.length - 1].children.push(sub.node);
+      i = sub.next; continue;
+    }
+    if (/\d/.test(m[2]) !== ordered && indent === base) break;  // marker type switched → a new list
+    items.push({ text: m[3], children: [] });
+    i++;
+  }
+  return { node: { type: 'list', ordered, items }, next: i };
+}
+
+/* ── Block render ─────────────────────────────────────────────────────────── */
+function renderBlocks(blocks, onCite, key) {
+  return blocks.map((b, i) => renderBlock(b, onCite, (key || 'b') + i));
+}
+function renderBlock(block, onCite, key) {
+  switch (block.type) {
+    case 'heading': {
+      const Tag = 'h' + Math.min(6, Math.max(1, block.level));
+      return <Tag key={key} className="md-h">{renderInline(block.text, key, onCite)}</Tag>;
+    }
+    case 'code':
+      return <pre key={key} className="md-code-block"><code>{block.text}</code></pre>;
+    case 'hr':
+      return <hr key={key} className="md-hr" />;
+    case 'quote':
+      return <blockquote key={key} className="md-quote">{renderBlocks(block.children, onCite, key + 'q')}</blockquote>;
+    case 'list': {
+      const Tag = block.ordered ? 'ol' : 'ul';
+      return (
+        <Tag key={key} className="md-list">
+          {block.items.map((it, j) => (
+            <li key={j}>
+              {renderInline(it.text, key + 'li' + j, onCite)}
+              {it.children && it.children.length ? renderBlocks(it.children, onCite, key + 'c' + j) : null}
+            </li>
+          ))}
+        </Tag>
+      );
+    }
+    case 'para':
+    default:
+      return <p key={key}>{renderInline(block.text, key, onCite)}</p>;
+  }
+}
+
+/* Entry point — the reply text rendered as Markdown + citation chips. Same name
+   and signature as before, so Message and the mechanical-reading panel that
+   call it are untouched. */
+function renderAnswer(text, onCite) {
+  return renderBlocks(mdBlocks(text), onCite, 'b');
 }
 
 function AuditBadge({ audit }) {
@@ -599,12 +828,15 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, enrich, onToggleEnrich }) {
+function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
-  // The reference desk is off (proxy cleared) ⇒ no toggle, the chat stays local.
+  // The reference desk needs a configured proxy; in 'off' mode (or with no proxy)
+  // the composer shows no Wikipedia control and the chat stays local. In 'auto'/
+  // 'on' the button is a per-message FORCE ("look it up now"), not a global toggle.
   const canEnrich = !!(window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled());
+  const showWiki = canEnrich && wikiMode && wikiMode !== 'off';
   return (
     <div className="composer-box">
       <SourceChips sources={sources} addable={addable} onAddSource={onAddSource} onRemoveSource={onRemoveSource} />
@@ -621,19 +853,11 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, o
             </button>
           ))}
         </div>
-        {onToggleEnrich && (
-          <button type="button" role="switch" aria-checked={!!enrich} disabled={!canEnrich}
-            className={'wiki-toggle' + (enrich ? ' on' : '')}
-            title={canEnrich
-              ? (enrich
-                  ? 'Wikipedia is ON — Cleo proposes a lookup for your message and asks you to confirm (and can edit) the search before anything leaves your device. Click to turn off.'
-                  : 'Wikipedia is OFF — turn on and Cleo will offer to look up the relevant article for each message; you confirm the search before it runs.')
-              : 'Wikipedia lookups are off — set window.EO_REFERENCE_PROXY to enable.'}
-            onClick={() => canEnrich && onToggleEnrich()}>
-            <Icon name="book" size={14} />
-            <span className="wiki-toggle-label">Wikipedia</span>
-            <span className="wiki-toggle-state">{enrich ? 'On' : 'Off'}</span>
-            <span className="wiki-switch" aria-hidden="true"><span className="wiki-knob" /></span>
+        {showWiki && onForceEnrich && (
+          <button type="button" className={'comp-btn enrich' + (forceEnrich ? ' on' : '')} aria-pressed={!!forceEnrich}
+            title="Look it up on Wikipedia now — fetch an encyclopaedia + dictionary card for this one message, bypassing the gate even in Auto. Sends only the looked-up term (not the document) to Wikipedia & Wiktionary through the proxy."
+            onClick={onForceEnrich}>
+            <Icon name="book" size={15} /> Wikipedia
           </button>
         )}
         <div className="comp-spacer" />
@@ -688,7 +912,7 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
       <div className="composer-wrap">
         <div className="composer"><Composer {...composerProps} placeholder={narrow ? 'Ask about this document…' : 'Message Cleo…'} /></div>
         <div className="composer-hint">
-          <span>Runs locally · <b>{composerProps.mode}</b> mode{composerProps.enrich ? <span> · chatting with <b>Wikipedia</b></span> : null}</span>
+          <span>Runs locally · <b>{composerProps.mode}</b> mode{composerProps.wikiMode && composerProps.wikiMode !== 'off' ? <span> · Wikipedia: <b>{composerProps.wikiMode}</b></span> : null}</span>
           {onExportPrompts && hasTurns && (
             <button type="button" className="export-prompts" onClick={onExportPrompts}>
               <Icon name="expand" size={12} /> Export prompts (JSON)

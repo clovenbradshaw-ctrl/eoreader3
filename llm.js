@@ -230,18 +230,64 @@
   // Hugging Face (its resolve endpoint sends browser-friendly CORS) and are
   // cached on the device (useCache) so a refresh re-instantiates without
   // re-downloading.
+  // Per-model registry: {name, url, bytes?, quant?}. `bytes` is the GGUF size
+  // (used to surface a sensible "this much will download" hint and to size the
+  // progress estimate when the server omits Content-Length); `quant` is the
+  // weight precision, surfaced as a quality tier in the picker so the user can
+  // pick a higher-quality version of the same base model without knowing what
+  // Q4_K_M means. Adding a new entry — a Q5 of an existing model, a different
+  // 1B — is a single object literal; no other code change is required.
+  // Each entry carries an `urls` ARRAY of equivalent mirrors — bartowski first
+  // (the canonical), then community alternatives (unsloth) so a 503 / DNS
+  // hiccup on one host falls through to the next without surfacing as a failed
+  // load. `bytes` is the expected GGUF size, used as a progress estimate when
+  // the server omits Content-Length; `quant` is the weight precision, surfaced
+  // as a quality tier in the picker. Adding a model = one object literal;
+  // adding a new mirror to an existing one = one URL in its array.
   const WLLAMA_MODELS = (typeof window !== 'undefined' && window.EO_WLLAMA_MODELS) || {
-    'smollm2-360m': { name: 'SmolLM2 360M', url: 'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf' },
-    'qwen25-05b':   { name: 'Qwen2.5 0.5B', url: 'https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf' },
-    'llama32-1b':   { name: 'Llama 3.2 1B', url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf' },
-    'llama32-3b':   { name: 'Llama 3.2 3B', url: 'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf' },
+    // Tiny: the seamless fallback. ~95 MB downloads in seconds on any connection,
+    // and we pre-fetch it on first launch so a later "GPU stalled" event swaps
+    // over with no fetch at all — only wllama init.
+    'smollm2-135m': { name: 'SmolLM2 135M', urls: ['https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf'], bytes: 95 * 1024 * 1024, quant: 'Q4_K_M' },
+    'smollm2-360m': { name: 'SmolLM2 360M', urls: ['https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf'], bytes: 270 * 1024 * 1024, quant: 'Q4_K_M' },
+    'qwen25-05b':   { name: 'Qwen2.5 0.5B', urls: ['https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf'], bytes: 380 * 1024 * 1024, quant: 'Q4_K_M' },
+    'qwen25-05b-q8':{ name: 'Qwen2.5 0.5B (high quality)', urls: ['https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q8_0.gguf'], bytes: 530 * 1024 * 1024, quant: 'Q8_0' },
+    'llama32-1b':   { name: 'Llama 3.2 1B', urls: [
+      'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf',
+    ], bytes: 770 * 1024 * 1024, quant: 'Q4_K_M' },
+    'llama32-1b-q8':{ name: 'Llama 3.2 1B (high quality)', urls: ['https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf'], bytes: 1320 * 1024 * 1024, quant: 'Q8_0' },
+    'llama32-3b':   { name: 'Llama 3.2 3B', urls: [
+      'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+    ], bytes: 2020 * 1024 * 1024, quant: 'Q4_K_M' },
   };
-  const wllamaSource = (key) => WLLAMA_MODELS[wllamaId(key)] || null;
+  // Helper: a registry entry exposes its mirror list as `urls`; older callers
+  // still see a `url` shorthand pointing at the primary. An UPLOADED entry has
+  // a `blob` instead and no URLs, so this returns [] for it (the blob path in
+  // buildWllama handles those).
+  const wllamaUrls = (src) => (src && src.urls && src.urls.length) ? src.urls : (src && src.url ? [src.url] : []);
+  // User-uploaded GGUFs. Session-only — File handles can't be persisted to
+  // localStorage, so a refresh loses them. Kept in a separate map so the
+  // canonical registry (wllamaModels()) only carries URL-backed entries.
+  const WLLAMA_UPLOADED = {};
+  function registerUploadedModel(id, file) {
+    if (!id || !file) return null;
+    WLLAMA_UPLOADED[String(id)] = { name: file.name || String(id), blob: file };
+    return WLLAMA_PREFIX + String(id);
+  }
+  const wllamaSource = (key) => {
+    const id = wllamaId(key);
+    return WLLAMA_UPLOADED[id] || WLLAMA_MODELS[id] || null;
+  };
   const wllamaModels = () => Object.assign({}, WLLAMA_MODELS);
-  // The CPU model used for the automatic fallback (no WebGPU / GPU stall). 0.5B
-  // is a sane balance of quality and CPU speed; override with EO_CPU_FALLBACK_ID.
+  // The CPU model used for the automatic fallback (no WebGPU / GPU stall). The
+  // smallest viable model wins this slot — at ~95 MB it downloads in seconds
+  // and runs anywhere wllama can — so when a GPU model stalls or there's no
+  // WebGPU here, the swap is immediate rather than a several-minute wait. Pick
+  // higher quality from the picker once you've used the page enough to want it.
   function fallbackKey() {
-    const id = (typeof window !== 'undefined' && window.EO_CPU_FALLBACK_ID) || 'qwen25-05b';
+    const id = (typeof window !== 'undefined' && window.EO_CPU_FALLBACK_ID) || 'smollm2-135m';
     if (WLLAMA_MODELS[id]) return WLLAMA_PREFIX + id;
     const first = Object.keys(WLLAMA_MODELS)[0];
     return first ? WLLAMA_PREFIX + first : null;
@@ -256,19 +302,41 @@
     if (wllamaMod) return wllamaMod;
     if (typeof window !== 'undefined' && window.EO_WLLAMA) { wllamaMod = window.EO_WLLAMA; return wllamaMod; }
     const ver = (typeof window !== 'undefined' && window.EO_WLLAMA_VERSION) || WLLAMA_VERSION;
-    const esmBase = (typeof window !== 'undefined' && window.EO_WLLAMA_CDN) || ('https://esm.run/@wllama/wllama@' + ver);
-    const cdnEsm = 'https://cdn.jsdelivr.net/npm/@wllama/wllama@' + ver + '/esm';
+    // IMPORTANT: import the package's EXPLICIT ESM entry, not esm.run / jsdelivr's
+    // `/+esm` auto-bundle. wllama 3.4.1's package.json `main` points at a
+    // non-existent root `index.js`, so `/+esm` (and esm.run, which redirects to
+    // it) 404s — which is exactly the "CPU model never loads" failure we kept
+    // hitting. The real ESM bundle is at `esm/index.js` and is self-contained.
+    // We try a list of CDN bases in order so one CDN hiccup falls through to the
+    // next. window.EO_WLLAMA_CDN (a full module URL) still overrides everything.
+    const override = (typeof window !== 'undefined' && window.EO_WLLAMA_CDN) || null;
+    const bases = [
+      'https://cdn.jsdelivr.net/npm/@wllama/wllama@' + ver + '/esm',
+      'https://unpkg.com/@wllama/wllama@' + ver + '/esm',
+      'https://esm.sh/@wllama/wllama@' + ver + '/esm',
+    ];
     const work = (async () => {
-      const m = await import(esmBase);
+      let m = null, usedBase = null, lastErr = null;
+      const tryUrls = override ? [override] : bases.map(b => b + '/index.js');
+      for (let i = 0; i < tryUrls.length; i++) {
+        try {
+          m = await import(/* @vite-ignore */ tryUrls[i]);
+          usedBase = override ? null : bases[i];
+          lastErr = null;
+          break;
+        } catch (e) { lastErr = e; }
+      }
+      if (!m) throw lastErr || new Error('Could not load the CPU model runtime from any CDN.');
       const Wllama = m.Wllama || (m.default && m.default.Wllama) || m.default;
-      // Prefer the package's own CDN wasm map (encodes the right paths for THIS
-      // version); fall back to the documented esm/ layout. Either is overridable.
+      // wllama 3.4.1's pathConfig wants a single `default` pointing at the one
+      // unified wasm (esm/wasm/wllama.wasm); the old single-thread/multi-thread
+      // keys are obsolete and, lacking `default`, make loadModel throw
+      // '"default" is missing from pathConfig'. Overridable via EO_WLLAMA_WASM.
       let wasmPaths = (typeof window !== 'undefined' && window.EO_WLLAMA_WASM) || null;
-      if (!wasmPaths) { try { const c = await import(cdnEsm + '/wasm-from-cdn.js'); wasmPaths = c.default || c.WasmFromCDN || c; } catch (_) {} }
-      if (!wasmPaths) wasmPaths = {
-        'single-thread/wllama.wasm': cdnEsm + '/single-thread/wllama.wasm',
-        'multi-thread/wllama.wasm': cdnEsm + '/multi-thread/wllama.wasm',
-      };
+      if (!wasmPaths) {
+        const base = usedBase || bases[0];
+        wasmPaths = { 'default': base + '/wasm/wllama.wasm' };
+      }
       return { Wllama, wasmPaths };
     })();
     let to;
@@ -278,6 +346,53 @@
     return wllamaMod;
   }
 
+  // wllama's own CacheManager is **OPFS-backed** in v3.x (its cache-manager.d.ts
+  // says so verbatim), so the durable side-cache I'd planned to layer on top is
+  // already there — bytes that survive a tab refresh, a few-day gap, even a
+  // "clear cache" that spares site data. Calling loadModelFromUrl with
+  // useCache:true is what writes to it; a subsequent load with the same URL
+  // reads from OPFS and skips the network. The robustness gap we kept seeing
+  // was browser-side eviction of best-effort storage, which persistStorage()
+  // now mitigates — see the boot-time call.
+  //
+  // What's new here:
+  //  - urls is an ARRAY. We try each in order; a 503 / DNS hiccup on bartowski
+  //    falls through to unsloth without surfacing as a failed load. Once any
+  //    mirror succeeds, wllama caches its bytes and the next session uses them.
+  //  - parallelDownloads bumped to 4 so a fresh download uses the bandwidth.
+  //  - cacheStatus / clearCache talk to wllama's cacheManager directly, so
+  //    the picker badge and the "stuck cache" escape hatch agree with what's
+  //    actually on disk.
+
+  // Compute wllama's OPFS filename for a URL: hashSHA1(url) + '_' + filename.
+  // Lets cacheStatus check the cache without instantiating a Wllama (so the
+  // picker badge stays cheap), and matches what wllama writes byte for byte.
+  async function wllamaCacheName(url) {
+    try {
+      const enc = new TextEncoder().encode(url);
+      const digest = await crypto.subtle.digest('SHA-1', enc);
+      const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+      const file = (url.split('/').pop() || '').split('?')[0];
+      return hex + '_' + file;
+    } catch (_) { return null; }
+  }
+  async function wllamaCacheHas(url) {
+    if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.getDirectory !== 'function') return false;
+    try {
+      const name = await wllamaCacheName(url);
+      if (!name) return false;
+      const root = await navigator.storage.getDirectory();
+      await root.getFileHandle(name);
+      return true;
+    } catch (_) { return false; }
+  }
+  async function wllamaCachedAny(src) {
+    for (const u of wllamaUrls(src)) {
+      try { if (await wllamaCacheHas(u)) return true; } catch (_) {}
+    }
+    return false;
+  }
+
   // Pre-import the runtime (small JS + wasm) WITHOUT loading a model, so the
   // later switch-to-CPU pays only the model download, not the runtime fetch +
   // compile. This is the cheap "keep a backup ready" step: a single resident
@@ -285,9 +400,44 @@
   // alongside a live GPU one — but we CAN have the runtime cached and ready.
   async function prewarmFallback() { try { return await importWllama(); } catch (e) { return null; } }
 
-  // Build (and resolve to) a resident wllama engine for `mlcKey`. Mirrors the
-  // WebLLM build: progress is gated on the load token so a superseded build goes
-  // inert, and the instance frees itself (exit) if a newer load supersedes it.
+  // Pre-fetch the fallback CPU model into wllama's OPFS cache, in the
+  // background, so a later "GPU stalled" event swaps in the CPU model with no
+  // download at all — only wllama init. This is what makes the fallback FEEL
+  // instantaneous instead of taking minutes. Idempotent: a no-op once the
+  // file is on disk; safe to call every boot. Silent on failure — a fetch
+  // miss just leaves the user without the pre-warm.
+  async function prewarmFallbackModel() {
+    try {
+      const key = fallbackKey();
+      if (!key) return false;
+      const src = wllamaSource(key);
+      if (!src) return false;
+      const urls = wllamaUrls(src);
+      if (!urls.length) return false;
+      if (await wllamaCachedAny(src)) return true;
+      const { Wllama, wasmPaths } = await importWllama();
+      const tmp = new Wllama(wasmPaths, { parallelDownloads: 4, logger: WLLAMA_LOGGER });
+      for (const url of urls) {
+        try {
+          if (typeof tmp.cacheManager === 'object' && tmp.cacheManager && typeof tmp.cacheManager.download === 'function') {
+            await tmp.cacheManager.download(url);
+          } else {
+            // Older wllama without cacheManager.download — just download into
+            // memory and discard; the bytes don't stick, but we tried.
+            await fetch(url).then(r => r && r.body && r.body.getReader());
+          }
+          return true;
+        } catch (_) {}
+      }
+      return false;
+    } catch (_) { return false; }
+  }
+
+  // Build (and resolve to) a resident wllama engine for `mlcKey`. wllama's
+  // loadModelFromUrl handles the parallel download + OPFS-backed cache, and
+  // we wrap it in a multi-URL fallback: a 503 on bartowski falls through to
+  // unsloth without breaking the load. Bytes are sticky once any mirror
+  // succeeds, so a refresh re-instantiates from disk with no network hit.
   async function buildWllama(mlcKey, onProgress, myToken) {
     const { Wllama, wasmPaths } = await importWllama();
     if (typeof Wllama !== 'function') throw new Error('The CPU model runtime (wllama) did not load.');
@@ -298,7 +448,7 @@
     // when isolation is present so we never trip an unsupported multi-thread path.
     const isolated = (typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated);
     const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
-    const instance = new Wllama(wasmPaths, { parallelDownloads: 3, logger: WLLAMA_LOGGER });
+    const instance = new Wllama(wasmPaths, { parallelDownloads: 4, logger: WLLAMA_LOGGER });
     activeWllama = instance;
     const loadOpts = {
       n_ctx: (typeof window !== 'undefined' && +window.EO_WLLAMA_NCTX) || 4096,
@@ -310,7 +460,40 @@
       },
     };
     if (isolated) loadOpts.n_threads = Math.min(4, Math.max(1, cores - 1));
-    await instance.loadModelFromUrl(src.url, loadOpts);
+
+    // Uploaded GGUFs come in as a Blob/File rather than a URL; loadModel() reads
+    // the bytes directly without going through the cache (the file is already
+    // on the user's disk, so caching adds nothing here).
+    if (src.blob) {
+      if (typeof instance.loadModel !== 'function')
+        throw new Error('This build of the CPU runtime can’t load a model from a file.');
+      const { useCache, progressCallback, ...blobOpts } = loadOpts;
+      await instance.loadModel([src.blob], blobOpts);
+    } else {
+      // Registry models: walk the mirror list in order. A 503 / DNS hiccup on
+      // the primary (bartowski) falls through to the next mirror (unsloth)
+      // without surfacing as a failed load. Once any mirror succeeds, wllama
+      // caches its bytes in OPFS and the next session loads from disk.
+      const urls = wllamaUrls(src);
+      if (!urls.length) throw new Error('No download URL for ' + mlcKey);
+      let lastErr = null;
+      for (let i = 0; i < urls.length; i++) {
+        try {
+          await instance.loadModelFromUrl(urls[i], loadOpts);
+          lastErr = null;
+          break;
+        } catch (e) {
+          if (e && e.code === 'CANCEL') throw e;
+          if (myToken !== loadToken) throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' });
+          lastErr = e;
+          if (i < urls.length - 1 && onProgress) {
+            onProgress(0, 'That source is unavailable — trying the next mirror…');
+          }
+        }
+      }
+      if (lastErr) throw lastErr;
+    }
+
     if (myToken !== loadToken) { try { await instance.exit(); } catch (_) {} if (activeWllama === instance) activeWllama = null; throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' }); }
     if (onProgress) onProgress(1, '');
     return {
@@ -480,15 +663,33 @@
   // or a genuine load error is NOT a reason to abandon the worker path for the
   // session — those propagate so the caller (buildOnce) handles them.
   const WORKER_HANDSHAKE_MS = 20000;
+  // WebLLM's default cache backend is the Cache API, which the browser treats
+  // as best-effort — even with navigator.storage.persist() granted, our users
+  // keep coming back to a refreshed tab whose shards are gone. Forcing the
+  // IndexedDB backend (useIndexedDBCache: true) puts the shards in IndexedDB
+  // instead, which is the more durable bucket on every major engine: a tab
+  // refresh, a few-day gap, even a "clear cache" that spares site data leaves
+  // these alive. Combined with persistStorage(), this is what locks the
+  // multi-GB download to a one-time cost. The prebuiltAppConfig (the model
+  // registry WebLLM ships) is spread first so we don't drop any entries.
+  function webllmAppConfig() {
+    try {
+      const m = mod; if (!m) return undefined;
+      const base = m.prebuiltAppConfig || {};
+      return Object.assign({}, base, { useIndexedDBCache: true });
+    } catch (_) { return undefined; }
+  }
   async function createEngine(mlcKey, opts) {
     const webllm = await importWebLLM();
+    const appConfig = webllmAppConfig();
+    const optsWithConfig = appConfig ? Object.assign({}, opts, { appConfig }) : opts;
     if (!workerBroken && typeof Worker !== 'undefined' && typeof webllm.CreateWebWorkerMLCEngine === 'function') {
       let worker = null, sawProgress = false;
       try {
         worker = spawnWorker();
         activeWorker = worker;
-        const userCb = opts && opts.initProgressCallback;
-        const wrapped = Object.assign({}, opts, {
+        const userCb = optsWithConfig && optsWithConfig.initProgressCallback;
+        const wrapped = Object.assign({}, optsWithConfig, {
           initProgressCallback: (r) => { sawProgress = true; if (userCb) userCb(r); },
         });
         // A worker whose module import is blocked would otherwise leave the
@@ -525,7 +726,7 @@
         }
       }
     }
-    return webllm.CreateMLCEngine(mlcKey, opts);
+    return webllm.CreateMLCEngine(mlcKey, optsWithConfig);
   }
 
   // No init-progress callback for this long ⇒ the download has stalled. WebLLM
@@ -674,17 +875,112 @@
     return e;
   }
 
+  // Ask the browser to mark this origin's storage PERSISTENT, so the cached
+  // model shards (IndexedDB for WebLLM, Cache API for wllama) can't be evicted
+  // under storage pressure. Without this, a multi-GB model can quietly disappear
+  // between sessions and the next load re-downloads everything from scratch —
+  // exactly the "hard redownload" we're trying to avoid. Idempotent: skips the
+  // ask if persistence is already granted; resolves to the final state. A
+  // no-op (false) on browsers without the Storage API. Call once on boot.
+  async function persistStorage() {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.storage) return false;
+      if (typeof navigator.storage.persisted === 'function') {
+        try { if (await navigator.storage.persisted()) return true; } catch (_) {}
+      }
+      if (typeof navigator.storage.persist !== 'function') return false;
+      return !!(await navigator.storage.persist());
+    } catch (_) { return false; }
+  }
+
+  // Whether a model's weights are already on disk in this browser. Tells the
+  // UI when a row in the picker is a fast re-instantiate (no download) rather
+  // than a multi-gigabyte fetch. Best-effort across backends:
+  //  - Anthropic: nothing to cache.
+  //  - wllama: check OPFS for ANY of the model's mirror URLs. wllama's cache
+  //    keys files by hashSHA1(url)+'_'+filename, so a primary-then-fallback
+  //    download leaves bytes that satisfy the FIRST URL match too.
+  //  - WebLLM: use the library's own hasModelInCache helper, which reads the
+  //    IndexedDB bucket we force on for durability.
+  // Resolves to { cached, kind } so callers can render a badge without
+  // knowing the backend; unknown flips false rather than throwing.
+  async function cacheStatus(mlcKey) {
+    if (isAnthropic(mlcKey)) return { cached: false, kind: 'cloud' };
+    if (isWllama(mlcKey)) {
+      try {
+        const src = wllamaSource(mlcKey);
+        if (!src) return { cached: false, kind: 'cpu' };
+        const cached = await wllamaCachedAny(src);
+        return { cached, kind: 'cpu' };
+      } catch (_) { return { cached: false, kind: 'cpu' }; }
+    }
+    try {
+      const webllm = await importWebLLM();
+      if (typeof webllm.hasModelInCache === 'function') {
+        const yes = await webllm.hasModelInCache(mlcKey, webllmAppConfig());
+        return { cached: !!yes, kind: 'gpu' };
+      }
+    } catch (_) {}
+    return { cached: false, kind: 'gpu' };
+  }
+
+  // Whole-origin storage usage. The browser doesn't itemize by feature, so we
+  // surface the totals (bytes used / bytes available) and let the UI present
+  // them; per-model bytes would require parsing the cache directly. Resolves
+  // to null on browsers without the Storage API.
+  async function storageEstimate() {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.estimate !== 'function') return null;
+      const e = await navigator.storage.estimate();
+      return { usage: (e && e.usage) || 0, quota: (e && e.quota) || 0 };
+    } catch (_) { return null; }
+  }
+
   // Wipe a model's cached weights/config so the next load re-downloads from
   // scratch — the escape hatch when a half-finished download left a corrupt
   // shard that keeps re-stalling on every reload. Best-effort and feature-
-  // detected across WebLLM versions; resolves false if nothing could be cleared.
+  // detected across versions; resolves false if nothing could be cleared.
+  // wllama: walk every mirror URL and delete its OPFS entry by name. WebLLM:
+  // its own delete helpers.
   async function clearCache(mlcKey) {
+    if (isWllama(mlcKey)) {
+      let did = false;
+      const src = wllamaSource(mlcKey);
+      const urls = wllamaUrls(src);
+      // Delete OPFS files directly so we don't need to spin up a Wllama
+      // instance (which is heavy and itself touches the cache).
+      if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.getDirectory === 'function') {
+        try {
+          const root = await navigator.storage.getDirectory();
+          for (const u of urls) {
+            try {
+              const name = await wllamaCacheName(u);
+              if (!name) continue;
+              await root.removeEntry(name);
+              did = true;
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
+      // Also wipe any legacy Cache-API entry from an older wllama build.
+      try {
+        if (typeof caches !== 'undefined') {
+          const keys = await caches.keys();
+          for (const k of keys) {
+            for (const u of urls) {
+              try { const c = await caches.open(k); if (await c.delete(u)) did = true; } catch (_) {}
+            }
+          }
+        }
+      } catch (_) {}
+      return did;
+    }
     try {
       const webllm = await importWebLLM();
-      if (typeof webllm.deleteModelAllInfoInCache === 'function') { await webllm.deleteModelAllInfoInCache(mlcKey); return true; }
+      if (typeof webllm.deleteModelAllInfoInCache === 'function') { await webllm.deleteModelAllInfoInCache(mlcKey, webllmAppConfig()); return true; }
       let did = false;
       for (const name of ['deleteModelInCache', 'deleteModelWasmInCache', 'deleteChatConfigInCache'])
-        if (typeof webllm[name] === 'function') { try { await webllm[name](mlcKey); did = true; } catch (_) {} }
+        if (typeof webllm[name] === 'function') { try { await webllm[name](mlcKey, webllmAppConfig()); did = true; } catch (_) {} }
       return did;
     } catch (_) { return false; }
   }
@@ -1145,5 +1441,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
