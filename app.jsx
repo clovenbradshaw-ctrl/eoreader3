@@ -1223,7 +1223,11 @@ function App() {
     }
     const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
     const tier = E.contextPartsScope(scope, probe, 6);
-    const primaryDoc = E.routePrimary(scope, probe) || scope[0];
+    // A correction rebinds to the active subject, not the mis-bound document:
+    // "no, that's Noah Kahan's inspirations" returns the turn to Howard Shore
+    // (the held subject), it doesn't refine within Kahan. Discourse precedence
+    // carries that here too.
+    const primaryDoc = E.routePrimary(scope, probe, { hotEntity: hotEntity() }) || scope[0];
     if (ready && (tier.spans.length || tier.notes.length)) {
       try {
         // The shape pass sees the tagged history, so the rejected reply and

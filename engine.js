@@ -11015,13 +11015,19 @@ function projectGraph(events, frame = {}) {
       .replace(/([.!?]['"’”)\]]*)\s*((?:\[s(?:\d+|\?)\]\s*)+)/g, ' $2$1')
       .replace(/\s+([.,;:])/g, '$1').trim();
     const texts = doc.sentenceTexts || [];
+    // Chrome is never citable: a reference/external-link line, a heading or a
+    // nav row is page structure, not a source for a claim. A model tag that
+    // points at one (the IMDb "Official website" line the trace cited as
+    // s123) is dropped from the citable pool — the claim holds uncited rather
+    // than laundering chrome into a citation.
+    const chromeSet = (doc._chrome && doc._chrome.length) ? new Set(doc._chrome) : null;
     const parts = splitDraft(raw).filter(p => p.replace(/\[s(?:\d+|\?)\]/g, '').trim());
     const cited = [], held = [];
     let attested = 0, keyed = 0;
     const out = parts.map(sent => {
       const tags = [...String(sent).matchAll(/\[s(\d+|\?)\]/g)].map(m => m[1]);
       const clean = sent.replace(/\[s(?:\d+|\?)\]/g, '').replace(/\s+([.,;:])/g, '$1').replace(/\s{2,}/g, ' ').trim();
-      const keys = tags.filter(t => t !== '?').map(Number).filter(n => n >= 0 && n < texts.length);
+      const keys = tags.filter(t => t !== '?').map(Number).filter(n => n >= 0 && n < texts.length && !(chromeSet && chromeSet.has(n)));
       if (keys.length) {
         keyed++;
         const idx = keys[0];                      // the first tag is the claim's provenance
