@@ -756,7 +756,8 @@ table.grid .member td:first-child { padding-left: 30px; }
 .pop-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--r-sm); cursor: pointer; }
 .pop-item:hover { background: var(--bg-subtle); }
 .pop-item .pi-main { flex: 1; }
-.pop-item .pi-n { font-size: 13px; font-weight: 550; }
+.pop-item .pi-n { font-size: 13px; font-weight: 550; display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.pop-item .pi-cached { font-family: var(--mono); font-size: 9.5px; font-weight: 500; letter-spacing: .02em; color: var(--good-fg); border: 1px solid var(--good-bd); background: var(--good-bg); border-radius: var(--r-pill); padding: 1px 6px; text-transform: lowercase; }
 .pop-item .pi-d { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); margin-top: 1px; }
 .pop-item .pi-check { color: var(--accent); opacity: 0; }
 .pop-item.sel .pi-check { opacity: 1; }

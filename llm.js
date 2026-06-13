@@ -673,6 +673,70 @@
     return e;
   }
 
+  // Ask the browser to mark this origin's storage PERSISTENT, so the cached
+  // model shards (IndexedDB for WebLLM, Cache API for wllama) can't be evicted
+  // under storage pressure. Without this, a multi-GB model can quietly disappear
+  // between sessions and the next load re-downloads everything from scratch —
+  // exactly the "hard redownload" we're trying to avoid. Idempotent: skips the
+  // ask if persistence is already granted; resolves to the final state. A
+  // no-op (false) on browsers without the Storage API. Call once on boot.
+  async function persistStorage() {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.storage) return false;
+      if (typeof navigator.storage.persisted === 'function') {
+        try { if (await navigator.storage.persisted()) return true; } catch (_) {}
+      }
+      if (typeof navigator.storage.persist !== 'function') return false;
+      return !!(await navigator.storage.persist());
+    } catch (_) { return false; }
+  }
+
+  // Whether a model's weights are already on disk in this browser. Tells the
+  // UI when a row in the picker is a fast re-instantiate (no download) rather
+  // than a multi-gigabyte fetch. Best-effort across backends:
+  //  - Anthropic: nothing to cache.
+  //  - wllama: walk open Cache instances for the GGUF URL.
+  //  - WebLLM: use the library's own hasModelInCache helper.
+  // Resolves to { cached, kind } so callers can render a badge without
+  // knowing the backend; unknown flips false rather than throwing.
+  async function cacheStatus(mlcKey) {
+    if (isAnthropic(mlcKey)) return { cached: false, kind: 'cloud' };
+    if (isWllama(mlcKey)) {
+      try {
+        const src = wllamaSource(mlcKey);
+        if (!src || typeof caches === 'undefined') return { cached: false, kind: 'cpu' };
+        const keys = await caches.keys();
+        for (const k of keys) {
+          try {
+            const c = await caches.open(k);
+            if (await c.match(src.url)) return { cached: true, kind: 'cpu' };
+          } catch (_) {}
+        }
+        return { cached: false, kind: 'cpu' };
+      } catch (_) { return { cached: false, kind: 'cpu' }; }
+    }
+    try {
+      const webllm = await importWebLLM();
+      if (typeof webllm.hasModelInCache === 'function') {
+        const yes = await webllm.hasModelInCache(mlcKey);
+        return { cached: !!yes, kind: 'gpu' };
+      }
+    } catch (_) {}
+    return { cached: false, kind: 'gpu' };
+  }
+
+  // Whole-origin storage usage. The browser doesn't itemize by feature, so we
+  // surface the totals (bytes used / bytes available) and let the UI present
+  // them; per-model bytes would require parsing the cache directly. Resolves
+  // to null on browsers without the Storage API.
+  async function storageEstimate() {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.estimate !== 'function') return null;
+      const e = await navigator.storage.estimate();
+      return { usage: (e && e.usage) || 0, quota: (e && e.quota) || 0 };
+    } catch (_) { return null; }
+  }
+
   // Wipe a model's cached weights/config so the next load re-downloads from
   // scratch — the escape hatch when a half-finished download left a corrupt
   // shard that keeps re-stalling on every reload. Best-effort and feature-
@@ -1144,5 +1208,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();

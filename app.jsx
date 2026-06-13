@@ -818,6 +818,12 @@ function App() {
   // nothing: a refresh comes back to a loaded model.
   useEffect(() => {
     if (!bootReady || !window.EOLLM) return;
+    // Ask the browser to mark this origin's storage persistent so the cached
+    // model shards (IndexedDB for WebLLM, Cache API for wllama) survive
+    // eviction under storage pressure — the single biggest reason a model
+    // appears to "redownload" on a return visit. Idempotent; quietly no-ops
+    // on browsers without the Storage API.
+    try { window.EOLLM.persistStorage && window.EOLLM.persistStorage(); } catch (e) {}
     if (model.provider === 'anthropic') {
       // A persisted Claude selection resumes if its key is stored; otherwise stay
       // idle and let the popover collect the key.
