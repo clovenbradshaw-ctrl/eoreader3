@@ -146,8 +146,18 @@ function ProseDoc({ doc, explore, onEntity, activeEntity, flashSent, onCite }) {
   );
 }
 
+/* A spec → one-line description, for view chips / tooltips. */
+function describeSpec(doc, spec) {
+  if (window.EOTableQuery && window.EOTableQuery.describe) return window.EOTableQuery.describe(doc, spec);
+  const parts = (spec.filters || []).map(f => f.col + ' = ' + f.val);
+  let s = parts.join(' and ') || 'all rows';
+  if (spec.groupBy) s += ', by ' + spec.groupBy;
+  if (spec.aggregate) s += ', ' + spec.aggregate.op + (spec.aggregate.col ? '(' + spec.aggregate.col + ')' : '');
+  return s;
+}
+
 /* spreadsheet + live pivot */
-function TableDoc({ doc, initialSpec }) {
+function TableDoc({ doc, initialSpec, savedViews, onApplyView, onSaveView, onDeleteView }) {
   const [spec, setSpec] = React.useState(initialSpec || { groupBy: null, aggregate: null, sortBy: null, filters: [] });
   React.useEffect(() => { if (initialSpec) setSpec(initialSpec); }, [initialSpec]);
   const fold = window.foldPivot(doc, spec);
@@ -240,6 +250,24 @@ function TableDoc({ doc, initialSpec }) {
           </table>
         )}
         <div className="pv-note" style={{ marginTop: 10 }}>{fold.total} rows · pivot questions you ask in chat are computed here directly.</div>
+        {/* Saved views live under the table: reopen a filtered slice, or save the
+            current one. Populated from chat ("Save as view") or this button. */}
+        {((savedViews && savedViews.length) || active) && (
+          <div className="saved-views">
+            <span className="sv-label">Saved views</span>
+            {(savedViews || []).map(v => (
+              <span key={v.id} className="sv-chip" title={describeSpec(doc, v.spec)}>
+                <button className="sv-open" onClick={() => onApplyView && onApplyView(doc.id, v.spec)}>{v.name}</button>
+                {onDeleteView && <button className="sv-x" onClick={() => onDeleteView(doc.id, v.id)} aria-label={'Delete view ' + v.name}>×</button>}
+              </span>
+            ))}
+            {active && onSaveView && (
+              <button className="sv-save" onClick={() => onSaveView(doc.id, spec)}>
+                <Icon name="plus" size={13} /> Save current view
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {activeRecord && <RecordPanel doc={doc} record={activeRecord} onClose={() => setActiveRecord(null)} />}
     </div>
@@ -369,7 +397,8 @@ function EntityModal({ doc, name, onCite, onEntity, onOpenTab, onClose }) {
 
 /* the doc pane shell: tabs + tools + content */
 function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, onLayout,
-                  explore, onToggleExplore, onEntity, activeEntity, flashSent, onCite, tableSpec }) {
+                  explore, onToggleExplore, onEntity, activeEntity, flashSent, onCite, tableSpec,
+                  savedViews, onApplyView, onSaveView, onDeleteView }) {
   const resolve = (id) => {
     if (id.startsWith('@ent/')) {
       const [, docId, ...rest] = id.split('/'); return { kind: 'entity', doc: docsById[docId], name: decodeURIComponent(rest.join('/')) };
@@ -407,7 +436,8 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
       </div>
       {!cur ? <div className="empty-doc">No document open</div>
         : cur.kind === 'entity' ? <EntityView doc={cur.doc} name={cur.name} onCite={onCite} onEntity={onEntity} />
-        : cur.kind === 'table' ? <TableDoc doc={cur.doc} initialSpec={tableSpec} />
+        : cur.kind === 'table' ? <TableDoc doc={cur.doc} initialSpec={tableSpec}
+            savedViews={(savedViews && savedViews[cur.doc.id]) || []} onApplyView={onApplyView} onSaveView={onSaveView} onDeleteView={onDeleteView} />
         : <ProseDoc key={cur.doc.id} doc={cur.doc} explore={explore} onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={onCite} />}
     </aside>
   );

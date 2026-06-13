@@ -188,11 +188,14 @@ function App() {
   const [theme, setTheme] = useState('system');
   const [reduceMotion, setReduceMotion] = useState(false);
   // Computational grounding (pyodide.js): when on, a computational turn may run
-  // Python locally over the loaded document (off by default). The pref persists
+  // Python locally over the loaded document (on by default). The pref persists
   // through savePrefs like theme/reduce-motion, and is wired to EOPython on load
   // and on change. EOPython owns its own persisted flag too, so enabled() is
   // authoritative even before the React tree hydrates.
-  const [pythonEnabled, setPythonEnabled] = useState(() => !!(window.EOPython && window.EOPython.enabled && window.EOPython.enabled()));
+  // Computational grounding (pyodide) is ON by default — a returning user's
+  // stored choice still wins during hydration. The runtime is fetched only on
+  // the first actual run, so default-on costs nothing at load.
+  const [pythonEnabled, setPythonEnabled] = useState(true);
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
   // Show the per-answer grounding badge (grounded · covers · stable + its note).
   // Some readers want the answer without the audit chrome; persisted with prefs.
@@ -247,6 +250,12 @@ function App() {
   const [flashSent, setFlashSent] = useState(null);
   const [tableSpec, setTableSpec] = useState(null);
   const [entityModal, setEntityModal] = useState(null);
+  // Smart parse: route data questions through the schema-aware resolver (model
+  // in the loop, back-and-forth on ambiguity). On by default; remembered.
+  const [smartParse, setSmartParse] = useState(true);
+  // Saved views per table: { [docId]: [{ id, name, spec, createdAt }] }. Shown
+  // under the table and reopenable as a tab. Persisted in prefs.
+  const [savedViews, setSavedViews] = useState({});
 
   const [splitRatio, setSplitRatio] = useState(0.46);
   const [dragging, setDragging] = useState(false);
@@ -338,7 +347,7 @@ function App() {
   // induced learning all live on the device so a refresh doesn't wipe the
   // workspace. Everything is best-effort — storage may be unavailable.
   useEffect(() => {
-    if (!window.EOStore) { hydrated.current = true; setBootReady(true); return; }
+    if (!window.EOStore) { try { if (window.EOPython) window.EOPython.setEnabled(true); } catch (e) {} hydrated.current = true; setBootReady(true); return; }
     let cancelled = false;
     // Persist the engine's learned rules-ledger delta whenever it grows.
     window.EO_onLedgerChange = (events) => { try { window.EOStore.saveLedger(events); } catch (e) {} };
@@ -382,6 +391,9 @@ function App() {
         if (typeof prefs.reduceMotion === 'boolean') setReduceMotion(prefs.reduceMotion);
         if (typeof prefs.groundingInfo === 'boolean') setGroundingInfo(prefs.groundingInfo);
         if (typeof prefs.pythonEnabled === 'boolean') { setPythonEnabled(prefs.pythonEnabled); if (window.EOPython) window.EOPython.setEnabled(prefs.pythonEnabled); }
+        else if (window.EOPython) window.EOPython.setEnabled(true);   // computational grounding on by default for new users
+        if (typeof prefs.smartParse === 'boolean') setSmartParse(prefs.smartParse);
+        if (prefs.savedViews && typeof prefs.savedViews === 'object') setSavedViews(prefs.savedViews);
         // Restored docs were parsed under the saved modes, so suppress the
         // re-parse the same way rule toggles do (batched into one render).
         if (prefs.langModes && typeof prefs.langModes === 'object') { suppressReparse.current = true; setLangModes(prefs.langModes); }
@@ -440,8 +452,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, fallbackModelIds, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled });
-  }, [rules, langModes, model, fallbackModelIds, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, fallbackModelIds, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
+  }, [rules, langModes, model, fallbackModelIds, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -1438,6 +1450,118 @@ function App() {
     depositSettled(scope, q, plan.cites);
     AUD('end', { engine: 'mechanical', text: plan.text, audit: plan.audit, cites: plan.cites || [], tableSpec: plan.tableSpec || null });
     setBusy(false);
+  };
+
+  // Open a table doc in its own tab with a spec applied (the "expand into a tab"
+  // affordance, and how a saved view reopens). Mirrors runMechanicalScope's
+  // open+spec move; the user triggers it explicitly here.
+  const applyTableView = (docId, spec) => {
+    if (!docId) return;
+    openTab(docId);
+    setTableSpec(spec ? { ...spec } : { groupBy: null, aggregate: null, sortBy: null, filters: [] });
+  };
+  // Persist a named view under its table (appears beneath the spreadsheet and is
+  // reopenable). De-duped by identical spec; the name defaults to a plain-language
+  // description of the filter.
+  const saveTableView = (docId, spec, name) => {
+    if (!docId || !spec) return;
+    const doc = docsById[docId];
+    const nm = (name && String(name).trim())
+      || (window.EOTableQuery && doc ? window.EOTableQuery.describe(doc, spec) : 'Saved view');
+    const list = savedViews[docId] || [];
+    if (list.some(v => JSON.stringify(v.spec) === JSON.stringify(spec))) { showToast('That view is already saved.'); return; }
+    const view = { id: 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: nm, spec: { ...spec }, createdAt: Date.now() };
+    setSavedViews(sv => ({ ...sv, [docId]: [...(sv[docId] || []), view] }));
+    showToast('Saved view “' + nm + '”.');
+  };
+  const deleteTableView = (docId, viewId) => {
+    setSavedViews(sv => ({ ...sv, [docId]: (sv[docId] || []).filter(v => v.id !== viewId) }));
+  };
+
+  // The model adapter the schema resolver calls: a plain (system, user, history)
+  // completion over the loaded model. Returns '' when no model is ready, so the
+  // resolver degrades to its mechanical layer.
+  const callTableLLM = async (system, user, hist) => {
+    if (!(window.EOLLM && window.EOLLM.isLoaded(model.mlc))) return '';
+    try {
+      return await window.EOLLM.phrase({
+        mlcKey: model.mlc, sysOverride: system, question: user,
+        history: Array.isArray(hist) ? hist : [], grounded: false, mode: 'chat', maxTokens: 240,
+      });
+    } catch (e) { eoWarn('table-llm', e); return ''; }
+  };
+
+  // SMART TABLE QUERY — schema-aware filtering with the model in the loop and a
+  // back-and-forth when the request is ambiguous. The model only chooses WHICH
+  // column/value to filter on; foldPivot computes the count mechanically, so the
+  // number stays exact and grounded. Falls back to the plain pivot path when the
+  // resolver finds nothing table-shaped.
+  const runTableQuery = async (scope, q, primary, history) => {
+    const myGen = genRef.current;
+    const TQ = window.EOTableQuery;
+    if (!TQ || !primary || primary.kind !== 'table') { runMechanicalScope(scope, q); return; }
+    const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
+    AUD('step', 'route', { referencing: true, reason: 'table-smart', path: ready ? 'table-llm' : 'table-mechanical',
+      primary: { id: primary.id, name: primary.name, kind: primary.kind } });
+    let result = null;
+    // Keep the back-and-forth tight: the small model only needs the recent
+    // clarify exchange, not the whole chat (and a 0.5B's context is precious).
+    try { result = await TQ.resolve({ doc: primary, query: q, history: (history || []).slice(-4), llm: ready ? callTableLLM : null }); }
+    catch (e) { eoWarn('tablequery', e); }
+    if (genStale(myGen)) return;
+
+    if (result && result.kind === 'clarify') {
+      AUD('step', 'clarify', { question: result.question, options: result.options || [] });
+      replaceLast({ role: 'assistant', text: result.question, audit: null, mode: 'grounded',
+        clarify: { options: result.options || [] } });
+      AUD('end', { engine: 'mechanical', text: result.question, audit: null });
+      setBusy(false);
+      return;
+    }
+
+    if (result && result.kind === 'spec') {
+      const spec = result.spec;
+      let fold = null;
+      try { fold = window.foldPivot(primary, spec); } catch (e) { eoWarn('fold', e); }
+      const total = (primary.rows || []).length;
+      const matched = fold ? fold.total : total;
+      const noun = /clients?\b/i.test(primary.name || '') ? 'clients' : 'rows';
+      const hasFilter = !!(spec.filters && spec.filters.length);
+      const filterDesc = (spec.filters || []).map(f => `${f.col} = ${f.val}`).join(' and ');
+      const fmtN = (n) => Number(n).toLocaleString('en-US');
+      const moneyCol = (c) => (primary.money || []).includes(c);
+      let text;
+      if (spec.groupBy && fold && fold.kind === 'grouped') {
+        const top = fold.groups.slice(0, 8).map(g => {
+          const v = (spec.aggregate && g.agg && g.agg.value != null)
+            ? (moneyCol(spec.aggregate.col) ? window.fmtMoney(g.agg.value) : window.fmtNum(g.agg.value))
+            : g.count;
+          return `${g.key} (${v})`;
+        }).join(', ');
+        const more = fold.groups.length > 8 ? `, … ${fold.groups.length - 8} more` : '';
+        text = `Grouped by **${spec.groupBy}**${hasFilter ? ` where ${filterDesc}` : ''}: ${top}${more}.`;
+      } else if (spec.aggregate && spec.aggregate.op !== 'count') {
+        const agg = window.aggregate ? window.aggregate((fold && fold.rows) || [], spec.aggregate) : null;
+        const val = agg && agg.value != null
+          ? (moneyCol(spec.aggregate.col) ? window.fmtMoney(agg.value) : window.fmtNum(agg.value)) : '—';
+        text = `**${val}** — the ${spec.aggregate.op}${spec.aggregate.col ? ' of ' + spec.aggregate.col : ''}${hasFilter ? ` where ${filterDesc}` : ''}, over ${fmtN(matched)} ${noun}.`;
+      } else if (hasFilter) {
+        text = `That matches **${fmtN(matched)}** of ${fmtN(total)} ${noun} — where ${filterDesc}.`;
+      } else {
+        text = `**${fmtN(matched)}** ${noun}.`;
+      }
+      const desc = result.describe || (TQ.describe ? TQ.describe(primary, spec) : filterDesc);
+      replaceLast({ role: 'assistant', text,
+        audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
+          note: 'Folded mechanically from ' + primary.name + ' — the model only chose the filter; the figure is exact.' },
+        mode: 'grounded', tableView: { docId: primary.id, spec, matched, describe: desc } });
+      AUD('end', { engine: 'mechanical', text, tableSpec: spec });
+      setBusy(false);
+      return;
+    }
+
+    // Nothing table-shaped — let the existing mechanical pivot path answer.
+    runMechanicalScope(scope, q);
   };
 
   // Plain conversation with the model — multi-turn, no document forced in,
@@ -3020,7 +3144,12 @@ function App() {
     // model), so a non-computational table question still answers in words.
     if (mode !== 'creative' && ready && window.EOPython && window.EOPython.enabled && window.EOPython.enabled()) {
       const pyDoc = scope.find(d => d && d.kind === 'table' && Array.isArray(d.rows) && d.rows.length);
-      if (pyDoc) {
+      // Smart parse owns filter/slice/group questions it can resolve from the
+      // table's own schema (faster, grounded, with clarify + save-as-view);
+      // Python stays the tool for computations the fold can't express, so it
+      // yields when the smart path would claim this turn.
+      const smartOwns = pyDoc && smartParse && window.EOTableQuery && window.EOTableQuery.looksLikeTableQuery(q, pyDoc);
+      if (pyDoc && !smartOwns) {
         AUD('step', 'route', { referencing: true, path: 'compute', reason: 'computation toggle',
           primary: { id: pyDoc.id, name: pyDoc.name, kind: pyDoc.kind } });
         lastGroundedRef.current = true; everGroundedRef.current = true;
@@ -3140,6 +3269,15 @@ function App() {
 
     if (referencing) {
       const primary = route.primary || window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
+      // SMART TABLE PATH: a data question over a table runs through the schema-
+      // aware resolver — it reads THIS table's real columns and values, resolves
+      // "clients from Mexico" to Country = Mexico, and asks a short clarifying
+      // question when a value is ambiguous (the back-and-forth). The fold still
+      // computes the count. Off (Smart parse) → the plain pivot path below.
+      if (smartParse && primary && primary.kind === 'table' && window.EOTableQuery) {
+        runTableQuery(scope, q, primary, history).catch(turnFailed('table'));
+        return;
+      }
       const useLLM = ready && primary && primary.kind === 'prose';
       AUD('step', 'route', { referencing: true, reason: route.reason, confidence: route.confidence,
         path: useLLM ? 'grounded-llm' : 'mechanical',
@@ -3218,6 +3356,7 @@ function App() {
     addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     onAddSource: addSource, onRemoveSource: removeSource,
     wikiMode, forceEnrich, onForceEnrich: toggleForceEnrich,
+    smartParse, onSmartParse: () => setSmartParse(v => !v), hasTable: docs.some(d => d.kind === 'table'),
   };
 
   const hasTabs = openTabs.length > 0;
@@ -3281,7 +3420,8 @@ function App() {
             <React.Fragment>
               {showChat && (
                 <div style={{ flexBasis: showDocPane ? (splitRatio * 100) + '%' : '100%', flexGrow: showDocPane ? 0 : 1, flexShrink: 0, display: 'flex', minWidth: 0 }}>
-                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} onConfirmWiki={runWikiSearch} onDismissWiki={dismissWikiSearch} onOpenDoc={openTab} />
+                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} onConfirmWiki={runWikiSearch} onDismissWiki={dismissWikiSearch} onOpenDoc={openTab}
+                    onApplyTableView={applyTableView} onSaveTableView={saveTableView} onQuickReply={send} />
                 </div>
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}
@@ -3289,7 +3429,8 @@ function App() {
                 <DocPane openTabs={openTabs} activeTab={activeTab} docsById={docsById}
                   onActivate={setActiveTab} onClose={closeTab} layout={layout} onLayout={setLayout}
                   explore={explore} onToggleExplore={() => setExplore(x => !x)}
-                  onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={flashCitation} tableSpec={tableSpec} />
+                  onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={flashCitation} tableSpec={tableSpec}
+                  savedViews={savedViews} onApplyView={applyTableView} onSaveView={saveTableView} onDeleteView={deleteTableView} />
               )}
             </React.Fragment>
           )}
