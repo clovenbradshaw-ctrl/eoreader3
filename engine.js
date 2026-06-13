@@ -3720,6 +3720,43 @@ async function _breathe(onProgress, phase, done, total) {
   }
 }
 
+// Segment ONE paragraph into compromise sentence docs without ever handing a
+// huge string to nlp() in a single synchronous gulp. A normal-length paragraph
+// is parsed exactly as before — one nlp() call — so the reading stays
+// byte-identical; only a pathologically long paragraph (a whole book pasted with
+// no blank line between paragraphs) is pre-sliced at sentence/word boundaries
+// into bounded chunks, segmented chunk by chunk, and breathed between, so it
+// can't lock the tab. `rawCount` is the raw sentence tally the block rebuilder
+// needs (the same number nlp would give), summed across chunks on the sliced
+// path. Defined as a module function so extractEoGraph can await it per paragraph.
+async function _segmentParagraph(p, onProgress, done, total) {
+  const MAX = 20000;                                // chars handed to nlp at once
+  if (p.length <= MAX) {
+    const sents = nlp(p).sentences();
+    const subs = []; sents.forEach(s => subs.push(s));
+    const rawCount = (sents.out('array') || []).filter(s => s.trim()).length || 1;
+    return { subs, rawCount };
+  }
+  const subs = []; let rawCount = 0;
+  for (let i = 0; i < p.length;) {
+    let end = Math.min(i + MAX, p.length);
+    if (end < p.length) {
+      // Back up to the last sentence terminal, else the last newline/space, so a
+      // chunk boundary never lands mid-word (and rarely mid-sentence).
+      const w = p.slice(i, end);
+      let cut = Math.max(w.lastIndexOf('. '), w.lastIndexOf('! '), w.lastIndexOf('? '), w.lastIndexOf('… '), w.lastIndexOf('\n'));
+      if (cut < (MAX >> 1)) { const sp = w.lastIndexOf(' '); if (sp > 0) cut = sp; }
+      if (cut > 0) end = i + cut + 1;
+    }
+    const sents = nlp(p.slice(i, end)).sentences();
+    sents.forEach(s => subs.push(s));
+    rawCount += (sents.out('array') || []).filter(s => s.trim()).length;
+    i = end;
+    if (onProgress) { onProgress({ phase: 'existence', stage: 'segmenting', done, total }); await _breathe(onProgress, 'existence', done, total); }
+  }
+  return { subs, rawCount: rawCount || 1 };
+}
+
 // Staged, chunked prose extraction, walked in the medium's own order:
 // EXISTENCE → STRUCTURE → SIGNIFICANCE. Nothing in a later phase may run
 // before the one beneath it has settled — the same law the rule layers obey.
@@ -3812,6 +3849,12 @@ async function extractEoGraph(text, onProgress) {
   // boundary; no sentence crosses it.
   const sentenceDocs = [];
   const sentParaSolo = [];
+  // Per non-empty paragraph, the raw sentence count — what the host's block
+  // rebuilder needs to group sentences back into paragraphs WITHOUT a second
+  // full compromise pass over the whole document (see rebuildBlocks). Recorded
+  // here, where the segmenter has already done the work, so a big file is read
+  // once, not twice.
+  const paraCounts = [];
   // sentence index → transcript turn index (the i-th non-empty paragraph IS
   // the i-th turn, by construction in readTranscript). Empty when not a
   // transcript; consumed by the voice-attribution pass below.
@@ -3829,6 +3872,7 @@ async function extractEoGraph(text, onProgress) {
     if (!p) continue;
     _turnIdx++;
     const paraDocs = [];
+    let _rawCount = 1;
     if (LANG === 'zh') {
       // CJK sentence terminals; compromise neither splits nor needs to.
       // Each sentence becomes a whole-string doc so downstream .text()
@@ -3837,13 +3881,17 @@ async function extractEoGraph(text, onProgress) {
         const q = piece.trim();
         if (q) paraDocs.push(nlp(q));
       }
+      _rawCount = paraDocs.length || 1;
     } else {
       // English split, then rejoin a sentence the segmenter cut after an
       // abbreviation: a known title (lexicon in the ruliad, not hardcoded here)
       // or any "Abbr." immediately before a number ("No. 12", "Fig. 3"). Keeps a
       // citation from ever landing mid-name. No-op when nothing merges, so a
-      // title-free document segments exactly as before.
-      const subs = []; nlp(p).sentences().forEach(s => subs.push(s));
+      // title-free document segments exactly as before. The segment step is
+      // chunked for an over-long paragraph so one giant block can't freeze the
+      // tab; a normal paragraph still goes through nlp() in a single pass.
+      const { subs, rawCount: _rc } = await _segmentParagraph(p, onProgress, _pi + 1, _paras.length);
+      _rawCount = _rc;
       for (let k = 0; k < subs.length; k++) {
         let txt = subs[k].text(), merged = false;
         while (k + 1 < subs.length) {
@@ -3869,6 +3917,7 @@ async function extractEoGraph(text, onProgress) {
       }
     }
     for (const s of paraDocs) { sentenceDocs.push(s); sentParaSolo.push(paraDocs.length === 1); if (TRANSCRIPT) sentTurn.push(_turnIdx); }
+    paraCounts.push(_rawCount);
     if (onProgress && performance.now() - _segClock > 24) {
       onProgress({ phase: 'existence', stage: 'segmenting', done: _pi + 1, total: _paras.length });
       await _breathe(onProgress, 'existence', _pi + 1, _paras.length); _segClock = performance.now();
@@ -6023,6 +6072,9 @@ async function extractEoGraph(text, onProgress) {
     verb_slot_tally: typeof verbSlotTally !== 'undefined' ? verbSlotTally : {},
     sections,
     sentence_texts: sentenceTexts,
+    // raw per-paragraph sentence counts, in order — lets the host rebuild
+    // display blocks without re-running the segmenter over the whole document.
+    paragraph_counts: paraCounts,
     chrome: chromeIdx,
     open_signals: openSignals,
     signal_collapses: signalCollapses,
@@ -6952,9 +7004,18 @@ function projectGraph(events, frame = {}) {
     // Timecode cue lines carry a consistent comma each; that's a transcript's
     // typography declaring itself, not a table schema.
     if (lines.length >= 3 && countTimecodeLines(text) < 3) {
-      const counts = lines.map(l => (l.match(/,/g) || []).length);
-      const mode = counts.slice().sort((a, b) => counts.filter(x => x === b).length - counts.filter(x => x === a).length)[0];
-      if (mode >= 1 && counts.filter(c => c === mode).length / counts.length >= 0.7) return 'table';
+      // The most common comma-count across lines, found in ONE linear pass: a
+      // CSV's rows share a column count, so a dominant non-zero mode reads as
+      // tabular. (The old version found the mode with a sort whose comparator
+      // rescanned the whole array on every compare — O(n²), which froze the tab
+      // on a big paste. A ≥70% mode is unique, so the outcome is unchanged.)
+      const freq = new Map(); let mode = 0, best = -1;
+      for (const l of lines) {
+        const c = (l.match(/,/g) || []).length;
+        const n = (freq.get(c) || 0) + 1; freq.set(c, n);
+        if (n > best) { best = n; mode = c; }
+      }
+      if (mode >= 1 && best / lines.length >= 0.7) return 'table';
     }
     return 'prose';
   }
@@ -7007,23 +7068,37 @@ function projectGraph(events, frame = {}) {
   // paragraph→sentence segmentation, so the global sentence indices line
   // up with result.sentence_texts. Headings come straight from the
   // graph's section decisions.
-  function rebuildBlocks(text, sentenceTexts, sections) {
+  // Group the flat sentence spine back into display paragraphs. The segmenter
+  // already counted the sentences in each paragraph (result.paragraph_counts),
+  // so we walk those counts directly — no second compromise pass over the whole
+  // document, which on a big file was a synchronous re-parse that froze the tab
+  // right after ingest "finished." When the counts are missing (an old result,
+  // a non-prose caller) we fall back to re-deriving them with nlp, chunk-safe.
+  function rebuildBlocks(text, sentenceTexts, sections, paraCounts) {
     const headingSet = new Set((sections || []).map(s => s.start_sentence));
-    const norm = String(text).replace(/\r\n?/g, '\n').replace(/([^\n])\n(?!\n)/g, '$1 ');
-    const paras = norm.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
     const blocks = []; let gi = 0; let titled = false;
-    for (const p of paras) {
-      let count;
-      try { count = (nlp(p).sentences().out('array') || []).filter(s => s.trim()).length || 1; }
-      catch (e) { count = 1; }
+    const emit = (count) => {
       const idxs = [];
       for (let k = 0; k < count && gi < sentenceTexts.length; k++) idxs.push(gi++);
-      if (!idxs.length) continue;
+      if (!idxs.length) return;
       if (idxs.length === 1 && headingSet.has(idxs[0])) {
         blocks.push({ type: titled ? 'h2' : 'h1', text: sentenceTexts[idxs[0]] });
         titled = true;
       } else {
         blocks.push({ type: 'p', sentences: idxs.map(i => ({ i, t: sentenceTexts[i] })) });
+      }
+    };
+    if (Array.isArray(paraCounts) && paraCounts.length) {
+      for (const c of paraCounts) { if (gi >= sentenceTexts.length) break; emit(Math.max(1, c | 0)); }
+    } else {
+      const norm = String(text).replace(/\r\n?/g, '\n').replace(/([^\n])\n(?!\n)/g, '$1 ');
+      const paras = norm.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+      for (const p of paras) {
+        if (gi >= sentenceTexts.length) break;
+        let count;
+        try { count = (nlp(p).sentences().out('array') || []).filter(s => s.trim()).length || 1; }
+        catch (e) { count = 1; }
+        emit(count);
       }
     }
     if (gi < sentenceTexts.length) {  // defensive: never drop a sentence
@@ -7041,7 +7116,7 @@ function projectGraph(events, frame = {}) {
     // A transcript was normalized inside the extractor (cues and speaker
     // labels became structure); the blocks must mirror the text the reading
     // actually segmented, or sentence indices drift and timecodes leak back.
-    const blocks = rebuildBlocks(result.normalized_text || text, sentenceTexts, result.sections);
+    const blocks = rebuildBlocks(result.normalized_text || text, sentenceTexts, result.sections, result.paragraph_counts);
     // seq → sentence index, so projected entities can list their mentions
     const seqToSent = new Map();
     for (const ev of (result.events || [])) if (ev.sentence_idx != null) seqToSent.set(ev.seq, ev.sentence_idx);

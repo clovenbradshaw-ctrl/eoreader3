@@ -101,6 +101,43 @@ async function main() {
     ok(r.events.length === big._events.length, 'the full event log is carried, uncapped');
   }
 
+  console.log('• large files — a giant single-paragraph paste is sliced, not gulped');
+  {
+    // A book pasted with NO blank line between paragraphs collapses to ONE
+    // paragraph. The old path handed that whole string to nlp() in a single
+    // synchronous gulp (the freeze), then re-segmented the entire document a
+    // SECOND time to build display blocks. Now an over-long paragraph is sliced
+    // into bounded chunks, and blocks are rebuilt from the segmenter's own
+    // counts — no second parse. This pins that the slicing never drops or
+    // duplicates a span at a chunk seam.
+    const sents = [];
+    for (let i = 0; i < 4000; i++) {
+      const who = ['Edith', 'Sefton', 'Marlow', 'the keeper'][i % 4];
+      sents.push(`${who} carried the lamp past Voss Point that evening number ${i}.`);
+    }
+    const oneParagraph = sents.join(' ');               // one unbroken line, > 200KB
+    ok(!oneParagraph.includes('\n'), 'the fixture really is one unbroken paragraph');
+    const giant = await E.parseDocument('giant.txt', oneParagraph, 'giant');
+    eq(giant.kind, 'prose', 'a giant single paragraph reads as prose, not a table');
+    ok(giant.sentenceTexts.length > 2000, 'the giant paragraph segments into thousands of spans (got ' + giant.sentenceTexts.length + ')');
+    const seen = [];
+    for (const b of giant.blocks) if (b.type === 'p') for (const s of b.sentences) seen.push(s.i);
+    eq(seen.length, giant.sentenceTexts.length, 'every span lands in exactly one block — none dropped at a chunk seam');
+    ok(seen.every((v, i) => v === i), 'block sentence indices are the spine, in order, with no gaps or repeats');
+  }
+
+  console.log('• large files — blocks are rebuilt from the segmenter, no second parse');
+  {
+    // Blocks must still account for every span (headings carry one each), and a
+    // dialogue-heavy doc must regroup identically to the segmenter's own split.
+    const voss = await E.parseDocument('Voss.txt', VOSS, 'voss-blocks');
+    const covered = voss.blocks.reduce((n, b) => n + (b.type === 'p' ? b.sentences.length : 1), 0);
+    eq(covered, voss.sentenceTexts.length, 'every sentence span is covered by exactly one block');
+    const flat = [];
+    for (const b of voss.blocks) { if (b.type === 'p') for (const s of b.sentences) flat.push(s.i); }
+    ok(flat.every((v, i) => i === 0 || flat[i - 1] < v), 'paragraph spans stay strictly ascending (gaps for headings, never a repeat)');
+  }
+
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
   if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

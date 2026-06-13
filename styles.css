@@ -638,6 +638,10 @@ ol.md-list { list-style: decimal; }
 .prose .doc-meta { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); margin-bottom: 26px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
 .prose .doc-h2 { font-family: var(--sans); font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); margin: 30px 0 12px; }
 .prose .doc-p { font-family: var(--serif); font-size: 17.5px; line-height: 1.75; color: #26282d; margin: 0 0 18px; }
+/* Progressive-reveal footer shown while a long document streams into the pane,
+   a few sections per frame, so opening a big file stays responsive. */
+.prose-more { display: flex; align-items: center; gap: 9px; margin: 6px 0 0; padding: 12px 2px; font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
+.prose-more .pm-orb { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); animation: pulseload 1.2s ease-in-out infinite; flex-shrink: 0; }
 .prose .sent { transition: background .2s; border-radius: 3px; padding: 0 1px; }
 /* highlight a jumped-to citation, then fade — long enough to find after a
    smooth scroll, matched to the flashSent clear in flashCitation. */
@@ -1061,6 +1065,7 @@ table.grid .member td:first-child { padding-left: 30px; }
 .ingest-banner .ib-stage { color: var(--text); font-weight: 550; }
 .ingest-banner .ib-name { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; }
 .ingest-banner .ib-pct { margin-left: auto; font-family: var(--mono); color: var(--accent); flex-shrink: 0; }
+.ingest-banner .ib-count { color: var(--text-3); font-weight: 400; }
 .ingest-banner .ib-mem { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--accent-hover); background: var(--accent-tint); border-radius: var(--r-pill); padding: 1px 8px; flex-shrink: 0; }
 .ingest-banner .ib-bar { height: 5px; background: var(--bg-subtle); border-radius: 999px; margin-top: 9px; overflow: hidden; position: relative; }
 .ingest-banner .ib-fill { position: relative; overflow: hidden; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s cubic-bezier(.2,.8,.2,1); }
@@ -1081,6 +1086,7 @@ table.grid .member td:first-child { padding-left: 30px; }
 .ingest-banner .ib-step.done .ib-dot { background: var(--accent); }
 .ingest-banner .ib-step.on { color: var(--accent); }
 .ingest-banner .ib-step.on .ib-dot { background: var(--accent); animation: ibpulse 1.5s ease-in-out infinite; }
+.ingest-banner .ib-note { margin-top: 8px; font-size: 11px; line-height: 1.5; color: var(--text-3); }
 @keyframes ibindet { 0% { left: -38%; } 100% { left: 100%; } }
 @keyframes ibsheen { 0% { background-position: 120% 0; } 100% { background-position: -120% 0; } }
 @keyframes iborb { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-tint-2); opacity: .85; } 50% { box-shadow: 0 0 0 6px transparent; opacity: 1; } }
