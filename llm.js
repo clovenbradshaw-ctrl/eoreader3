@@ -302,19 +302,41 @@
     if (wllamaMod) return wllamaMod;
     if (typeof window !== 'undefined' && window.EO_WLLAMA) { wllamaMod = window.EO_WLLAMA; return wllamaMod; }
     const ver = (typeof window !== 'undefined' && window.EO_WLLAMA_VERSION) || WLLAMA_VERSION;
-    const esmBase = (typeof window !== 'undefined' && window.EO_WLLAMA_CDN) || ('https://esm.run/@wllama/wllama@' + ver);
-    const cdnEsm = 'https://cdn.jsdelivr.net/npm/@wllama/wllama@' + ver + '/esm';
+    // IMPORTANT: import the package's EXPLICIT ESM entry, not esm.run / jsdelivr's
+    // `/+esm` auto-bundle. wllama 3.4.1's package.json `main` points at a
+    // non-existent root `index.js`, so `/+esm` (and esm.run, which redirects to
+    // it) 404s — which is exactly the "CPU model never loads" failure we kept
+    // hitting. The real ESM bundle is at `esm/index.js` and is self-contained.
+    // We try a list of CDN bases in order so one CDN hiccup falls through to the
+    // next. window.EO_WLLAMA_CDN (a full module URL) still overrides everything.
+    const override = (typeof window !== 'undefined' && window.EO_WLLAMA_CDN) || null;
+    const bases = [
+      'https://cdn.jsdelivr.net/npm/@wllama/wllama@' + ver + '/esm',
+      'https://unpkg.com/@wllama/wllama@' + ver + '/esm',
+      'https://esm.sh/@wllama/wllama@' + ver + '/esm',
+    ];
     const work = (async () => {
-      const m = await import(esmBase);
+      let m = null, usedBase = null, lastErr = null;
+      const tryUrls = override ? [override] : bases.map(b => b + '/index.js');
+      for (let i = 0; i < tryUrls.length; i++) {
+        try {
+          m = await import(/* @vite-ignore */ tryUrls[i]);
+          usedBase = override ? null : bases[i];
+          lastErr = null;
+          break;
+        } catch (e) { lastErr = e; }
+      }
+      if (!m) throw lastErr || new Error('Could not load the CPU model runtime from any CDN.');
       const Wllama = m.Wllama || (m.default && m.default.Wllama) || m.default;
-      // Prefer the package's own CDN wasm map (encodes the right paths for THIS
-      // version); fall back to the documented esm/ layout. Either is overridable.
+      // wllama 3.4.1's pathConfig wants a single `default` pointing at the one
+      // unified wasm (esm/wasm/wllama.wasm); the old single-thread/multi-thread
+      // keys are obsolete and, lacking `default`, make loadModel throw
+      // '"default" is missing from pathConfig'. Overridable via EO_WLLAMA_WASM.
       let wasmPaths = (typeof window !== 'undefined' && window.EO_WLLAMA_WASM) || null;
-      if (!wasmPaths) { try { const c = await import(cdnEsm + '/wasm-from-cdn.js'); wasmPaths = c.default || c.WasmFromCDN || c; } catch (_) {} }
-      if (!wasmPaths) wasmPaths = {
-        'single-thread/wllama.wasm': cdnEsm + '/single-thread/wllama.wasm',
-        'multi-thread/wllama.wasm': cdnEsm + '/multi-thread/wllama.wasm',
-      };
+      if (!wasmPaths) {
+        const base = usedBase || bases[0];
+        wasmPaths = { 'default': base + '/wasm/wllama.wasm' };
+      }
       return { Wllama, wasmPaths };
     })();
     let to;
