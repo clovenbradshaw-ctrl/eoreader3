@@ -604,6 +604,49 @@
   }
 
   /* ============================================================
+     Wikipedia article → ingestible document text.
+
+     The plain-text extract arrives with its outline inline (== Heading ==)
+     and its reference apparatus at the tail. Three moves before ingestion:
+       · the title and short description become their own PUNCTUATED
+         paragraphs — unpunctuated, the segmenter glues them into the first
+         body sentence ("Howard Shore Canadian film score composer (born
+         1946)" as sentence 0), which seeds a polluted entity span;
+       · boilerplate bands (References, External links, See also, Notes,
+         Further reading…) are dropped WHOLE — their link rows otherwise
+         outrank prose in name-overlap retrieval and leak into citations
+         ("Howard Shore at IMDb" as a top hit);
+       · section headings are kept verbatim: the engine's chrome gate reads
+         them as structure (never prose), and they stay fold boundaries.
+     ============================================================ */
+  const WIKI_DROP_SECTIONS = /^(references|external links|see also|notes|further reading|sources|citations|footnotes|works cited)$/i;
+  function stripWikiSections(text) {
+    const out = [];
+    let dropLevel = 0;
+    for (const line of String(text == null ? '' : text).split('\n')) {
+      const h = line.match(/^\s*(={2,6})\s*(.+?)\s*\1\s*$/);
+      if (h) {
+        const level = h[1].length;
+        if (dropLevel && level <= dropLevel) dropLevel = 0;
+        if (!dropLevel && WIKI_DROP_SECTIONS.test(h[2].trim())) { dropLevel = level; continue; }
+      }
+      if (!dropLevel) out.push(line);
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  function articleDocText(p) {
+    if (!p) return '';
+    const dot = (s) => { s = String(s == null ? '' : s).trim(); return s ? (/[.!?…]$/.test(s) ? s : s + '.') : ''; };
+    const parts = [];
+    if (p.title) parts.push(dot(p.title));
+    if (p.description) parts.push(dot(p.description));
+    const body = stripWikiSections((p.text && p.text.trim()) ? p.text : (p.intro || ''));
+    if (body) parts.push(body);
+    if (p.url) parts.push('Source: ' + p.url);
+    return parts.filter(Boolean).join('\n\n').trim();
+  }
+
+  /* ============================================================
      The prioritised, budgeted batch. Spend at most `budget` live lookups on
      the most serious needs; the rest come back `skipped` (abstain). Results
      stream through opts.onResult so the UI can fill in as the rate limiter
@@ -645,6 +688,7 @@
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
     enrichTerm, article, pickQuery,
+    stripWikiSections, articleDocText,
     hasConsent, grantConsent, revokeConsent,
     clearCache,
     enabled: () => !!proxyBase() && !!_fetch(),

@@ -1826,7 +1826,13 @@ function App() {
   };
 
   // Render a Wikipedia article payload into an ingestible prose document.
+  // Article payload → ingestible text. EOExternal owns the composition
+  // (punctuated title/description paragraphs, boilerplate bands dropped,
+  // headings kept for the chrome gate); the raw join survives only as the
+  // fallback for an older external.js.
   const buildWikiDocText = (p) => {
+    const X = window.EOExternal;
+    if (X && X.articleDocText) return X.articleDocText(p);
     const parts = [];
     if (p.title) parts.push(p.title);
     if (p.description) parts.push(p.description);
