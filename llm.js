@@ -281,6 +281,44 @@
     return WLLAMA_UPLOADED[id] || WLLAMA_MODELS[id] || null;
   };
   const wllamaModels = () => Object.assign({}, WLLAMA_MODELS);
+
+  // MODEL TIER (WI-3, the L2 veto). The truthfulness laws bite differently by
+  // model capacity, so the talker needs one honest label for "how much can this
+  // model be trusted to compose grounded prose":
+  //   'api'     — Anthropic (Claude): composes reliably.
+  //   'capable' — a large local model (≳2B params): the softened veto is correct.
+  //   'small'   — a sub-2B local model: it cannot compose from the page without
+  //               drift, so on this tier the system underclaims (see WI-6).
+  // Sizing: wllama (CPU) entries carry an authoritative GGUF `bytes`; the WebGPU
+  // (MLC) keys encode their parameter count instead ("…0.5B…", "…3B…"), so size
+  // those from the key. Anything we cannot size defaults to 'capable' — never
+  // harden a path we cannot measure (that keeps today's behavior for it).
+  const TIER_SMALL_MAX_BYTES = 1.6 * 1024 * 1024 * 1024;   // ≈1.6 GB ⇒ ~sub-2B at Q4/Q8
+  // Billions of parameters parsed from a model id ("…1.5B…" → 1.5, "…360M…" →
+  // 0.36), or null when no size token is present. NOT used for wllama ids (their
+  // "05b" shorthand misreads as 5B — those size by bytes); for the MLC keys the
+  // "0.5B"/"3B" form is unambiguous.
+  function modelParamsB(key) {
+    const s = String(key == null ? '' : key);
+    let m = s.match(/(\d+(?:\.\d+)?)\s*b\b/i);
+    if (m) return parseFloat(m[1]);
+    m = s.match(/(\d+(?:\.\d+)?)\s*m\b/i);
+    if (m) return parseFloat(m[1]) / 1000;
+    return null;
+  }
+  function modelTier(mlcKey) {
+    if (isAnthropic(mlcKey)) return 'api';
+    if (isWllama(mlcKey)) {
+      const src = wllamaSource(mlcKey);
+      if (!src) return 'small';                            // unknown id ⇒ fail safe (underclaim)
+      if (typeof src.bytes !== 'number') return 'capable'; // uploaded GGUF: user's choice, don't harden
+      return src.bytes < TIER_SMALL_MAX_BYTES ? 'small' : 'capable';
+    }
+    const pB = modelParamsB(mlcKey);
+    if (pB == null) return 'capable';                      // unrecognizable → don't harden
+    return pB < 2 ? 'small' : 'capable';
+  }
+
   // The CPU model used for the automatic fallback (no WebGPU / GPU stall). The
   // smallest viable model wins this slot — at ~95 MB it downloads in seconds
   // and runs anywhere wllama can — so when a GPU model stalls or there's no
@@ -1441,5 +1479,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();

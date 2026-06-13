@@ -99,5 +99,37 @@ group('subscribe fires on change and unsubscribes cleanly', () => {
   eq(hits, was, 'unsubscribe stops further notifications');
 });
 
+group('WI-7: truthfulness components are computed and attached on end()', () => {
+  // void counting is pure and total
+  eq(A.countVoids('plain text'), 0, 'no voids in plain text');
+  eq(A.countVoids('a {{void:Zorthax}} and {{absent:d1:no line}} here'), 2, 'counts both void and absent markers');
+  eq(A.countVoids(null), 0, 'null text is zero voids, never a throw');
+
+  // a clean grounded answer: bound from cites, no voids, no unbound
+  let t = A.truthfulness({ text: 'The keeper said no. {{cite:d1:2}}', audit: { grounded: true, covers: '1/1', status: 'clean' }, cites: [{ docId: 'd1', idx: 2 }] });
+  eq(t.bound, 1, 'one bound claim'); eq(t.voids, 0, 'no voids'); eq(t.unbound, 0, 'clean answer has zero unbound'); eq(t.coverage, 1, 'coverage 1');
+
+  // a residual (WI-4): a void on the target + bound subject material, success
+  t = A.truthfulness({ text: 'The document does not establish Zorthax. {{absent:d1:no presence}} What it does: ...', audit: { grounded: true, covers: '2/3', status: 'residual' }, cites: [{ docId: 'd1', idx: 1 }, { docId: 'd1', idx: 4 }] });
+  eq(t.unbound, 0, 'a residual carries no unbound assertion'); eq(t.voids, 1, 'the registered absence is counted'); eq(t.bound, 2, 'subject material bound');
+
+  // the one dishonest move: a kept unbound assertion (the thing WI-2/3/4 remove)
+  t = A.truthfulness({ text: 'Zorthax departed for Jupiter.', audit: { grounded: false, covers: '0/1', status: 'warn' }, cites: [] });
+  eq(t.unbound, 1, 'a grounded-path warn that bound nothing counts as one unbound assertion');
+
+  // plain chat and honest refusal are NOT unbound (they claim no binding)
+  eq(A.truthfulness({ text: 'I think so.', audit: { grounded: false, status: 'plain' }, cites: [] }).unbound, 0, 'plain chat is not unbound');
+  eq(A.truthfulness({ text: 'I cannot answer.', audit: { grounded: false, covers: '0/1', status: 'error' }, cites: [] }).unbound, 0, 'an honest refusal is not unbound');
+
+  // end() attaches .truth on the recorded turn
+  A.clear();
+  A.begin({ input: 'q' });
+  A.end({ engine: 'model + mechanical cite', text: 'The keeper said no. {{cite:d1:2}}', audit: { grounded: true, covers: '1/1', status: 'clean' }, cites: [{ docId: 'd1', idx: 2 }] });
+  const rec = JSON.parse(A.toJSONL());
+  ok(rec.final.truth, 'end() attached a truth block to the final');
+  eq(rec.final.truth.unbound, 0, 'recorded turn reports zero unbound');
+  eq(rec.final.truth.bound, 1, 'recorded turn reports one bound claim');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }

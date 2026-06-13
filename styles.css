@@ -1289,6 +1289,27 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
 .aud-badge.held  { background: var(--warn-bg); border-color: var(--warn-bd); color: var(--warn-fg); border-style: dashed; }
 .aud-badge.plain { border-style: dashed; color: var(--text-3); }
 .aud-badge.run   { color: var(--accent); border-color: var(--accent-tint-2); background: var(--accent-tint); }
+.aud-badge.error { background: var(--bad-bg); border-color: var(--bad-bd); color: var(--bad-fg); }
+
+/* WI-7 — per-turn truthfulness chip (bound ✓ / voids ⟨⟩ / unbound ⊥ · coverage) */
+.aud-truth { font-family: var(--mono); font-size: 10px; color: var(--text-3); flex-shrink: 0; white-space: nowrap; display: inline-flex; gap: 1px; align-items: baseline; }
+.aud-truth-b { color: var(--good-fg); }
+.aud-truth-v { color: var(--warn-fg); }
+.aud-truth-u { color: var(--text-3); }
+.aud-truth-u.bad { color: var(--bad-fg); font-weight: 600; }
+.aud-truth-c { color: var(--text-3); }
+
+/* WI-7 — the per-session truthfulness summary, atop the trace */
+.aud-truth-sum { border: 1px solid var(--border); border-radius: var(--r-md, 8px); padding: 9px 11px; margin-bottom: 10px; background: var(--bg-subtle); }
+.aud-truth-sum.bad { border-color: var(--bad-bd); background: var(--bad-bg); }
+.aud-truth-sum-head { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+.aud-truth-verdict { font-family: var(--mono); font-size: 10.5px; padding: 1px 7px; border-radius: var(--r-pill); }
+.aud-truth-verdict.ok { background: var(--good-bg); border: 1px solid var(--good-bd); color: var(--good-fg); }
+.aud-truth-verdict.bad { background: var(--bad-bg); border: 1px solid var(--bad-bd); color: var(--bad-fg); }
+.aud-truth-sum-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 7px; font-family: var(--mono); font-size: 10.5px; color: var(--text-2); }
+.aud-truth-trace { display: flex; align-items: flex-end; gap: 2px; height: 24px; margin-top: 9px; }
+.aud-truth-bar { width: 6px; min-height: 2px; background: var(--accent, #6b7); border-radius: 1px; opacity: 0.8; }
+.aud-truth-bar.bad { background: var(--bad-fg); opacity: 1; }
 
 /* turn body */
 .aud-turn-body { border-top: 1px solid var(--border); padding: 10px 12px 12px; background: #fbfbfc; }
