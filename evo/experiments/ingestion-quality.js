@@ -196,5 +196,5 @@ function fmt(rows, cols) {
   console.log('  heavyPerson%   ' + r3(mean('heavyPersonRate')) + '   (higher better)');
   console.log('  assert/heavy   ' + r3(mean('assertionsPerHeavy')) + '   (higher better)');
 
-  if (jsonOut) { fs.writeFileSync(jsonOut, JSON.stringify({ schema: 'cleon-ingestion/1', at: new Date().toISOString(), engine: enginePath || 'baseline', rows }, null, 1)); console.log('\nwrote ' + jsonOut); }
+  if (jsonOut) { fs.writeFileSync(jsonOut, JSON.stringify({ schema: 'cleo-ingestion/1', at: new Date().toISOString(), engine: enginePath || 'baseline', rows }, null, 1)); console.log('\nwrote ' + jsonOut); }
 })().catch(e => { console.error(e); process.exit(1); });

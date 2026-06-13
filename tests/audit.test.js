@@ -45,7 +45,7 @@ group('records a turn as one JSONL line', () => {
   const lines = A.toJSONL().split('\n');
   eq(lines.length, 1, 'one JSONL line for one turn');
   const t = JSON.parse(lines[0]);                 // each line must be valid JSON on its own
-  eq(t.schema, 'cleon-audit/1', 'schema stamped on the turn');
+  eq(t.schema, 'cleo-audit/1', 'schema stamped on the turn');
   eq(t.input, 'what is this about?', 'input captured');
   eq(t.mode, 'auto', 'mode captured');
   eq(t.modelReady, true, 'set() merged a late field');

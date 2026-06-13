@@ -1,5 +1,5 @@
 /* ============================================================
-   Cleon — configuration (not sample data).
+   Cleo — configuration (not sample data).
    Models, the rule registry (auditable/exportable), example RAW text
    the engine parses live, and the rule-pack schema + authoring prompt.
    ============================================================ */
@@ -37,17 +37,19 @@ const MODELS = [
   // automatic fallback when a GPU model stalls. Slower than the GPU tier, but
   // works anywhere; the GGUF downloads once from Hugging Face and is cached. The
   // `provider:'wllama'` + `wllama:` key routes them to the CPU backend in llm.js.
-  // The tiny one is the automatic fallback: ~95 MB downloads in seconds and
-  // is pre-fetched into OPFS on first launch, so a GPU stall swaps over with
-  // no fetch at all — only wllama init. The Q8 variants are the same models
+  // The tiny one is the automatic fallback: ~95 MB downloads in seconds and is
+  // pre-fetched into wllama's OPFS cache on first launch, so a GPU stall swaps
+  // over with no fetch — only wllama init. The Q8 variants are the same models
   // at higher precision: one click for noticeably better phrasing, slower on
-  // the CPU but a small step up in download size.
+  // the CPU but a modest step up in download size. The 3B is the strongest
+  // CPU option, on par with the GPU default if you don't have WebGPU.
   { id: 'cpu-smol-135',   name: 'SmolLM2 135M',                detail: '~95 MB · CPU · instant fallback',   provider: 'wllama', mlc: 'wllama:smollm2-135m' },
   { id: 'cpu-smol-360',   name: 'SmolLM2 360M',                detail: '~270 MB · CPU · fastest',           provider: 'wllama', mlc: 'wllama:smollm2-360m' },
   { id: 'cpu-qwen-05',    name: 'Qwen2.5 0.5B',                detail: '~400 MB · CPU · balanced',          provider: 'wllama', mlc: 'wllama:qwen25-05b' },
   { id: 'cpu-qwen-05-q8', name: 'Qwen2.5 0.5B (high quality)', detail: '~550 MB · CPU · Q8 — better words', provider: 'wllama', mlc: 'wllama:qwen25-05b-q8' },
-  { id: 'cpu-llama-1',    name: 'Llama 3.2 1B',                detail: '~800 MB · CPU · strongest',         provider: 'wllama', mlc: 'wllama:llama32-1b' },
+  { id: 'cpu-llama-1',    name: 'Llama 3.2 1B',                detail: '~800 MB · CPU · capable',           provider: 'wllama', mlc: 'wllama:llama32-1b' },
   { id: 'cpu-llama-1-q8', name: 'Llama 3.2 1B (high quality)', detail: '~1.3 GB · CPU · Q8 — best words',   provider: 'wllama', mlc: 'wllama:llama32-1b-q8' },
+  { id: 'cpu-llama-3',    name: 'Llama 3.2 3B',                detail: '~2.0 GB · CPU · strongest',         provider: 'wllama', mlc: 'wllama:llama32-3b' },
   // cloud · Anthropic (Claude) — needs an API key, runs no download, and works
   // without WebGPU. The `mlc` key carries an 'anthropic:' prefix so llm.js
   // routes it to the Claude API; the value after the colon is the exact model id.
@@ -258,7 +260,7 @@ const RULE_PACK_SCHEMA = {
 };
 
 const AUTHOR_PROMPT =
-`You are authoring a rule pack for Cleon, an in-browser grounded document reader.
+`You are authoring a rule pack for Cleo, an in-browser grounded document reader.
 A rule pack is a JSON object that adds installable, toggleable reading rules.
 
 Return ONLY a JSON object with this exact shape:

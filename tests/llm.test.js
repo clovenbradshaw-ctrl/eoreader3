@@ -304,7 +304,7 @@ group('buildUserContent — tiered spans/notes, question first and last', () => 
 // rides the user message AFTER the spans, as closing guidance about HOW to
 // answer. The old order (note before spans, labeled "What this turn wants:")
 // let a small model read the note as a synopsis and pre-frame the spans it
-// hadn't reached yet — Cleon parroted "the author is not named" even when
+// hadn't reached yet — Cleo parroted "the author is not named" even when
 // the Author: span sat right below. Spans-before-note inverts that.
 group('shape pass — a director\'s note AFTER spans, framed as guidance', () => {
   ok(/never answer the question yourself/.test(LLM.SHAPE_SYSTEM), 'the shape prompt forbids answering');
@@ -330,7 +330,7 @@ group('shape pass — a director\'s note AFTER spans, framed as guidance', () =>
   ok(!/What this turn wants/.test(u) && !/What this turn wants/.test(bare), 'the old "What this turn wants:" label is gone (read as a synopsis by small models)');
 
   // The grounded system prompt names the editor's note as a third context
-  // type and tells Cleon it's guidance, not source — the standing guard
+  // type and tells Cleo it's guidance, not source — the standing guard
   // that backs the reorder. Without it, a model that still reads the note
   // as facts has nothing in the system prompt to pull it back.
   const sys = LLM.systemFor('grounded', 'answer', true, 1);
@@ -513,7 +513,14 @@ async function groupA(name, fn) { console.log('• ' + name); await fn(); }
     ok(typeof LLM.fallbackKey() === 'string' && /^wllama:/.test(LLM.fallbackKey()), 'fallbackKey() names a wllama model');
     const reg = LLM.wllamaModels();
     ok(reg && Object.keys(reg).length >= 1, 'wllamaModels() exposes the id→source registry');
-    ok(Object.values(reg).every(m => m && /^https?:/.test(m.url)), 'every registry entry carries a model URL');
+    // Each entry exposes a mirror list as `urls` (an array of equivalent
+    // download sources tried in order). A single-URL legacy shape is still
+    // accepted via the `url` shorthand; the contract is "at least one
+    // resolvable URL on every entry".
+    ok(Object.values(reg).every(m => {
+      const list = (m && m.urls && m.urls.length ? m.urls : (m && m.url ? [m.url] : []));
+      return list.length > 0 && list.every(u => /^https?:/.test(u));
+    }), 'every registry entry carries at least one model URL (urls[] or url)');
   });
 
   await groupA('a wllama model loads on the CPU (no WebGPU) and reports ready', async () => {

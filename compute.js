@@ -1,7 +1,7 @@
 /* ============================================================
    Deterministic arithmetic — the calculator behind the chat.
 
-   Cleon's contract is "the intelligence is mechanical; the model
+   Cleo's contract is "the intelligence is mechanical; the model
    only phrases." Arithmetic is the most mechanical thing of all, so
    it must never touch the model: when a turn is essentially a math
    expression, math.js evaluates it deterministically and the model

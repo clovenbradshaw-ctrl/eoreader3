@@ -237,17 +237,34 @@
   // pick a higher-quality version of the same base model without knowing what
   // Q4_K_M means. Adding a new entry — a Q5 of an existing model, a different
   // 1B — is a single object literal; no other code change is required.
+  // Each entry carries an `urls` ARRAY of equivalent mirrors — bartowski first
+  // (the canonical), then community alternatives (unsloth) so a 503 / DNS
+  // hiccup on one host falls through to the next without surfacing as a failed
+  // load. `bytes` is the expected GGUF size, used as a progress estimate when
+  // the server omits Content-Length; `quant` is the weight precision, surfaced
+  // as a quality tier in the picker. Adding a model = one object literal;
+  // adding a new mirror to an existing one = one URL in its array.
   const WLLAMA_MODELS = (typeof window !== 'undefined' && window.EO_WLLAMA_MODELS) || {
     // Tiny: the seamless fallback. ~95 MB downloads in seconds on any connection,
-    // and we pre-fetch it to OPFS in the background on first launch so a later
-    // "GPU stalled" event swaps over with no fetch at all — only wllama init.
-    'smollm2-135m': { name: 'SmolLM2 135M', url: 'https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf', bytes: 95 * 1024 * 1024, quant: 'Q4_K_M' },
-    'smollm2-360m': { name: 'SmolLM2 360M', url: 'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf', bytes: 270 * 1024 * 1024, quant: 'Q4_K_M' },
-    'qwen25-05b':   { name: 'Qwen2.5 0.5B', url: 'https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf', bytes: 380 * 1024 * 1024, quant: 'Q4_K_M' },
-    'qwen25-05b-q8':{ name: 'Qwen2.5 0.5B (high quality)', url: 'https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q8_0.gguf', bytes: 530 * 1024 * 1024, quant: 'Q8_0' },
-    'llama32-1b':   { name: 'Llama 3.2 1B', url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf', bytes: 770 * 1024 * 1024, quant: 'Q4_K_M' },
-    'llama32-1b-q8':{ name: 'Llama 3.2 1B (high quality)', url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf', bytes: 1320 * 1024 * 1024, quant: 'Q8_0' },
+    // and we pre-fetch it on first launch so a later "GPU stalled" event swaps
+    // over with no fetch at all — only wllama init.
+    'smollm2-135m': { name: 'SmolLM2 135M', urls: ['https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf'], bytes: 95 * 1024 * 1024, quant: 'Q4_K_M' },
+    'smollm2-360m': { name: 'SmolLM2 360M', urls: ['https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf'], bytes: 270 * 1024 * 1024, quant: 'Q4_K_M' },
+    'qwen25-05b':   { name: 'Qwen2.5 0.5B', urls: ['https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf'], bytes: 380 * 1024 * 1024, quant: 'Q4_K_M' },
+    'qwen25-05b-q8':{ name: 'Qwen2.5 0.5B (high quality)', urls: ['https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q8_0.gguf'], bytes: 530 * 1024 * 1024, quant: 'Q8_0' },
+    'llama32-1b':   { name: 'Llama 3.2 1B', urls: [
+      'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf',
+    ], bytes: 770 * 1024 * 1024, quant: 'Q4_K_M' },
+    'llama32-1b-q8':{ name: 'Llama 3.2 1B (high quality)', urls: ['https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf'], bytes: 1320 * 1024 * 1024, quant: 'Q8_0' },
+    'llama32-3b':   { name: 'Llama 3.2 3B', urls: [
+      'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+    ], bytes: 2020 * 1024 * 1024, quant: 'Q4_K_M' },
   };
+  // Helper: every entry exposes its mirror list as `urls`; older callers still
+  // see a `url` shorthand pointing at the primary.
+  const wllamaUrls = (src) => (src && src.urls && src.urls.length) ? src.urls : (src && src.url ? [src.url] : []);
   const wllamaSource = (key) => WLLAMA_MODELS[wllamaId(key)] || null;
   const wllamaModels = () => Object.assign({}, WLLAMA_MODELS);
   // The CPU model used for the automatic fallback (no WebGPU / GPU stall). The
@@ -293,108 +310,51 @@
     return wllamaMod;
   }
 
-  // OPFS-backed GGUF cache. wllama's built-in useCache writes through the
-  // Cache API, which the browser treats as best-effort: a tab refresh after a
-  // few days, or storage pressure from another origin, evicts it and the next
-  // load re-fetches hundreds of MB — exactly the "I just had to reinstall on
-  // refresh" failure mode. The Origin Private File System is the durable
-  // counterpart: not best-effort, not exposed to the user via "Clear cache,"
-  // not bucketed alongside Cache API entries. We fetch the GGUF once, write
-  // it here as a single blob, and from then on every load pulls bytes from
-  // disk and hands them to wllama via loadModel(Blob) — no network, no Cache
-  // API. A best-effort no-op on browsers without OPFS (none of the supported
-  // browsers today, but the fall-through to the legacy URL load still works).
-  const OPFS_DIR = 'eo-models';
-  async function opfsRoot() {
-    if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.getDirectory !== 'function') return null;
-    try {
-      const root = await navigator.storage.getDirectory();
-      return await root.getDirectoryHandle(OPFS_DIR, { create: true });
-    } catch (_) { return null; }
-  }
-  async function opfsGet(name) {
-    try {
-      const dir = await opfsRoot(); if (!dir) return null;
-      const handle = await dir.getFileHandle(name);
-      const f = await handle.getFile();
-      return f && f.size > 0 ? f : null;
-    } catch (_) { return null; }
-  }
-  async function opfsHas(name) {
-    try { const dir = await opfsRoot(); if (!dir) return false; await dir.getFileHandle(name); return true; }
-    catch (_) { return false; }
-  }
-  async function opfsPut(name, blob) {
-    try {
-      const dir = await opfsRoot(); if (!dir) return false;
-      const handle = await dir.getFileHandle(name, { create: true });
-      const w = await handle.createWritable();
-      await w.write(blob);
-      await w.close();
-      return true;
-    } catch (_) { return false; }
-  }
-  async function opfsDelete(name) {
-    try { const dir = await opfsRoot(); if (!dir) return false; await dir.removeEntry(name); return true; }
-    catch (_) { return false; }
-  }
-  async function opfsClearAll() {
-    try {
-      const dir = await opfsRoot(); if (!dir) return false;
-      if (typeof dir.values === 'function') {
-        for await (const h of dir.values()) {
-          try { await dir.removeEntry(h.name); } catch (_) {}
-        }
-      }
-      return true;
-    } catch (_) { return false; }
-  }
-  // Per-wllama-id filename. Quant is in the id, so a Q4 and a Q8 of the same
-  // base model never collide on disk.
-  const opfsName = (mlcKey) => 'wllama-' + wllamaId(mlcKey) + '.gguf';
+  // wllama's own CacheManager is **OPFS-backed** in v3.x (its cache-manager.d.ts
+  // says so verbatim), so the durable side-cache I'd planned to layer on top is
+  // already there — bytes that survive a tab refresh, a few-day gap, even a
+  // "clear cache" that spares site data. Calling loadModelFromUrl with
+  // useCache:true is what writes to it; a subsequent load with the same URL
+  // reads from OPFS and skips the network. The robustness gap we kept seeing
+  // was browser-side eviction of best-effort storage, which persistStorage()
+  // now mitigates — see the boot-time call.
+  //
+  // What's new here:
+  //  - urls is an ARRAY. We try each in order; a 503 / DNS hiccup on bartowski
+  //    falls through to unsloth without surfacing as a failed load. Once any
+  //    mirror succeeds, wllama caches its bytes and the next session uses them.
+  //  - parallelDownloads bumped to 4 so a fresh download uses the bandwidth.
+  //  - cacheStatus / clearCache talk to wllama's cacheManager directly, so
+  //    the picker badge and the "stuck cache" escape hatch agree with what's
+  //    actually on disk.
 
-  // Fetch a GGUF with progress and stash it in OPFS in one pass. Cancellable
-  // via the load token (a superseded build aborts its in-flight reader so the
-  // next-current load can race). Returns the Blob it wrote, so callers can hand
-  // it straight to wllama without re-reading the file.
-  async function fetchAndCacheGGUF(mlcKey, onProgress, myToken) {
-    const src = wllamaSource(mlcKey);
-    if (!src) throw new Error('Unknown on-device model: ' + mlcKey);
-    let resp;
-    try { resp = await fetch(src.url); }
-    catch (e) { throw Object.assign(new Error('Could not reach the on-device model host — check your connection.'), { code: 'NET' }); }
-    if (!resp || !resp.ok || !resp.body) throw new Error('Could not download the on-device model (HTTP ' + (resp && resp.status) + ').');
-    // Prefer Content-Length when the server sends it; fall back to the registry
-    // estimate so the progress bar still moves on hosts that don't (Hugging
-    // Face's resolve endpoint does, but a mirror might not).
-    const total = +(resp.headers && resp.headers.get('content-length')) || src.bytes || 0;
-    const reader = resp.body.getReader();
-    const chunks = [];
-    let loaded = 0;
+  // Compute wllama's OPFS filename for a URL: hashSHA1(url) + '_' + filename.
+  // Lets cacheStatus check the cache without instantiating a Wllama (so the
+  // picker badge stays cheap), and matches what wllama writes byte for byte.
+  async function wllamaCacheName(url) {
     try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (myToken !== loadToken) {
-          try { reader.cancel(); } catch (_) {}
-          throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' });
-        }
-        chunks.push(value);
-        loaded += value.byteLength || value.length || 0;
-        if (onProgress) {
-          const p = total ? Math.min(1, loaded / total) : 0;
-          onProgress(p, total ? 'Downloading the on-device model — ' + Math.round(p * 100) + '%' : 'Downloading the on-device model…');
-        }
-      }
-    } catch (e) {
-      if (e && e.code === 'CANCEL') throw e;
-      throw e;
+      const enc = new TextEncoder().encode(url);
+      const digest = await crypto.subtle.digest('SHA-1', enc);
+      const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+      const file = (url.split('/').pop() || '').split('?')[0];
+      return hex + '_' + file;
+    } catch (_) { return null; }
+  }
+  async function wllamaCacheHas(url) {
+    if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.getDirectory !== 'function') return false;
+    try {
+      const name = await wllamaCacheName(url);
+      if (!name) return false;
+      const root = await navigator.storage.getDirectory();
+      await root.getFileHandle(name);
+      return true;
+    } catch (_) { return false; }
+  }
+  async function wllamaCachedAny(src) {
+    for (const u of wllamaUrls(src)) {
+      try { if (await wllamaCacheHas(u)) return true; } catch (_) {}
     }
-    const blob = new Blob(chunks, { type: 'application/octet-stream' });
-    // Best-effort persist: a write failure (OPFS unavailable, quota exceeded)
-    // shouldn't fail the load — the in-memory Blob still loads this session.
-    await opfsPut(opfsName(mlcKey), blob);
-    return blob;
+    return false;
   }
 
   // Pre-import the runtime (small JS + wasm) WITHOUT loading a model, so the
@@ -404,28 +364,44 @@
   // alongside a live GPU one — but we CAN have the runtime cached and ready.
   async function prewarmFallback() { try { return await importWllama(); } catch (e) { return null; } }
 
-  // Pre-fetch the fallback CPU model into OPFS, in the background, so a later
-  // "GPU stalled" event swaps in the CPU model with no download at all — only
-  // wllama init. This is what makes the fallback FEEL instantaneous instead of
-  // taking minutes. Idempotent: a no-op once the file is on disk; safe to call
-  // every boot. Runs at low priority and silently — a fetch failure just
-  // leaves the user without the pre-warm, never surfaces an error.
+  // Pre-fetch the fallback CPU model into wllama's OPFS cache, in the
+  // background, so a later "GPU stalled" event swaps in the CPU model with no
+  // download at all — only wllama init. This is what makes the fallback FEEL
+  // instantaneous instead of taking minutes. Idempotent: a no-op once the
+  // file is on disk; safe to call every boot. Silent on failure — a fetch
+  // miss just leaves the user without the pre-warm.
   async function prewarmFallbackModel() {
     try {
       const key = fallbackKey();
       if (!key) return false;
-      if (await opfsHas(opfsName(key))) return true;
-      await fetchAndCacheGGUF(key, null, loadToken);
-      return true;
+      const src = wllamaSource(key);
+      if (!src) return false;
+      const urls = wllamaUrls(src);
+      if (!urls.length) return false;
+      if (await wllamaCachedAny(src)) return true;
+      const { Wllama, wasmPaths } = await importWllama();
+      const tmp = new Wllama(wasmPaths, { parallelDownloads: 4, logger: WLLAMA_LOGGER });
+      for (const url of urls) {
+        try {
+          if (typeof tmp.cacheManager === 'object' && tmp.cacheManager && typeof tmp.cacheManager.download === 'function') {
+            await tmp.cacheManager.download(url);
+          } else {
+            // Older wllama without cacheManager.download — just download into
+            // memory and discard; the bytes don't stick, but we tried.
+            await fetch(url).then(r => r && r.body && r.body.getReader());
+          }
+          return true;
+        } catch (_) {}
+      }
+      return false;
     } catch (_) { return false; }
   }
 
-  // Build (and resolve to) a resident wllama engine for `mlcKey`. The fast path:
-  // bytes are already in OPFS → hand them to wllama as a Blob, no network. The
-  // cold path: fetch to OPFS first, then load. Either way the CACHED state on
-  // the next refresh is identical (OPFS file present), so a tab reload always
-  // re-instantiates from disk and never re-downloads. Older wllama builds
-  // without loadModel(Blob) fall back to the URL path with Cache API caching.
+  // Build (and resolve to) a resident wllama engine for `mlcKey`. wllama's
+  // loadModelFromUrl handles the parallel download + OPFS-backed cache, and
+  // we wrap it in a multi-URL fallback: a 503 on bartowski falls through to
+  // unsloth without breaking the load. Bytes are sticky once any mirror
+  // succeeds, so a refresh re-instantiates from disk with no network hit.
   async function buildWllama(mlcKey, onProgress, myToken) {
     const { Wllama, wasmPaths } = await importWllama();
     if (typeof Wllama !== 'function') throw new Error('The CPU model runtime (wllama) did not load.');
@@ -436,34 +412,37 @@
     // when isolation is present so we never trip an unsupported multi-thread path.
     const isolated = (typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated);
     const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
-    const instance = new Wllama(wasmPaths, { parallelDownloads: 3, logger: WLLAMA_LOGGER });
+    const instance = new Wllama(wasmPaths, { parallelDownloads: 4, logger: WLLAMA_LOGGER });
     activeWllama = instance;
-    const loadOpts = { n_ctx: (typeof window !== 'undefined' && +window.EO_WLLAMA_NCTX) || 4096 };
-    if (isolated) loadOpts.n_threads = Math.min(4, Math.max(1, cores - 1));
-
-    const canLoadBlob = typeof instance.loadModel === 'function';
-    let blob = canLoadBlob ? await opfsGet(opfsName(mlcKey)) : null;
-
-    if (!blob && canLoadBlob) {
-      if (onProgress) onProgress(0, 'Downloading the on-device model…');
-      blob = await fetchAndCacheGGUF(mlcKey, onProgress, myToken);
-    }
-
-    if (blob && canLoadBlob) {
-      if (onProgress) onProgress(blob.size ? 1 : 0, 'Loading the on-device model…');
-      await instance.loadModel(blob, loadOpts);
-    } else {
-      // Legacy path: wllama too old for loadModel(Blob), OR OPFS unavailable
-      // and the in-memory fetch failed. Hand wllama the URL and let its own
-      // Cache-API caching apply. Same progress wiring as before.
-      loadOpts.useCache = true;
-      loadOpts.progressCallback = ({ loaded, total }) => {
-        if (myToken !== loadToken) return;
+    const loadOpts = {
+      n_ctx: (typeof window !== 'undefined' && +window.EO_WLLAMA_NCTX) || 4096,
+      useCache: true,
+      progressCallback: ({ loaded, total }) => {
+        if (myToken !== loadToken) return;                 // superseded → go inert
         const p = total ? loaded / total : 0;
         if (onProgress) onProgress(p, total ? 'Downloading the on-device model — ' + Math.round(p * 100) + '%' : 'Downloading the on-device model…');
-      };
-      await instance.loadModelFromUrl(src.url, loadOpts);
+      },
+    };
+    if (isolated) loadOpts.n_threads = Math.min(4, Math.max(1, cores - 1));
+
+    const urls = wllamaUrls(src);
+    if (!urls.length) throw new Error('No download URL for ' + mlcKey);
+    let lastErr = null;
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        await instance.loadModelFromUrl(urls[i], loadOpts);
+        lastErr = null;
+        break;
+      } catch (e) {
+        if (e && e.code === 'CANCEL') throw e;
+        if (myToken !== loadToken) throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' });
+        lastErr = e;
+        if (i < urls.length - 1 && onProgress) {
+          onProgress(0, 'That source is unavailable — trying the next mirror…');
+        }
+      }
     }
+    if (lastErr) throw lastErr;
 
     if (myToken !== loadToken) { try { await instance.exit(); } catch (_) {} if (activeWllama === instance) activeWllama = null; throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' }); }
     if (onProgress) onProgress(1, '');
@@ -868,8 +847,9 @@
   // UI when a row in the picker is a fast re-instantiate (no download) rather
   // than a multi-gigabyte fetch. Best-effort across backends:
   //  - Anthropic: nothing to cache.
-  //  - wllama: OPFS first (the durable side-cache buildWllama writes), then
-  //    the legacy Cache API entries left by an earlier session.
+  //  - wllama: check OPFS for ANY of the model's mirror URLs. wllama's cache
+  //    keys files by hashSHA1(url)+'_'+filename, so a primary-then-fallback
+  //    download leaves bytes that satisfy the FIRST URL match too.
   //  - WebLLM: use the library's own hasModelInCache helper, which reads the
   //    IndexedDB bucket we force on for durability.
   // Resolves to { cached, kind } so callers can render a badge without
@@ -878,17 +858,10 @@
     if (isAnthropic(mlcKey)) return { cached: false, kind: 'cloud' };
     if (isWllama(mlcKey)) {
       try {
-        if (await opfsHas(opfsName(mlcKey))) return { cached: true, kind: 'cpu' };
         const src = wllamaSource(mlcKey);
-        if (!src || typeof caches === 'undefined') return { cached: false, kind: 'cpu' };
-        const keys = await caches.keys();
-        for (const k of keys) {
-          try {
-            const c = await caches.open(k);
-            if (await c.match(src.url)) return { cached: true, kind: 'cpu' };
-          } catch (_) {}
-        }
-        return { cached: false, kind: 'cpu' };
+        if (!src) return { cached: false, kind: 'cpu' };
+        const cached = await wllamaCachedAny(src);
+        return { cached, kind: 'cpu' };
       } catch (_) { return { cached: false, kind: 'cpu' }; }
     }
     try {
@@ -916,20 +889,37 @@
   // Wipe a model's cached weights/config so the next load re-downloads from
   // scratch — the escape hatch when a half-finished download left a corrupt
   // shard that keeps re-stalling on every reload. Best-effort and feature-
-  // detected across WebLLM versions; resolves false if nothing could be cleared.
-  // For wllama also clears the OPFS copy; otherwise the "stuck cache" reset
-  // would leave the corrupt blob right there for the next load to pick up.
+  // detected across versions; resolves false if nothing could be cleared.
+  // wllama: walk every mirror URL and delete its OPFS entry by name. WebLLM:
+  // its own delete helpers.
   async function clearCache(mlcKey) {
     if (isWllama(mlcKey)) {
       let did = false;
-      try { if (await opfsDelete(opfsName(mlcKey))) did = true; } catch (_) {}
-      // Also wipe any legacy Cache-API entry from before OPFS was the primary.
+      const src = wllamaSource(mlcKey);
+      const urls = wllamaUrls(src);
+      // Delete OPFS files directly so we don't need to spin up a Wllama
+      // instance (which is heavy and itself touches the cache).
+      if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.getDirectory === 'function') {
+        try {
+          const root = await navigator.storage.getDirectory();
+          for (const u of urls) {
+            try {
+              const name = await wllamaCacheName(u);
+              if (!name) continue;
+              await root.removeEntry(name);
+              did = true;
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
+      // Also wipe any legacy Cache-API entry from an older wllama build.
       try {
-        const src = wllamaSource(mlcKey);
-        if (src && typeof caches !== 'undefined') {
+        if (typeof caches !== 'undefined') {
           const keys = await caches.keys();
           for (const k of keys) {
-            try { const c = await caches.open(k); if (await c.delete(src.url)) did = true; } catch (_) {}
+            for (const u of urls) {
+              try { const c = await caches.open(k); if (await c.delete(u)) did = true; } catch (_) {}
+            }
           }
         }
       } catch (_) {}
@@ -948,14 +938,14 @@
   function isLoaded(mlcKey) { return loadedModel === mlcKey && !!enginePromise; }
 
   // Pick the system prompt for the turn.
-  //  - plain chat (grounded=false, not creative): just be Cleon and converse,
+  //  - plain chat (grounded=false, not creative): just be Cleo and converse,
   //    using the running history. No document is forced in.
   //  - grounded: answer strictly from the supplied passages; citations are
   //    bound mechanically afterward, never written by the model.
   //  - creative: free composition over any supplied passages.
   function systemFor(mode, task, grounded, depth = 1, opts) {
     if (mode === 'creative')
-      return 'You are Cleon, a private assistant running locally in the user\'s browser. Use any supplied passages as raw material to compose freely. Do not add citation markers.';
+      return 'You are Cleo, a private assistant running locally in the user\'s browser. Use any supplied passages as raw material to compose freely. Do not add citation markers.';
     if (grounded) {
       // The notes-and-spans framing. The old prompts treated the model as a
       // hostile witness ("Answer using ONLY the supplied passages… never add
@@ -975,7 +965,7 @@
       // degeneracy guard (don't hand back a single span as the summary),
       // which is faithfulness, not length.
       const lines = [
-        'You\'re Cleon, a helpful assistant running locally in the user\'s browser. You\'re in the middle of a conversation with them about a document you\'ve been reading together.',
+        'You\'re Cleo, a helpful assistant running locally in the user\'s browser. You\'re in the middle of a conversation with them about a document you\'ve been reading together.',
         '',
         'Two kinds of context come with each turn:',
         '- Spans — exact sentences quoted verbatim from the document. Trust them; lean on them whenever a fact is in there.',
@@ -1004,7 +994,7 @@
       }
       return lines.join('\n');
     }
-    return 'You are Cleon, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. Do not invent facts about real people, places, or events: if you are not sure something is true, say you are not sure rather than making something up — a confident wrong answer is worse than an honest "I\'m not certain." A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. If the user is clearly asking about an open document but you were not handed a relevant passage, say so and offer to look it up, rather than guessing at what it contains. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
+    return 'You are Cleo, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. Do not invent facts about real people, places, or events: if you are not sure something is true, say you are not sure rather than making something up — a confident wrong answer is worse than an honest "I\'m not certain." A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. If the user is clearly asking about an open document but you were not handed a relevant passage, say so and offer to look it up, rather than guessing at what it contains. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
   }
 
   // Chat-history policy.
@@ -1028,7 +1018,7 @@
   // is the absolute index (into the full history) of the first folded turn.
   function summarizeTurns(turns, startIndex = 0) {
     const lines = turns.map((m, i) =>
-      `#${startIndex + i} ${m.role === 'assistant' ? 'Cleon' : 'user'}: ${condense(m.content)}`);
+      `#${startIndex + i} ${m.role === 'assistant' ? 'Cleo' : 'user'}: ${condense(m.content)}`);
     return {
       role: 'system',
       content:
@@ -1124,7 +1114,7 @@
   // answers the question just gets paraphrased by the answer pass: wasted
   // compute and a worse answer). The taste lives in the examples below.
   const SHAPE_SYSTEM = [
-    'You are the editor sitting beside Cleon, a local assistant that answers questions about a document it has read. Before Cleon answers, you hand it a one-breath director\'s note: what the user is actually after this turn, what register fits, and what a bad answer would look like. You characterize the move — you never answer the question yourself, and you never state facts about the document.',
+    'You are the editor sitting beside Cleo, a local assistant that answers questions about a document it has read. Before Cleo answers, you hand it a one-breath director\'s note: what the user is actually after this turn, what register fits, and what a bad answer would look like. You characterize the move — you never answer the question yourself, and you never state facts about the document.',
     '',
     'Examples of the notes you write:',
     '',
@@ -1134,7 +1124,7 @@
     'Question: "who wrote it?"',
     'Note: Bibliographic lookup. They want the name. One line, no hedging, and never "the author" — say the name if the header metadata or a span has it; if nothing does, say what\'s missing.',
     '',
-    'Question (right after Cleon listed characters, including obvious boilerplate): "project gutenberg is a character?"',
+    'Question (right after Cleo listed characters, including obvious boilerplate): "project gutenberg is a character?"',
     'Note: Pushback, and they\'re right — that\'s boilerplate, not a character. Acknowledge the mistake without grovelling and give the cleaner answer. This is repair, not fresh retrieval; don\'t re-serve the old list.',
     '',
     'Question: "thanks, that helps"',
@@ -1145,7 +1135,7 @@
 
   async function shapePass({ mlcKey, question, history, docTitle, metaHint }) {
     const recent = (Array.isArray(history) ? history : []).slice(-4)
-      .map(m => `${m.role === 'assistant' ? 'Cleon' : 'user'}: ${condense(m.content, 200)}`).join('\n');
+      .map(m => `${m.role === 'assistant' ? 'Cleo' : 'user'}: ${condense(m.content, 200)}`).join('\n');
     // metaHint used to be inlined as a list of field names ("title, author,
     // release date…") which small models inverted into object-level claims
     // ("the author is not named, the release date is unknown") — the editor
@@ -1154,7 +1144,7 @@
     // guard, and the editor stops trying to enumerate document facts.
     const user = [
       docTitle ? `Document open: "${docTitle}".` : 'A document is open.',
-      metaHint ? `A bibliographic header is present in the document (covering ${metaHint}). Cleon will see those facts in the spans — don't repeat them in the note.` : '',
+      metaHint ? `A bibliographic header is present in the document (covering ${metaHint}). Cleo will see those facts in the spans — don't repeat them in the note.` : '',
       recent ? `\nRecent turns:\n${recent}` : '',
       `\nUser just asked: "${question}"`,
       '\nWhat does this turn want? Reply with the note only. Describe the move (register, what a bad answer looks like) — never what the document says.',
@@ -1180,7 +1170,7 @@
   // HOW-guidance. The note used to ride between the question and the spans,
   // labeled "What this turn wants:", which let a small model read it as a
   // synopsis and pre-frame the spans it hadn't reached yet (the leak: editor
-  // states "the author is not named", Cleon parrots it even though the
+  // states "the author is not named", Cleo parrots it even though the
   // Author: span sits right below). Spans-before-note inverts that: facts
   // are seen first, the editor's guidance closes the turn, and the relabel
   // ("Editor's note on HOW to handle this turn") makes its role

@@ -1,7 +1,7 @@
 /* ============================================================
    Reading conformance — the seven invariants, made mechanical.
 
-   Scores a `cleon-ingestion/1` dump (the Ingestion drawer's Export
+   Scores a `cleo-ingestion/1` dump (the Ingestion drawer's Export
    JSON) as a 7-bit vector in invariant order:
 
      ADMISSION BINDING SPEECH COMPANY DARK WEIGHT CUSTOM
@@ -463,7 +463,7 @@ function checkDump(report, opts = {}) {
   };
 }
 
-/* ---------- session-side advisory checks (cleon-audit/1 JSONL) ----------
+/* ---------- session-side advisory checks (cleo-audit/1 JSONL) ----------
    Never move a bit: the vector scores the dump. These surface the spec's
    session witnesses — a below-floor hit served as the answer, a clean badge
    that names no frame, a term unseekable only because of an accent, one
@@ -591,7 +591,7 @@ async function main(argv) {
     process.exit(2);
   }
   for (const r of reports) {
-    if (r.schema && r.schema !== 'cleon-ingestion/1') console.error(`conformance: warning — ${r.schema} is not cleon-ingestion/1; reading it anyway`);
+    if (r.schema && r.schema !== 'cleo-ingestion/1') console.error(`conformance: warning — ${r.schema} is not cleo-ingestion/1; reading it anyway`);
   }
 
   const results = reports.map(r => checkDump(r, { pack, reports }));
@@ -600,7 +600,7 @@ async function main(argv) {
   console.log(formatText(results, sessionFindings, { quiet }));
   if (jsonOut) {
     fs.writeFileSync(jsonOut, JSON.stringify({
-      schema: 'cleon-conformance/1', at: new Date().toISOString(),
+      schema: 'cleo-conformance/1', at: new Date().toISOString(),
       pack: packFile || 'default', invariants: INVARIANTS,
       dumps: results, session: sessionFindings,
       conformant: results.every(r => r.conformant),

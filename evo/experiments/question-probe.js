@@ -183,5 +183,5 @@ const oneLine = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
       console.log(`  ${c.id.padEnd(8)} person-typed ${(c.personRate * 100).toFixed(0).padStart(3)}%  assertions ${String(c.assertions).padStart(2)}  relations ${String(c.relations).padStart(2)}  spine-chrome ${c.spine.filter(s => /^(contents|by |[ivxlcdm]+$|.{0,4}$)/i.test(s)).length}/${c.spine.length}`);
   }
 
-  if (jsonOut) { fs.writeFileSync(jsonOut, JSON.stringify({ schema: 'cleon-question-probe/2', at: new Date().toISOString(), questions: qRows }, null, 1)); console.log('\nwrote ' + jsonOut); }
+  if (jsonOut) { fs.writeFileSync(jsonOut, JSON.stringify({ schema: 'cleo-question-probe/2', at: new Date().toISOString(), questions: qRows }, null, 1)); console.log('\nwrote ' + jsonOut); }
 })().catch(e => { console.error(e); process.exit(1); });
