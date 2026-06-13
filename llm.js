@@ -262,10 +262,24 @@
       'https://huggingface.co/unsloth/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf',
     ], bytes: 2020 * 1024 * 1024, quant: 'Q4_K_M' },
   };
-  // Helper: every entry exposes its mirror list as `urls`; older callers still
-  // see a `url` shorthand pointing at the primary.
+  // Helper: a registry entry exposes its mirror list as `urls`; older callers
+  // still see a `url` shorthand pointing at the primary. An UPLOADED entry has
+  // a `blob` instead and no URLs, so this returns [] for it (the blob path in
+  // buildWllama handles those).
   const wllamaUrls = (src) => (src && src.urls && src.urls.length) ? src.urls : (src && src.url ? [src.url] : []);
-  const wllamaSource = (key) => WLLAMA_MODELS[wllamaId(key)] || null;
+  // User-uploaded GGUFs. Session-only — File handles can't be persisted to
+  // localStorage, so a refresh loses them. Kept in a separate map so the
+  // canonical registry (wllamaModels()) only carries URL-backed entries.
+  const WLLAMA_UPLOADED = {};
+  function registerUploadedModel(id, file) {
+    if (!id || !file) return null;
+    WLLAMA_UPLOADED[String(id)] = { name: file.name || String(id), blob: file };
+    return WLLAMA_PREFIX + String(id);
+  }
+  const wllamaSource = (key) => {
+    const id = wllamaId(key);
+    return WLLAMA_UPLOADED[id] || WLLAMA_MODELS[id] || null;
+  };
   const wllamaModels = () => Object.assign({}, WLLAMA_MODELS);
   // The CPU model used for the automatic fallback (no WebGPU / GPU stall). The
   // smallest viable model wins this slot — at ~95 MB it downloads in seconds
@@ -425,24 +439,38 @@
     };
     if (isolated) loadOpts.n_threads = Math.min(4, Math.max(1, cores - 1));
 
-    const urls = wllamaUrls(src);
-    if (!urls.length) throw new Error('No download URL for ' + mlcKey);
-    let lastErr = null;
-    for (let i = 0; i < urls.length; i++) {
-      try {
-        await instance.loadModelFromUrl(urls[i], loadOpts);
-        lastErr = null;
-        break;
-      } catch (e) {
-        if (e && e.code === 'CANCEL') throw e;
-        if (myToken !== loadToken) throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' });
-        lastErr = e;
-        if (i < urls.length - 1 && onProgress) {
-          onProgress(0, 'That source is unavailable — trying the next mirror…');
+    // Uploaded GGUFs come in as a Blob/File rather than a URL; loadModel() reads
+    // the bytes directly without going through the cache (the file is already
+    // on the user's disk, so caching adds nothing here).
+    if (src.blob) {
+      if (typeof instance.loadModel !== 'function')
+        throw new Error('This build of the CPU runtime can’t load a model from a file.');
+      const { useCache, progressCallback, ...blobOpts } = loadOpts;
+      await instance.loadModel([src.blob], blobOpts);
+    } else {
+      // Registry models: walk the mirror list in order. A 503 / DNS hiccup on
+      // the primary (bartowski) falls through to the next mirror (unsloth)
+      // without surfacing as a failed load. Once any mirror succeeds, wllama
+      // caches its bytes in OPFS and the next session loads from disk.
+      const urls = wllamaUrls(src);
+      if (!urls.length) throw new Error('No download URL for ' + mlcKey);
+      let lastErr = null;
+      for (let i = 0; i < urls.length; i++) {
+        try {
+          await instance.loadModelFromUrl(urls[i], loadOpts);
+          lastErr = null;
+          break;
+        } catch (e) {
+          if (e && e.code === 'CANCEL') throw e;
+          if (myToken !== loadToken) throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' });
+          lastErr = e;
+          if (i < urls.length - 1 && onProgress) {
+            onProgress(0, 'That source is unavailable — trying the next mirror…');
+          }
         }
       }
+      if (lastErr) throw lastErr;
     }
-    if (lastErr) throw lastErr;
 
     if (myToken !== loadToken) { try { await instance.exit(); } catch (_) {} if (activeWllama === instance) activeWllama = null; throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' }); }
     if (onProgress) onProgress(1, '');
@@ -1391,5 +1419,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
