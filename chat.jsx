@@ -503,6 +503,10 @@ function Message({ msg, onCite, showGrounding }) {
           {msg.mode && <span className="asst-mode-tag">{msg.mode}</span>}
         </div>
         {msg.auditId && <ThinkingBlock auditId={msg.auditId} />}
+        {/* The Wikipedia enrichment card sits at the TOP of the reply: the
+            looked-up article is the ground, and the response below reads from
+            it (see ReferenceCard's "grounded … below" footer). */}
+        {msg.enrichment && window.ReferenceCard && <window.ReferenceCard data={msg.enrichment} />}
         {msg.loading
           ? <div className="model-loading">
               {msg.loadCloud
@@ -546,7 +550,6 @@ function Message({ msg, onCite, showGrounding }) {
               {msg.calc && <WorkedMath data={msg.calc} onCite={onCite} />}
               {msg.mechanical && <MechanicalReading data={msg.mechanical} onCite={onCite} />}
             </React.Fragment>}
-        {msg.enrichment && window.ReferenceCard && <window.ReferenceCard data={msg.enrichment} />}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
             <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer|absent):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
