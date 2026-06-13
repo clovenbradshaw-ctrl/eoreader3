@@ -111,6 +111,12 @@ The intelligence is **mechanical**; the language model only phrases things.
   writes its own citations and never overrides the page.
 - **`pivot.jsx`** — deterministic pivot/fold over tables (totals, counts,
   grouping) driven by a small natural-language → spec parser.
+- **Record views** (`docview.jsx`) — clicking a row in the spreadsheet opens its
+  full record as a side drawer or a **full-width panel** sized to the table (never
+  taller than it), with fields laid out in one to three columns and optional
+  **data links** that pull a matching value from another loaded table (joined on a
+  shared key). Each layout — width, columns, field selection, and links — saves as
+  a named **custom view**, persisted locally by the table's column signature.
 - **`compute.js`** — the auditable calculator (`window.EOCompute`). When a turn
   is essentially a math expression ("15% of $240,000", "sqrt(144)+3^2"), math.js
   evaluates it deterministically (BigNumber precision, so money doesn't drift)
@@ -128,7 +134,7 @@ The intelligence is **mechanical**; the language model only phrases things.
   the look.
 - **`data.jsx`** — example documents, model list, and the reading rulesets.
 - **`store.js`** — local persistence (IndexedDB for docs/chat, localStorage for
-  prefs/rules and the learned rules-ledger delta).
+  prefs/rules, saved table views, and the learned rules-ledger delta).
 
 ### Chat behaviour
 

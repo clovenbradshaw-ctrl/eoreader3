@@ -146,19 +146,102 @@ function ProseDoc({ doc, explore, onEntity, activeEntity, flashSent, onCite }) {
   );
 }
 
-/* spreadsheet + live pivot */
-function TableDoc({ doc, initialSpec }) {
+/* ---------- custom record views (per-table layouts, saved locally) ----------
+   A table's identity for saved views is its column signature, so the same
+   schema keeps its views across reloads and even a re-import of the file. */
+function tableSig(doc) { return ((doc && doc.columns) || []).join('¦'); }
+
+// The fallback "show everything" view — what a table opens with before any
+// custom view is applied. drawer = today's side panel; columns = 1.
+function defaultView(doc) {
+  return { id: null, name: 'All fields', layout: 'drawer', columns: 1, fields: (doc.columns || []).slice(), links: [] };
+}
+
+// Resolve one data link for one record: find rows in another loaded table whose
+// foreign key matches this record's local key and pull the chosen column. Pure
+// and defensive — returns { missing:true } when the linked table isn't loaded.
+function resolveLink(record, link, tablesBySig) {
+  const src = tablesBySig[link.fromSig];
+  if (!src) return { missing: true };
+  const key = String(record[link.on.local] == null ? '' : record[link.on.local]).trim().toLowerCase();
+  const hits = (src.rows || []).filter(r => String(r[link.on.foreign] == null ? '' : r[link.on.foreign]).trim().toLowerCase() === key);
+  return { src, hits, values: hits.map(r => r[link.show]) };
+}
+
+/* spreadsheet + live pivot + customizable record views */
+function TableDoc({ doc, initialSpec, tables }) {
+  const sig = tableSig(doc);
   const [spec, setSpec] = React.useState(initialSpec || { groupBy: null, aggregate: null, sortBy: null, filters: [] });
   React.useEffect(() => { if (initialSpec) setSpec(initialSpec); }, [initialSpec]);
   const fold = window.foldPivot(doc, spec);
   const [openGroups, setOpenGroups] = React.useState({});
-  // The clicked record (a row), shown in the side panel. Cleared on close or
+  // The clicked record (a row), shown in the record panel. Cleared on close or
   // when the open document changes, so a panel from one CSV can't linger over
   // another. Stored as the row object itself; the panel reads every column off
-  // it. (Pivoted/grouped views still show one record per data row, so the side
-  // panel works the same way in both layouts.)
+  // it. (Pivoted/grouped views still show one record per data row, so the
+  // record panel works the same way in both layouts.)
   const [activeRecord, setActiveRecord] = React.useState(null);
-  React.useEffect(() => { setActiveRecord(null); }, [doc.id]);
+  // The saved views for this table and the effective record-view config (`view`
+  // — layout, column count, visible/ordered fields, cross-table links). The
+  // editor overlay edits a draft of it; the view bar switches between saved ones.
+  const [views, setViews] = React.useState([]);
+  const [view, setView] = React.useState(() => defaultView(doc));
+  // When the editor is open, `editorView` is the config it snapshots — the
+  // current view for an edit, or a fresh copy (no id/name) for a new one.
+  const [editorView, setEditorView] = React.useState(null);
+  const editorOpen = editorView != null;
+  const openNew = () => setEditorView({ ...view, id: null, name: '' });
+  const openEdit = () => setEditorView(view);
+
+  const persist = (list, activeId) => {
+    try {
+      const store = (window.EOStore && window.EOStore.loadViews) ? window.EOStore.loadViews() : {};
+      const prev = (store[sig] && store[sig].active) || null;
+      store[sig] = { views: list, active: activeId === undefined ? prev : activeId };
+      window.EOStore && window.EOStore.saveViews && window.EOStore.saveViews(store);
+    } catch (e) {}
+  };
+  const applyViewObj = (v, remember) => {
+    setView({ id: v.id, name: v.name, layout: v.layout || 'drawer', columns: v.columns || 1,
+      fields: (v.fields && v.fields.length ? v.fields.slice() : doc.columns.slice()), links: (v.links || []).map(l => ({ ...l })) });
+    if (v.spec) setSpec(v.spec); else setSpec({ groupBy: null, aggregate: null, sortBy: null, filters: [] });
+    if (remember) persist(views, v.id || null);
+  };
+
+  // Load saved views when the table changes; auto-apply the last-used one unless
+  // chat drove a pivot into this tab (initialSpec wins then).
+  React.useEffect(() => {
+    setActiveRecord(null);
+    let entry = null;
+    try { const s = (window.EOStore && window.EOStore.loadViews) ? window.EOStore.loadViews() : {}; entry = s[sig] || null; } catch (e) {}
+    const list = entry && Array.isArray(entry.views) ? entry.views : [];
+    setViews(list);
+    const remembered = !initialSpec && entry && entry.active && list.find(v => v.id === entry.active);
+    if (remembered) applyViewObj(remembered, false); else setView(defaultView(doc));
+  }, [doc.id]);
+
+  const applyView = (id) => {
+    if (!id) { setView(defaultView(doc)); setSpec({ groupBy: null, aggregate: null, sortBy: null, filters: [] }); persist(views, null); return; }
+    const v = views.find(x => x.id === id); if (v) applyViewObj(v, true);
+  };
+  // Save the editor's draft (combined with the live pivot spec) as a named view.
+  const saveDraft = (draft) => {
+    const id = draft.id || ('vw' + Math.random().toString(36).slice(2, 8));
+    const name = (draft.name || '').trim() || ('View ' + (views.length + 1));
+    const obj = { id, name, layout: draft.layout, columns: draft.columns, fields: draft.fields.slice(), links: draft.links.map(l => ({ ...l })), spec: { ...spec } };
+    const list = views.some(v => v.id === id) ? views.map(v => v.id === id ? obj : v) : [...views, obj];
+    setViews(list); persist(list, id);
+    setView({ id, name, layout: obj.layout, columns: obj.columns, fields: obj.fields.slice(), links: obj.links.map(l => ({ ...l })) });
+    setEditorView(null);
+  };
+  const deleteView = (id) => {
+    const list = views.filter(v => v.id !== id);
+    const clearing = view.id === id;
+    setViews(list); persist(list, clearing ? null : undefined);
+    if (clearing) setView(defaultView(doc));
+  };
+  const setLayout = (layout) => setView(v => ({ ...v, layout }));
+
   const numCols = doc.numeric || [];
   const moneyCols = doc.money || [];
   const key0 = doc.columns[0];
@@ -170,8 +253,20 @@ function TableDoc({ doc, initialSpec }) {
   const active = spec.groupBy || spec.aggregate || spec.sortBy || (spec.filters && spec.filters.length);
 
   return (
-    <div className="doc-scroll">
+    <div className="tabledoc">
+      <div className="doc-scroll">
       <div className="tableview">
+        <div className="view-bar">
+          <span className="vb-label"><Icon name="layers" size={13} /> View</span>
+          <select aria-label="Saved view" value={view.id || ''} onChange={e => applyView(e.target.value || null)}>
+            <option value="">All fields (default)</option>
+            {views.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+          </select>
+          <button className="vb-btn" onClick={openNew}><Icon name="plus" size={13} /> New view</button>
+          {view.id && <button className="vb-btn" onClick={openEdit}><Icon name="edit" size={13} /> Edit</button>}
+          {view.id && <button className="vb-btn danger" onClick={() => deleteView(view.id)} title="Delete this view"><Icon name="trash" size={13} /></button>}
+          <span className="vb-hint">click a row to open its record</span>
+        </div>
         <div className="pivot-controls">
           <div className="pc"><span className="lbl">Group by</span>
             <select aria-label="Group by column" value={spec.groupBy || ''} onChange={e => set({ groupBy: e.target.value || null })}>
@@ -241,53 +336,244 @@ function TableDoc({ doc, initialSpec }) {
         )}
         <div className="pv-note" style={{ marginTop: 10 }}>{fold.total} rows · pivot questions you ask in chat are computed here directly.</div>
       </div>
-      {activeRecord && <RecordPanel doc={doc} record={activeRecord} onClose={() => setActiveRecord(null)} />}
+      </div>
+      {activeRecord && (
+        <RecordPanel doc={doc} record={activeRecord} view={view} tables={tables}
+          onClose={() => setActiveRecord(null)} onLayout={setLayout} onCustomize={openEdit} />
+      )}
+      {editorOpen && (
+        <ViewEditor doc={doc} tables={tables} view={editorView} onSave={saveDraft} onClose={() => setEditorView(null)} />
+      )}
     </div>
   );
 }
 
-/* Side panel showing every field of a clicked record. Slides in over the table
-   using the shared .overlay/.drawer chrome (same affordance as Rules/Settings).
-   Values format the same way the cells do: money as currency, numerics with
-   thousands separators, status as the colored chip. */
-function RecordPanel({ doc, record, onClose }) {
+/* The clicked record, shown either as the side drawer (default) or as a
+   full-width panel pinned over the table area — same width as the table, never
+   taller than it (it lives inside .tabledoc, which is exactly the table region
+   below the tabs). Fields render in 1–3 columns per the view, and any data
+   links pull matching values from other loaded tables. Values format the same
+   way the cells do: money as currency, numerics with thousands separators,
+   status as the colored chip. */
+function RecordPanel({ doc, record, view, tables, onClose, onLayout, onCustomize }) {
   const dialogRef = window.useDialog(onClose);
+  const full = view.layout === 'full';
   const numCols = doc.numeric || [];
-  const moneyCols = doc.money || [];
-  const fmt = (col, v) => moneyCols.includes(col) ? window.fmtMoney(window.num(v))
-    : numCols.includes(col) ? window.fmtNum(window.num(v)) : v;
+  const fmt = (col, v, d) => { d = d || doc;
+    return (d.money || []).includes(col) ? window.fmtMoney(window.num(v))
+      : (d.numeric || []).includes(col) ? window.fmtNum(window.num(v)) : v; };
+  const tablesBySig = React.useMemo(() => {
+    const m = {}; for (const t of (tables || [])) m[tableSig(t)] = t; return m;
+  }, [tables]);
+  const cols = Math.max(1, Math.min(3, view.columns || 1));
+  // Respect an explicit (even empty) field list; only an absent one shows all.
+  const fields = (Array.isArray(view.fields) ? view.fields : doc.columns).filter(c => doc.columns.includes(c));
   const title = record[doc.columns[0]];
+
+  const fieldBlock = (key, label, valNode, isNum) => (
+    <div key={key} className="rec-field">
+      <div className="rec-label">{label}</div>
+      <div className={'rec-value' + (isNum ? ' num' : '')}>{valNode}</div>
+    </div>
+  );
+  const renderOwn = (c) => {
+    const v = record[c];
+    const empty = v == null || v === '';
+    if (empty) return <span className="rec-empty">—</span>;
+    if (c === 'status' && ['won', 'open', 'lost'].includes(String(v).toLowerCase())) return <span className={'status-tag ' + String(v).toLowerCase()}>{v}</span>;
+    return fmt(c, v);
+  };
+  const renderLink = (link) => {
+    const r = resolveLink(record, link, tablesBySig);
+    if (r.missing) return { node: <span className="rec-empty" title="that table isn’t loaded right now">⚠ table not loaded</span>, isNum: false };
+    if (!r.hits.length) return { node: <span className="rec-empty">— no match</span>, isNum: false };
+    const isNum = (r.src.numeric || []).includes(link.show);
+    const shown = r.values.slice(0, 4).map(v => (v == null || v === '' ? '—' : fmt(link.show, v, r.src))).join(' · ');
+    return { node: <span>{shown}{r.values.length > 4 ? ' · +' + (r.values.length - 4) : ''}</span>, isNum };
+  };
+
+  const head = (
+    <div className="drawer-head">
+      <div className="row1">
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="rec-eyebrow">{doc.name} · record · <b>{view.name}</b></div>
+          <h2 className="rec-title">{title}</h2>
+        </div>
+        <div className="rec-head-tools">
+          <button className="rec-tool" onClick={onCustomize} title="Customize this view"><Icon name="settings" size={16} /></button>
+          <button className="rec-tool" onClick={() => onLayout(full ? 'drawer' : 'full')}
+                  title={full ? 'Collapse to side panel' : 'Expand to full width'}>
+            <Icon name={full ? 'collapse' : 'expand'} size={16} />
+          </button>
+          <button className="x" onClick={onClose} aria-label="Close record"><Icon name="x" size={18} /></button>
+        </div>
+      </div>
+    </div>
+  );
+  const body = (
+    <div className="drawer-body record-body">
+      <div className={'record-fields cols-' + cols} style={{ '--rec-cols': cols }}>
+        {fields.map(c => fieldBlock(c, c, renderOwn(c), numCols.includes(c)))}
+      </div>
+      {view.links && view.links.length > 0 && (
+        <div className="rec-links">
+          <div className="rec-section"><Icon name="link" size={12} /> Linked data</div>
+          <div className={'record-fields cols-' + cols} style={{ '--rec-cols': cols }}>
+            {view.links.map(link => { const r = renderLink(link); return fieldBlock(link.id, link.label || link.show, r.node, r.isNum); })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  if (full) {
+    return (
+      <div className="record-full" role="dialog" aria-modal="true"
+           aria-label={'Record ' + title} tabIndex={-1} ref={dialogRef}>
+        {head}{body}
+      </div>
+    );
+  }
   return (
     <div className="overlay" onClick={onClose}>
       <div className="drawer record-drawer" role="dialog" aria-modal="true"
            aria-label={'Record ' + title} tabIndex={-1} ref={dialogRef}
            onClick={e => e.stopPropagation()}>
+        {head}{body}
+      </div>
+    </div>
+  );
+}
+
+/* The view editor: name the view, pick its record layout (side drawer vs
+   full-width) and 1–3 field columns, choose & reorder which fields show, and
+   add data links that pull a column from another loaded table matched on a key.
+   Saving stores it locally (keyed by the table's column signature) alongside the
+   live pivot spec, so the whole table state restores when the view is picked. */
+function ViewEditor({ doc, tables, view, onSave, onClose }) {
+  const dialogRef = window.useDialog(onClose);
+  const [draft, setDraft] = React.useState(() => ({
+    id: view.id || null,
+    name: view.id ? (view.name || '') : '',
+    layout: view.layout || 'drawer',
+    columns: view.columns || 1,
+    fields: (Array.isArray(view.fields) ? view.fields.slice() : doc.columns.slice()),
+    links: (view.links || []).map(l => ({ ...l })),
+  }));
+  const upd = (patch) => setDraft(d => ({ ...d, ...patch }));
+  const linkTables = (tables || []);   // every loaded table (self-joins allowed)
+
+  const toggleField = (c) => upd({ fields: draft.fields.includes(c) ? draft.fields.filter(x => x !== c) : [...draft.fields, c] });
+  const moveField = (c, dir) => {
+    const f = draft.fields.slice(); const i = f.indexOf(c); const j = i + dir;
+    if (i < 0 || j < 0 || j >= f.length) return;
+    [f[i], f[j]] = [f[j], f[i]]; upd({ fields: f });
+  };
+  const hidden = doc.columns.filter(c => !draft.fields.includes(c));
+
+  const addLink = () => {
+    const src = linkTables[0]; if (!src) return;
+    upd({ links: [...draft.links, {
+      id: 'lk' + Math.random().toString(36).slice(2, 8), fromSig: tableSig(src), fromName: src.name,
+      on: { local: doc.columns[0], foreign: src.columns[0] }, show: src.columns[1] || src.columns[0],
+      label: src.name + ' · ' + (src.columns[1] || src.columns[0]),
+    }] });
+  };
+  const updLink = (id, patch) => upd({ links: draft.links.map(l => l.id === id ? { ...l, ...patch } : l) });
+  const setLinkSrc = (id, sig) => {
+    const src = linkTables.find(t => tableSig(t) === sig); if (!src) return;
+    updLink(id, { fromSig: sig, fromName: src.name, on: { local: doc.columns[0], foreign: src.columns[0] }, show: src.columns[1] || src.columns[0], label: src.name + ' · ' + (src.columns[1] || src.columns[0]) });
+  };
+  const delLink = (id) => upd({ links: draft.links.filter(l => l.id !== id) });
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="drawer view-editor" role="dialog" aria-modal="true" aria-label="Customize view"
+           tabIndex={-1} ref={dialogRef} onClick={e => e.stopPropagation()}>
         <div className="drawer-head">
           <div className="row1">
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="rec-eyebrow">{doc.name} · record</div>
-              <h2 className="rec-title">{title}</h2>
+            <h2 style={{ flex: 1 }}>{draft.id ? 'Edit view' : 'New view'}</h2>
+            <button className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={18} /></button>
+          </div>
+          <p>A saved layout for this table’s records — width, columns, which fields, and data pulled from other tables.</p>
+        </div>
+        <div className="drawer-body view-editor-body">
+          <div className="ve-section">
+            <h3>Name</h3>
+            <input className="ve-name" value={draft.name} placeholder="e.g. Deal card" onChange={e => upd({ name: e.target.value })} />
+          </div>
+
+          <div className="ve-section">
+            <h3>Width</h3>
+            <div className="ve-seg">
+              <button className={draft.layout === 'drawer' ? 'on' : ''} onClick={() => upd({ layout: 'drawer' })}>Side drawer</button>
+              <button className={draft.layout === 'full' ? 'on' : ''} onClick={() => upd({ layout: 'full' })}>Full width</button>
             </div>
-            <button className="x" onClick={onClose} aria-label="Close record"><Icon name="x" size={18} /></button>
+          </div>
+
+          <div className="ve-section">
+            <h3><Icon name="columns" size={12} /> Field columns</h3>
+            <div className="ve-seg">
+              {[1, 2, 3].map(n => <button key={n} className={draft.columns === n ? 'on' : ''} onClick={() => upd({ columns: n })}>{n}</button>)}
+            </div>
+          </div>
+
+          <div className="ve-section">
+            <h3>Fields</h3>
+            {draft.fields.map((c, i) => (
+              <div key={c} className="ve-field-row">
+                <input type="checkbox" checked onChange={() => toggleField(c)} aria-label={'Show ' + c} />
+                <span className="nm">{c}</span>
+                <button className="ve-mini" disabled={i === 0} onClick={() => moveField(c, -1)} aria-label="Move up">↑</button>
+                <button className="ve-mini" disabled={i === draft.fields.length - 1} onClick={() => moveField(c, 1)} aria-label="Move down">↓</button>
+              </div>
+            ))}
+            {hidden.map(c => (
+              <div key={c} className="ve-field-row off">
+                <input type="checkbox" checked={false} onChange={() => toggleField(c)} aria-label={'Show ' + c} />
+                <span className="nm">{c}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="ve-section">
+            <h3><Icon name="link" size={12} /> Data links</h3>
+            {!linkTables.length && <div className="ve-empty">Load another CSV to pull linked data into a record.</div>}
+            {draft.links.map(link => {
+              const src = linkTables.find(t => tableSig(t) === link.fromSig);
+              return (
+                <div key={link.id} className="ve-link">
+                  <div className="ve-link-head">
+                    <input value={link.label} onChange={e => updLink(link.id, { label: e.target.value })} aria-label="Link label" />
+                    <button className="ve-mini" onClick={() => delLink(link.id)} aria-label="Remove link"><Icon name="trash" size={13} /></button>
+                  </div>
+                  <div className="ve-link-grid">
+                    <div><label>From table</label>
+                      <select value={link.fromSig} onChange={e => setLinkSrc(link.id, e.target.value)}>
+                        {linkTables.map((t, i) => <option key={i} value={tableSig(t)}>{t.name}</option>)}
+                      </select></div>
+                    <div><label>Show column</label>
+                      <select value={link.show} onChange={e => updLink(link.id, { show: e.target.value })}>
+                        {(src ? src.columns : []).map(c => <option key={c} value={c}>{c}</option>)}
+                      </select></div>
+                    <div><label>Match this table’s</label>
+                      <select value={link.on.local} onChange={e => updLink(link.id, { on: { ...link.on, local: e.target.value } })}>
+                        {doc.columns.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select></div>
+                    <div><label>to their</label>
+                      <select value={link.on.foreign} onChange={e => updLink(link.id, { on: { ...link.on, foreign: e.target.value } })}>
+                        {(src ? src.columns : []).map(c => <option key={c} value={c}>{c}</option>)}
+                      </select></div>
+                  </div>
+                </div>
+              );
+            })}
+            {!!linkTables.length && <button className="vb-btn" onClick={addLink}><Icon name="plus" size={13} /> Add data link</button>}
           </div>
         </div>
-        <div className="drawer-body record-body">
-          {doc.columns.map(c => {
-            const v = record[c];
-            const empty = v == null || v === '';
-            const isStatus = c === 'status' && !empty && ['won', 'open', 'lost'].includes(String(v).toLowerCase());
-            const isNum = numCols.includes(c);
-            return (
-              <div key={c} className="rec-field">
-                <div className="rec-label">{c}</div>
-                <div className={'rec-value' + (isNum ? ' num' : '')}>
-                  {empty ? <span className="rec-empty">—</span>
-                    : isStatus ? <span className={'status-tag ' + String(v).toLowerCase()}>{v}</span>
-                    : fmt(c, v)}
-                </div>
-              </div>
-            );
-          })}
+        <div className="ve-footer">
+          <button className="ve-save" onClick={() => onSave(draft)}>Save view</button>
+          <button className="ve-cancel" onClick={onClose}>Cancel</button>
         </div>
       </div>
     </div>
@@ -377,6 +663,9 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
     const d = docsById[id]; return d ? { kind: d.kind, doc: d } : null;
   };
   const cur = activeTab ? resolve(activeTab) : null;
+  // Every loaded table — passed to the record view so data links can pull a
+  // column from a sibling table matched on a shared key.
+  const tables = React.useMemo(() => Object.values(docsById).filter(d => d && d.kind === 'table'), [docsById]);
   const iconFor = (id) => {
     if (id.startsWith('@ent/')) return 'sparkle';
     const d = docsById[id]; return !d ? 'doc' : d.kind === 'table' ? 'table' : 'doc';
@@ -407,10 +696,10 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
       </div>
       {!cur ? <div className="empty-doc">No document open</div>
         : cur.kind === 'entity' ? <EntityView doc={cur.doc} name={cur.name} onCite={onCite} onEntity={onEntity} />
-        : cur.kind === 'table' ? <TableDoc doc={cur.doc} initialSpec={tableSpec} />
+        : cur.kind === 'table' ? <TableDoc key={cur.doc.id} doc={cur.doc} initialSpec={tableSpec} tables={tables} />
         : <ProseDoc key={cur.doc.id} doc={cur.doc} explore={explore} onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={onCite} />}
     </aside>
   );
 }
 
-Object.assign(window, { DocPane, ProseDoc, TableDoc, EntityView, EntityModal, RecordPanel });
+Object.assign(window, { DocPane, ProseDoc, TableDoc, EntityView, EntityModal, RecordPanel, ViewEditor });
