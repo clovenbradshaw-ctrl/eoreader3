@@ -40,7 +40,7 @@ async function main() {
 
   group('ingestionReport — shape + the whole text is accounted for', () => {
     const r = E.ingestionReport(voss);
-    eq(r.schema, 'cleon-ingestion/1', 'schema stamped');
+    eq(r.schema, 'cleo-ingestion/1', 'schema stamped');
     eq(r.doc.sentences, voss.sentenceTexts.length, 'sentence count matches the doc');
     // Every single word lands in exactly one bucket: nothing silently vanishes.
     eq(r.words.indexed + r.words.stop + r.words.dropped, r.words.occurrences, 'every word is accounted for (indexed + stop + dropped = total)');
@@ -76,7 +76,7 @@ async function main() {
 
   group('textGraph — the whole text is in the graph, every word meaningful', () => {
     const g = E.textGraph(voss);
-    eq(g.schema, 'cleon-textgraph/1', 'schema stamped');
+    eq(g.schema, 'cleo-textgraph/1', 'schema stamped');
     eq(g.coverage.lit + g.coverage.chrome + g.coverage.dark, g.coverage.spans, 'every span is exactly one of lit / chrome / dark');
     eq(g.spans.length, voss.sentenceTexts.length, 'a node exists for every span — nothing summarized away');
     ok(g.spans.every(s => s.kind !== 'dark' || s.reason != null), 'every dark span carries its written reason');

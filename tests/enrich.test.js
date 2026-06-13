@@ -4,7 +4,7 @@
    enrich.js is a browser script (IIFE → window.EOEnrich) that also
    module.exports for Node. The fixture is the real NDP/Corman document
    (the one the demo-repair trace replays): we parse it with the live engine
-   into a `cleon-graph/1` snapshot, then enrich it — once mechanically
+   into a `cleo-graph/1` snapshot, then enrich it — once mechanically
    (degraded mode) and once with a deterministic mock ModelOracle — and assert
    the §10 acceptance contract.
 
@@ -102,7 +102,7 @@ function mockOracle() {
   const graph = E.graphSnapshot(doc);
   const sentences = doc.sentenceTexts;
 
-  ok(graph && graph.schema === 'cleon-graph/1', 'engine produced a cleon-graph/1 snapshot');
+  ok(graph && graph.schema === 'cleo-graph/1', 'engine produced a cleo-graph/1 snapshot');
   ok(Array.isArray(sentences) && sentences.length === graph.doc.sentences,
     'sentences[] length matches graph.doc.sentences');
 
@@ -130,7 +130,7 @@ function mockOracle() {
     const merges = degraded.ledger.filter(o => o.pass === 'canonicalize' && o.op === 'merge');
     ok(merges.every(o => o.confidence !== 'supported'), 'no model-backed merges in degraded mode');
     ok(degraded.ledger.some(o => o.deferred), 'some ops are marked deferred');
-    ok(degraded.ledger.every(o => o.schema === 'cleon-enrich/1'), 'every ledger op carries the schema');
+    ok(degraded.ledger.every(o => o.schema === 'cleo-enrich/1'), 'every ledger op carries the schema');
   });
 
   /* ---- §10.3 boundary repair ---- */
@@ -146,7 +146,7 @@ function mockOracle() {
     // a focused unit test of the strip mechanic on a synthetic graph (the engine
     // pre-cleans paren-capture in this fixture, so exercise the rule directly):
     const synthetic = {
-      schema: 'cleon-graph/1', doc: { id: 'x', sentences: 1 },
+      schema: 'cleo-graph/1', doc: { id: 'x', sentences: 1 },
       entities: [
         { name: 'DMC)', key: 'dmc', type: 'org', mentions: ['DMC'], mass: 1, sents: [0] },
         { name: '(South Nashville', key: 'sn', type: 'place', mentions: ['South Nashville'], mass: 1, sents: [0] },

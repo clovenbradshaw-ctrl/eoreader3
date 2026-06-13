@@ -1,5 +1,5 @@
 /* ============================================================
-   Cleon — configuration (not sample data).
+   Cleo — configuration (not sample data).
    Models, the rule registry (auditable/exportable), example RAW text
    the engine parses live, and the rule-pack schema + authoring prompt.
    ============================================================ */
@@ -19,6 +19,7 @@ const MODELS = [
   { id: 'llama-1',  name: 'Llama 3.2 1B', detail: '~700 MB',               mlc: 'Llama-3.2-1B-Instruct-q4f16_1-MLC' },
   { id: 'qwen3-17', name: 'Qwen3 1.7B',   detail: '~2.0 GB · newer-gen',   mlc: 'Qwen3-1.7B-q4f16_1-MLC' },
   { id: 'phi-35',   name: 'Phi 3.5 mini', detail: '~2.3 GB',               mlc: 'Phi-3.5-mini-instruct-q4f16_1-MLC' },
+  { id: 'llama-3',  name: 'Llama 3.2 3B', detail: '~2.3 GB · stronger',    mlc: 'Llama-3.2-3B-Instruct-q4f16_1-MLC' },
   // higher-end · need a discrete GPU (multi-GB download, much stronger phrasing)
   { id: 'mistral-7', name: 'Mistral 7B',   detail: '~4.6 GB · needs 8 GB GPU',          mlc: 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC' },
   { id: 'llama-8',   name: 'Llama 3.1 8B', detail: '~5.0 GB · needs 8 GB GPU',          mlc: 'Llama-3.1-8B-Instruct-q4f16_1-MLC' },
@@ -32,7 +33,8 @@ const MODELS = [
   // `provider:'wllama'` + `wllama:` key routes them to the CPU backend in llm.js.
   { id: 'cpu-smol-360', name: 'SmolLM2 360M', detail: '~270 MB · CPU · fastest',   provider: 'wllama', mlc: 'wllama:smollm2-360m' },
   { id: 'cpu-qwen-05',  name: 'Qwen2.5 0.5B', detail: '~400 MB · CPU · balanced',  provider: 'wllama', mlc: 'wllama:qwen25-05b' },
-  { id: 'cpu-llama-1',  name: 'Llama 3.2 1B', detail: '~800 MB · CPU · strongest', provider: 'wllama', mlc: 'wllama:llama32-1b' },
+  { id: 'cpu-llama-1',  name: 'Llama 3.2 1B', detail: '~800 MB · CPU · capable',   provider: 'wllama', mlc: 'wllama:llama32-1b' },
+  { id: 'cpu-llama-3',  name: 'Llama 3.2 3B', detail: '~2.0 GB · CPU · strongest', provider: 'wllama', mlc: 'wllama:llama32-3b' },
   // cloud · Anthropic (Claude) — needs an API key, runs no download, and works
   // without WebGPU. The `mlc` key carries an 'anthropic:' prefix so llm.js
   // routes it to the Claude API; the value after the colon is the exact model id.
@@ -243,7 +245,7 @@ const RULE_PACK_SCHEMA = {
 };
 
 const AUTHOR_PROMPT =
-`You are authoring a rule pack for Cleon, an in-browser grounded document reader.
+`You are authoring a rule pack for Cleo, an in-browser grounded document reader.
 A rule pack is a JSON object that adds installable, toggleable reading rules.
 
 Return ONLY a JSON object with this exact shape:

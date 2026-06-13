@@ -17,11 +17,11 @@
    ============================================================ */
 (function () {
   'use strict';
-  const DB_NAME = 'cleon';
+  const DB_NAME = 'cleo';
   const DB_VERSION = 1;
   const KV = 'kv';                       // one object store, keyed by name
-  const LS_PREFS = 'cleon.prefs';
-  const LS_LEDGER = 'cleon.ledger';
+  const LS_PREFS = 'cleo.prefs';
+  const LS_LEDGER = 'cleo.ledger';
 
   let _dbp = null;
   function openDB() {

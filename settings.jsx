@@ -52,7 +52,7 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
             <h2>Settings</h2>
             <button className="x" onClick={onClose} aria-label="Close settings"><Icon name="x" size={18} /></button>
           </div>
-          <p>Preferences for this device. Everything Cleon keeps — these settings, your documents and chats, and what the engine learns — stays in this browser.</p>
+          <p>Preferences for this device. Everything Cleo keeps — these settings, your documents and chats, and what the engine learns — stays in this browser.</p>
         </div>
 
         <div className="drawer-body set-body">
@@ -90,7 +90,7 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
               <div className="set-row">
                 <div className="set-row-main">
                   <div className="set-label">Run Python over your documents</div>
-                  <div className="set-sub">Lets Cleon run Python locally to answer computational questions a reader can't — sum a column, count rows, group a CSV. The code it runs and the output it gets are recorded in the glass box, and it all runs entirely on your device. Off by default.</div>
+                  <div className="set-sub">Lets Cleo run Python locally to answer computational questions a reader can't — sum a column, count rows, group a CSV. The code it runs and the output it gets are recorded in the glass box, and it all runs entirely on your device. Off by default.</div>
                 </div>
                 <button className={'switch' + (pythonEnabled ? ' on' : '')} role="switch"
                         aria-checked={!!pythonEnabled} aria-label="Run Python over your documents"

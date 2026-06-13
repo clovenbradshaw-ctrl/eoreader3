@@ -1,6 +1,6 @@
 # evo/ — the evolution scaffold
 
-A development-only agentic loop that evolves the Cleon reading engine. An
+A development-only agentic loop that evolves the Cleo reading engine. An
 agent reads the engine's own traces, proposes one change to the *physics* or
 the *prompts*, applies it in a sandbox, reruns the harness, scores the result
 against two fitness functions in tension, and surfaces a diff plus an argument

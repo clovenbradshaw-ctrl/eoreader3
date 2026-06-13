@@ -1,7 +1,7 @@
 /* ============================================================
    Narrated demo: conversational repair + the possessive-kin record.
 
-   Replays a real failed conversation (from an exported cleon-audit trace)
+   Replays a real failed conversation (from an exported cleo-audit trace)
    against a reconstruction of its document, driving the engine the way
    app.jsx's runTurn does — mechanically, no model, which is the contract.
 
@@ -120,7 +120,7 @@ const ECHO_OPENERS = [
     messages.push({ role: 'assistant', text: out });
     console.log('USER : ' + q);
     console.log('ROUTE: ' + label);
-    console.log('CLEON: ' + out.replace(/\{\{[^}]*\}\}/g, '').replace(/\n+/g, ' ⏎ '));
+    console.log('CLEO: ' + out.replace(/\{\{[^}]*\}\}/g, '').replace(/\n+/g, ' ⏎ '));
     console.log('');
   }
 })().catch(e => { console.error(e); process.exit(1); });

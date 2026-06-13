@@ -495,8 +495,8 @@ function ProposalsView({ docs, onToast, onChanged }) {
   );
 }
 
-// Assemble the unified export: graph snapshot line(s) (schema cleon-graph/1)
-// when ingestion is on, plus the audit turn lines (schema cleon-audit/1) when
+// Assemble the unified export: graph snapshot line(s) (schema cleo-graph/1)
+// when ingestion is on, plus the audit turn lines (schema cleo-audit/1) when
 // output is on. Every line is a self-contained, independently-parseable record.
 function buildUnifiedJSONL({ docs, includeIngestion, includeOutput }) {
   const lines = [];
@@ -544,7 +544,7 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
     if (!exportIngestion && !exportOutput) { onToast && onToast('Turn on extraction or chat to export.'); return; }
     const text = build();
     if (!text) { onToast && onToast('Nothing to export yet.'); return; }
-    const ok = downloadText(text, 'cleon-glassbox-' + ts() + '.jsonl');
+    const ok = downloadText(text, 'cleo-glassbox-' + ts() + '.jsonl');
     onToast && onToast(ok ? 'Exported as JSONL' : 'Export failed.');
   };
   const copyJSONL = () => {
@@ -596,7 +596,7 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
             ? (view.length
                 ? view.map(t => <AuditTurn key={t.id} turn={t} />)
                 : <div className="empty-doc" style={{ padding: 40 }}>{enabled
-                    ? 'No turns recorded yet — ask Cleon something and the full pipeline shows up here.'
+                    ? 'No turns recorded yet — ask Cleo something and the full pipeline shows up here.'
                     : 'Recording is paused. Turn it on to capture chat turns.'}</div>)
             : tab === 'ladder'
               ? <LayerLadder doc={graphDoc} />

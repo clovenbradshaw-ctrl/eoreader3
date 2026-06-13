@@ -18,7 +18,7 @@
    ============================================================ */
 (function () {
   'use strict';
-  const SCHEMA = 'cleon-audit/1';
+  const SCHEMA = 'cleo-audit/1';
   const MAX_TURNS = 300;          // ring buffer; oldest turns drop first
 
   let turns = [];
@@ -122,7 +122,7 @@
   }
 
   function download(filename) {
-    const name = filename || ('cleon-audit-' + new Date().toISOString().replace(/[:.]/g, '-') + '.jsonl');
+    const name = filename || ('cleo-audit-' + new Date().toISOString().replace(/[:.]/g, '-') + '.jsonl');
     try {
       const blob = new Blob([toJSONL()], { type: 'application/x-ndjson' });
       const url = URL.createObjectURL(blob);
@@ -145,7 +145,7 @@
   }
 
   function downloadJSON(filename, list) {
-    const name = filename || ('cleon-prompts-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json');
+    const name = filename || ('cleo-prompts-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json');
     try {
       const blob = new Blob([toJSON(list)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);

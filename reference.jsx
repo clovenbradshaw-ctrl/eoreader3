@@ -252,11 +252,11 @@ function ReferenceDeskBar({ entities, budget }) {
   );
 }
 
-/* The card attached under a chat message when Wikipedia enrichment is on. It
-   renders the article that was pulled in — and, crucially, signals that the
-   article was INGESTED into the graph as a citable source (the "chat with
-   Wikipedia" use case): the answer above is grounded in this text, not in a
-   sidecar. Handles the loading / abstain / miss states inline. */
+/* The card pinned at the TOP of a chat message's reply when Wikipedia
+   enrichment is on. It renders the article that was pulled in — and, crucially,
+   signals that the article was INGESTED into the graph as a citable source (the
+   "chat with Wikipedia" use case): the answer below is grounded in this text,
+   not in a sidecar. Handles the loading / abstain / miss states inline. */
 function ReferenceCard({ data, onOpen }) {
   if (!data) return null;
   const term = data.term || data.query || '';
@@ -293,7 +293,7 @@ function ReferenceCard({ data, onOpen }) {
       </div>
       {ing ? (
         <div className="refcard-ingested">
-          <Icon name="check" size={12} /> Added to the graph as <b>{ing.name}</b> — the answer above is grounded in this article.
+          <Icon name="check" size={12} /> Added to the graph as <b>{ing.name}</b> — the answer below is grounded in this article.
           {onOpen ? <button type="button" className="refcard-open" onClick={() => onOpen(ing.id)}>open</button> : null}
         </div>
       ) : (

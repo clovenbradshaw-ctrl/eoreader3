@@ -479,7 +479,7 @@ function GraphAuditDrawer({ onClose, onToast, docs }) {
       const blob = new Blob([text], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = 'cleon-ingestion-' + (report.doc.name || 'doc').replace(/[^\w.-]+/g, '_') + '.json';
+      a.href = url; a.download = 'cleo-ingestion-' + (report.doc.name || 'doc').replace(/[^\w.-]+/g, '_') + '.json';
       document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
       onToast && onToast('Ingestion graph exported as JSON');
     } catch (e) { onToast && onToast('Export failed.'); }
