@@ -341,6 +341,25 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
   const style = anchor ? { left: anchor.left, bottom: anchor.bottom } : { left: 16, bottom: 60 };
   const pct = Math.round((progress || 0) * 100);
   const [keyDraft, setKeyDraft] = React.useState('');
+  // Per-row "cached on this device" flags — drives the badge that tells a
+  // reader the row is a fast re-instantiate (no download) rather than a
+  // multi-gig fetch. Queried on open (and after a load completes, since a
+  // freshly-finished download flips a row from uncached to cached); cheap
+  // best-effort lookup, no flicker if it never resolves.
+  const [cached, setCached] = React.useState({});
+  React.useEffect(() => {
+    const L = window.EOLLM;
+    if (!L || !L.cacheStatus) return;
+    let alive = true;
+    (async () => {
+      const out = {};
+      for (const m of models) {
+        try { const s = await L.cacheStatus(m.mlc); if (s && s.cached) out[m.id] = true; } catch (_) {}
+      }
+      if (alive) setCached(out);
+    })();
+    return () => { alive = false; };
+  }, [models, status]);
   const gpu = models.filter(m => !m.provider);
   const cpu = models.filter(m => m.provider === 'wllama' && !m.uploaded);
   const uploaded = models.filter(m => m.provider === 'wllama' && m.uploaded);
@@ -352,13 +371,21 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
   const row = (m) => {
     const isCur = m.id === current.id;
     const state = isCur ? status : 'idle';
-    const idle = m.provider === 'anthropic' ? 'Use' : 'Load';
+    const isCached = !!cached[m.id];
+    // A cached row is a fast re-instantiate (bytes on disk); the action label
+    // shifts to "Use" so the reader knows there's no fresh download coming.
+    const idle = m.provider === 'anthropic' ? 'Use' : (isCached ? 'Use' : 'Load');
     return (
       <div key={m.id} role="button" tabIndex={0} aria-pressed={isCur}
         className={'pop-item' + (isCur ? ' sel' : '')} onClick={() => onPick(m)}
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(m); } }}>
         <div className="pi-main">
-          <div className="pi-n">{m.name}</div>
+          <div className="pi-n">
+            {m.name}
+            {isCached && state !== 'ready' && (
+              <span className="pi-cached" title="Already cached on this device — no download needed">cached</span>
+            )}
+          </div>
           <div className="pi-d">{m.detail}</div>
         </div>
         {state === 'loading' ? <span className="pi-state load">{m.provider === 'anthropic' ? '…' : pct + '%'}</span>

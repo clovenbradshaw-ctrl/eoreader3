@@ -56,16 +56,40 @@
   // escalation isn't also paying the model download.
   function warm() { if (!extractor && !failed) ensure(); }
 
+  // How many sentences to embed per inference call. A whole large document
+  // (~1800 sentences for a full novel) embedded in ONE ex() call is a single
+  // multi-second synchronous WASM matmul that blocks the main thread — the
+  // browser shows "Page Unresponsive" and every in-flight turn (any backend,
+  // even Claude) appears to hang. Splitting into small batches and YIELDING to
+  // the event loop between them keeps each step short enough that the page
+  // stays responsive; total work is the same, just no longer one frozen block.
+  // Overridable via window.EO_EMBED_BATCH.
+  const EMBED_BATCH = (typeof window !== 'undefined' && +window.EO_EMBED_BATCH) || 24;
+  const yieldToEventLoop = () => new Promise(res => setTimeout(res, 0));
+
   // Embed an array of sentences → array of Float32Array (one row per sentence).
+  // Batched + yielding so a large document never freezes the tab (see EMBED_BATCH).
   async function embedSentences(sentences) {
     const ex = await ensure();
     if (!ex || !sentences || !sentences.length) return null;
     try {
-      const out = await ex(sentences, { pooling: 'mean', normalize: true });
-      // out is a [n,384] Tensor; .tolist() → nested arrays. Convert rows to
-      // Float32Array for fast dot products in the engine.
-      const rows = out.tolist();
-      return rows.map(r => Float32Array.from(r));
+      // Small inputs: one call, no batching overhead (the common query case).
+      if (sentences.length <= EMBED_BATCH) {
+        const out = await ex(sentences, { pooling: 'mean', normalize: true });
+        return out.tolist().map(r => Float32Array.from(r));
+      }
+      const rows = [];
+      for (let i = 0; i < sentences.length; i += EMBED_BATCH) {
+        const batch = sentences.slice(i, i + EMBED_BATCH);
+        const out = await ex(batch, { pooling: 'mean', normalize: true });
+        // out is a [n,384] Tensor; .tolist() → nested arrays. Convert rows to
+        // Float32Array for fast dot products in the engine.
+        for (const r of out.tolist()) rows.push(Float32Array.from(r));
+        // Let the browser paint / handle input between batches, so embedding a
+        // long document doesn't lock the page.
+        if (i + EMBED_BATCH < sentences.length) await yieldToEventLoop();
+      }
+      return rows;
     } catch (e) { if (window.eoWarn) window.eoWarn('embedSentences failed', e); return null; }
   }
 

@@ -17,9 +17,15 @@ const MODELS = [
   { id: 'qwen-05',  name: 'Qwen2.5 0.5B', detail: '~350 MB · fastest',     mlc: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC' },
   { id: 'qwen-15',  name: 'Qwen2.5 1.5B', detail: '~900 MB · balanced',    mlc: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC' },
   { id: 'llama-1',  name: 'Llama 3.2 1B', detail: '~700 MB',               mlc: 'Llama-3.2-1B-Instruct-q4f16_1-MLC' },
+  // Llama 3.2 3B in q4f16_1: the desktop default. ~2.3 GB downloads once and
+  // stays on disk via OPFS/IndexedDB; on Apple Silicon (and any GPU with
+  // healthy fp16) the half-precision build runs faster and lighter than
+  // q4f32_1 with no quality penalty worth noticing on a 3B model. The fp32
+  // variant is kept around for hardware where fp16 misbehaves.
+  { id: 'llama-3',     name: 'Llama 3.2 3B',         detail: '~2.3 GB · default · best balance of size and quality', mlc: 'Llama-3.2-3B-Instruct-q4f16_1-MLC' },
+  { id: 'llama-3-f32', name: 'Llama 3.2 3B (fp32)',  detail: '~2.7 GB · for GPUs where fp16 misbehaves',              mlc: 'Llama-3.2-3B-Instruct-q4f32_1-MLC' },
   { id: 'qwen3-17', name: 'Qwen3 1.7B',   detail: '~2.0 GB · newer-gen',   mlc: 'Qwen3-1.7B-q4f16_1-MLC' },
   { id: 'phi-35',   name: 'Phi 3.5 mini', detail: '~2.3 GB',               mlc: 'Phi-3.5-mini-instruct-q4f16_1-MLC' },
-  { id: 'llama-3',  name: 'Llama 3.2 3B', detail: '~2.3 GB · stronger',    mlc: 'Llama-3.2-3B-Instruct-q4f16_1-MLC' },
   // higher-end · need a discrete GPU (multi-GB download, much stronger phrasing)
   { id: 'mistral-7', name: 'Mistral 7B',   detail: '~4.6 GB · needs 8 GB GPU',          mlc: 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC' },
   { id: 'llama-8',   name: 'Llama 3.1 8B', detail: '~5.0 GB · needs 8 GB GPU',          mlc: 'Llama-3.1-8B-Instruct-q4f16_1-MLC' },
@@ -31,10 +37,19 @@ const MODELS = [
   // automatic fallback when a GPU model stalls. Slower than the GPU tier, but
   // works anywhere; the GGUF downloads once from Hugging Face and is cached. The
   // `provider:'wllama'` + `wllama:` key routes them to the CPU backend in llm.js.
-  { id: 'cpu-smol-360', name: 'SmolLM2 360M', detail: '~270 MB · CPU · fastest',   provider: 'wllama', mlc: 'wllama:smollm2-360m' },
-  { id: 'cpu-qwen-05',  name: 'Qwen2.5 0.5B', detail: '~400 MB · CPU · balanced',  provider: 'wllama', mlc: 'wllama:qwen25-05b' },
-  { id: 'cpu-llama-1',  name: 'Llama 3.2 1B', detail: '~800 MB · CPU · capable',   provider: 'wllama', mlc: 'wllama:llama32-1b' },
-  { id: 'cpu-llama-3',  name: 'Llama 3.2 3B', detail: '~2.0 GB · CPU · strongest', provider: 'wllama', mlc: 'wllama:llama32-3b' },
+  // The tiny one is the automatic fallback: ~95 MB downloads in seconds and is
+  // pre-fetched into wllama's OPFS cache on first launch, so a GPU stall swaps
+  // over with no fetch — only wllama init. The Q8 variants are the same models
+  // at higher precision: one click for noticeably better phrasing, slower on
+  // the CPU but a modest step up in download size. The 3B is the strongest
+  // CPU option, on par with the GPU default if you don't have WebGPU.
+  { id: 'cpu-smol-135',   name: 'SmolLM2 135M',                detail: '~95 MB · CPU · instant fallback',   provider: 'wllama', mlc: 'wllama:smollm2-135m' },
+  { id: 'cpu-smol-360',   name: 'SmolLM2 360M',                detail: '~270 MB · CPU · fastest',           provider: 'wllama', mlc: 'wllama:smollm2-360m' },
+  { id: 'cpu-qwen-05',    name: 'Qwen2.5 0.5B',                detail: '~400 MB · CPU · balanced',          provider: 'wllama', mlc: 'wllama:qwen25-05b' },
+  { id: 'cpu-qwen-05-q8', name: 'Qwen2.5 0.5B (high quality)', detail: '~550 MB · CPU · Q8 — better words', provider: 'wllama', mlc: 'wllama:qwen25-05b-q8' },
+  { id: 'cpu-llama-1',    name: 'Llama 3.2 1B',                detail: '~800 MB · CPU · capable',           provider: 'wllama', mlc: 'wllama:llama32-1b' },
+  { id: 'cpu-llama-1-q8', name: 'Llama 3.2 1B (high quality)', detail: '~1.3 GB · CPU · Q8 — best words',   provider: 'wllama', mlc: 'wllama:llama32-1b-q8' },
+  { id: 'cpu-llama-3',    name: 'Llama 3.2 3B',                detail: '~2.0 GB · CPU · strongest',         provider: 'wllama', mlc: 'wllama:llama32-3b' },
   // cloud · Anthropic (Claude) — needs an API key, runs no download, and works
   // without WebGPU. The `mlc` key carries an 'anthropic:' prefix so llm.js
   // routes it to the Claude API; the value after the colon is the exact model id.
