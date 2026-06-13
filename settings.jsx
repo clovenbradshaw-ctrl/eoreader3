@@ -25,6 +25,8 @@ window.EOTheme = { apply: applyTheme };
 function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                          pythonEnabled, onPythonEnabled, pythonAvailable,
                          groundingInfo, onGroundingInfo, wikiMode, onWikiMode,
+                         models, defaultModelId, onDefaultModel,
+                         fallbackModelIds, onFallbackModelIds,
                          onClearData, storageOK }) {
   const dialogRef = window.useDialog(onClose);
   const [confirmClear, setConfirmClear] = React.useState(false);
@@ -118,6 +120,52 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                       onClick={() => onReduceMotion(!reduceMotion)} />
             </div>
           </section>
+
+          {Array.isArray(models) && models.length > 0 && onDefaultModel && (
+            <section className="set-section">
+              <h3 className="set-h">Model</h3>
+
+              <div className="set-row set-row-col">
+                <div className="set-row-main">
+                  <div className="set-label">Default model</div>
+                  <div className="set-sub">The model loaded at startup and used for every turn. Switching here loads it immediately and remembers it across refreshes.</div>
+                </div>
+                <select className="set-select" value={defaultModelId || ''}
+                        aria-label="Default model"
+                        onChange={(e) => onDefaultModel(e.target.value)}>
+                  {models.map(m => (
+                    <option key={m.id} value={m.id}>{m.name}{m.detail ? ' — ' + m.detail : ''}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="set-row set-row-col">
+                <div className="set-row-main">
+                  <div className="set-label">Backups</div>
+                  <div className="set-sub">If the default fails to load (no WebGPU, a stalled download, a missing API key), Cleo walks this list in order until one loads. Leave a slot on “None” to skip it.</div>
+                </div>
+                <div className="set-fallbacks">
+                  {[0, 1, 2].map(i => (
+                    <label key={i} className="set-fallback">
+                      <span className="set-fallback-n">{i + 1}</span>
+                      <select className="set-select" value={(fallbackModelIds && fallbackModelIds[i]) || ''}
+                              aria-label={'Backup model ' + (i + 1)}
+                              onChange={(e) => {
+                                const next = (fallbackModelIds || [null, null, null]).slice();
+                                next[i] = e.target.value || null;
+                                onFallbackModelIds(next);
+                              }}>
+                        <option value="">None</option>
+                        {models.map(m => (
+                          <option key={m.id} value={m.id}>{m.name}{m.detail ? ' — ' + m.detail : ''}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
 
           {pythonAvailable && (
             <section className="set-section">

@@ -218,6 +218,12 @@ function App() {
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
   const [modelProgress, setModelProgress] = useState(0);
   const [modelLoadText, setModelLoadText] = useState(''); // WebLLM's live status line ("12MB fetched…", "Loading GPU shaders…")
+  // User-picked backup models, in order. Three slots; an unset slot is null.
+  // When the active model fails to load (stalls, no WebGPU, etc.) the load
+  // path walks this list (skipping the model that just failed and any backups
+  // that can't run here) before falling back to the automatic CPU pick.
+  // Persisted with prefs as `fallbackModelIds`.
+  const [fallbackModelIds, setFallbackModelIds] = useState([null, null, null]);
   // User-uploaded GGUF models. Session-only: the File reference is held in
   // llm.js's in-memory registry and lost on refresh, so these entries are not
   // persisted to prefs.
@@ -351,6 +357,14 @@ function App() {
           setRules(rs => rs.map(r => { const p = prefs.rules.find(x => x.id === r.id); return p ? { ...r, ...p } : r; }));
         }
         if (prefs.modelId) { const m = window.MODELS.find(x => x.id === prefs.modelId); if (m) setModel(m); }
+        if (Array.isArray(prefs.fallbackModelIds)) {
+          const slots = [null, null, null];
+          for (let i = 0; i < 3; i++) {
+            const id = prefs.fallbackModelIds[i];
+            if (id && window.MODELS.find(x => x.id === id)) slots[i] = id;
+          }
+          setFallbackModelIds(slots);
+        }
         if (Array.isArray(prefs.projects)) { setProjects(prefs.projects); bumpUid(prefs.projects.map(p => p.id)); }
         if (prefs.activeProject) setActiveProject(prefs.activeProject);
         if (prefs.mode) setMode(prefs.mode);
@@ -426,8 +440,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled });
-  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, fallbackModelIds, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled });
+  }, [rules, langModes, model, fallbackModelIds, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -733,9 +747,50 @@ function App() {
   };
   const openEntityTab = (docId, name) => { openTab('@ent/' + docId + '/' + encodeURIComponent(name)); };
 
+  // Whether a model can even attempt to load here — Claude needs its key,
+  // wllama needs WebAssembly, WebLLM needs WebGPU. Lets the fallback walker
+  // skip a backup that has no chance instead of burning a slot on a guaranteed
+  // failure. Mirrors the per-provider gates in loadModel.
+  const canRunModel = (m) => {
+    if (!m || !window.EOLLM) return false;
+    if (m.provider === 'anthropic') return !!(window.EOLLM.hasAnthropicKey && window.EOLLM.hasAnthropicKey());
+    if (m.provider === 'wllama') return !window.EOLLM.hasWasm || !!window.EOLLM.hasWasm();
+    return !!(window.EOLLM.hasWebGPU && window.EOLLM.hasWebGPU());
+  };
+  // Resolve the configured backup ids to runnable models, in order, skipping
+  // whichever models have already been tried this attempt (so a chain that
+  // walks through every slot can't loop back onto the failed default). Falls
+  // back to the automatic CPU pick when the user hasn't configured a backup
+  // that fits — the dependable "answer still gets worded" guarantee the page
+  // used to give unconditionally. Returns null when nothing viable is left.
+  const fallbackModelIdsRef = useRef(fallbackModelIds);
+  fallbackModelIdsRef.current = fallbackModelIds;
+  const nextFallback = (tried) => {
+    const seen = tried instanceof Set ? tried : new Set(tried || []);
+    for (const id of fallbackModelIdsRef.current || []) {
+      if (!id || seen.has(id)) continue;
+      const m = window.MODELS.find(x => x.id === id);
+      if (m && canRunModel(m)) return m;
+      seen.add(id);
+    }
+    const cpu = cpuFallbackModel();
+    if (cpu && !seen.has(cpu.id) && canRunModel(cpu)) return cpu;
+    return null;
+  };
+  // Why a backup ran — surfaced in the toast so the user knows the switch
+  // wasn't silent. STALL gets its own phrasing because the page used to mention it.
+  const failReason = (e) => (e && e.code === 'STALL') ? 'stalled' : 'wouldn’t load';
+
   // ---- model: load the real local model for the demo ----
-  const loadModel = async (m) => {
+  // `_tried` accumulates the model ids attempted during a single fallback walk,
+  // so a chain that exhausts every configured backup can't loop back onto a
+  // model that already failed this run. External callers (pickModel, the
+  // auto-load effect, the Claude key setter) start with no `_tried` — every
+  // user-driven load is a fresh attempt.
+  const loadModel = async (m, _tried) => {
     if (!window.EOLLM) { showToast('Local model module unavailable.'); return false; }
+    const tried = _tried instanceof Set ? _tried : new Set();
+    if (m && m.id) tried.add(m.id);
     // Claude: no WebGPU and no download — just needs the API key. Without one,
     // stay idle and let the model popover collect it (it shows a key field for
     // an Anthropic model). With one, "loading" resolves instantly.
@@ -747,6 +802,11 @@ function App() {
         setModelStatus('ready'); setModelLoadText(''); return true;
       } catch (e) {
         setModelStatus('idle'); setModelLoadText('');
+        const next = nextFallback(tried);
+        if (window.EO_CPU_FALLBACK !== 'off' && next) {
+          showToast('Claude ' + failReason(e) + ' — switching to “' + next.name + '”.');
+          return loadAsFallback(next, tried);
+        }
         showToast(e.message || 'Could not connect to Claude');
         return false;
       }
@@ -754,22 +814,40 @@ function App() {
     // wllama (CPU): no WebGPU needed. The GGUF downloads once from Hugging Face
     // and runs on the CPU; progress streams the same way the GPU path does.
     if (m.provider === 'wllama') {
-      if (window.EOLLM.hasWasm && !window.EOLLM.hasWasm()) { setModelStatus('idle'); showToast('This browser can’t run the on-device CPU model (no WebAssembly).'); return false; }
+      if (window.EOLLM.hasWasm && !window.EOLLM.hasWasm()) {
+        setModelStatus('idle');
+        const next = nextFallback(tried);
+        if (window.EO_CPU_FALLBACK !== 'off' && next) {
+          showToast('This browser can’t run the on-device CPU model — switching to “' + next.name + '”.');
+          return loadAsFallback(next, tried);
+        }
+        showToast('This browser can’t run the on-device CPU model (no WebAssembly).');
+        return false;
+      }
       setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
       try {
         await window.EOLLM.load(m.mlc, (p, text) => { setModelProgress(p); if (text) setModelLoadText(text); });
         setModelStatus('ready'); setModelLoadText(''); return true;
       } catch (e) {
         setModelStatus('idle'); setModelLoadText('');
-        if (!(e && e.code === 'CANCEL')) showToast(e.message || 'CPU model failed to load');
+        if (e && e.code === 'CANCEL') return false;
+        const next = nextFallback(tried);
+        if (window.EO_CPU_FALLBACK !== 'off' && next) {
+          showToast('The CPU model ' + failReason(e) + ' — switching to “' + next.name + '”.');
+          return loadAsFallback(next, tried);
+        }
+        showToast(e.message || 'CPU model failed to load');
         return false;
       }
     }
     if (!window.EOLLM.hasWebGPU()) {
-      // A GPU model was selected but this browser has no WebGPU. Rather than
-      // sit idle (mechanical-only), drop to the on-device CPU model.
+      // A GPU model was selected but this browser has no WebGPU. Fall through
+      // the configured backups (CPU model picked first if available).
       setModelStatus('idle');
-      if (window.EO_CPU_FALLBACK !== 'off') return fallbackToCPU();
+      if (window.EO_CPU_FALLBACK !== 'off') {
+        const next = nextFallback(tried);
+        if (next) return loadAsFallback(next, tried);
+      }
       return false;
     }
     setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
@@ -779,28 +857,34 @@ function App() {
     } catch (e) {
       setModelStatus('idle'); setModelLoadText('');
       if (e && e.code === 'CANCEL') return false;  // a user cancel is not an error
-      // A GPU model that stalled or failed to load leaves chat with no phrasing.
-      // Fall to the on-device CPU model so answers still get worded (the user's
-      // "backup ready when the GPU ones haven't loaded or are stalled").
-      const cpu = cpuFallbackModel();
-      if (window.EO_CPU_FALLBACK !== 'off' && cpu && cpu.id !== m.id && window.EOLLM.hasWasm && window.EOLLM.hasWasm()) {
-        showToast('The GPU model ' + (e.code === 'STALL' ? 'stalled' : 'wouldn’t load') + ' — switching to the on-device CPU model.');
-        return fallbackToCPU();
+      // The active model failed; walk the user's backup chain so phrasing
+      // doesn't drop to mechanical-only.
+      const next = nextFallback(tried);
+      if (window.EO_CPU_FALLBACK !== 'off' && next) {
+        showToast('The GPU model ' + failReason(e) + ' — switching to “' + next.name + '”.');
+        return loadAsFallback(next, tried);
       }
       showToast(e.message || 'Model failed to load');
       return false;
     }
   };
-  // Switch the active model to the on-device CPU model and load it. The single
-  // resident-engine invariant means we can't hold a warm CPU model beside a live
-  // GPU one — so the switch happens at the moment it's needed (no WebGPU at
-  // startup, or a GPU stall/failure), with the runtime pre-warmed for speed.
+  // Activate a backup model and load it. The single resident-engine invariant
+  // means we can't hold a warm second model beside the active one — so the
+  // switch happens at the moment it's needed. setModel here pins the user's
+  // backup as the active model, so subsequent turns route through it; the
+  // selection persists with prefs the same way a manual pick would.
+  const loadAsFallback = async (m, tried) => {
+    if (!m) return false;
+    setModel(m); setModelStatus('idle');
+    return loadModel(m, tried);
+  };
+  // Kept for the auto-load path below (cpuFallbackModel is the auto default
+  // when the user hasn't configured a backup that fits). Walks the chain too,
+  // so a user-picked backup wins over the hardcoded CPU pick when present.
   const fallbackToCPU = async () => {
-    const cpu = cpuFallbackModel();
-    if (!cpu) return false;
-    if (window.EOLLM && window.EOLLM.hasWasm && !window.EOLLM.hasWasm()) return false;
-    setModel(cpu); setModelStatus('idle');
-    return loadModel(cpu);
+    const next = nextFallback(null);
+    if (!next) return false;
+    return loadAsFallback(next);
   };
   // Save (or clear) the Claude API key from the model popover. Saving a key for
   // the currently-selected Anthropic model immediately loads it.
@@ -2944,6 +3028,8 @@ function App() {
         pythonEnabled={pythonEnabled} onPythonEnabled={setPython} pythonAvailable={!!window.EOPython}
         groundingInfo={groundingInfo} onGroundingInfo={setGroundingInfo}
         wikiMode={wikiMode} onWikiMode={changeWikiMode}
+        models={window.MODELS.concat(uploadedModels)} defaultModelId={model.id} onDefaultModel={(id) => { const m = window.MODELS.concat(uploadedModels).find(x => x.id === id); if (m) pickModel(m); }}
+        fallbackModelIds={fallbackModelIds} onFallbackModelIds={setFallbackModelIds}
         onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
