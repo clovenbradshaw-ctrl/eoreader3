@@ -1651,6 +1651,15 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .refcard-ingested svg { color: var(--good-fg); flex: none; }
 .refcard-ingested b { font-weight: 600; }
 .refcard-open { margin-left: auto; font-family: var(--mono); font-size: 11px; border: 1px solid var(--good-bd); background: transparent; color: var(--good-fg); border-radius: var(--r-xs); padding: 2px 8px; cursor: pointer; }
+/* the confirm-before-search step (ConfirmCard) */
+.refcard-confirm-body { padding: 12px 13px; }
+.refcard-confirm-ask { font-family: var(--sans); font-size: 13px; line-height: 1.5; color: var(--text-2); margin: 0 0 10px; }
+.refcard-confirm-field { display: flex; align-items: center; gap: 7px; padding: 7px 10px; margin: 0 0 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-subtle); }
+.refcard-confirm-field svg { color: var(--text-3); flex: none; }
+.refcard-confirm-input { flex: 1; min-width: 0; border: none; background: transparent; font-family: var(--sans); font-size: 14px; color: var(--text); outline: none; }
+.refcard-confirm-actions { display: flex; align-items: center; gap: 8px; }
+.refcard-dismiss { font-family: var(--mono); font-size: 11.5px; letter-spacing: .04em; border: 1px solid var(--border); background: transparent; color: var(--text-2); padding: 4px 10px; border-radius: var(--r-sm); cursor: pointer; }
+.refcard-dismiss:hover { background: var(--bg-subtle); color: var(--text); }
 .refcard .refdesk-thumb { float: right; margin: 0 0 8px 12px; max-width: 104px; width: 34%; border: 1px solid var(--paper-line); border-radius: var(--r-xs); }
 .refcard .refdesk-headword { font-size: 17px; font-weight: 600; margin: 0 0 3px; }
 .refcard .refdesk-headword a { color: var(--paper-ink); text-decoration: none; border-bottom: 1px solid var(--enc-ink); }

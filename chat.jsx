@@ -722,7 +722,7 @@ class MessageBoundary extends React.Component {
   }
 }
 
-function Message({ msg, onCite, showGrounding }) {
+function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc }) {
   if (msg.role === 'user') return <div className="msg-row user"><div className="bubble-user">{msg.text}</div></div>;
   return (
     <div className="msg-row asst">
@@ -735,7 +735,12 @@ function Message({ msg, onCite, showGrounding }) {
         {/* The Wikipedia enrichment card sits at the TOP of the reply: the
             looked-up article is the ground, and the response below reads from
             it (see ReferenceCard's "grounded … below" footer). */}
-        {msg.enrichment && window.ReferenceCard && <window.ReferenceCard data={msg.enrichment} />}
+        {msg.enrichment && window.ReferenceCard && (
+          <window.ReferenceCard data={msg.enrichment}
+            onConfirm={onConfirmWiki ? (term) => onConfirmWiki(msg.turnId, term) : null}
+            onDismiss={onDismissWiki ? () => onDismissWiki(msg.turnId) : null}
+            onOpen={onOpenDoc || null} />
+        )}
         {msg.loading
           ? <div className="model-loading">
               {msg.loadCloud
@@ -888,7 +893,7 @@ function Hero({ composerProps, onAttach, onExample, onPaste, dragOver }) {
   );
 }
 
-function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts, showGrounding }) {
+function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc }) {
   const streamRef = React.useRef(null);
   React.useEffect(() => { const el = streamRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages]);
   // Only offer the export once a turn has actually been recorded.
@@ -900,7 +905,7 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
           <MessageBoundary key={i}
             resetKey={(m.text ? m.text.length : 0) + ':' + (m.streaming ? 1 : 0) + ':' + (m.typing ? 1 : 0) + ':' + (m.loading ? 1 : 0) + ':' + (m.audit ? 1 : 0)}
             raw={m.role === 'assistant' ? m.text : null}>
-            <Message msg={m} onCite={onCite} showGrounding={showGrounding} />
+            <Message msg={m} onCite={onCite} showGrounding={showGrounding} onConfirmWiki={onConfirmWiki} onDismissWiki={onDismissWiki} onOpenDoc={onOpenDoc} />
           </MessageBoundary>
         ))}</div>
       </div>

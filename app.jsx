@@ -2353,11 +2353,18 @@ function App() {
     return bw.length > 1 && bw.includes(aw[0]);
   };
 
-  // Pull the salient term's article, attach the card to the live assistant
-  // message (by turnId), and ingest it as a source. Returns the doc for THIS
-  // turn's scope (state updates land for later turns). Best-effort throughout.
-  // `opts.force` (the per-message FORCE button, or 'on' mode — FIX 5) bypasses
-  // the acquisition gate; only a substantive term and corpus-resolution remain.
+  // Decide whether THIS turn should consult Wikipedia, and HOW. The acquisition
+  // gate (intent + identity + corpus-resolution + active-subject follow-up) is
+  // unchanged and still FAILS CLOSED — a missing or throwing decider SUPPRESSES
+  // the privileged off-device fetch rather than waving it through. What changed:
+  // a turn that passes the gate on its own (Auto mode) no longer silently fetches
+  // and ingests an article for whatever term pickQuery landed on — it PROPOSES
+  // the search, surfacing an editable confirm card on the live reply so the
+  // reader can correct the term before anything leaves the device (runWikiSearch
+  // fires the request on click). An explicit force — `opts.force`, i.e. the
+  // per-message FORCE button or 'on' mode — is the reader already asking to look
+  // it up, so it skips both the gate AND the confirm step and fetches straight
+  // into THIS turn's scope.
   const chatWikipedia = async (q, turnId, opts) => {
     const X = window.EOExternal;
     if (!X || !X.enabled || !X.enabled()) return null;
@@ -2401,8 +2408,44 @@ function App() {
     // "look up Shore" while a different Shore is active) must not silently
     // fetch-and-swap; hold (gate only — a force overrides).
     if (!force && hot && _termCollidesWithActive(term, hot)) return null;
-    try { X.grantConsent && X.grantConsent(); } catch (e) {}
+    // The gates passed. An AUTOMATIC pass only PROPOSES the search: the picked
+    // term is often not what the reader meant, so surface an editable confirm
+    // card and return null — this turn answers from the sources already in scope,
+    // and a confirmed article (runWikiSearch) grounds later turns. A force is the
+    // reader already asking, so fetch now and ground THIS turn on the article.
+    if (!force) {
+      setMessages(ms => ms.map(m => m.turnId === turnId
+        ? { ...m, enrichment: { status: 'confirm', term } } : m));
+      return null;
+    }
+    return await fetchWikiArticle(turnId, term, false);
+  };
+
+  // The confirmed fetch — the reader pressed Search on the confirm card, with the
+  // term as picked or as they corrected it. NOW the off-device request fires. The
+  // new source lands for the NEXT turn (React state updates after this handler),
+  // so the card's footer says "ask a follow-up to ground on it" (deferred) rather
+  // than claiming the reply already shown used it.
+  const runWikiSearch = async (turnId, rawTerm) => {
+    const X = window.EOExternal;
+    const term = String(rawTerm == null ? '' : rawTerm).trim();
+    if (!X || !X.enabled || !X.enabled() || !term) return null;
+    return await fetchWikiArticle(turnId, term, true);
+  };
+
+  // The reader dismissed the proposed search — clear the card, fetch nothing.
+  const dismissWikiSearch = (turnId) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: null } : m));
+
+  // The actual off-device fetch, shared by the confirmed search and a forced
+  // in-turn lookup: pull the article, drive the live message's card through its
+  // loading → result lifecycle, and ingest a hit as a citable source. `deferred`
+  // selects the footer copy — a confirmed search grounds the NEXT turn ("ask a
+  // follow-up"), a forced fetch grounds THIS one — and the doc is returned so a
+  // forced caller can thread it into this turn's scope. Best-effort throughout.
+  const fetchWikiArticle = async (turnId, term, deferred) => {
+    const X = window.EOExternal;
     const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
+    try { X.grantConsent && X.grantConsent(); } catch (e) {}
     tag({ loading: true, term });
     let res;
     try { res = await X.article(term); }
@@ -2416,7 +2459,7 @@ function App() {
       const text = buildWikiDocText(res.payload);
       if (text && text.replace(/\s+/g, ' ').trim().length > 60) doc = await ingestExternalSource(name, text);
     }
-    if (doc) { addSource(doc.id); tag({ ...base, ingested: { id: doc.id, name } }); }
+    if (doc) { addSource(doc.id); tag({ ...base, ingested: { id: doc.id, name, deferred: !!deferred } }); }
     return doc || null;
   };
 
@@ -2500,13 +2543,16 @@ function App() {
 
     // CHAT WITH WIKIPEDIA (FIX 5): consult the reference desk per the mode —
     //   off  → never (the composer FORCE button is hidden, so a force can't reach)
-    //   on   → every substantive turn (force past the acquisition gate)
-    //   auto → only when the gate passes, OR the FORCE button was pressed for
-    //          this one message (which bypasses the gate for this send only).
-    // A hit INGESTS the article as a citable source before reading, so the turn
-    // grounds on it (and cites it), not on a sidecar card. The freshly-parsed doc
-    // is threaded into THIS turn's scope directly (state updates are stale within
-    // the turn); best-effort — a failure degrades to whatever was already in scope.
+    //   auto → only when the acquisition gate passes; that pass now PROPOSES the
+    //          search (an editable confirm card on the reply) instead of fetching,
+    //          so this turn reads from whatever sources are already in scope and a
+    //          confirmed article (runWikiSearch) grounds later turns. The FORCE
+    //          button overrides for this one send: it fetches now, past the gate.
+    //   on   → every substantive turn fetches now, past the gate and the confirm
+    //          step (a standing "always look it up").
+    // A forced hit INGESTS the article as a citable source and is threaded into
+    // THIS turn's scope directly (state updates are stale within the turn), so the
+    // turn grounds on it; best-effort — a failure degrades to whatever was in scope.
     let injectedDoc = null;
     const forceWiki = wikiMode === 'on' || forcedThisMessage;
     if (wikiMode !== 'off' && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {
@@ -2848,7 +2894,7 @@ function App() {
             <React.Fragment>
               {showChat && (
                 <div style={{ flexBasis: showDocPane ? (splitRatio * 100) + '%' : '100%', flexGrow: showDocPane ? 0 : 1, flexShrink: 0, display: 'flex', minWidth: 0 }}>
-                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} />
+                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} onConfirmWiki={runWikiSearch} onDismissWiki={dismissWikiSearch} onOpenDoc={openTab} />
                 </div>
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}
