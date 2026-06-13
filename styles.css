@@ -1566,6 +1566,9 @@ button.gax-leg:hover .gax-dim { color: var(--text-2); }
 .gax-a { font-weight: 600; }
 .gax-b { font-weight: 600; }
 .gax-verb { font-family: var(--mono); font-size: 11px; color: var(--text-3); background: var(--bg-subtle); padding: 1px 7px; border-radius: var(--r-pill); }
+/* the gate: shown before a heavy graph is drawn, asking how to narrow it first */
+.gax-gate { margin-top: 14px; padding: 26px 18px; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); background: var(--bg-sunken); text-align: center; }
+.gax-gate p { margin: 0 auto 16px; max-width: 52ch; color: var(--text-2); font-size: 13px; line-height: 1.55; }
 
 /* events log */
 .gax-opfilter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
