@@ -336,13 +336,15 @@ matters — the first match settles the turn.
 | Degeneracy (single-span echo)     | `echoesASpan(scope, q, full)` (app.jsx:85, called ~2183)                              | Retry once with the C.6 addendum; refuse if retry also echoes |
 | Model declined                    | `modelDeclined(full)` (app.jsx:1736)                                                  | Fall back to mechanical if usable, else refuse honestly |
 | Shape-note echo                   | `echoesShapeNote(full, shapeNote)` (app.jsx:1749) or `looksLikeNote` (~1765)          | Fall back to mechanical or refuse                       |
+| **Meta-head (WI-2)**              | `peelMetaHead(full, shapeNote)` — leading meta clause ("The user is asking…", "Not the document.") | Peel the head, bind the tail; if nothing remains → residual / mechanical |
 | Echo across turns                 | `EOEngine.echoesPriorReply(text, prior)` (~app.jsx:2131)                              | Flag "same answer as before" + keep                     |
-| Unbound (no passage matched)      | binding audit `grounded === false`                                                    | Keep with caveat                                        |
+| **Unbound (no passage matched)**  | binding audit `grounded === false`                                                    | **WI-4: residual (void target + bound subject material), else mechanical, else refuse — never the kept-unbound overclaim** |
 | Assertion contradiction           | `checkAssertionsScope` returns contradictions                                          | Keep with caveat                                        |
 | Relation-gate mismatch            | `checkRelationsScope` (relation_gate ON)                                              | Keep with caveat                                        |
 | Kin-subject mismatch              | `checkKinSubjectsScope`                                                               | Keep with caveat                                        |
 | Invented terms                    | `inventedTerms(full)` returns non-empty                                                | Keep, strike with `voidInvented`, mark warn             |
 | Grounding envelope drift          | `groundingEnvelope` reports leaks (embedder + relation_gate)                          | Mark binding `warn`                                     |
+| **Small-tier join-only (WI-6)**   | `tier === 'small'` → `runGroundedSmall` rephrase adds a token / invents / binds outside the fixed cite set | Discard the rephrase, serve the mechanical reading (coverage 1/1 either way) |
 | Repair-stage echoes prior reply   | `echoesPriorReply` in repair (app.jsx:1582)                                           | Stuck message instead                                   |
 | Plain-chat failure                | LLM call throws non-abort error (~app.jsx:1430)                                       | Retry once with last 2 turns + 2200-token budget; honest error if it fails again |
 
@@ -350,6 +352,14 @@ matters — the first match settles the turn.
 `mechanical` (if a mechanical reading is usable) or `refused`
 (honest error). The user-visible report on `refused` is the "I drafted
 a reply, but the model came back empty / failed audit" message.
+
+**The unbound lane is the dominant truthfulness term.** Keeping a draft
+that bound to no passage is the one dishonest move (it overstates binding
+status), so WI-4 removed the kept-unbound path entirely: an unbound draft
+now becomes the *residual* (an explicit void on the absent target plus the
+bound subject material, settled as `status: 'residual'` — a success), or
+the mechanical reading, or an honest refusal. The per-turn unbound count
+(glass box, §I) is therefore 0 by construction.
 
 ## F. History wrapping (`epistemicTag`)
 
@@ -366,12 +376,25 @@ by `historyFor` (app.jsx:1109) before every model call.
 | `audit.status === 'warn' && audit.grounded`        | `[an earlier reply with terms the document does not contain struck as unverified — do not repeat or defend the struck parts]` (1104) |
 | `audit.grounded === false`                         | `[an earlier reply that was NOT verified against the document — do not repeat or defend its claims]` (1105) |
 
-Important: the wrapper PREPENDS, it does not replace. The bad tokens
-from a vetoed answer ride along with the wrapper into every subsequent
-model call. A 0.5B pattern-matches on the salvaged-tail garbage even
-when the warning is correct — this is the contamination cascade the
-upstream trace documented (turn-N's veto fragment showing up in
-turn-N+1's editor note and then in turn-N+1's answer).
+**WI-1 (the monotonicity floor, law L1) closed the contamination
+cascade.** The wrapper still PREPENDS its badge, but the body it wraps is
+now the *model-facing* text, not the display text: `historyFor`
+(app.jsx:1109) maps `epistemicTag(m) + stripMarkup(histTextFor(m))`, and
+`histTextFor` returns a neutral marker — `(no verified answer this turn)`
+— for every non-clean settle (`audit.grounded === false`, `warn`, or
+`plain`; refusals with `status === 'error'` are left as-is, being clean
+meta-messages already). So a vetoed answer's tokens never ride forward:
+the model sees the badge and the marker, never the salvaged-tail garbage a
+0.5B used to pattern-match on. The real text stays on `m.text` for the UI
+and for the index-recall escape hatch (`recallSpan` reads raw turns, not
+this assembled view). Clean turns are byte-identical to before, so parity
+holds. The condensed recap inherits the marker because `summarizeTurns`
+consumes `historyFor`'s output.
+
+An across-turn L1 check (`l1Violations`, app.jsx) verifies the invariant:
+zero by construction; any non-clean turn whose tokens still ride forward
+is recorded on the turn header (`l1Violations`) and surfaced in the glass
+box as a ⚠ L1 badge (§I).
 
 ## G. Small-model and budget notes
 
@@ -390,12 +413,29 @@ turn-N+1's editor note and then in turn-N+1's answer).
   Sonnet 4.x reject it); `max_tokens` is floored at 1024 in the
   computation flow (app.jsx:~1745) because Claude is more expansive.
 - CPU-fallback model (app.jsx:~100): phone default Qwen 0.5B; desktop
-  default Llama-3.2 3B. There are no inference-time prompt branches
-  keyed on model size — every flow assembles the same prompt regardless
-  of who's reading it. (This is the gap the user's diagnosis is
-  written against: a 0.5B and a 7B share the editor-note-in-tail
-  position, but only the larger model reliably treats the note as
-  guidance instead of continuation material.)
+  default Llama-3.2 3B.
+- **Model tier (WI-3), `EOLLM.modelTier(mlcKey)` (llm.js):** the one
+  inference-time branch keyed on model capacity. Three tiers — `small`
+  (sub-2B local, sized from the wllama registry `bytes` or the MLC key's
+  param token), `capable` (large local), `api` (Anthropic). On the
+  `small` tier the grounded path:
+  - skips the shape pass (net-negative on a 0.5B, and it spends a second
+    serial call) — the audit records `shape · skipped`;
+  - never free-composes: it takes the join-only path (`runGroundedSmall`,
+    WI-6) over the already-bound mechanical reading, capped at
+    `SMALL_MAX_TOKENS = 220`;
+  - hardens the veto: a partial bind settles as residual / mechanical,
+    never kept-with-caveat.
+  `capable`/`api` turns are unchanged by the tier gate (they keep the
+  shape pass, the depth-scaled cap, and the softened veto).
+- **Convergence loop (WI-5)** runs on `capable`/`api` only
+  (`runGroundedScope`, gated on `budget.replan`): bind → compute the
+  uncovered gap (`coverageGaps`) → re-retrieve on the gap → re-pass, until
+  the bound-claim set stops growing (`converged`) or the gap is unfillable
+  (`residual-void`, handed to WI-4). Bounded by `MAX_CONVERGE_ROUNDS = 3`;
+  the stop reason is recorded as a `converge-stop` step. A turn whose first
+  pass already covers the question adds no passes, so the well-covered case
+  is exactly today's single pass.
 - Embedder gating: grounding envelope, impression query, associative
   wander, and the semantic half of `retrieveHybrid` all skip silently
   when `EOEmbed.ready()` is false. The lexical-first short-circuit
@@ -419,3 +459,58 @@ A turn's audit log carries `path` (the runner that owned it) and
 
 If a turn appears wrong, the audit's `path` + `reason` is the right
 place to start: it names which runner the dispatcher chose and why.
+
+## I. Asymptotic truthfulness (the bound / void / unbound frame)
+
+The grounded path is organized around one invariant: the system should
+approach complete truthfulness *from below*, never claim to have reached
+it, and never regress. Truthfulness here is honesty about binding status,
+not possession of truth. Every claim has three honest relations to the
+evidence:
+
+- **bound** — its tokens match a witness span/source (a citation).
+- **void** — its target is absent from what was retrieved; recorded as a
+  registered absence (`{{void:…}}` / `{{absent:…}}`) and said out loud.
+- **unbound** — asserted without a witness. The one dishonest move; it
+  overstates binding status.
+
+Per turn, outputs rank by: (1) **unbound count must be 0** (the dominant
+term — one unbound assertion is strictly worse than the void in its
+place); (2) **coverage** = bound / (bound + relevant voids), rising toward
+1; (3) **voids are explicit**, never silent. Two laws the architecture
+enforces: **L1 monotonicity** — no turn may feed a prior turn's
+unwitnessed tokens into a later turn (WI-1); **L2 approach-from-below** —
+when a draft cannot fully bind, the truthful move is the void, never the
+partial keep (WI-3/WI-4).
+
+It is asymptotic, not reachable: each turn sees only what was retrieved (a
+partial view; the convergence loop adds views), and any binding is
+defeasible (later evidence can overturn it — Rule 9). The target is
+convergence under a standing revision channel, not arrival.
+
+**The instrument (WI-7).** `EOAudit.truthfulness(final)` (audit.js)
+attaches a `truth` block to every settled turn — `{ bound, voids,
+unbound, coverage }` — computed uniformly in `end()`, so grounded, chat,
+mechanical, residual, repair and compute turns are all measured. The glass
+box (auditview.jsx) surfaces it:
+
+- a per-turn chip `N✓ M⟨⟩ K⊥ · coverage%` (unbound `K` shown in alarm if
+  ever non-zero);
+- a ⚠ L1 badge when a turn's assembled history carried a prior turn's
+  unverified tokens (`turn.l1Violations`);
+- a per-session summary (`TruthSummary`): unbound total (must be 0), L1
+  carry-forward (must be 0), and the coverage trace — the approximation
+  climbing toward the asymptote.
+
+**EO mapping.** DEF defines binding (the grounding criterion); EVA tests
+each claim against it (the binder, the vetoes, `coverageGaps`); REC
+restructures when EVA cannot conclude (gap-retrieve, the convergence loop,
+the residual). Coverage is the approximation, complete binding the
+asymptote, defeasibility what keeps it open.
+
+**Parity floor.** None of WI-1…WI-7 alters a goldened engine function
+(`retrieve` / `context` / `answer` text·audit·cites / `inventedTerms` /
+`bindCitations`). Every change lives in the talker/orchestration layer
+(app.jsx), the LLM layer (llm.js: `modelTier`), or read-only
+instrumentation (audit.js, auditview.jsx). `tests/parity.js` stays
+bit-exact by construction.

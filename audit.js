@@ -34,6 +34,52 @@
 
   function notify() { for (const fn of listeners) { try { fn(turns); } catch (e) {} } }
 
+  /* ---- WI-7: the truthfulness instrument (EVA pointed at our own output) ----
+     The system approaches complete truthfulness from below. You cannot claim
+     approach to a limit you do not measure, so every settled turn carries its
+     truthfulness components, computed here from the answer it produced:
+
+       bound    — claims that match a witness span/source (the citations).
+       voids    — registered absences ({{void:…}} / {{absent:…}}): the honest
+                  "the page does not establish X" move.
+       unbound  — assertions kept without a witness (the one dishonest move).
+                  Must be 0 (WI-2/WI-3/WI-4); a non-zero value is the dominant
+                  truthfulness term and should never appear.
+       coverage — bound / (bound + relevant voids), rising toward 1; falls back
+                  to the existing `covers` query-coverage fraction when present.
+
+     Pure and total: any malformed input yields zeros, never a throw. */
+  function _parseFrac(s) {
+    const m = /^\s*(\d+)\s*\/\s*(\d+)\s*$/.exec(String(s == null ? '' : s));
+    if (!m) return null;
+    const d = +m[2];
+    return d ? +m[1] / d : null;
+  }
+  function countVoids(text) {
+    const t = String(text == null ? '' : text);
+    return (t.match(/\{\{(?:void|absent):/g) || []).length;
+  }
+  function truthfulness(final) {
+    final = final || {};
+    const audit = final.audit || null;
+    const text = final.text || '';
+    const cites = Array.isArray(final.cites) ? final.cites : [];
+    const voids = countVoids(text);
+    const bound = cites.length;
+    // An UNBOUND assertion is a document-grounded answer that asserts a binding
+    // it did not achieve: grounded === false, a coverage figure present, kept as
+    // a 'warn'. Plain chat (status 'plain', no coverage) and honest refusals
+    // (status 'error') claim no binding, so they are not unbound.
+    const unbound = (audit && audit.grounded === false && audit.status === 'warn' && audit.covers != null) ? 1 : 0;
+    // coverage = bound / (bound + relevant voids), rising toward 1 as retrieval
+    // fills the gaps the question opened. Falls back to the existing query-
+    // coverage `covers` fraction when the turn bound and voided nothing.
+    const denom = bound + voids;
+    const coverage = denom ? bound / denom
+      : (audit && audit.covers ? _parseFrac(audit.covers) : null);
+    return { covers: (audit && audit.covers) || null, coverage, bound, voids, unbound };
+  }
+
   function isEnabled() { return enabled; }
   function setEnabled(on) {
     enabled = !!on;
@@ -72,10 +118,14 @@
     notify();
   }
 
-  /* Finalize the current turn with the answer it produced. */
+  /* Finalize the current turn with the answer it produced. Every settle path
+     funnels through here, so this is where the per-turn truthfulness components
+     (WI-7) are attached — uniformly, for grounded, chat, mechanical, residual,
+     repair and compute turns alike. */
   function end(final) {
     if (!enabled || !current) return;
     current.final = clone(final || {});
+    try { current.final.truth = truthfulness(current.final); } catch (e) {}
     current.ms = Math.round(now() - current._t0);
     current.done = true;
     current = null;
@@ -159,6 +209,7 @@
   window.EOAudit = {
     SCHEMA, isEnabled, setEnabled, begin, step, set, end,
     all, count, clear, restore, subscribe, toJSONL, toJSON, download, downloadJSON, publicTurn,
+    truthfulness, countVoids,
     // convenience for llm.js — records the model call as an 'llm' step
     llm: (data) => step('llm', data),
   };

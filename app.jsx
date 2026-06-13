@@ -1105,10 +1105,48 @@ function App() {
     if (a.grounded === false) return '[an earlier reply that was NOT verified against the document — do not repeat or defend its claims] ';
     return '';
   };
+  // WI-1 — THE MONOTONICITY FLOOR (law L1). The epistemicTag above WEARS a badge
+  // but still hands the model the turn's actual tokens; a small model imitates
+  // the salvaged tail no matter what the badge says. So split DISPLAY text from
+  // MODEL-FACING text: a turn that did not settle clean re-enters history as a
+  // neutral marker, never its own unverified words. The real text stays on
+  // m.text for the UI and for the index-recall escape hatch the recap promises
+  // (recallSpan reads the raw turns, not this assembled view). Clean turns are
+  // byte-identical to before (histTextFor returns m.text), so parity holds.
+  // An explicit m.histText set at a settle wins, then mode, then the audit.
+  const HIST_NEUTRAL = '(no verified answer this turn)';
+  // A settle whose tokens must NOT ride forward: unbound (grounded === false),
+  // warn, or plain. Refused turns (status 'error') are excluded — they already
+  // store a clean meta-message, so they are left as is (epistemicTag tags them).
+  const histNonClean = (a) => !!(a && a.status !== 'error'
+    && (a.status === 'plain' || a.status === 'warn' || a.grounded === false));
+  const histTextFor = (m) => {
+    if (m.role !== 'assistant') return m.text;
+    if (typeof m.histText === 'string') return m.histText;   // explicit override at settle
+    if (m.mode === 'creative') return m.text;                // a creative composition rides (its own tag)
+    // A non-clean settle does not carry forward its tokens — only the neutral
+    // marker. retracted/objected keep their text (epistemicTag's strong "do not
+    // defend" markers, and the repair path re-reads them verbatim).
+    return histNonClean(m.audit) ? HIST_NEUTRAL : m.text;
+  };
+  // L1 instrument (WI-7): the prior assistant turns whose unverified tokens would
+  // ride forward into THIS turn's model history — i.e. a non-clean turn that is
+  // NOT neutralized. Zero by construction (histTextFor neutralizes every such
+  // turn); a non-zero result is a monotonicity violation worth surfacing.
+  const l1Violations = () => {
+    const out = [];
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.role !== 'assistant' || !m.text || m.typing || m.loading) continue;
+      if (histNonClean(m.audit) && histTextFor(m) !== HIST_NEUTRAL)
+        out.push({ turn: i, status: (m.audit && m.audit.status) || null });
+    }
+    return out;
+  };
   // the running conversation, as plain {role, content} turns for the model
   const historyFor = () => messages
     .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.typing && !m.loading && m.text)
-    .map(m => ({ role: m.role, content: epistemicTag(m) + stripMarkup(m.text) }));
+    .map(m => ({ role: m.role, content: epistemicTag(m) + stripMarkup(histTextFor(m)) }));
 
   const streamInto = (patch) => (d) => setMessages(m => {
     const c = m.slice(); const prev = c[c.length - 1];
@@ -1899,6 +1937,127 @@ function App() {
     }
   };
 
+  // WI-3 caps the small tier's generation low: a 0.5B emitting hundreds of
+  // tokens of "grounded" prose is mostly drift. The rephrase only needs room to
+  // re-join the mechanical reading, never to expand it. Also the convergence
+  // iteration ceiling (WI-5) — a ceiling, never the terminator.
+  const SMALL_MAX_TOKENS = 220;
+  const MAX_CONVERGE_ROUNDS = 3;
+
+  // WI-2 — peel a single leading META clause: an unbound assertion ("The user is
+  // asking…", "Not the document itself.") glued to a real bound sentence. It
+  // passes the full-echo vetoes (the tail is a real answer) yet is a lie about
+  // the head, so it must never reach binding or history. Peel when the head
+  // opens with a known meta phrase OR overlaps the director's note heavily, then
+  // bind the remainder. Conservative by design: a clean answer comes back
+  // byte-for-byte (peeled === null), so clean turns are unaffected.
+  const META_OPENER = /^(?:the user is asking|the user wants|this turn|the question is|the question asks|not the document|note)\b/i;
+  const peelMetaHead = (full, note) => {
+    let text = String(full == null ? '' : full);
+    const peeled = [];
+    for (let i = 0; i < 3; i++) {                       // unstack a short run of meta heads
+      const lead = text.replace(/^\s+/, '');
+      const m = lead.match(/^([^.!?\n:]{0,160}[.!?:\n])\s+(\S[\s\S]*)$/);
+      if (!m) break;
+      const head = m[1].trim(), rest = m[2].trim();
+      if (!rest) break;                                 // never strip the only sentence
+      let overlap = false;
+      if (!META_OPENER.test(head) && note) {
+        try {
+          const ht = new Set(window.EOEngine.tok(head)), nt = new Set(window.EOEngine.tok(String(note)));
+          if (ht.size >= 3 && nt.size) {
+            let hit = 0; for (const x of ht) if (nt.has(x)) hit++;
+            overlap = head.split(/\s+/).length <= 16 && hit / ht.size >= 0.6;
+          }
+        } catch (e) {}
+      }
+      if (!META_OPENER.test(head) && !overlap) break;
+      peeled.push(head);
+      text = rest;
+    }
+    return { text: peeled.length ? text : full, peeled: peeled.length ? peeled.join(' ') : null };
+  };
+
+  // WI-6 — SMALL-TIER JOIN-ONLY SMOOTHING (coverage 1.0 by construction). The
+  // mechanical reading (answer(), goldened) is already deterministic and bound.
+  // The model never composes from the page, so it cannot invent from the page:
+  // hand it the already-bound text with a join-and-rephrase-ONLY rule (no adding,
+  // no selecting), then re-bind the rephrase. If it introduces ANY token outside
+  // the bound text, any invented entity, or any cite outside the set fixed before
+  // it spoke, discard the rephrase and serve the mechanical text. Either way
+  // every claim traces to a pre-existing cite, so the model cannot change binding
+  // status and coverage is 1/1.
+  const runGroundedSmall = async (scope, q, history, opts) => {
+    const myGen = genRef.current;
+    const E = window.EOEngine;
+    const { mech, intent, budget } = opts || {};
+    const mechUsable = !!(mech && mech.text && mech.text.trim() && mech.audit
+      && mech.audit.status !== 'held'
+      && (mech.audit.status === 'clean' || mech.audit.status === 'warn' || mech.audit.grounded));
+    const settleSmall = (text, audit, cites, decision, mechPanel) => {
+      if (genStale(myGen)) return;
+      lastGroundedRef.current = !!(audit && audit.grounded);
+      replaceLast({ role: 'assistant', text, audit, mode: 'grounded', mechanical: mechPanel || null });
+      if (cites && cites.length) setTimeout(() => flashCitation(cites[0].docId, cites[0].idx), 380);
+      depositSettled(scope, q, cites);
+      AUD('end', { engine: decision, text, audit, cites: cites || [] });
+      setBusy(false);
+    };
+    // No usable bound reading to smooth (a hold/void): serve the mechanical
+    // reading honestly — the small tier never free-composes.
+    if (!mechUsable) { AUD('step', 'veto', { decision: 'mechanical', reason: 'small tier, no bound reading to smooth' }); runMechanicalScope(scope, q); return; }
+    const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
+    if (!ready) { settleSmall(mech.text, mech.audit, mech.cites || [], 'mechanical (small, model not ready)'); return; }
+
+    const mechPlain = String(mech.text).replace(/\{\{[^}]*\}\}/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    const level = (budget && budget.level) || 1;
+    const sys = window.EOLLM.systemFor('grounded', 'answer', true, level)
+      + '\n\nThe answer below is already correct and fully cited. Your ONLY job is to rephrase it into one or two natural sentences: join the points and smooth the wording. Do NOT add any fact, name, number, place, or detail that is not already in it, and do NOT bring in anything from your own knowledge. If you cannot improve it, repeat it unchanged.';
+    let re = '';
+    try {
+      replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
+      re = await window.EOLLM.phrase({
+        mlcKey: model.mlc, question: q, contextText: mechPlain, history,
+        mode: 'grounded', task: 'answer', grounded: true, sysOverride: sys,
+        maxTokens: SMALL_MAX_TOKENS, onToken: streamInto({ mode: 'grounded' }), depth: level,
+      });
+      if (genStale(myGen)) return;
+      re = E.dedupeSentences(re);
+    } catch (e) {
+      if (window.EOLLM.isAbort(e) || genStale(myGen)) return;
+      AUD('step', 'error', { where: 'grounded-small', message: String((e && e.message) || e) });
+      settleSmall(mech.text, mech.audit, mech.cites || [], 'mechanical (small, rephrase failed)');
+      return;
+    }
+    // EVA: the cite set is fixed (mech.cites). The rephrase may only re-join the
+    // already-bound text. It breaks join-only if it is empty, invents an entity,
+    // adds a content token absent from the bound text, fails to bind, or binds to
+    // a cite outside the fixed set.
+    const stripped = String(re || '').replace(/\{\{[^}]*\}\}/g, ' ');
+    let added = []; try { added = E.coverageGaps(stripped, mechPlain).uncovered || []; } catch (e) {}
+    let invented = []; try { const per = scope.map(d => new Set(E.inventedTerms(d, stripped))); invented = per.length ? [...per[0]].filter(t => per.every(s => s.has(t))) : []; } catch (e) {}
+    let boundRe = null; try { boundRe = E.bindCitationsScope(scope, re, q, intent, { hotEntity: hotEntity() }); } catch (e) {}
+    const fixed = new Set((mech.cites || []).map(c => c.docId + ':' + c.idx));
+    const newCite = !!(boundRe && (boundRe.cites || []).some(c => !fixed.has(c.docId + ':' + c.idx)));
+    const empty = !re || re.trim().length < 3;
+    if (empty || added.length || invented.length || newCite || !(boundRe && boundRe.audit && boundRe.audit.grounded)) {
+      AUD('step', 'veto', { decision: 'mechanical',
+        reason: empty ? 'rephrase empty' : invented.length ? 'rephrase invented terms'
+          : added.length ? 'rephrase added unbound tokens' : newCite ? 'rephrase bound outside the fixed cite set' : 'rephrase did not bind',
+        added, invented });
+      settleSmall(mech.text, mech.audit, mech.cites || [], 'mechanical (small, rephrase discarded)');
+      return;
+    }
+    // Kept: every cite is from the set fixed before the model spoke, and no token
+    // was added — so the smoothed phrasing leads and the exact mechanical reading
+    // rides as the click-to-view panel. Coverage 1/1 by construction.
+    AUD('step', 'veto', { decision: 'model-join', reason: 'rephrase stayed within the bound text; cites unchanged', covers: '1/1' });
+    const audit = { ...mech.audit, status: mech.audit.status === 'warn' ? 'warn' : 'clean',
+      note: 'Small-tier join-only: the model re-joined the mechanical reading without adding anything; every claim traces to a citation fixed before it spoke. ' + (mech.audit.note || '') };
+    const mechPanel = mech.text !== boundRe.text ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null;
+    settleSmall(boundRe.text, audit, boundRe.cites || mech.cites || [], 'model join + mechanical cite (small)', mechPanel);
+  };
+
   // Document-referencing turn: feed the model the relevant passages and bind
   // citations mechanically. The seeker still decides what's there to say —
   // "who" is exact-mechanical; no ground → honest hold; the model only phrases.
@@ -1957,6 +2116,13 @@ function App() {
     // curated blob (the salient picks read as one piece); buildUserContent
     // frames a blob the same way.
     const budget = turnBudgetRef.current;
+    // WI-3 — MODEL TIER (the L2 veto). How much can this model be trusted to
+    // compose grounded prose? 'small' (sub-2B local) cannot, so it takes the
+    // join-only path (WI-6) and never free-composes; 'capable'/'api' run the
+    // free composition + convergence loop (WI-5). Default 'capable' if the
+    // tier helper is unavailable (older llm.js) — i.e. today's behavior.
+    const tier = (window.EOLLM && window.EOLLM.modelTier) ? window.EOLLM.modelTier(model.mlc) : 'capable';
+    AUD('step', 'tier', { tier, model: model.mlc });
     // A "who appears" turn wants the cast as context, not lexical retrieval —
     // the same per-doc entity sample the mechanical reading counts from. Treat
     // it like a summary for context-building (blob, no seek) so the model
@@ -2054,6 +2220,16 @@ function App() {
           }
         }
       } catch (e) { eoWarn('impression', e); }
+    }
+    // WI-6 — SMALL TIER: do not free-compose. The model can't compose from the
+    // page reliably, so it never gets to; it only joins-and-rephrases the
+    // already-bound mechanical reading, over a cite set fixed before it speaks.
+    // The shape pass is skipped here (net-negative on a small model, and it
+    // spends a second serial call) — the audit records the skip.
+    if (tier === 'small') {
+      AUD('step', 'shape', { skipped: true, tier: 'small', reason: 'small tier joins-and-rephrases the mechanical reading; no director\'s note, no free composition' });
+      runGroundedSmall(scope, q, history, { mech, primaryDoc, intent, budget }).catch(turnFailed('grounded-small'));
+      return;
     }
     // THE SHAPE PASS (two-stage answering): a small first call characterizes
     // the turn — a director's note on what the user is actually after — and
@@ -2166,6 +2342,29 @@ function App() {
         }
         refuseModel(reason, message);
       };
+      // WI-4 — THE TRUTHFUL RESIDUAL (a first-class answer, not a failure). When
+      // binding the full target fails but the page DOES establish material about
+      // the subject, the honest move is: void the absent target explicitly, then
+      // give the bound subject material with its cites. This generalizes the
+      // repair addendum to the main path. It settles as 'residual' — a success
+      // (grounded, carrying no unbound assertion), distinct from 'error'
+      // (refused). Returns true when it settled, false when it can't (no clearly
+      // absent target, or no bound subject material) so the caller falls back.
+      const residualAnswer = (reason) => {
+        if (genStale(myGen)) return false;
+        if (!mechUsable) return false;                      // no bound subject material to give
+        let target = null;
+        try { target = (window.EOEngine.referentsScope(scope, q).antimatter || [])[0] || null; } catch (e) {}
+        if (!target) return false;                          // no clearly-absent target to void
+        const docId = (primaryDoc && primaryDoc.id) || (scope[0] && scope[0].id) || '';
+        const voidLine = `The document doesn’t establish ${target}. {{absent:${docId}:no presence found for “${target}”}}`;
+        const text = voidLine + ' Here is what it does establish about the subject:\n\n' + mech.text;
+        const audit = { status: 'residual', grounded: true, covers: (mech.audit && mech.audit.covers) || null, stable: true,
+          note: `The target (${target}) is absent from what the page establishes, so it is voided explicitly; the bound subject material follows, cited. A residual answer (success), not an overclaim.` };
+        AUD('step', 'veto', { decision: 'residual', reason, target, boundCovers: audit.covers });
+        settle({ text, audit, cites: mech.cites || [] }, 'residual (' + reason + ')');
+        return true;
+      };
       if (modelDeclined(full)) {
         AUD('step', 'veto', { decision: 'refused', reason: 'model declined / empty / leaked reasoning' });
         fallbackMechOrRefuse('model_declined',
@@ -2232,6 +2431,70 @@ function App() {
             return;
           }
           full = retry;   // retry produced a real answer; fall through to bind it
+        }
+        // WI-5 — CONVERGENCE STOP (the DEF→EVA→REC loop). Re-retrieve on the
+        // uncovered gap and re-pass until the bound-claim set stops growing
+        // (converged at the question's resolution) or the residual gap is
+        // unfillable (hand it to WI-4 as a void). Iteration is bounded; the token
+        // cap is a ceiling, not the terminator. Capable/api only — the small tier
+        // already converged in one pass (WI-6). A turn whose first pass already
+        // covers the question adds no passes (stop = 'converged' on round 1), so
+        // the well-covered case is exactly today's single pass.
+        let convergeStop = 'single-pass', residualGap = [];
+        if (budget && budget.replan) {
+          const citeKeys = (b) => new Set(((b && b.cites) || []).map(c => c.docId + ':' + c.idx));
+          const support = () => (parts ? parts.spans.map(s => s.text).join(' ') : ctx);
+          let prevKeys; try { prevKeys = citeKeys(window.EOEngine.bindCitationsScope(scope, full, q, intent, { hotEntity: hotEntity() })); } catch (e) { prevKeys = new Set(); }
+          for (let round = 1; round < MAX_CONVERGE_ROUNDS; round++) {
+            let gaps; try { gaps = window.EOEngine.coverageGaps(q, full + ' ' + support()); } catch (e) { break; }
+            if (!gaps.uncovered.length) { convergeStop = 'converged'; break; }   // resolution reached
+            let more = []; try { more = window.EOEngine.retrieveScope(scope, gaps.uncovered.join(' '), 4) || []; } catch (e) { more = []; }
+            if (!more.length) { convergeStop = 'residual-void'; residualGap = gaps.uncovered.slice(0, 6); break; }   // gap unfillable
+            let added = false;
+            if (parts) {
+              for (const s of window.EOEngine.partsFromHits(scope, more).spans)
+                if (!parts.spans.some(x => x.docId === s.docId && x.idx === s.idx)) { parts.spans.push(s); added = true; }
+            } else {
+              const extra = window.EOEngine.contextFromHits(scope, more);
+              if (extra) { ctx += '\n' + extra; added = true; }
+            }
+            if (!added) { convergeStop = 'converged'; break; }                   // nothing new to add
+            AUD('step', 'converge', { round, uncovered: gaps.uncovered, retrieved: more.length });
+            if (genStale(myGen)) return;
+            let next;
+            try {
+              replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
+              next = await window.EOLLM.phrase({
+                mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
+                spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
+                docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote, maxTokens: shapeMax,
+                grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
+                depth: budget && budget.level, provenanceKeys: gateOn,
+              });
+              if (genStale(myGen)) return;
+              next = window.EOEngine.dedupeSentences(next);
+            } catch (e) { if (window.EOLLM.isAbort(e) || genStale(myGen)) return; break; }
+            if (!next || next.trim().length < 3) { convergeStop = 'converged'; break; }
+            let nextKeys; try { nextKeys = citeKeys(window.EOEngine.bindCitationsScope(scope, next, q, intent, { hotEntity: hotEntity() })); } catch (e) { nextKeys = new Set(); }
+            let grew = false; for (const k of nextKeys) if (!prevKeys.has(k)) { grew = true; break; }
+            full = next;
+            if (!grew) { convergeStop = 'converged'; break; }                    // bound-claim set stopped growing
+            prevKeys = nextKeys;
+            if (round === MAX_CONVERGE_ROUNDS - 1) convergeStop = 'iteration-cap';
+          }
+          AUD('step', 'converge-stop', { stop: convergeStop, residual: residualGap });
+        }
+        // WI-2 — peel any leading meta head off the converged draft, ahead of the
+        // term/claim checks, so an unbound head never reaches binding or history.
+        const peeled = peelMetaHead(full, shapeNote);
+        if (peeled.peeled) { AUD('step', 'veto', { decision: 'peel-head', head: peeled.peeled, reason: 'leading meta clause stripped (WI-2)' }); full = peeled.text; }
+        if (!full || full.trim().length < 3) {
+          // Nothing real remained after peeling — route to the truthful residual
+          // or the mechanical reading; never settle an empty/meta draft.
+          if (!residualAnswer('empty-after-peel')) fallbackMechOrRefuse('empty_after_peel',
+            'After stripping a meta preamble the draft had no actual answer left, and I have no clean reading of the page to fall back on. Try rephrasing, or point me at the line you want me to read.');
+          if (!genStale(myGen)) setBusy(false);
+          return;
         }
         // SOFTENED VETO across the whole scope. The page still overrules the
         // model, but a draft that genuinely binds is no longer thrown away whole
@@ -2305,6 +2568,16 @@ function App() {
         // panel (settle attaches it for any 'model…' decision), so the page's
         // own answer is never lost — the model's phrasing just leads, wearing
         // an honest caveat badge.
+        // WI-5 → WI-4: the convergence loop hit an unfillable residual gap. If
+        // the answer still bound, append a registered absence for the residual,
+        // so the turn settles on its best bound pass PLUS an explicit void on
+        // what the sources could not cover (never silence on the gap).
+        if (convergeStop === 'residual-void' && residualGap.length && bound.audit.grounded) {
+          const terms = residualGap.join(', ');
+          const rdoc = (primaryDoc && primaryDoc.id) || (scope[0] && scope[0].id) || '';
+          bound = { ...bound, text: bound.text + ` {{absent:${rdoc}:the document does not cover ${terms}}}`,
+            audit: { ...bound.audit, note: (bound.audit.note || '') + ` Residual gap left as a registered absence: ${terms}.` } };
+        }
         const flagModel = (reason, note) => {
           const flagged = { ...bound,
             audit: { ...(bound.audit || {}), status: 'warn',
@@ -2312,11 +2585,16 @@ function App() {
           settle(flagged, 'model (flagged: ' + reason + ')');
         };
         if (!bound.audit.grounded) {
-          // Unmoored: the phrasing matched no passage. Kept and flagged; the
-          // mechanical reading is one click away.
+          // WI-4 / law L2 — the draft bound to NOTHING. Keeping it would be the
+          // one dishonest move: an unbound assertion, the dominant truthfulness
+          // term. Underclaim instead — the truthful residual when the page
+          // establishes subject material (void the absent target, give the bound
+          // subject material), else the mechanical reading, else an honest
+          // refusal. Never the kept-unbound overclaim. (unbound count stays 0.)
           if (budget && budget.replan) AUD('step', 'plan-seg', { from: 'factual', to: 'question-about-silence', reason: 'the draft bound to nothing on the page' });
-          AUD('step', 'veto', { decision: 'model-flagged', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
-          flagModel('unbound', 'Phrased by the model, but it didn’t bind to any passage in the document — kept and flagged. The exact mechanical reading is one click away.');
+          AUD('step', 'veto', { decision: 'residual-or-mechanical', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
+          if (!residualAnswer('unbound')) fallbackMechOrRefuse('unbound',
+            'I drafted an answer, but it didn’t bind to any passage in the document, and I have no clean reading of the page to fall back on — so I’d rather not assert it than overstate it. Try rephrasing, or point me at the line you want me to read.');
         } else if (contradictions.length) {
           AUD('step', 'veto', { decision: 'model-flagged', reason: 'contradicts-assertion',
             contradictions: contradictions.map(c => ({ subject: c.subject, is: c.is, sent: c.sent, claim: c.claim, docId: c.docId })),
@@ -2697,6 +2975,11 @@ function App() {
     // prior message, so this id rides through every settle path. (null when
     // recording is paused → the panel renders nothing.)
     if (auditId) patchLast({ auditId });
+    // WI-7 (law L1): record whether any prior non-clean turn would carry its
+    // unverified tokens into THIS turn's assembled model history. Zero by
+    // construction (histTextFor neutralizes every such turn); a non-empty list
+    // is a monotonicity violation, surfaced in the glass box.
+    { const l1 = l1Violations(); if (l1.length) AUD('set', { l1Violations: l1 }); }
 
     // DETERMINISTIC ARITHMETIC (mechanical, no model). A turn that is
     // essentially a math expression is evaluated by math.js; figures that also

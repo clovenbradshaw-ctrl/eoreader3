@@ -159,6 +159,35 @@ group('short history needs no recap — still one system message, first', () => 
   eq(messages[0].content, 'SYS', 'nothing is folded in when no turn is condensed');
 });
 
+group('modelTier (WI-3) labels each model by its capacity to compose', () => {
+  // Anthropic → 'api'.
+  eq(LLM.modelTier('anthropic:claude-opus-4-8'), 'api', 'Claude is the api tier');
+  eq(LLM.modelTier('anthropic:claude-haiku-4-5'), 'api', 'even Haiku is api (composes reliably)');
+  // wllama (CPU) sizes by the registry GGUF bytes: sub-2B ⇒ small, large ⇒ capable.
+  eq(LLM.modelTier('wllama:smollm2-135m'), 'small', '135M CPU model is small');
+  eq(LLM.modelTier('wllama:qwen25-05b'), 'small', '0.5B CPU model is small');
+  eq(LLM.modelTier('wllama:qwen25-05b-q8'), 'small', '0.5B Q8 CPU model is small');
+  eq(LLM.modelTier('wllama:llama32-1b'), 'small', '1B CPU model is small');
+  eq(LLM.modelTier('wllama:llama32-1b-q8'), 'small', '1B Q8 CPU model is still small (<1.6GB)');
+  eq(LLM.modelTier('wllama:llama32-3b'), 'capable', '3B CPU model is capable');
+  eq(LLM.modelTier('wllama:does-not-exist'), 'small', 'an unrecognized wllama id fails safe to small');
+  // WebGPU (MLC) keys carry no registry bytes — size from the param token.
+  eq(LLM.modelTier('Qwen2.5-0.5B-Instruct-q4f16_1-MLC'), 'small', '0.5B WebGPU model is small');
+  eq(LLM.modelTier('Qwen2.5-1.5B-Instruct-q4f16_1-MLC'), 'small', '1.5B WebGPU model is small');
+  eq(LLM.modelTier('Llama-3.2-1B-Instruct-q4f16_1-MLC'), 'small', '1B WebGPU model is small');
+  eq(LLM.modelTier('Qwen3-1.7B-q4f16_1-MLC'), 'small', '1.7B WebGPU model is small');
+  eq(LLM.modelTier('Llama-3.2-3B-Instruct-q4f16_1-MLC'), 'capable', '3B WebGPU model is capable');
+  eq(LLM.modelTier('Mistral-7B-Instruct-v0.3-q4f16_1-MLC'), 'capable', '7B WebGPU model is capable');
+  eq(LLM.modelTier('gemma-2-9b-it-q4f16_1-MLC'), 'capable', '9B WebGPU model is capable');
+  // Unrecognizable / no size token ⇒ capable (never harden what we cannot measure).
+  eq(LLM.modelTier('Phi-3.5-mini-instruct-q4f16_1-MLC'), 'capable', 'no size token ⇒ capable (not hardened)');
+  eq(LLM.modelTier(''), 'capable', 'empty key ⇒ capable');
+  // modelParamsB parses the size token directly (and is not fooled by quant tags).
+  eq(LLM.modelParamsB('Qwen2.5-0.5B-Instruct-q4f16_1-MLC'), 0.5, '0.5B parses to 0.5');
+  eq(LLM.modelParamsB('Llama-3.2-3B'), 3, '3B parses to 3');
+  eq(LLM.modelParamsB('q4f16_1-MLC'), null, 'a bare quant tag has no size token');
+});
+
 group('no history — bare system + question', () => {
   const messages = LLM.assembleMessages({
     sys: 'SYS', history: [], contextText: '[s0] a passage',

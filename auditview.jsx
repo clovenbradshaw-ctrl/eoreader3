@@ -83,7 +83,9 @@ function AuditStep({ s }) {
   );
   if (s.t === 'shape') return (
     <Line label="shape" kind="intent">
-      {s.note ? <span className="aud-dim">“{s.note}”</span> : <span className="aud-dim">no note (shape pass empty or dropped) — answer pass ran bare</span>}
+      {s.skipped
+        ? <span className="aud-dim">skipped{s.tier ? ' (' + s.tier + ' tier)' : ''} — {s.reason || 'no shape pass this turn'}</span>
+        : s.note ? <span className="aud-dim">“{s.note}”</span> : <span className="aud-dim">no note (shape pass empty or dropped) — answer pass ran bare</span>}
     </Line>
   );
   if (s.t === 'repair') return (
@@ -208,8 +210,87 @@ function AuditStep({ s }) {
       ))}
     </Line>
   );
+  if (s.t === 'tier') return (
+    <Line label="tier" kind="intent">
+      model tier: <b>{s.tier}</b>
+      {s.tier === 'small' ? <span className="aud-dim"> · join-only over the mechanical reading (no free composition)</span> : null}
+    </Line>
+  );
+  if (s.t === 'converge') return (
+    <Line label="converge" kind="retrieve">
+      <span className="aud-dim">round {s.round} · re-retrieved {s.retrieved} on the uncovered gap: </span>
+      <span className="aud-void">{(s.uncovered || []).join(', ')}</span>
+    </Line>
+  );
+  if (s.t === 'converge-stop') return (
+    <Line label="converged" kind="retrieve">
+      stop: <b>{s.stop}</b>
+      {(s.residual && s.residual.length) ? <span className="aud-dim"> · residual void: <span className="aud-void">{s.residual.join(', ')}</span></span> : null}
+    </Line>
+  );
   if (s.t === 'error') return <Line label="error" kind="error"><span className="aud-void">{s.where}: {s.message}</span></Line>;
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
+}
+
+// WI-7 — the per-turn truthfulness chip: bound / void / unbound and coverage.
+// Unbound must be 0 (WI-2/WI-3/WI-4); a non-zero value is the dominant term and
+// is shown in alarm. Reads turn.final.truth (attached by EOAudit.end).
+function TruthChip({ truth }) {
+  if (!truth) return null;
+  const cov = truth.coverage != null ? Math.round(truth.coverage * 100) + '%' : (truth.covers || '—');
+  return (
+    <span className="aud-truth" title="truthfulness: bound claims / explicit voids / unbound assertions (unbound must be 0)">
+      <span className="aud-truth-b">{truth.bound}✓</span>
+      {truth.voids ? <span className="aud-truth-v"> {truth.voids}⟨⟩</span> : null}
+      <span className={truth.unbound ? 'aud-truth-u bad' : 'aud-truth-u'}> {truth.unbound}⊥</span>
+      <span className="aud-truth-c"> · {cov}</span>
+    </span>
+  );
+}
+
+// WI-7 — the per-session truthfulness instrument. The system approaches
+// complete truthfulness from below and must never regress: this is that claim,
+// measured. It surfaces three things the rest of the spec keeps invariant:
+//   • unbound total — the dominant term; must be 0 (WI-2/WI-3/WI-4).
+//   • L1 carry-forward — turns whose model history carried a prior turn's
+//     unverified tokens; must be 0 (WI-1).
+//   • the coverage trace — the approximation, rising toward 1 (the asymptote),
+//     shown per turn so you can watch it climb and never silently drop.
+function TruthSummary({ turns }) {
+  const done = (turns || []).filter(t => t.done && t.final && t.final.truth);
+  if (!done.length) return null;
+  let unbound = 0, voids = 0, bound = 0;
+  for (const t of done) { unbound += t.final.truth.unbound || 0; voids += t.final.truth.voids || 0; bound += t.final.truth.bound || 0; }
+  const l1 = (turns || []).reduce((n, t) => n + ((t.l1Violations && t.l1Violations.length) || 0), 0);
+  const series = done.map(t => t.final.truth.coverage).filter(c => c != null);
+  const mean = series.length ? series.reduce((a, b) => a + b, 0) / series.length : null;
+  const honest = unbound === 0 && l1 === 0;
+  return (
+    <div className={'aud-truth-sum' + (honest ? '' : ' bad')}>
+      <div className="aud-truth-sum-head">
+        <b>Truthfulness</b>
+        <span className="aud-dim"> — approaching from below, never regressing</span>
+        <span className="aud-grow" />
+        <span className={honest ? 'aud-truth-verdict ok' : 'aud-truth-verdict bad'}>{honest ? 'truthful so far ✓' : 'regression ⚠'}</span>
+      </div>
+      <div className="aud-truth-sum-row">
+        <span><b className={unbound ? 'aud-void' : ''}>{unbound}</b> unbound <span className="aud-dim">(must be 0)</span></span>
+        <span><b className={l1 ? 'aud-void' : ''}>{l1}</b> L1 carry-forward <span className="aud-dim">(must be 0)</span></span>
+        <span><b>{bound}</b> bound · <b>{voids}</b> voids</span>
+        {mean != null && <span>coverage <b>{Math.round(mean * 100)}%</b> <span className="aud-dim">mean</span></span>}
+      </div>
+      {series.length > 1 && (
+        <div className="aud-truth-trace" title="per-turn coverage — the approximation rising toward the asymptote">
+          {done.map((t, i) => {
+            const c = t.final.truth.coverage;
+            const h = c == null ? 2 : Math.max(2, Math.round(c * 22));
+            const u = (t.final.truth.unbound || 0) > 0 || (t.l1Violations && t.l1Violations.length);
+            return <span key={i} className={'aud-truth-bar' + (u ? ' bad' : '')} style={{ height: h + 'px' }} title={'turn ' + (i + 1) + (c == null ? '' : ' · ' + Math.round(c * 100) + '%') + (u ? ' · violation' : '')} />;
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // One collapsible turn: header summary + (on expand) timeline or raw JSON.
@@ -236,6 +317,10 @@ function AuditTurn({ turn }) {
         {turn.final && turn.final.engine && <span className="aud-engine">{turn.final.engine}</span>}
         <span className="aud-q">{turn.input}</span>
         <span className="aud-grow" />
+        {(turn.l1Violations && turn.l1Violations.length)
+          ? <span className="aud-badge error" title="a prior non-clean turn carried its unverified tokens into this turn's model history (L1 violation)">⚠ L1</span>
+          : null}
+        {turn.final && turn.final.truth && <TruthChip truth={turn.final.truth} />}
         {badge}
         {turn.ms != null && <span className="aud-ms">{turn.ms}ms</span>}
       </button>
@@ -594,7 +679,7 @@ function AuditDrawer({ onClose, enabled, onToggle, onToast, docs, exportIngestio
         <div className="drawer-body aud-body">
           {tab === 'trace'
             ? (view.length
-                ? view.map(t => <AuditTurn key={t.id} turn={t} />)
+                ? <React.Fragment><TruthSummary turns={view} />{view.map(t => <AuditTurn key={t.id} turn={t} />)}</React.Fragment>
                 : <div className="empty-doc" style={{ padding: 40 }}>{enabled
                     ? 'No turns recorded yet — ask Cleo something and the full pipeline shows up here.'
                     : 'Recording is paused. Turn it on to capture chat turns.'}</div>)
