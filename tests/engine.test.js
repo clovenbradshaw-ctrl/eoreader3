@@ -1068,6 +1068,87 @@ group('answerConfirm — confirmed / contradicted / absence-attested, no model i
   ok(sc && /Yes — the page itself asserts/.test(sc.text), 'the scope fold finds the source that holds the assertion');
 });
 
+// ── the false-premise fix: verb-predicate & article-led propositions ──
+// Before this, "Mara Velasquez founded Veldmar" / "The treaty was signed in
+// 1776" routed to 'factual', hit the grounded-QA path, and a FALSE premise came
+// back stamped "grounded · covers N/M" on retrieval overlap rather than truth.
+group('classifyIntent — verb-predicate & article-led assertions route to confirm', () => {
+  eq(E.classifyIntent('Mara Velasquez founded Veldmar'), 'confirm', 'a transitive-verb assertion is a proposition');
+  eq(E.classifyIntent('Shakespeare wrote Hamlet'), 'confirm', 'an irregular-past verb assertion is a proposition');
+  eq(E.classifyIntent('The treaty was signed in 1776'), 'confirm', 'an article-led subject is a proposition');
+  eq(E.classifyIntent('Steven Watts recorded the event'), 'confirm', 'a verb-predicate about a named figure');
+  // the instruction / non-claim shapes stay OUT of confirm (no false routing)
+  eq(E.classifyIntent('Tell me everything about the meeting'), 'factual', 'a bare instruction is not a claim about "Tell"');
+  eq(E.classifyIntent('The point is moot'), 'factual', 'a discourse-filler article subject is not a proposition');
+  eq(E.classifyIntent('List the speakers'), 'factual', 'an imperative stays factual');
+});
+
+group('answerConfirm — a verb-predicate is checked against the prose, never lexical overlap', () => {
+  // a verb-predicate the page actually STATES is confirmed in its own words, cited
+  const rec = E.answerConfirm(meeting, 'Steven Watts recorded the event.');
+  ok(rec && /Yes — the page states this/.test(rec.text), 'a true verb-predicate is confirmed from the sentence that makes the claim');
+  ok(rec.cites.length === 1 && /\{\{cite:meet:/.test(rec.text), 'and carries that sentence\'s cite');
+  eq(rec.checks[0].verdict, 'confirmed', 'verdict: confirmed');
+  // THE HEADLINE BUG: a false transitive-verb premise is attested as silence,
+  // not affirmed — covers 0/1, warn, never a grounded badge.
+  const fv = E.answerConfirm(meeting, 'Steven Watts founded the committee.');
+  ok(fv && /never asserts/.test(fv.text) && /\{\{absent:meet:/.test(fv.text), 'a false verb-predicate is named unattested with a receipt');
+  eq(fv.audit.status, 'warn', 'an unattested verb-predicate wears warn, not grounded');
+  eq(fv.audit.covers, '0/1', 'and covers 0/1 — not retrieval coverage');
+  eq(fv.checks[0].verdict, 'unattested', 'verdict: unattested');
+  // the entity scope prevents cross-subject confirmation: the page says STEVEN
+  // WATTS recorded the event, so the same claim about Amos Dresser is silence.
+  const cross = E.answerConfirm(meeting, 'Amos Dresser recorded the event.');
+  ok(cross && /never asserts/.test(cross.text), 'a verb claim true of another figure is not confirmed for this one');
+});
+
+group('answerConfirm — the DEF check is an ordered phrase match, not a bag of words', () => {
+  // the predicate's head words must sit TOGETHER and IN ORDER in the page's own
+  // assertion. Reordered head words that merely co-occur in the DEF value
+  // ("white minister" present, asked as "south minister who came white") no
+  // longer earn "Yes — the page itself asserts…".
+  const reordered = E.answerConfirm(meeting, 'Is Amos Dresser the south minister who came white?');
+  ok(!(reordered && /Yes — the page itself asserts/.test(reordered.text)), 'reordered head words do not false-confirm against the DEF');
+});
+
+// ── the over-strict guardrail: a strong hit grounds a thin-ratio answer ──
+// A long, multi-clause question inflates the coverage denominator, so a single
+// sentence that genuinely answers it could fall under the floor on token ratio
+// and get HELD as "ungrounded" — the opposite failure from the false-confirm
+// bug. A strong lexical hit (the ≥0.5 answer-now bar) now carries it.
+await group('answerProse — a strong lexical hit grounds despite a long question thinning the ratio', async () => {
+  const reef = await E.parseDocument('reef.txt', 'Mirabel charted the reefs.\nThe harbor was quiet that season.', 'reef');
+  const a = E.answer(reef, 'What did Mirabel chart along the reefs and how many seasons did the survey of the outer archipelago take?');
+  ok(a.audit.grounded && a.audit.status !== 'held', 'a strong single-passage hit grounds despite a thin ratio (covers ' + a.audit.covers + ')');
+  ok(/\{\{cite:reef:\d+:s\d+\}\}/.test(a.text), 'and the grounding line is still cited');
+});
+
+// ── mechanical arithmetic: exact, no model ──
+// A small on-device model is an unreliable calculator ("42 + 8" came back 42).
+// A self-contained expression is computed exactly and never handed to a model.
+group('answerArithmetic — a pure expression is computed exactly, never guessed', () => {
+  const val = (q) => { const r = E.answerArithmetic(q); return r ? r.text : null; };
+  eq(val('42 + 8'), '42 + 8 = 50', 'addition is exact (the on-device model returned 42)');
+  eq(val('17 × 23'), '17 × 23 = 391', 'multiplication with the × sign');
+  eq(val('17 * 23'), '17 × 23 = 391', 'multiplication with an asterisk');
+  eq(val('100 / 4'), '100 ÷ 4 = 25', 'division');
+  eq(val('3*(4+5)'), '3 × (4 + 5) = 27', 'parentheses override precedence');
+  eq(val('2^10'), '2 ^ 10 = 1024', 'exponent');
+  eq(val('5 plus 3'), '5 + 3 = 8', 'word operators');
+  eq(val('10 minus 4'), '10 - 4 = 6', 'a worded minus is intent, not a range');
+  eq(val('what is 42 + 8?'), '42 + 8 = 50', 'a calc lead and trailing punctuation are stripped');
+  eq(val('1,000 + 1'), '1000 + 1 = 1001', 'thousands separators');
+  const ar = E.answerArithmetic('42 + 8');
+  eq(ar.audit.status, 'clean', 'arithmetic wears a clean badge');
+  eq(ar.cites.length, 0, 'and carries no citations (nothing to cite — it is computed)');
+  // NON-arithmetic stays null so ordinary chat / document questions are untouched
+  eq(val('what is the 42nd amendment'), null, 'a number inside a phrase is not a calculation');
+  eq(val('I have 42 apples and 8 oranges'), null, 'a sentence with numbers is not a calculation');
+  eq(val('the year 2020-2021'), null, 'a year range is not a subtraction');
+  eq(val('2020-2021'), null, 'a bare hyphenated range is not a subtraction');
+  eq(val('who founded Veldmar'), null, 'an ordinary question is not a calculation');
+});
+
 // ── widened graph-portrait surface (WI-1..4) ──────────────────────────
 const MACHINERY_RE = /\{\{|\[s\d+\]|\bs\d+\b|\b(mass|momentum|gravity|coupling|frame|rules_rev|NUL|SIG|INS|SEG|CON|SYN|DEF|EVA|REC|cite|void|infer|absent)\b/i;
 await group('graph portrait — widened surface stays additive', async () => {
