@@ -200,10 +200,17 @@ function App() {
   // and/or the chat half (audit turns). Persisted with prefs. Both on by default.
   const [exportIngestion, setExportIngestion] = useState(true);
   const [exportOutput, setExportOutput] = useState(true);
-  // Per-message Wikipedia enrichment (external.js reference desk): when on, a
-  // sent message gets an encyclopaedia + dictionary card for its salient term.
-  // Off by default — it is the one path that sends a term off-device.
-  const [wikiEnrich, setWikiEnrich] = useState(false);
+  // Wikipedia reference desk (external.js): tri-state (FIX 5). 'off' never
+  // contacts it (fully local); 'auto' (default) consults it only when a turn
+  // passes the acquisition gate (an explicit "look up X" with the subject not
+  // already in the corpus); 'on' enriches every substantive message. It is the
+  // one path that sends a term off-device, so the default is the gated middle —
+  // never eager always-fetch.
+  const [wikiMode, setWikiMode] = useState('auto');
+  // Per-message reference-desk FORCE ("look it up now"): the composer Wikipedia
+  // button (in the 'auto'/'on' modes) flags THIS message to fetch its salient
+  // term, bypassing the acquisition gate. One-shot — consumed/cleared on send.
+  const [forceEnrich, setForceEnrich] = useState(false);
   const [model, setModel] = useState(defaultModel);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
@@ -344,7 +351,11 @@ function App() {
         if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
         if (typeof prefs.exportIngestion === 'boolean') setExportIngestion(prefs.exportIngestion);
         if (typeof prefs.exportOutput === 'boolean') setExportOutput(prefs.exportOutput);
-        if (typeof prefs.wikiEnrich === 'boolean') setWikiEnrich(prefs.wikiEnrich);
+        // Reference-desk mode (tri-state). Prefer a stored wikiMode; else migrate
+        // the legacy boolean — true (eager) → 'on', false (the old default) →
+        // 'auto' (the new gated default). New users with neither key keep 'auto'.
+        if (prefs.wikiMode === 'off' || prefs.wikiMode === 'auto' || prefs.wikiMode === 'on') setWikiMode(prefs.wikiMode);
+        else if (typeof prefs.wikiEnrich === 'boolean') setWikiMode(prefs.wikiEnrich ? 'on' : 'auto');
         if (prefs.theme === 'system' || prefs.theme === 'light' || prefs.theme === 'dark') setTheme(prefs.theme);
         if (typeof prefs.reduceMotion === 'boolean') setReduceMotion(prefs.reduceMotion);
         if (typeof prefs.groundingInfo === 'boolean') setGroundingInfo(prefs.groundingInfo);
@@ -407,8 +418,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion, groundingInfo, pythonEnabled });
-  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion, groundingInfo, pythonEnabled]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled });
+  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -571,6 +582,9 @@ function App() {
   // synchronously (from a click handler) without going stale on a closure.
   const messagesRef = useRef([]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+  // Monotonic turn clock — FIX 3: stamps enrichment-ingested docs so the
+  // provisional sweep can reap ones that never grounded an answer after a few turns.
+  const turnSeqRef = useRef(0);
   const proposeArmed = useRef(false);
   const maybeProposeConventions = () => {
     const E = window.EOEngine;
@@ -959,12 +973,39 @@ function App() {
     // Stash the carry for follow-up turns (see lastCarryRef): every settled
     // grounded turn becomes the retrieval seed the next elliptical turn rides.
     lastCarryRef.current = { q: String(q || ''), cites: (cites || []).slice(0, 8) };
+    // FIX 3b: a provisional enrichment doc this answer actually cited has earned
+    // its place — clear the flag so the sweep won't reap it.
+    const citedIds = new Set((cites || []).map(c => c && c.docId).filter(Boolean));
+    if (citedIds.size) setDocs(ds => ds.some(d => citedIds.has(d.id) && d.provisional)
+      ? ds.map(d => (citedIds.has(d.id) && d.provisional) ? { ...d, provisional: false } : d) : ds);
     const F = window.EOEngine && window.EOEngine.conversationField;
     if (!F) return;
     let matter = [];
     try { matter = (window.EOEngine.referentsScope(scope, q) || {}).matter || []; } catch (e) {}
     try { F.deposit({ entities: matter, sentences: (cites || []).map(c => ({ docId: c.docId, idx: c.idx })) }, 1); }
     catch (e) { eoWarn('field deposit', e); }
+  };
+
+  // FIX 3c — provisional-source sweep. Enrichment-ingested docs are tagged
+  // provisional at ingest (ingestExternalSource) and cleared when an answer
+  // cites them (depositSettled). One that never grounds is junk that keeps
+  // competing for primary selection and retrieval, so reap it: `force` (a chat
+  // switch/reset) drops every provisional doc; otherwise only those older than
+  // the TTL in turns. User-uploaded docs (no provenance flag) are never touched.
+  const PROVISIONAL_TTL = 2;
+  const sweepProvisional = (force) => {
+    const seq = turnSeqRef.current;
+    const doomed = new Set((docsRef.current || [])
+      .filter(d => d && d.provisional === true && d.provenance === 'enrichment'
+        && (force || typeof d.provTurn !== 'number' || seq - d.provTurn >= PROVISIONAL_TTL))
+      .map(d => d.id));
+    if (!doomed.size) return;
+    const docId = (t) => (t && t.startsWith && t.startsWith('@ent/')) ? t.split('/')[1] : t;
+    setDocs(ds => ds.filter(d => !doomed.has(d.id)));
+    setSources(s => s.filter(id => !doomed.has(id)));
+    setOpenTabs(t => t.filter(x => !doomed.has(docId(x))));
+    setActiveTab(a => doomed.has(docId(a)) ? null : a);
+    if (activeProject) setProjects(ps => ps.map(p => p.id === activeProject ? { ...p, docIds: p.docIds.filter(id => !doomed.has(id)) } : p));
   };
 
   // The follow-up's retrieval seed: the turn's own words plus the previous
@@ -1066,7 +1107,7 @@ function App() {
   const associateKept = async (scope, q, budget) => {
     const E = window.EOEngine;
     try {
-      const prim = E.routePrimary(scope, q) || scope[0];
+      const prim = E.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
       if (!prim || prim.kind !== 'prose' || !E.associativeNeighbors) return [];
       const srcSpans = (E.retrieveScope([prim], q, 6) || []).map(h => h.i);
       if (!srcSpans.length) return [];
@@ -1566,6 +1607,17 @@ function App() {
     } catch (e) { return false; }
   };
 
+  // FIX 4: a draft that is literally the editor's note (a "Note: …" preamble, or
+  // verbatim the shape note) is meta about the question, never an answer — caught
+  // even when it shares too little vocabulary for echoesShapeNote's overlap test.
+  const looksLikeNote = (full, note) => {
+    const t = String(full == null ? '' : full).trim();
+    if (!t) return false;
+    if (/^note\s*:/i.test(t)) return true;
+    const n = String(note == null ? '' : note).trim();
+    return !!n && t === n;
+  };
+
   // COMPUTATIONAL turn (pyodide.js): the second mechanical grounding source.
   // The model writes Python; Python run locally over the loaded CSV produces the
   // figure; the model phrases over that result and never reports a number it
@@ -1945,14 +1997,30 @@ function App() {
         noteOpaque(res, decision);                        // edge-of-trace marker (Phase 6)
         AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
       };
+      // FIX 4: prefer the deterministic mechanical reading over a canned refusal
+      // when the model's draft can't be served — a clean exact-reading IS a real
+      // answer. NEVER render the editor note or an empty string. Refuse honestly
+      // only when there is no usable mechanical reading to fall back on.
+      const mechUsable = !!(mech && mech.text && mech.text.trim()
+        && mech.audit && mech.audit.status !== 'held'
+        && (mech.audit.status === 'clean' || mech.audit.status === 'warn' || mech.audit.grounded));
+      const fallbackMechOrRefuse = (reason, message) => {
+        if (genStale(myGen)) return;
+        if (mechUsable) {
+          AUD('step', 'veto', { decision: 'mechanical', reason: reason + ' → mechanical reading (no model answer to serve)' });
+          settle({ text: mech.text, audit: mech.audit, cites: mech.cites || [] }, 'mechanical (' + reason + ')');
+          return;
+        }
+        refuseModel(reason, message);
+      };
       if (modelDeclined(full)) {
         AUD('step', 'veto', { decision: 'refused', reason: 'model declined / empty / leaked reasoning' });
-        refuseModel('model_declined',
-          'I drafted, but the model came back empty (or refused to answer, or leaked raw reasoning instead of an answer). I’d rather say so than substitute a generated stand-in — try rephrasing, or point me at the line you want me to read.');
-      } else if (echoesShapeNote(full, shapeNote)) {
+        fallbackMechOrRefuse('model_declined',
+          'I drafted, but the model came back empty (or refused to answer, or leaked raw reasoning instead of an answer), and I have no clean reading of the page to fall back on. Try rephrasing, or point me at the line you want me to read.');
+      } else if (echoesShapeNote(full, shapeNote) || looksLikeNote(full, shapeNote)) {
         AUD('step', 'veto', { decision: 'refused', reason: 'echoed the director’s note — meta about the question, not an answer' });
-        refuseModel('note_echo',
-          'I drafted a reply, but it just paraphrased the editor’s guidance about the question rather than reading the document — that’s a non-answer in the shape of one. I’d rather say so than serve it. Try rephrasing, or point me at a passage you want me to read.');
+        fallbackMechOrRefuse('note_echo',
+          'I drafted a reply, but it just paraphrased the editor’s guidance about the question rather than reading the document, and I have no clean reading to fall back on. Try rephrasing, or point me at a passage you want me to read.');
       } else {
         // DEGENERACY VETO (audit-reject retry, ported from eo-extractor.html):
         // a near-verbatim copy of one retrieved span binds and audits clean but
@@ -2148,7 +2216,17 @@ function App() {
   };
 
   // ---- chat with Wikipedia (external.js knowledge augmentation) ----
-  const toggleWikiEnrich = () => setWikiEnrich(v => {
+  // Reference-desk mode setter (FIX 5). Any mode that may fetch ('auto'/'on')
+  // records the proxy consent once; 'off' never requests it (and never fetches).
+  const changeWikiMode = (next) => {
+    if (next !== 'off' && next !== 'auto' && next !== 'on') return;
+    setWikiMode(next);
+    if (next !== 'off') { try { window.EOExternal && window.EOExternal.grantConsent && window.EOExternal.grantConsent(); } catch (e) {} }
+  };
+  // The composer Wikipedia button is a per-message FORCE ("look it up now") in the
+  // fetching modes — it bypasses the acquisition gate for the next send only.
+  // Pressing it implies consent to consult the desk, recorded once.
+  const toggleForceEnrich = () => setForceEnrich(v => {
     const next = !v;
     if (next) { try { window.EOExternal && window.EOExternal.grantConsent && window.EOExternal.grantConsent(); } catch (e) {} }
     return next;
@@ -2164,6 +2242,10 @@ function App() {
     let doc;
     try { doc = await window.EOEngine.parseDocument(name, text, id); }
     catch (e) { eoWarn('external source parse', e); return null; }
+    // FIX 3a: mark it provisional — a background enrichment grab earns its place
+    // in the corpus only by grounding an answer (depositSettled clears the flag);
+    // until then the sweep can reap it so it never competes for primary/retrieval.
+    doc.provenance = 'enrichment'; doc.provisional = true; doc.provTurn = turnSeqRef.current;
     setDocs(ds => ds.some(d => d.id === doc.id) ? ds : [...ds, doc]);
     return doc;
   };
@@ -2205,42 +2287,51 @@ function App() {
   // Pull the salient term's article, attach the card to the live assistant
   // message (by turnId), and ingest it as a source. Returns the doc for THIS
   // turn's scope (state updates land for later turns). Best-effort throughout.
-  const chatWikipedia = async (q, turnId) => {
+  // `opts.force` (the per-message FORCE button, or 'on' mode — FIX 5) bypasses
+  // the acquisition gate; only a substantive term and corpus-resolution remain.
+  const chatWikipedia = async (q, turnId, opts) => {
     const X = window.EOExternal;
     if (!X || !X.enabled || !X.enabled()) return null;
     const E = window.EOEngine;
+    const force = !!(opts && opts.force);
     const term = (X.pickQuery && X.pickQuery(q)) || q;
     // A vague follow-up ("tell me more", "why?") names no new subject — keep
     // chatting against whatever Wikipedia articles are already in scope rather
     // than pulling a spurious one. The substantive turn did the ingest.
     if (!term || term.length < 3 || /^(more|it|that|this|them|those|they|he|she|why|how|ok|okay|yes|no|sure|tell|again|continue|else|next|so|and|but)$/i.test(term)) return null;
-    // ── Acquisition gate (intent + identity decide, never the bare proper
-    // noun) ── A fetch fires only when all three hold; the default is flipped
-    // so corpus-resolution is the first branch and acquisition the fallback.
-    //   (1) the turn EXPLICITLY asks to acquire (a lookup verb / acquisition
-    //       frame). A bare factual or follow-up question is intent: factual
-    //       and never reaches the fetcher — this is the turn-3 "what are his
-    //       inspirations?" case the audit already classified factual.
-    if (X.acquireIntent && !X.acquireIntent(q)) return null;
-    const hot = (typeof hotEntity === 'function') ? hotEntity() : null;
-    //   (3) a follow-up bound to the active subject answers against the held
-    //       document — there is nothing to acquire.
-    if (hot && E && E.discourseBinding) {
-      try { const b = E.discourseBinding(scopeList(), q, { hotEntity: hot }); if (b && b.hold) return null; }
-      catch (e) {}
+    // ── Acquisition gate (intent + identity decide, never the bare proper noun).
+    // FIX 2 — the gate FAILS CLOSED: a reference-desk fetch is the privileged,
+    // off-device action, so a missing or throwing decider SUPPRESSES it rather
+    // than waving it through. A per-message force ('on' mode or the composer
+    // button) skips the intent/identity gate (but never the corpus check below).
+    const hot = (!force && typeof hotEntity === 'function') ? hotEntity() : null;
+    if (!force) {
+      //   (1) the turn must EXPLICITLY ask to acquire (a lookup verb / frame). A
+      //       bare factual or follow-up question ("what are his inspirations?")
+      //       is intent: factual and never reaches the fetcher.
+      if (typeof X.acquireIntent !== 'function') return null;
+      let wantsAcquire; try { wantsAcquire = X.acquireIntent(q); } catch (e) { eoWarn('acquireIntent', e); return null; }
+      if (!wantsAcquire) return null;
+      //   (3) a follow-up bound to the active subject answers against the held
+      //       document — nothing to acquire. With an active subject we MUST be
+      //       able to prove it isn't such a follow-up, or we don't fetch.
+      if (hot) {
+        if (!E || typeof E.discourseBinding !== 'function') return null;
+        let b; try { b = E.discourseBinding(scopeList(), q, { hotEntity: hot }); } catch (e) { eoWarn('discourseBinding', e); return null; }
+        if (b && b.hold) return null;
+      }
     }
-    //   (2) corpus resolution FIRST: a subject already ingested (resolved by
-    //       entity, not surface) binds to the existing document — no re-fetch,
-    //       no duplicate ingestion.
-    if (E && E.resolveSubjectDoc) {
-      let have = null; try { have = E.resolveSubjectDoc(docsRef.current, term); } catch (e) {}
-      if (have) { addSource(have.id); return have; }
-    }
-    // Ambiguous acquisition (a term that shares a name token with the active
-    // subject but isn't the same referent — "look up Shore" while a different
-    // Shore is active) must not silently fetch-and-swap; hold and let the turn
-    // answer against the active subject rather than pulling a colliding article.
-    if (hot && _termCollidesWithActive(term, hot)) return null;
+    //   (2) corpus resolution FIRST (even when forced): a subject already
+    //       ingested (resolved by entity, not surface) binds to the existing
+    //       document — no re-fetch, no duplicate. FIX 2 fail-closed: if we can't
+    //       check the corpus, we can't prove a fetch is warranted, so we don't.
+    if (!E || typeof E.resolveSubjectDoc !== 'function') return null;
+    let have; try { have = E.resolveSubjectDoc(docsRef.current, term); } catch (e) { eoWarn('resolveSubjectDoc', e); return null; }
+    if (have) { addSource(have.id); return have; }
+    // Ambiguous acquisition (a bare token that collides with the active subject —
+    // "look up Shore" while a different Shore is active) must not silently
+    // fetch-and-swap; hold (gate only — a force overrides).
+    if (!force && hot && _termCollidesWithActive(term, hot)) return null;
     try { X.grantConsent && X.grantConsent(); } catch (e) {}
     const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
     tag({ loading: true, term });
@@ -2320,6 +2411,14 @@ function App() {
     const turnId = 'wt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     setMessages(m => [...m, { role: 'user', text: q }, { role: 'assistant', typing: true, turnId }]);
     setBusy(true); ensureChat(q);
+    // FIX 3c: advance the turn clock and reap any aged-out provisional enrichment
+    // docs that never grounded an answer (so they stop competing for primary).
+    turnSeqRef.current++;
+    sweepProvisional(false);
+    // Consume the per-message reference-desk FORCE (composer Wikipedia button):
+    // read it for this turn and clear the one-shot flag.
+    const forcedThisMessage = forceEnrich;
+    if (forcedThisMessage) setForceEnrich(false);
 
     // Paint the send immediately. The user's bubble and the typing indicator are
     // committed above, but everything that follows on this turn — routing, graph
@@ -2330,15 +2429,19 @@ function App() {
     // starts; the turn then proceeds, lagging on its own without holding the UI.
     await new Promise(res => setTimeout(res, 0)); // yield to paint
 
-    // CHAT WITH WIKIPEDIA: when enrichment is on, pull the salient term's
-    // article and INGEST it into the graph as a citable source before reading,
-    // so this turn grounds on it (and cites it), not on a sidecar card. The
-    // freshly-parsed doc is threaded into THIS turn's scope directly (state
-    // updates are stale within the turn); best-effort — a failure degrades to
-    // whatever sources were already in scope.
+    // CHAT WITH WIKIPEDIA (FIX 5): consult the reference desk per the mode —
+    //   off  → never (the composer FORCE button is hidden, so a force can't reach)
+    //   on   → every substantive turn (force past the acquisition gate)
+    //   auto → only when the gate passes, OR the FORCE button was pressed for
+    //          this one message (which bypasses the gate for this send only).
+    // A hit INGESTS the article as a citable source before reading, so the turn
+    // grounds on it (and cites it), not on a sidecar card. The freshly-parsed doc
+    // is threaded into THIS turn's scope directly (state updates are stale within
+    // the turn); best-effort — a failure degrades to whatever was already in scope.
     let injectedDoc = null;
-    if (wikiEnrich && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {
-      try { injectedDoc = await chatWikipedia(q, turnId); } catch (e) { eoWarn('wiki-chat', e); }
+    const forceWiki = wikiMode === 'on' || forcedThisMessage;
+    if (wikiMode !== 'off' && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {
+      try { injectedDoc = await chatWikipedia(q, turnId, { force: forceWiki }); } catch (e) { eoWarn('wiki-chat', e); }
     }
 
     let doc = backingDoc() || injectedDoc;
@@ -2463,7 +2566,7 @@ function App() {
     let route;
     if (mode === 'grounded' && scope.length) {
       route = { decision: 'mechanical', confidence: 'forced', reason: 'grounded-mode',
-                primary: window.EOEngine.routePrimary(scope, q) || scope[0] };
+                primary: window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0] };
     } else if (scope.length) {
       // hadReply: repair needs a conversation to repair — any settled assistant
       // reply counts, grounded or not (the trace's "someone's son is mentioned"
@@ -2478,7 +2581,7 @@ function App() {
     // fresh content. Mark the rejected reply (history hygiene), then re-read
     // the question actually under repair instead of retrieving on the complaint.
     if (route.decision === 'repair') {
-      const primary = route.primary || window.EOEngine.routePrimary(scope, q) || scope[0];
+      const primary = route.primary || window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
       AUD('step', 'route', { referencing: true, reason: route.reason, confidence: route.confidence,
         path: 'repair', primary: primary ? { id: primary.id, name: primary.name, kind: primary.kind } : null });
       markObjected();
@@ -2495,7 +2598,7 @@ function App() {
       if (genStale(myGen)) return;                  // stopped during the recall — stand down
       const recovered = hits.length && (reader.indexOf('embedding') >= 0 ? hits.some(h => h.semantic) : true);
       AUD('step', 'escalate', { reason: route.reason, reader, found: hits.length, recovered: !!recovered });
-      if (recovered) { route.decision = 'mechanical'; route.confidence = 'recovered'; semanticHits = hits.filter(h => h.semantic).length ? hits : null; route.primary = route.primary || window.EOEngine.routePrimary(scope, q) || scope[0]; }
+      if (recovered) { route.decision = 'mechanical'; route.confidence = 'recovered'; semanticHits = hits.filter(h => h.semantic).length ? hits : null; route.primary = route.primary || window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0]; }
       else { route.decision = 'chat'; }
     }
 
@@ -2524,7 +2627,7 @@ function App() {
         if (route.decision === 'chat') {
           route.decision = 'mechanical'; route.confidence = 'carry';
           route.reason += '+carry';
-          route.primary = route.primary || window.EOEngine.routePrimary(scope, cq) || scope[0];
+          route.primary = route.primary || window.EOEngine.routePrimary(scope, cq, { hotEntity: hotEntity() }) || scope[0];
         }
       }
     }
@@ -2534,7 +2637,7 @@ function App() {
     if (referencing) everGroundedRef.current = true;
 
     if (referencing) {
-      const primary = route.primary || window.EOEngine.routePrimary(scope, q) || scope[0];
+      const primary = route.primary || window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
       const useLLM = ready && primary && primary.kind === 'prose';
       AUD('step', 'route', { referencing: true, reason: route.reason, confidence: route.confidence,
         path: useLLM ? 'grounded-llm' : 'mechanical',
@@ -2557,8 +2660,8 @@ function App() {
   // Reset the conversation field on a fresh or switched chat — working memory is
   // chat-scoped, matching newChat's reset semantics (distinct from the learned ledger).
   const resetField = () => { try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.reset(); } catch (e) { eoWarn('field reset', e); } };
-  const newChat = () => { setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
-  const selectChat = (id) => { setActiveChat(id); lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
+  const newChat = () => { sweepProvisional(true); setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
+  const selectChat = (id) => { sweepProvisional(true); setActiveChat(id); lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
 
   // ---- rules ----
   const toggleRule = (id) => setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
@@ -2612,7 +2715,7 @@ function App() {
     sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     onAddSource: addSource, onRemoveSource: removeSource,
-    enrich: wikiEnrich, onToggleEnrich: toggleWikiEnrich,
+    wikiMode, forceEnrich, onForceEnrich: toggleForceEnrich,
   };
 
   const hasTabs = openTabs.length > 0;
@@ -2699,6 +2802,7 @@ function App() {
         theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
         pythonEnabled={pythonEnabled} onPythonEnabled={setPython} pythonAvailable={!!window.EOPython}
         groundingInfo={groundingInfo} onGroundingInfo={setGroundingInfo}
+        wikiMode={wikiMode} onWikiMode={changeWikiMode}
         onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}

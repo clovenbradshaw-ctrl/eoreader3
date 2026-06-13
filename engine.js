@@ -9956,10 +9956,13 @@ function projectGraph(events, frame = {}) {
       if (d.kind === 'table') continue;
       const h = retrieve(d, query, 1)[0];
       const s = h ? h.score : 0;
-      if (s > bestScore) { bestScore = s; best = d; }
+      // FIX 3d: on a score tie, a user / non-provisional doc beats a provisional
+      // enrichment doc — a backstop so already-committed enrichment junk never
+      // steals primary when discourse precedence (above) hasn't bound a subject.
+      if (s > bestScore || (s === bestScore && best && best.provisional && !d.provisional)) { bestScore = s; best = d; }
     }
     if (best && bestScore > 0) return best;
-    return ds.find(d => referencesDoc(d, query, ctx)) || ds[0];
+    return ds.find(d => referencesDoc(d, query, ctx)) || ds.find(d => !d.provisional) || ds[0];
   }
 
   // Anti-matter across the whole scope: a named referent is matter if present in
