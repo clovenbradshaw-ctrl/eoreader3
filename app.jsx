@@ -202,16 +202,16 @@ function App() {
   // and/or the chat half (audit turns). Persisted with prefs. Both on by default.
   const [exportIngestion, setExportIngestion] = useState(true);
   const [exportOutput, setExportOutput] = useState(true);
-  // Wikipedia reference desk (external.js): tri-state (FIX 5). 'off' never
-  // contacts it (fully local); 'auto' (default) consults it only when a turn
-  // passes the acquisition gate (an explicit "look up X" with the subject not
-  // already in the corpus); 'on' enriches every substantive message. It is the
-  // one path that sends a term off-device, so the default is the gated middle —
-  // never eager always-fetch.
+  // Wikipedia reference desk (external.js): tri-state. 'off' never contacts it
+  // (fully local); 'auto' (default) takes a stab only when a turn passes the
+  // acquisition gate (an explicit "look up X" with the subject not already in the
+  // corpus); 'on' takes a stab on every substantive message. A stab is only the
+  // lightweight OPTIONS search — a full article is pulled in only when the reader
+  // picks a candidate — so even 'on' never eagerly fetches.
   const [wikiMode, setWikiMode] = useState('auto');
-  // Per-message reference-desk FORCE ("look it up now"): the composer Wikipedia
-  // button (in the 'auto'/'on' modes) flags THIS message to fetch its salient
-  // term, bypassing the acquisition gate. One-shot — consumed/cleared on send.
+  // Per-message reference-desk FORCE ("take a stab now"): the composer Wikipedia
+  // button (in the 'auto'/'on' modes) flags THIS message to search Wikipedia for
+  // options, bypassing the acquisition gate. One-shot — consumed/cleared on send.
   const [forceEnrich, setForceEnrich] = useState(false);
   const [model, setModel] = useState(defaultModel);
   const [modelOpen, setModelOpen] = useState(false);
@@ -2292,9 +2292,10 @@ function App() {
     setWikiMode(next);
     if (next !== 'off') { try { window.EOExternal && window.EOExternal.grantConsent && window.EOExternal.grantConsent(); } catch (e) {} }
   };
-  // The composer Wikipedia button is a per-message FORCE ("look it up now") in the
-  // fetching modes — it bypasses the acquisition gate for the next send only.
-  // Pressing it implies consent to consult the desk, recorded once.
+  // The composer Wikipedia button is a per-message FORCE ("take a stab now") in
+  // the active modes — it bypasses the acquisition gate for the next send only
+  // (it offers options to research; it does not fetch). Pressing it implies
+  // consent to consult the desk, recorded once.
   const toggleForceEnrich = () => setForceEnrich(v => {
     const next = !v;
     if (next) { try { window.EOExternal && window.EOExternal.grantConsent && window.EOExternal.grantConsent(); } catch (e) {} }
@@ -2353,19 +2354,17 @@ function App() {
     return bw.length > 1 && bw.includes(aw[0]);
   };
 
-  // Decide whether THIS turn should consult Wikipedia, and HOW. The acquisition
+  // Decide whether THIS turn should take a stab at Wikipedia. The acquisition
   // gate (intent + identity + corpus-resolution + active-subject follow-up) is
   // unchanged and still FAILS CLOSED — a missing or throwing decider SUPPRESSES
-  // the privileged off-device fetch rather than waving it through. What changed:
-  // a turn that passes the gate on its own (Auto mode) no longer silently fetches
-  // and ingests an article for whatever term pickQuery landed on — it runs a
+  // the off-device search rather than waving it through. A turn that clears the
+  // gate (or is forced past it) never fetches an article on its own: it runs a
   // lightweight OPTIONS search and offers the candidates on the live reply ("want
-  // me to research one of these?"), so the reader picks the right subject before
-  // any full article is fetched (runWikiSearch fires that on click). An explicit
-  // force — `opts.force`, i.e. the
-  // per-message FORCE button or 'on' mode — is the reader already asking to look
-  // it up, so it skips both the gate AND the confirm step and fetches straight
-  // into THIS turn's scope.
+  // me to research one of these?"), and only when the reader picks one does the
+  // full article get pulled in (runWikiSearch, on click). `opts.force` — the
+  // per-message FORCE button or 'on' mode — does NOT fetch; it only BYPASSES the
+  // gate so any message takes a stab (corpus resolution still short-circuits to
+  // an already-ingested doc). The deep fetch is always a click away.
   const chatWikipedia = async (q, turnId, opts) => {
     const X = window.EOExternal;
     if (!X || !X.enabled || !X.enabled()) return null;
@@ -2409,18 +2408,15 @@ function App() {
     // "look up Shore" while a different Shore is active) must not silently
     // fetch-and-swap; hold (gate only — a force overrides).
     if (!force && hot && _termCollidesWithActive(term, hot)) return null;
-    // The gates passed. An AUTOMATIC pass does the lightweight OPTIONS search and
-    // offers the candidates ("want me to research one of these?") — the picked
-    // term is often not what the reader meant, so we surface real choices and let
-    // them pick before any full article is fetched. Returns null: this turn
-    // answers from the sources already in scope, and the chosen article
-    // (runWikiSearch) grounds later turns. A force is the reader already asking,
-    // so skip the options step and fetch now, grounding THIS turn on the article.
-    if (!force) {
-      offerWikiOptions(turnId, term).catch((e) => eoWarn('wiki-options', e));
-      return null;
-    }
-    return await fetchWikiArticle(turnId, term, false);
+    // The turn reaches here either because the gate decided it (Auto) or because
+    // a force waved it past the gate ('on' mode / the per-message button). EITHER
+    // WAY it only takes a stab and OFFERS options — it NEVER pulls a full article
+    // in on its own. The lightweight search surfaces the candidates (with any
+    // disambiguation); the reader picks one (runWikiSearch) and only THEN is the
+    // article fetched and ingested. Returns null: this turn answers from the
+    // sources already in scope, and the chosen article grounds later turns.
+    offerWikiOptions(turnId, term).catch((e) => eoWarn('wiki-options', e));
+    return null;
   };
 
   // The "initial search → offer options" step (the AUTOMATIC path). A cheap
@@ -2567,18 +2563,16 @@ function App() {
     // starts; the turn then proceeds, lagging on its own without holding the UI.
     await new Promise(res => setTimeout(res, 0)); // yield to paint
 
-    // CHAT WITH WIKIPEDIA (FIX 5): consult the reference desk per the mode —
+    // CHAT WITH WIKIPEDIA: consult the reference desk per the mode —
     //   off  → never (the composer FORCE button is hidden, so a force can't reach)
-    //   auto → only when the acquisition gate passes; that pass now PROPOSES the
-    //          search (an editable confirm card on the reply) instead of fetching,
-    //          so this turn reads from whatever sources are already in scope and a
-    //          confirmed article (runWikiSearch) grounds later turns. The FORCE
-    //          button overrides for this one send: it fetches now, past the gate.
-    //   on   → every substantive turn fetches now, past the gate and the confirm
-    //          step (a standing "always look it up").
-    // A forced hit INGESTS the article as a citable source and is threaded into
-    // THIS turn's scope directly (state updates are stale within the turn), so the
-    // turn grounds on it; best-effort — a failure degrades to whatever was in scope.
+    //   auto → only when the acquisition gate passes
+    //   on   → every substantive turn, past the gate (a standing "always take a
+    //          stab"); the FORCE button does the same for one send.
+    // In every case the turn only TAKES A STAB and offers options — it never pulls
+    // an article in on its own. chatWikipedia returns no fetched doc (the reader
+    // clicks an option to ingest one, which grounds later turns); the only doc it
+    // can hand back is an ALREADY-ingested corpus match, threaded into this turn's
+    // scope. `force` ('on' / the button) bypasses the gate, not the offer.
     let injectedDoc = null;
     const forceWiki = wikiMode === 'on' || forcedThisMessage;
     if (wikiMode !== 'off' && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {

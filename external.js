@@ -625,6 +625,11 @@
     const quoted = /["“”'’]([^"“”'’]{2,60})["“”'’]/.exec(t);
     if (quoted && quoted[1].trim()) return quoted[1].trim();
     t = t.replace(/^(?:tell me about|tell me|explain|define|describe|summari[sz]e|give me|show me)\b[\s,:'-]*/i, '')
+         // strip a leading acquisition frame so the stab is the SUBJECT, not the
+         // verb ("search for dogs" → "dogs", "look up Howard Shore" → "Howard
+         // Shore", "find the article on socialism" → "socialism")
+         .replace(/^(?:please\s+)?(?:look\s+up|look\s+for|pull\s+up|search\s+for|search|google|find|get|read\s+up\s+on|read\s+about|read\s+on)\b[\s,:'-]*/i, '')
+         .replace(/^(?:me\s+)?(?:the\s+)?(?:(?:wiki(?:pedia)?\s+)?(?:article|page|entry|wiki|info|information)\s+(?:on|about|for)\s+)?/i, '')
          // strip a RUN of leading question / auxiliary words ("what is", "who was")
          .replace(/^(?:(?:who|what|which|where|when|why|how|whose|whom|is|are|was|were|do|does|did|can|could|would|should)\b[\s,:'-]*)+/i, '')
          .replace(/[?.!]+\s*$/, '').trim();

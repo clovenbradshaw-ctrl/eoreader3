@@ -74,8 +74,8 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
   // Reference desk (Wikipedia) — a tri-state mirroring the answer-mode control.
   const WIKI_MODES = [
     { id: 'off', label: 'Off', sub: 'Never contacts Wikipedia. Fully local.' },
-    { id: 'auto', label: 'Auto', sub: 'Looks something up only when you ask to (a “look up X” style request) and it isn’t already in your documents.' },
-    { id: 'on', label: 'On', sub: 'Attaches a Wikipedia + Wiktionary card to every message.' },
+    { id: 'auto', label: 'Auto', sub: 'When you ask to look something up (a “look up X” request) and it isn’t already in your documents, searches Wikipedia and offers matching articles — you pick which to pull in.' },
+    { id: 'on', label: 'On', sub: 'Searches Wikipedia for every message and offers matching articles to research. Nothing is pulled in until you pick one.' },
   ];
   const wikiSub = (WIKI_MODES.find(w => w.id === wikiMode) || WIKI_MODES[1]).sub;
 
