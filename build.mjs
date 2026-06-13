@@ -26,6 +26,11 @@ mkdirSync(DIST, { recursive: true });
 const result = await esbuild.build({
   entryPoints: [join(ROOT, 'build', 'entry.js')],
   bundle: true,
+  // mathjs is loaded as a plain CDN script (window.math); compute.js resolves it
+  // from there in the browser and only falls back to require('mathjs') in Node
+  // (tests). Mark it external so esbuild leaves that require alone instead of
+  // pulling the whole package into the bundle.
+  external: ['mathjs'],
   outfile: join(DIST, 'app.bundle.js'),
   format: 'iife',
   minify: true,
@@ -101,6 +106,9 @@ const HTML = `<!doctype html>
     };
   })();
 </script>
+<!-- math.js (window.math) — the deterministic evaluator behind the chat's
+     calculator; compute.js (bundled below) resolves it from here. -->
+<script src="https://cdn.jsdelivr.net/npm/mathjs@13.2.3/lib/browser/math.js"></script>
 <!-- everything else: React (production) + compromise + engine + UI, prebuilt -->
 <script src="app.bundle.js"></script>
 </body>

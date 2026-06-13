@@ -7,6 +7,7 @@ import '../engine.js';
 import '../store.js';
 import '../audit.js';
 import '../pyodide.js';
+import '../compute.js';
 import '../enrich.js';
 import '../external.js';
 import '../data.jsx';

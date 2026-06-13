@@ -111,6 +111,15 @@ The intelligence is **mechanical**; the language model only phrases things.
   writes its own citations and never overrides the page.
 - **`pivot.jsx`** — deterministic pivot/fold over tables (totals, counts,
   grouping) driven by a small natural-language → spec parser.
+- **`compute.js`** — the auditable calculator (`window.EOCompute`). When a turn
+  is essentially a math expression ("15% of $240,000", "sqrt(144)+3^2"), math.js
+  evaluates it deterministically (BigNumber precision, so money doesn't drift)
+  and the model is bypassed entirely — the number you see is the engine's, never
+  the model's mental arithmetic. Figures that also appear in an open source are
+  bound to the exact line they came from, so the chat's **Show the math** panel
+  lets you check each input (the one error an evaluator can't catch: right
+  arithmetic over a wrong number). Non-math turns return null and fall through to
+  ordinary routing. Deterministic; no model involved.
 - **`audit.js`** — the audit recorder (`window.EOAudit`). Records each chat
   turn's pipeline step by step and exports it as JSONL. In-memory; deterministic;
   no model involved.
