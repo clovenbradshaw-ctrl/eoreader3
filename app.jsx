@@ -1182,7 +1182,7 @@ function App() {
       AUD('step', 'confirm', { checks: plan.checks.map(c => ({ subject: c.subject, predicate: c.predicate, negated: !!c.negated, verdict: c.verdict })) });
       try { plan = maybeRetract(scope, plan); } catch (e) { eoWarn('retract', e); }
     }
-    const primary = window.EOEngine.routePrimary(scope, q) || scope[0];
+    const primary = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
     replaceLast({ role: 'assistant', text: plan.text, audit: plan.audit, mode: mode === 'creative' ? 'creative' : 'grounded' });
     if (plan.tableSpec && primary) { openTab(primary.id); setTableSpec({ ...plan.tableSpec }); }
     if (plan.cites && plan.cites.length) setTimeout(() => flashCitation(plan.cites[0].docId, plan.cites[0].idx), 380);
@@ -1401,7 +1401,11 @@ function App() {
     }
     const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
     const tier = E.contextPartsScope(scope, probe, 6);
-    const primaryDoc = E.routePrimary(scope, probe) || scope[0];
+    // A correction rebinds to the active subject, not the mis-bound document:
+    // "no, that's Noah Kahan's inspirations" returns the turn to Howard Shore
+    // (the held subject), it doesn't refine within Kahan. Discourse precedence
+    // carries that here too.
+    const primaryDoc = E.routePrimary(scope, probe, { hotEntity: hotEntity() }) || scope[0];
     if (ready && (tier.spans.length || tier.notes.length)) {
       try {
         // The shape pass sees the tagged history, so the rejected reply and
@@ -1801,7 +1805,10 @@ function App() {
     }
     // Heat-ranked working memory carried into the prompt (depth > 1; null at floor).
     const wm = buildWMForTurn(scope, q);
-    const primaryDoc = window.EOEngine.routePrimary(scope, q) || scope[0];
+    // Discourse precedence: the active subject (conversation field) holds the
+    // bound document, so a follow-up never silently rebinds to whichever
+    // source has the strongest content-word overlap.
+    const primaryDoc = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
     // IMPRESSION QUERY (the embedder as a fuzzy graph query): alongside the
     // lexical retrieval, query the page by MEANING — gather the semantically
     // related region and hand the model both the verbatim related spans AND the
@@ -2145,7 +2152,13 @@ function App() {
   };
 
   // Render a Wikipedia article payload into an ingestible prose document.
+  // Article payload → ingestible text. EOExternal owns the composition
+  // (punctuated title/description paragraphs, boilerplate bands dropped,
+  // headings kept for the chrome gate); the raw join survives only as the
+  // fallback for an older external.js.
   const buildWikiDocText = (p) => {
+    const X = window.EOExternal;
+    if (X && X.articleDocText) return X.articleDocText(p);
     const parts = [];
     if (p.title) parts.push(p.title);
     if (p.description) parts.push(p.description);
@@ -2156,18 +2169,62 @@ function App() {
     return parts.join('\n').trim();
   };
 
+  // An acquisition term is AMBIGUOUS against the active subject when it is a
+  // bare single token that the active subject's multi-word name also carries
+  // ("look up Shore" while "Howard Shore" is active — could mean this Shore or
+  // another). A fully distinct multi-word name ("look up Pauly Shore") is not
+  // ambiguous and still fetches. Narrow by design: better to fetch a clearly
+  // new subject than to block it.
+  const _termCollidesWithActive = (term, hot) => {
+    const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const a = norm(term), b = norm(hot);
+    if (!a || !b || a === b) return false;
+    const aw = a.split(' ');
+    if (aw.length !== 1 || aw[0].length < 3) return false;
+    const bw = b.split(' ');
+    return bw.length > 1 && bw.includes(aw[0]);
+  };
+
   // Pull the salient term's article, attach the card to the live assistant
   // message (by turnId), and ingest it as a source. Returns the doc for THIS
   // turn's scope (state updates land for later turns). Best-effort throughout.
   const chatWikipedia = async (q, turnId) => {
     const X = window.EOExternal;
     if (!X || !X.enabled || !X.enabled()) return null;
-    try { X.grantConsent && X.grantConsent(); } catch (e) {}
+    const E = window.EOEngine;
     const term = (X.pickQuery && X.pickQuery(q)) || q;
     // A vague follow-up ("tell me more", "why?") names no new subject — keep
     // chatting against whatever Wikipedia articles are already in scope rather
     // than pulling a spurious one. The substantive turn did the ingest.
     if (!term || term.length < 3 || /^(more|it|that|this|them|those|they|he|she|why|how|ok|okay|yes|no|sure|tell|again|continue|else|next|so|and|but)$/i.test(term)) return null;
+    // ── Acquisition gate (intent + identity decide, never the bare proper
+    // noun) ── A fetch fires only when all three hold; the default is flipped
+    // so corpus-resolution is the first branch and acquisition the fallback.
+    //   (1) the turn EXPLICITLY asks to acquire (a lookup verb / acquisition
+    //       frame). A bare factual or follow-up question is intent: factual
+    //       and never reaches the fetcher — this is the turn-3 "what are his
+    //       inspirations?" case the audit already classified factual.
+    if (X.acquireIntent && !X.acquireIntent(q)) return null;
+    const hot = (typeof hotEntity === 'function') ? hotEntity() : null;
+    //   (3) a follow-up bound to the active subject answers against the held
+    //       document — there is nothing to acquire.
+    if (hot && E && E.discourseBinding) {
+      try { const b = E.discourseBinding(scopeList(), q, { hotEntity: hot }); if (b && b.hold) return null; }
+      catch (e) {}
+    }
+    //   (2) corpus resolution FIRST: a subject already ingested (resolved by
+    //       entity, not surface) binds to the existing document — no re-fetch,
+    //       no duplicate ingestion.
+    if (E && E.resolveSubjectDoc) {
+      let have = null; try { have = E.resolveSubjectDoc(docsRef.current, term); } catch (e) {}
+      if (have) { addSource(have.id); return have; }
+    }
+    // Ambiguous acquisition (a term that shares a name token with the active
+    // subject but isn't the same referent — "look up Shore" while a different
+    // Shore is active) must not silently fetch-and-swap; hold and let the turn
+    // answer against the active subject rather than pulling a colliding article.
+    if (hot && _termCollidesWithActive(term, hot)) return null;
+    try { X.grantConsent && X.grantConsent(); } catch (e) {}
     const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
     tag({ loading: true, term });
     let res;
@@ -2395,7 +2452,7 @@ function App() {
       // reply counts, grounded or not (the trace's "someone's son is mentioned"
       // followed a PLAIN-chat miss, so prevGrounded alone would drop it).
       const hadReply = messages.some(m => m.role === 'assistant' && m.text && !m.typing && !m.loading);
-      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current, hadReply, everGrounded: everGroundedRef.current });
+      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current, hadReply, everGrounded: everGroundedRef.current, hotEntity: hotEntity() });
     } else {
       route = { decision: 'chat', confidence: 'none', reason: 'no-scope' };
     }

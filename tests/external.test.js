@@ -260,6 +260,24 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     eq(X.pickQuery(''), null, 'empty → null');
   });
 
+  group('acquireIntent() — only an explicit acquisition reaches the fetcher', () => {
+    // explicit lookup verbs / acquisition frames acquire
+    ok(X.acquireIntent('look up howard shore'), 'a lookup verb is acquisition');
+    ok(X.acquireIntent('find the article on socialism'), 'an acquisition frame is acquisition');
+    ok(X.acquireIntent('search for David Cronenberg'), 'search is acquisition');
+    ok(X.acquireIntent('pull up the Wikipedia page for Toronto'), 'pull up / wikipedia is acquisition');
+    // who/what/tell-me frames acquire only with a proper-name target
+    ok(X.acquireIntent('who is Howard Shore'), '"who is <ProperName>" is acquisition');
+    ok(X.acquireIntent('tell me about Noah Kahan'), '"tell me about <ProperName>" is acquisition');
+    // bare factual / follow-up turns are NOT acquisition (the turn-3 bug)
+    ok(!X.acquireIntent('what are his inspirations?'), 'a pronoun follow-up is factual, not acquisition');
+    ok(!X.acquireIntent('when was he born?'), 'a bare factual question is not acquisition');
+    ok(!X.acquireIntent('who is the funniest character'), '"who is the <common noun>" is not acquisition');
+    ok(!X.acquireIntent('what is the craziest stuff in there?'), 'no proper-name target ⇒ not acquisition');
+    ok(!X.acquireIntent('summarize this'), 'a summary ask is not acquisition');
+    ok(!X.acquireIntent('tell me more'), 'a vague follow-up is not acquisition');
+  });
+
   await group('rate limiter — calls are spaced by the interval', async () => {
     X.setConfig({ intervalMs: 25 });
     const log2 = [];

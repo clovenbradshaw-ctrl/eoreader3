@@ -768,6 +768,11 @@ const READING_RULES = {
       // article meta rows: "5 min read", "12 Comments"
       '/^\\d+\\s+min(ute)?s?\\s+read\\b/i',
       '/^\\d+\\s+comments?\\s*$/i',
+      // MediaWiki section headings ("== Early life ==", "=== 2001–2006 ==="):
+      // a plain-text Wikipedia extract carries its outline inline, and a
+      // heading line is structure, not prose — left ungated it glues into the
+      // next sentence and seeds phantom entity spans.
+      '/^\\s*={2,6}\\s*[^=\\s].*?={2,6}\\s*$/',
       // book apparatus: front-matter heads, numbered chapter/section heads,
       // roman-numeral and bare-number lines, bracketed plates, transcriber
       // boilerplate, and the Gutenberg wrapper
@@ -823,9 +828,20 @@ const READING_RULES = {
   },
   type_keywords_person: {
     value: ['man','woman','detective','officer','lecturer','lawyer','chief',
-      'leader','boss','dealer','smuggler','kingpin','trafficker','informant'],
+      'leader','boss','dealer','smuggler','kingpin','trafficker','informant',
+      'composer','conductor','musician','director','filmmaker','actor','actress',
+      'author','writer','singer','producer','artist'],
     mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
     desc: 'Class nouns that, as the predicate of a copular definition, retype a default thing-referent to a person. English class-noun inventory; conservative by design.',
+  },
+  np_generic_heads: {
+    value: ['award','prize','medal','court','courthouse','festival','orchestra','band','ensemble','choir',
+      'building','tower','center','centre','hall','school','university','college','academy','institute',
+      'museum','library','theatre','theater','hospital','church','cathedral','foundation','society',
+      'association','committee','commission','council','authority','administration','station','stadium',
+      'arena','league','club','hotel'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Generic class nouns that close a proper name ("…Chancery COURT", "Golden Globe AWARDS"). A name may honestly shorten by dropping such a tail ("Davidson County Chancery", "Golden Globe"), so the SYN identity gate admits a prefix-containment merge only when every dropped token is in this inventory (or the type_keywords class nouns) — never when the tail carries a name\'s worth of content ("Max Steiner" vs "Max Steiner Film Music Achievement Award"). Singular stems; the gate compares stemmed tokens. English inventory.',
   },
   // ── Site face cues (EO Space × Time) ──
   // The 9 sites are the phenomenological addresses every referent/relation
@@ -891,7 +907,7 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE,
     GUTENBERG_START_RES, GUTENBERG_END_RES,
     CHROME_RES, METAPHOR_RES, TYPE_KW_ORG, TYPE_KW_PLACE, TYPE_KW_PERSON,
-    SITE_GROUND_CUES, SITE_PATTERN_CUES;
+    NP_GENERIC_HEADS, SITE_GROUND_CUES, SITE_PATTERN_CUES;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -966,6 +982,7 @@ function rebuildLangSets() {
   TYPE_KW_ORG = new Set(mod_values('type_keywords_org'));
   TYPE_KW_PLACE = new Set(mod_values('type_keywords_place'));
   TYPE_KW_PERSON = new Set(mod_values('type_keywords_person'));
+  NP_GENERIC_HEADS = new Set(mod_values('np_generic_heads'));
   SITE_GROUND_CUES = new Set(mod_values('site_ground_cues'));
   SITE_PATTERN_CUES = new Set(mod_values('site_pattern_cues'));
 }
@@ -1214,6 +1231,7 @@ function _conventionsExport() {
     'speaker_label_patterns', 'separator_lines',
     'chrome_patterns', 'metaphor_frames',
     'type_keywords_org', 'type_keywords_place', 'type_keywords_person',
+    'np_generic_heads',
     'site_ground_cues', 'site_pattern_cues'];
   const coreConventions = {};
   for (const id of CORE_IDS) if (READING_RULES[id]) coreConventions[id] = READING_RULES[id].value;
@@ -2444,22 +2462,26 @@ function looksLikePerson(name) {
 }
 function normSurface(s) { return String(s).toLowerCase().replace(/\s+/g, ' ').trim(); }
 
+// Conservative singular stem so plural/singular variants of one token bind:
+//   Cossacks → cossack, Russians → russian, cities → city, churches → church.
+// Returns null when no safe stem exists (short tokens, -ss/-us/-is endings).
+function singularStem(t) {
+  if (t.length <= 4) return null;
+  let stem = null;
+  if (t.endsWith('ies')) stem = t.slice(0, -3) + 'y';
+  else if (t.endsWith('sses')) stem = t.slice(0, -2);                 // dresses → dress
+  else if (t.endsWith('ches') || t.endsWith('shes') || t.endsWith('xes')) stem = t.slice(0, -2);
+  else if (t.endsWith('s') && !t.endsWith('ss') && !t.endsWith('us') && !t.endsWith('is')) stem = t.slice(0, -1);
+  return (stem && stem.length >= 3 && !STOP.has(stem)) ? stem : null;
+}
+
 function tokenSetOf(name) {
   const raw = (String(name).toLowerCase().match(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu) || [])
     .filter(t => t.length > 1 && !STOP.has(t));
-  // Add conservative singular stems so plural/singular variants bind:
-  //   Cossacks → {cossacks, cossack}, Russians → {russians, russian},
-  //   cities → {cities, city}, churches → {churches, church}.
-  // Stems shorter than 3 chars or already in STOP are skipped.
   const expanded = new Set(raw);
   for (const t of raw) {
-    if (t.length <= 4) continue;
-    let stem = null;
-    if (t.endsWith('ies')) stem = t.slice(0, -3) + 'y';
-    else if (t.endsWith('sses')) stem = t.slice(0, -2);                 // dresses → dress
-    else if (t.endsWith('ches') || t.endsWith('shes') || t.endsWith('xes')) stem = t.slice(0, -2);
-    else if (t.endsWith('s') && !t.endsWith('ss') && !t.endsWith('us') && !t.endsWith('is')) stem = t.slice(0, -1);
-    if (stem && stem.length >= 3 && !STOP.has(stem)) expanded.add(stem);
+    const stem = singularStem(t);
+    if (stem) expanded.add(stem);
   }
   // Diacritic-folded variant of each token, so accented and unaccented forms
   // of one name share a token under gravity ("Joaquín" ↔ "Joaquin", "Guzmán" ↔
@@ -2496,6 +2518,120 @@ function compileConventionRegexes(sources) {
 // merge/seek treat accented and unaccented forms of one name as equal.
 function foldDiacritics(s) {
   return String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+// ── Name-identity machinery (the SYN gate's evidence) ──
+// The ORDERED sequence of a surface form's content tokens, folded and
+// singular-stemmed: "Winnipeg Symphony Orchestra" → [winnipeg, symphony,
+// orchestra], "Genie Awards" → [genie, award]. Unlike tokenSetOf (a recall
+// bag for gravity force and retrieval), this preserves position — and for
+// proper-noun phrases position IS identity: the left specifier
+// distinguishes, the shared head merely classifies.
+function contentSeqOf(name) {
+  const words = String(name).toLowerCase().match(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu) || [];
+  const seq = [];
+  for (const w of words) {
+    if (w.length < 3 || STOP.has(w)) continue;
+    const folded = foldDiacritics(w);
+    seq.push(singularStem(folded) || folded);
+  }
+  return seq;
+}
+
+const seqEqual = (a, b) => a.length === b.length && a.every((t, i) => t === b[i]);
+
+// Offset of `short` as a CONTIGUOUS word-run inside `long`, or -1.
+function seqIndexOf(short, long) {
+  for (let o = 0; o + short.length <= long.length; o++) {
+    let hit = true;
+    for (let j = 0; j < short.length; j++) if (long[o + j] !== short[j]) { hit = false; break; }
+    if (hit) return o;
+  }
+  return -1;
+}
+
+// Is `short` an ordered (possibly gapped) subsequence of `long`?
+// "howard shore" ⊂ "howard leslie shore" — middle-name elision.
+function isOrderedSubseq(short, long) {
+  let i = 0;
+  for (const t of long) { if (i < short.length && t === short[i]) i++; }
+  return i === short.length;
+}
+
+// Can two surface forms name the SAME referent? Identity precedence over
+// lexical overlap: shared-token COUNT is not identity evidence — "Winnipeg
+// Symphony Orchestra" and "Toronto Symphony Orchestra" share two of three
+// tokens and are different orchestras; "Golden Globe Awards" and "Genie
+// Awards" share their head and are different awards. For a proper-noun
+// phrase the identifying information lives in the LEFT specifier, so two
+// forms co-refer only when one is the other's honest short form:
+//   · equal content sequences (case/diacritic/plural variants) — always;
+//   · equal-arity sequences that differ anywhere — NEVER (the specifier
+//     disagreement veto: premodifiers disagreeing past a shared head);
+//   · persons: the shorter is an ordered subsequence of the longer
+//     ("Shore" ⊂ "Howard Shore", "Howard Shore" ⊂ "Howard Leslie Shore",
+//     "Tse" ⊂ "Tse Chi Lop") — given name, surname, and middle-name
+//     elision all preserve the sequence; "Mac Shore" vs "Howard Shore"
+//     fails it and stays apart;
+//   · non-persons keep the HEAD: a single token must equal the longer's
+//     final token ("Partnership" ⊂ "Nashville Downtown Partnership", but
+//     never "Nashville" ⊂ "Nashville Banner" — the city the org is named
+//     after); a multi-token shorter must be a contiguous suffix
+//     ("Symphony Orchestra" ⊂ "Winnipeg Symphony Orchestra"), a
+//     contiguous prefix whose dropped tail is ALL generic class nouns
+//     ("Golden Globe" ⊂ "Golden Globe Awards", "Davidson County Chancery"
+//     ⊂ "Davidson County Chancery Court" — but never "Max Steiner" ⊂
+//     "Max Steiner Film Music Achievement Award", whose tail is a name's
+//     worth of content), or an EDGE-ANCHORED elision: same specifier,
+//     same head, inner tokens elided ("Howard Shore" ⊂ "Howard Leslie
+//     Shore"). The elision shape is person-typical, but compromise's NER
+//     cannot be trusted to say so ("Howard" tags as Place), so the shape
+//     itself is the evidence.
+// Entity-type agreement is enforced where typing is STRONG — the gendered-
+// title veto at the gate — and the person-vs-award shape the weak NER veto
+// would have caught is already vetoed structurally here (a name's-worth
+// tail blocks the prefix path). Raw NER types are surface noise of exactly
+// the kind this gate exists to demote; a veto on them splits real subjects.
+// Gravity force (mass × overlap) still RANKS the admitted candidates; it
+// just no longer ADMITS them — overlap is a tie-breaker within identity,
+// never an override of it.
+function genericNameHead(t) {
+  return (NP_GENERIC_HEADS && NP_GENERIC_HEADS.has(t))
+    || (TYPE_KW_ORG && TYPE_KW_ORG.has(t))
+    || (TYPE_KW_PLACE && TYPE_KW_PLACE.has(t));
+}
+function namesCoRefer(seqA, seqB, bothPersons) {
+  if (!seqA.length || !seqB.length) return false;
+  if (seqEqual(seqA, seqB)) return true;
+  if (seqA.length === seqB.length) return false;
+  const [short, long] = seqA.length < seqB.length ? [seqA, seqB] : [seqB, seqA];
+  if (bothPersons) return isOrderedSubseq(short, long);
+  if (short.length === 1) return short[0] === long[long.length - 1];
+  const at = seqIndexOf(short, long);
+  if (at !== -1) {
+    if (at + short.length === long.length) return true;
+    if (at === 0) {
+      for (let j = short.length; j < long.length; j++) if (!genericNameHead(long[j])) return false;
+      return true;
+    }
+    return false;
+  }
+  return short[0] === long[0] && short[short.length - 1] === long[long.length - 1]
+    && isOrderedSubseq(short, long);
+}
+
+// Track the FULLEST form a site has been sighted as (longest content
+// sequence, then longest string). The SYN gate tests arrivals against this
+// — the site's most complete identity statement — never against the
+// accumulated token bag, whose growth across merges is what let one false
+// join snowball into a cluster that swallowed every name sharing a head.
+function noteFullForm(site, surface) {
+  const seq = contentSeqOf(surface);
+  if (!site.fullSeq || seq.length > site.fullSeq.length ||
+      (seq.length === site.fullSeq.length && String(surface).length > String(site.fullForm || '').length)) {
+    site.fullSeq = seq;
+    site.fullForm = String(surface);
+  }
 }
 
 // Normalize a CON relation verb: drop auxiliaries/copulas and punctuation so
@@ -2608,6 +2744,7 @@ const _DECHROME_LABELS = [
   ['copyright',   true,  /(©|\(c\)|copyright|all rights reserved|registered trademark)/i],
   ['byline',      true,  /^by\s+[a-z]/i],
   ['rule',        false, /^[\s_*=·•—–-]{3,}$|^\*\s*\*\s*\*/],
+  ['section',     false, /^\s*={2,6}\s*[^=\s].*?={2,6}\s*$/],
   ['frontmatter', false, /^(contents|index|preface|introduction|appendix|notes?|footnotes?|bibliography|glossary|errata|epilogue|prologue|dedication|illustrations?|chapter|book|volume|part|section|canto|act|scene|cap[ií]tulo)\b/i],
   ['numbering',   false, /^([ivxlcdm]+|\d+)[.)]?$/i],
   ['transcriber', false, /^(produced|prepared|transcribed|digitized|translated|edited|illustrated|compiled|adapted|annotated)\s+by\b|^transcriber/i],
@@ -3632,6 +3769,13 @@ async function extractEoGraph(text, onProgress) {
   // Bolkónski" → "Chief Prince"), and severs attributions from their
   // quotes. Blank lines (real paragraph breaks) survive as boundaries.
   text = String(text).replace(/\r\n?/g, '\n');
+  // A MediaWiki heading line ("== Early life and career ==") carries no
+  // terminal punctuation, so the single-newline unwrap below would glue it
+  // into the next sentence — the heading then pollutes that sentence's
+  // entity spans, and the chrome gate (which reads whole spine lines)
+  // never sees it standing alone. Promote each one to its own paragraph
+  // first; the chrome_patterns convention then gates it as structure.
+  text = text.replace(/^[ \t]*(={2,6}\s*[^=\s][^\n]*?={2,6})[ \t]*$/gm, '\n$1\n');
   // BUT a title-shaped line is structure, not a wrapped clause: a headline
   // pasted with a single newline before the body ("Downtown Business Owners:
   // You Cannot Afford…\nIf you own a business downtown…") would be glued into
@@ -4195,6 +4339,7 @@ async function extractEoGraph(text, onProgress) {
     cur.surfaceMass = (cur.surfaceMass || 0) + weight;
     cur.momentum = cur.momentum * GAMMA + weight;
     bumpForm(cur, surface);
+    noteFullForm(cur, surface);
     // Type is sticky after first assignment. Compromise NER produces
     // different types for the same surface in different sentences (Don as
     // 'thing' at first INS, then 'person' in the next sentence because the
@@ -4478,7 +4623,15 @@ async function extractEoGraph(text, onProgress) {
     const properArr = [];
     sentDoc.match('#ProperNoun+').forEach(m => {
       const trimmed = trimNounSpan(m.text());
-      if (trimmed) properArr.push(trimmed);
+      if (!trimmed) return;
+      // A bare demonym ("Canadian", "French", "Russians") is a nationality
+      // class word wearing a capital — compromise tags it ProperNoun, but
+      // it names no referent. Admitted, it becomes a SYN anchor that pulls
+      // the nationality's every span toward one node ("Canadian" fusing
+      // into a biography's subject). Multi-word names that merely contain
+      // one ("British Columbia") keep working.
+      if (!/\s/.test(trimmed) && m.has('#Demonym')) return;
+      properArr.push(trimmed);
     });
 
     const admitted = [];           // [{ surface, type, key }] for this sentence
@@ -4569,6 +4722,9 @@ async function extractEoGraph(text, onProgress) {
         // momentum is the kinetic boost from recent mentions.
         const candTokens = tokenSetOf(cleaned);
         const substCandTokens = [...candTokens].filter(t => t.length >= 3 && !STOP.has(t));
+        // The arrival's ordered content sequence — the identity the gate
+        // below tests, where the token SET above only measures recall.
+        const candSeq = contentSeqOf(cleaned);
         // Gender of the arriving surface, read from a leading gendered title.
         // The title is a STOP token for the index, but it is identity evidence
         // here: "Mrs. Samsa" (f) and "Mr. Samsa" / "Gregor Samsa" (m) share only
@@ -4576,50 +4732,28 @@ async function extractEoGraph(text, onProgress) {
         // they are different people, and must never fuse into one site.
         const candGender = genderFromName(cleaned);
         const pulls = [];
-        if (substCandTokens.length > 0) {
+        if (substCandTokens.length > 0 && candSeq.length > 0) {
           for (const [siteKey, site] of sites) {
             const shared = [...candTokens].filter(t => site.tokens.has(t));
             const substShared = shared.filter(t => t.length >= 3 && !STOP.has(t));
             if (substShared.length === 0) continue;
             if (candGender && site.gender && candGender !== site.gender) continue;
-            // Substring-merge guard: a single shared content token is too weak
-            // to fuse two surfaces into one referent ("South America" / "South
-            // Korea" share only "south"; "Alex Chung" / "Lee Chung Chak" share
-            // only "chung"). Require full containment of the smaller content-
-            // token set ("Tse" ⊂ "Tse Chi Lop"), ≥2 shared content tokens, or
-            // diacritic-equality ("Joaquín" ≡ "Joaquin"). Same token space the
-            // pull uses, so the guard can never disagree with the force it gates.
-            const substSiteTokens = [...site.tokens].filter(t => t.length >= 3 && !STOP.has(t));
-            const minContent = Math.min(substCandTokens.length, substSiteTokens.length);
-            let strongEvidence = substShared.length >= 2
-              || (minContent > 0 && substShared.length === minContent)
-              || foldDiacritics(cleaned) === foldDiacritics(site.name);
-            // Single-token containment is PERSON-shaped evidence ("Tse" ⊂
-            // "Tse Chi Lop", "Corman" ⊂ "David Corman" — given name and
-            // surname both serve as short forms). For places, orgs and things
-            // the only honest short form keeps the HEAD (final) token: "the
-            // Partnership" shortens "Nashville Downtown Partnership", but
-            // "Nashville" ⊂ "Nashville Downtown Partnership" is the city the
-            // org is named AFTER — a leading-modifier match that fused the
-            // document's protagonist into its hometown (and "Tennessee" into
-            // "Tennessee Highway Patrol"). And a longer arrival containing an
-            // established single-token site ("Nashville Banner" over
-            // "Nashville") is a new compound, never a re-mention. Both
-            // directions gated here; persons exempt; diacritic-equality and
-            // ≥2-shared-token merges untouched.
-            if (strongEvidence && substShared.length < 2 && minContent === 1
-                && type !== 'person' && site.type !== 'person'
-                && foldDiacritics(cleaned) !== foldDiacritics(site.name)) {
-              if (substCandTokens.length === 1) {
-                const siteHead = String(site.name).toLowerCase().split(/\s+/)
-                  .filter(w => w.length >= 3 && !STOP.has(w)).pop();
-                if (siteHead && foldDiacritics(substCandTokens[0]) !== foldDiacritics(siteHead))
-                  strongEvidence = false;
-              } else if (substSiteTokens.length === 1) {
-                strongEvidence = false;
-              }
-            }
-            if (!strongEvidence) continue;
+            // ── Identity gate (INS outranks SIG) ──
+            // Shared-token count used to be the merge evidence here, and it
+            // fused every name pair sharing a head: "Winnipeg Symphony
+            // Orchestra" + "Toronto Symphony Orchestra" (2 shared tokens),
+            // the Academy/Golden Globe/Grammy/Genie awards (snowballing
+            // through the accumulated token bag), "Max Steiner" + the award
+            // named after him. Admission now requires the two names to
+            // CO-REFER (namesCoRefer: equal sequences, person short forms,
+            // or head-keeping containment — with the specifier-disagreement
+            // veto), tested against the site's FULLEST sighted form rather
+            // than its token bag, so one bad join can no longer widen the
+            // net for the next. Force still RANKS the admitted pulls below —
+            // overlap is a tie-breaker within identity, never an override.
+            if (!site.fullSeq) noteFullForm(site, site.name);
+            const bothPersons = type === 'person' && site.type === 'person';
+            if (!namesCoRefer(candSeq, site.fullSeq, bothPersons)) continue;
             const overlap = shared.length / Math.sqrt(Math.max(1, candTokens.size) * Math.max(1, site.tokens.size));
             const force = (site.mass + site.momentum) * overlap;
             if (force > 0) pulls.push({
@@ -4631,6 +4765,29 @@ async function extractEoGraph(text, onProgress) {
         }
 
         if (pulls.length === 0) {
+          // ── Generic-phrase gate ──
+          // A multi-token surface whose every content word also stands
+          // lowercase on this page ("Music Festival", "Symphony Orchestra")
+          // is a class phrase wearing capitals, not a name. Single tokens
+          // already die at the lowercase-evidence gate in tryAdmit; this is
+          // its multi-token completion, applied only where it matters — at
+          // the brink of MINTING a referent. A generic head minted as a
+          // node becomes a merge magnet for every later compound sharing
+          // its tail. An honest short-form reuse ("Symphony Orchestra"
+          // where "Winnipeg Symphony Orchestra" is established) never
+          // reaches here: the established site pulls it in the branch
+          // below. No event, like tryAdmit's silent rejections; withdrawn
+          // from this sentence's admitted set so relation extraction can't
+          // bind to a referent that was never minted.
+          if (lowerVocab && /\s/.test(cleaned)) {
+            const words = cleaned.toLowerCase().split(/\s+/)
+              .map(w => w.replace(/[^\p{L}\p{M}\p{N}'’-]+/gu, ''))
+              .filter(w => w.length >= 3 && !STOP.has(w));
+            if (words.length && words.every(w => lowerVocab.has(w) || lowerVocab.has(singularStem(w) || w))) {
+              admitted.pop();
+              continue;
+            }
+          }
           // No body exerts gravity on this surface — new instantiation.
           // Before creating, check the signal substrate. If the reader has
           // been holding a signal whose constraints match this name (gender
@@ -4696,6 +4853,7 @@ async function extractEoGraph(text, onProgress) {
           // string — see pickCanonicalForm.
           noteSight(target.siteKey, i);
           bumpForm(targetSite, cleaned);
+          noteFullForm(targetSite, cleaned);
           const canonical = pickCanonicalForm(targetSite.forms, target.siteName);
           events.push({
             id: 'ev-' + seq, seq: seq++, op: 'SYN', stance: 'Joining',
@@ -4794,10 +4952,15 @@ async function extractEoGraph(text, onProgress) {
     // Type inference from a copular gloss: a definition whose predicate names
     // a class ("Sam Gor is a drug syndicate") retypes a default thing-referent
     // to org/place/person via the type_keywords conventions. Conservative —
-    // only a recognized class noun retypes, and only from the 'thing' default,
-    // never overriding a person/place/org already established. Emitted as a DEF
-    // path:'type' (the same channel speech-induction uses), so projection
-    // believes it: the cluster's type carries the retype forward.
+    // only a recognized class noun retypes, and only from the 'thing' default
+    // — with ONE exception: a person-class gloss may override a PLACE guess.
+    // Compromise reads a surname that doubles as a geography noun as a place
+    // ("Howard SHORE"), and that first guess is sticky; the page's own copular
+    // statement ("…is a Canadian composer") is strictly stronger evidence.
+    // Org stays protected (an org described by its leader-noun must not turn
+    // into a person). Emitted as a DEF path:'type' (the same channel
+    // speech-induction uses), so projection believes it: the cluster's type
+    // carries the retype forward.
     const maybeRetypeFromGloss = (targetSurface, hint, gloss) => {
       const inferred = inferTypeFromGloss(gloss);
       if (!inferred) return;
@@ -4808,7 +4971,8 @@ async function extractEoGraph(text, onProgress) {
         || resolveSiteKey(cleanedKey)
         || resolveSiteKey(normSurface(targetSurface));
       const site = k ? sites.get(k) : null;
-      if (!site || site.type !== 'thing') return;
+      if (!site) return;
+      if (site.type !== 'thing' && !(site.type === 'place' && inferred === 'person')) return;
       site.type = inferred;
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
@@ -4823,7 +4987,16 @@ async function extractEoGraph(text, onProgress) {
     // ── DEF (Dissecting): copular "X is/was Y" ────────────────
     // Use clauses() + manual copula detection instead of named-capture
     // matching — same compatibility reason as CON.
-    sentDoc.clauses().forEach(clause => {
+    // An inline parenthetical makes compromise clause the SUBJECT apart from
+    // its copula ("Howard Leslie Shore OC | born … | is a Canadian
+    // composer"), so the copula never meets its subject and the page's own
+    // definition is lost. When the sentence carries one, re-clause a
+    // paren-stripped copy; a sentence with no parenthetical uses sentDoc
+    // unchanged, so every other reading is byte-identical (parity).
+    const copularSource = /\([^()]*\)/.test(sentText)
+      ? nlp(sentText.replace(/\s*\([^()]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim())
+      : sentDoc;
+    copularSource.clauses().forEach(clause => {
       const text = clause.text();
       // Look for "<noun phrase> (is|was|are|were|am) (a|an|the) <noun phrase>".
       // The determiner is REQUIRED and kept: a definition is a det-headed
@@ -4833,10 +5006,33 @@ async function extractEoGraph(text, onProgress) {
       // deposits nothing here.
       const m = text.match(/^(.+?)\s+(is|was|are|were|am|been|becomes?|became|remains?|remained)\s+((?:(?:a|an|the)\s+)?)(.+?)\.?$/i);
       if (!m) return;
-      const targetRaw = m[1].trim();
+      let targetRaw = m[1].trim();
+      // A postnominal parenthetical is apposition, not part of the name:
+      // "Howard Leslie Shore OC (born October 18, 1946) is a Canadian
+      // composer" must resolve its subject as the NAME, or the page's own
+      // copular statement never reaches the site it defines.
+      targetRaw = targetRaw.replace(/\s*\([^()]*\)\s*$/, '').trim() || targetRaw;
+      // …and post-nominal honorifics ("OC", "OBE", "Jr.") are not part of the
+      // name either — NER admits the site without them, so a subject that
+      // keeps them resolves to no site. A closed list (never bare all-caps,
+      // which would behead "The DMC is …" to "The").
+      targetRaw = targetRaw.replace(/(?:\s+(?:OC|OBE|CBE|MBE|KBE|GBE|CC|CM|CVO|CH|PC|QC|KC|FRS|FRSC|FRSL|Jr\.?|Sr\.?|II|III|IV))+$/, '').trim() || targetRaw;
+      // A subject led by a subordinating conjunction belongs to a
+      // SUBORDINATE clause: "When Shore was 13" states his age at a past
+      // moment, not the standing fact "Shore is 13" — the copula is the
+      // temporal/conditional frame's, not a predication about the subject.
+      // Promoting it is how a mechanical readout answered "what are his
+      // influences?" with "Shore is 13". Rejected outright.
+      if (/^(when|while|whenever|whilst|if|unless|though|although|because|whereas|once|after|before|until|till|as|since)\b/i.test(targetRaw)) return;
       const det = m[3] || '';
       const value = (det + m[4]).trim().replace(/[.,;:!?]+$/, '');
       if (!targetRaw || !value) return;
+      // The copula carries TENSE, and tense is meaning: "Shore was a member
+      // of Lighthouse" (1969–1972, finished) must not flatten to "Shore is a
+      // member". Recorded on the event so the readout renders the page's own
+      // tense instead of a default present.
+      const copula = m[2].toLowerCase();
+      const pastTense = /^(was|were|been|became|remained)$/.test(copula);
       const target = trimNounSpan(targetRaw) || targetRaw;
       if (target === value) return;
       if (/^(there|here|it|this|that)$/i.test(target)) return;
@@ -4864,6 +5060,7 @@ async function extractEoGraph(text, onProgress) {
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
         target, path: det ? 'class' : 'state', value,
+        copula, tense: pastTense ? 'past' : 'present',
         targetHint: hint,
         targetRaw,
         ...sentMeta, src: 'copular',
@@ -5902,6 +6099,33 @@ function pickCanonicalForm(forms, fallback) {
   return best != null ? best : fallback;
 }
 
+// Deterministic cluster canonical (projection-time identity): the LONGEST
+// fully-specified mention is the cluster's identity statement — "David
+// Cronenberg" over "Cronenberg", "Bridgehampton Chamber Music Festival"
+// over a truncation — independent of which form happened to host each
+// inline merge. Ties break on sighting count, then first-sighting order,
+// then the string itself: a TOTAL order, so the same forms yield the same
+// canonical on every firing, and the cluster key derives from the same
+// string (key ⊂ name by construction). The inline site names
+// (pickCanonicalForm above) remain live-pass display transients; this is
+// the projected identity.
+function pickCanonicalDeterministic(forms, firstSeq) {
+  let best = null, bestSeq = -1, bestLen = -1, bestN = -1, bestFirst = Infinity;
+  for (const [form, n] of forms) {
+    const seqLen = contentSeqOf(form).length;
+    const len = String(form).length;
+    const first = (firstSeq && firstSeq.has(form)) ? firstSeq.get(form) : Infinity;
+    const better =
+      seqLen > bestSeq ||
+      (seqLen === bestSeq && (len > bestLen ||
+        (len === bestLen && (n > bestN ||
+          (n === bestN && (first < bestFirst ||
+            (first === bestFirst && best != null && String(form) < String(best))))))));
+    if (better) { best = form; bestSeq = seqLen; bestLen = len; bestN = n; bestFirst = first; }
+  }
+  return best;
+}
+
 // Pronoun resolution under physics: pronouns have no substantive token
 // of their own, so they bind by type (person pronoun → person sites).
 // The pull strength is the site's momentum (recent activity in working
@@ -6102,11 +6326,12 @@ function projectGraph(events, frame = {}) {
       if (!isPromotable(surf)) continue;
       const key = normSurface(surf);
       if (key.length < 2) continue;
-      const cur = occ.get(key) || { key, name: surf, mentions: 0, eventSeqs: [], surfaceForms: new Set(), formCounts: new Map() };
+      const cur = occ.get(key) || { key, name: surf, mentions: 0, eventSeqs: [], surfaceForms: new Set(), formCounts: new Map(), formFirst: new Map() };
       cur.mentions++;
       cur.eventSeqs.push(ev.seq);
       cur.surfaceForms.add(surf);
       cur.formCounts.set(surf, (cur.formCounts.get(surf) || 0) + 1);
+      if (!cur.formFirst.has(surf)) cur.formFirst.set(surf, ev.seq);
       // Display name is mentions-first (the form seen most), not the longest
       // string — consistent with the site-layer canonical. A site-SYN
       // `canonical` from a gravity merge still overrides this below.
@@ -6161,6 +6386,10 @@ function projectGraph(events, frame = {}) {
           cur.mentions++;
           cur.eventSeqs.push(ev.seq);
           cur.surfaceForms.add(siteName);
+          if (!cur.formCounts) cur.formCounts = new Map();
+          if (!cur.formFirst) cur.formFirst = new Map();
+          cur.formCounts.set(siteName, (cur.formCounts.get(siteName) || 0) + 1);
+          if (!cur.formFirst.has(siteName)) cur.formFirst.set(siteName, ev.seq);
         }
       }
       joinsBySeq.set(ev.seq, ev.sites.slice());
@@ -6510,12 +6739,29 @@ function projectGraph(events, frame = {}) {
     cluster.type = bestType;
   }
 
-  // Apply canonical names from site-layer SYN events (most-recent wins for its cluster).
-  for (const ev of events) {
-    if ((isSiteSyn(ev) || ev.op === 'MERGE') && ev.canonical && Array.isArray(ev.sites) && ev.sites.length > 0) {
-      const root = find(ev.sites[0]);
-      const cluster = clusterMap.get(root);
-      if (cluster) cluster.name = ev.canonical;
+  // Canonical name and key, recomputed deterministically over the FULLY
+  // MERGED cluster. The site-layer SYN events each recorded a canonical as
+  // the merge fired, but those are order-sensitive — the same pair resolves
+  // to different survivors depending on which form hosted the join, so a
+  // cluster's name and key used to be chosen by divergent passes and could
+  // disagree (a key that wasn't even a sub-phrase of the name). Here every
+  // member's sighted forms are pooled and one total order picks the
+  // canonical (pickCanonicalDeterministic); the key derives from that same
+  // string, so name and key agree by construction. The SYN events keep
+  // their recorded canonicals as the audit trail of the live pass.
+  for (const cluster of clusterMap.values()) {
+    const forms = new Map(), firsts = new Map();
+    for (const k of cluster.memberKeys) {
+      const o = occ.get(k);
+      if (!o) continue;
+      if (o.formCounts) for (const [f, n] of o.formCounts) forms.set(f, (forms.get(f) || 0) + n);
+      if (o.formFirst) for (const [f, s] of o.formFirst) if (!firsts.has(f) || s < firsts.get(f)) firsts.set(f, s);
+    }
+    for (const sf of cluster.surfaceForms) if (!forms.has(sf)) forms.set(sf, 1);
+    const canonical = pickCanonicalDeterministic(forms, firsts);
+    if (canonical) {
+      cluster.name = canonical;
+      cluster.key = normSurface(canonical);
     }
   }
 
@@ -6607,7 +6853,12 @@ function projectGraph(events, frame = {}) {
   const findClusterKey = (surf) => {
     if (!surf) return null;
     const k = normSurface(surf);
-    if (parent.has(k)) return find(k);
+    // The union-find root is the internal handle; the cluster's PUBLIC key
+    // derives from its canonical name, so resolve root → cluster → key.
+    if (parent.has(k)) {
+      const cl = clusterMap.get(find(k));
+      return cl ? cl.key : find(k);
+    }
     for (const cl of clusters) {
       if (cl.surfaceForms.has(surf)) return cl.key;
     }
@@ -6645,7 +6896,13 @@ function projectGraph(events, frame = {}) {
       // `type` (person/place/org/thing) is the entity SUBTYPE — a rank below
       // the Entity cell, never a site.
       site: eoSite('Existence', c.name, c.type),
-      gender: genderFromName(c.name) || c.memberKeys.map(k => learnedGender.get(k)).find(Boolean) || null,
+      // Gender evidence may live on a titled member form ("Mr. Samsa")
+      // rather than on the canonical (the fuller, untitled "Gregor Samsa"),
+      // so scan every sighted form before falling back to learned gender.
+      // Conflicting-gender forms can't share a cluster (the SYN gender veto),
+      // so the first hit is the cluster's.
+      gender: genderFromName(c.name) || [...c.surfaceForms].map(f => genderFromName(f)).find(Boolean)
+        || c.memberKeys.map(k => learnedGender.get(k)).find(Boolean) || null,
       referent_id: c.canonical_referent_id,
       member_referent_ids: c.member_referent_ids,
       physics: c.physics || null,
@@ -7068,6 +7325,10 @@ function projectGraph(events, frame = {}) {
                        ? Math.round(e.physics.surfaceMass * 10) / 10 : null,
         gender:      e.gender || null,
         referent_id: e.referent_id || null,
+        // Every surface the cluster was sighted as — the audit trail for the
+        // key ⊂ name contract (the key derives from the canonical, and the
+        // canonical is one of these).
+        surfaceForms: e.surfaceForms || [],
       };
     }).filter(e => e.sents.length > 0);
     entities.sort((a, b) => b.mass - a.mass || b.raw - a.raw);
@@ -9291,6 +9552,11 @@ function projectGraph(events, frame = {}) {
     // the name IS, not whichever sentence shares the most tokens
     const defined = answerDefine(doc, query, opts);
     if (defined) return defined;
+    // a specific-aspect ask about a present subject reads only the sentences
+    // that speak to that aspect, or says the page doesn't cover it — never the
+    // subject's unrelated facts dragged in by name overlap (B5.1)
+    const aspectAns = answerAspect(doc, query, opts);
+    if (aspectAns) return aspectAns;
     // a kin-shaped ask ("whose son…?") is answered from the possessive-kin
     // record — the possessor named outright, which the raw sentence can't do
     const kin = answerKin(doc, query, opts);
@@ -9509,12 +9775,79 @@ function projectGraph(events, frame = {}) {
     return all.slice(0, k);
   }
 
-  // The single source a turn is most about — strongest retrieval wins, falling
-  // back to the first that referencesDoc, then the first in scope. This is where
-  // a mechanical (single-doc) answer is grounded.
+  // ── Discourse precedence (B1/B1′): identity outranks lexical surface in
+  // document binding, exactly as the SYN gate makes it outrank overlap one
+  // layer down. The active discourse subject — carried across turns by the
+  // conversation field, handed in as ctx.hotEntity — HOLDS the bound
+  // document. A bare-pronoun follow-up ("what are his inspirations?") and a
+  // follow-up that names the active subject ("what are SHORE's
+  // inspirations?") both stay on the subject's document, even when a content
+  // word ("inspirations") has its strongest lexical home in another source.
+  // Lexical scoring may rank spans WITHIN the held document; it may not move
+  // the document. Switching requires the query to name a DIFFERENT subject —
+  // a genuine new referent — not a content noun whose keyword home is
+  // elsewhere. Inert without an active subject (batch/parity callers pass
+  // none), so unthreaded routing is byte-identical to today.
+  function entityCoRefersName(entity, name) {
+    const b = contentSeqOf(name);
+    if (!b.length) return false;
+    if (namesCoRefer(contentSeqOf(entity.name || entity.key || ''), b, false)) return true;
+    for (const f of (entity.surfaceForms || [])) if (namesCoRefer(contentSeqOf(f), b, false)) return true;
+    return false;
+  }
+  // The scope doc the active subject is recorded in (its entities carry a
+  // cluster co-referent with hotName). Null when no source holds it.
+  function activeSubjectDoc(ds, hotName) {
+    if (!hotName) return null;
+    for (const d of ds) {
+      if (d.kind !== 'prose') continue;
+      let ents = []; try { ents = projectEntities(d).entities || []; } catch (e) { continue; }
+      if (ents.some(e => entityCoRefersName(e, hotName))) return d;
+    }
+    return null;
+  }
+  // The query names a subject that is NOT the active one — a real entity in
+  // some scope doc, not co-referent with hotName. Returns the switch-target
+  // doc, or null (the query introduces no competing subject → the active
+  // subject holds).
+  function queryNamesOtherSubject(ds, q, hotName) {
+    for (const d of ds) {
+      if (d.kind !== 'prose') continue;
+      let ents = []; try { ents = projectEntities(d).entities || []; } catch (e) { continue; }
+      const ql = ' ' + String(q).toLowerCase().replace(/['’]s\b/g, '').replace(/[^a-z0-9'’\- ]+/g, ' ') + ' ';
+      for (const e of ents) {
+        const n = String(e.name).toLowerCase();
+        let named = n.length >= 3 && ql.includes(' ' + n + ' ');
+        if (!named) {
+          const parts = n.split(/\s+/);
+          named = parts.length > 1 && parts.some(p => p.length >= 4 && !GENERIC_VOICE_HEADS.has(p) && ql.includes(' ' + p + ' '));
+        }
+        if (named && !entityCoRefersName(e, hotName)) return d;
+      }
+    }
+    return null;
+  }
+  // Discourse binding for a turn: { doc, hold } when the active subject
+  // holds, { doc, switch } when the query names a different subject, null
+  // when there's no active subject in scope (lexical decides). Pure read.
+  function discourseBinding(ds, q, ctx) {
+    if (!ctx || !ctx.hotEntity) return null;
+    const subjDoc = activeSubjectDoc(ds, ctx.hotEntity);
+    if (!subjDoc) return null;
+    const other = queryNamesOtherSubject(ds, q, ctx.hotEntity);
+    if (other && other.id !== subjDoc.id) return { doc: other, switch: true, from: subjDoc };
+    return { doc: subjDoc, hold: true };
+  }
+
+  // The single source a turn is most about. Discourse precedence first (an
+  // active subject holds its document); only then does lexical surface
+  // decide — strongest retrieval, falling back to the first that
+  // referencesDoc, then the first in scope.
   function routePrimary(docs, query, ctx) {
     const ds = scopeDocs(docs);
     if (!ds.length) return null;
+    const bind = discourseBinding(ds, query, ctx);
+    if (bind) return bind.doc;
     let best = null, bestScore = -1;
     for (const d of ds) {
       if (d.kind === 'table') continue;
@@ -9553,7 +9886,9 @@ function projectGraph(events, frame = {}) {
     const ds = scopeDocs(docs);
     if (!ds.length) return answer(null, query);
     if (ds.length === 1) return answer(ds[0], query, opts);
-    const primary = routePrimary(ds, query) || ds[0];
+    // Discourse precedence holds the active subject's document (opts.hotEntity
+    // is the conversation field's current subject); without it, lexical wins.
+    const primary = routePrimary(ds, query, opts) || ds[0];
     if (primary.kind === 'table') return answer(primary, query);
     const voidWhitelist = new Set(referentsScope(ds, query).antimatter);
     return answer(primary, query, { ...(opts || {}), voidWhitelist });
@@ -9809,6 +10144,9 @@ function projectGraph(events, frame = {}) {
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);
       out.push({ subject, key: ent ? ent.key : k, is: String(ev.value).trim(), path: ev.path,
+                 // tense rides through so the readout renders the page's own
+                 // copula ("was a member", not a flattened "is a member")
+                 tense: ev.tense || 'present', copula: ev.copula || null,
                  sent: ev.sentence_idx != null ? ev.sentence_idx : null });
     }
     return out;
@@ -9891,6 +10229,33 @@ function projectGraph(events, frame = {}) {
      ("what is X's job"), class DEFs first for an identity ask ("who is X");
      the other kind follows only if it adds content tokens. Null when the ask
      isn't definitional, names nothing, or the graph holds nothing. */
+  // The specific ASPECT a definitional ask is about, beyond the entity and
+  // the wh-frame: "what are Howard Shore's influences" → {influences}; a bare
+  // "who is Howard Shore" → {} (identity, no aspect). The mechanical readout
+  // is topic-blind without this — it answered "what are his influences?" with
+  // "Shore is a member of Lighthouse" because it dumped whatever DEF mentioned
+  // the entity. Substantive tokens only (≥5 chars), minus the entity's own.
+  const _ASK_FRAME = new Set(['who','what','which','whose','where','when','about','tell','give','show','their','his','her','its','the','that','this','does','did','was','were','are','is']);
+  function askAspectTokens(query, named) {
+    const entToks = new Set();
+    for (const e of named) for (const t of (tok(e.name) || [])) entToks.add(t);
+    const out = [];
+    for (const t of (tok(query) || [])) {
+      if (t.length < 5 || _ASK_FRAME.has(t) || entToks.has(t)) continue;
+      out.push(t);
+    }
+    return [...new Set(out)];
+  }
+  // Does a DEF value speak to the asked aspect? Stem-tolerant prefix match so
+  // "influences" reaches "influenced"/"influential", "inspirations" reaches
+  // "inspired".
+  function _defMatchesAspect(def, aspect) {
+    const vt = tok(def.is) || [];
+    return aspect.some(a => {
+      const pa = a.slice(0, 5);
+      return vt.some(t => t.slice(0, 5) === pa);
+    });
+  }
   function defineAssertions(doc, query) {
     if (!doc || doc.kind !== 'prose' || !isDefinitionalAsk(query)) return null;
     const named = namedEntitiesIn(doc, query);
@@ -9898,9 +10263,20 @@ function projectGraph(events, frame = {}) {
     let defs = [];
     try { defs = assertionsOf(doc); } catch (e) { return null; }
     const keys = new Set(named.map(e => e.key));
-    const mine = defs.filter(d => keys.has(d.key)
+    let mine = defs.filter(d => keys.has(d.key)
       || (d.key.length >= 4 && [...keys].some(k => _keyWithin(k, d.key) || _keyWithin(d.key, k))));
     if (!mine.length) return null;
+    // TOPIC-SCOPED (B5.1): a non-role aspect ask reads only the assertions
+    // that speak to that aspect. None match ⇒ the page records the subject
+    // but not this aspect — return null so the path falls through to lexical
+    // retrieval (which may find it in prose) or to honest absence, rather
+    // than dumping topically-unrelated DEFs as if they answered the question.
+    const aspect = isRoleAsk(query) ? [] : askAspectTokens(query, named);
+    if (aspect.length) {
+      const onTopic = mine.filter(d => _defMatchesAspect(d, aspect));
+      if (!onTopic.length) return null;
+      mine = onTopic;
+    }
     const roles = mine.filter(d => d.path === 'role');
     const classes = mine.filter(d => d.path !== 'role');
     const ordered = isRoleAsk(query) ? roles.concat(classes) : classes.concat(roles);
@@ -9931,14 +10307,72 @@ function projectGraph(events, frame = {}) {
       if (!seenCite.has(i)) { seenCite.add(i); cites.push({ docId: doc.id, idx: i }); }
       return ` {{cite:${doc.id}:${i}:s${i}}}`;
     };
+    // The copula is the page's, not a default present: a role reads bare
+    // ("Shore the chairman"), a class/state keeps its tense ("Shore was a
+    // member of Lighthouse").
     const text = da.picked
-      .map(d => `${d.subject} ${d.path === 'role' ? '' : 'is '}${deAnaphorDef(d.is)}` + cite(d.sent) + '.')
+      .map(d => {
+        const cop = d.path === 'role' ? '' : ((d.tense === 'past' ? 'was ' : 'is '));
+        return `${d.subject} ${cop}${deAnaphorDef(d.is)}` + cite(d.sent) + '.';
+      })
       .join(' ');
     return {
       text, cites,
       audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
         note: 'Read from the page’s recorded assertions (DEF events) about ' + da.subject + ' — no model involved.' },
     };
+  }
+
+  /* ---------- topic-scoped fallback / honest absence (B5.1) ----------
+     A definitional ask about a SPECIFIC aspect of a present subject ("what
+     are Howard Shore's influences?"). The page records the subject but maybe
+     not this aspect. This reads only sentences carrying BOTH the subject and
+     the aspect; finding none, it says so — it never falls through to the
+     entity-overlap retrieval that would surface the subject's UNRELATED facts
+     (a camp friendship, a band membership) as if they answered the question.
+     The mechanical reader was topic-blind here: it answered "influences?"
+     with "Shore was a member of Lighthouse". Null for a bare identity ask
+     (no aspect) or a non-definitional turn, so every other path is
+     byte-identical. */
+  function answerAspect(doc, query, opts = {}) {
+    if (!doc || doc.kind !== 'prose' || !isDefinitionalAsk(query) || isRoleAsk(query)) return null;
+    const named = namedEntitiesIn(doc, query);
+    if (!named.length) return null;
+    const aspect = askAspectTokens(query, named);
+    if (!aspect.length) return null;                 // bare identity ask → not ours
+    // referential absence (the subject isn't on the page at all) is the
+    // void's job, not this path's
+    try {
+      let { antimatter } = referents(doc, query);
+      if (opts.voidWhitelist) antimatter = antimatter.filter(t => opts.voidWhitelist.has(t));
+      if (antimatter.length) return null;
+    } catch (e) {}
+    const texts = doc.sentenceTexts || [];
+    const chromeSet = (doc._chrome && doc._chrome.length) ? new Set(doc._chrome) : null;
+    const onAspect = (i) => {
+      const vt = tok(texts[i]) || [];
+      return aspect.some(a => { const pa = a.slice(0, 5); return vt.some(t => t.slice(0, 5) === pa); });
+    };
+    const onSubject = (i) => {
+      const lc = ' ' + String(texts[i]).toLowerCase().replace(/\s+/g, ' ') + ' ';
+      return named.some(e => lc.includes(' ' + String(e.name).toLowerCase() + ' ')
+        || (e.surfaceForms || []).some(f => String(f).length >= 3 && lc.includes(' ' + String(f).toLowerCase() + ' ')));
+    };
+    const hits = [];
+    for (let i = 0; i < texts.length; i++) {
+      if (chromeSet && chromeSet.has(i)) continue;
+      if (onAspect(i) && onSubject(i)) hits.push(i);
+    }
+    if (hits.length) {
+      const cites = hits.slice(0, 2).map(i => ({ docId: doc.id, idx: i }));
+      const text = hits.slice(0, 2).map(i => `${String(texts[i]).trim()} {{cite:${doc.id}:${i}:s${i}}}`).join(' ');
+      return { text, cites, audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
+        note: 'Read from the sentences that speak to the asked aspect — no model involved.' } };
+    }
+    const subj = named[0].name, asp = aspect.join(' ');
+    return { text: `The document covers ${subj}, but records nothing about ${subj}’s ${asp}.`,
+      cites: [], audit: { status: 'notes', grounded: true, covers: '0/1', stable: true, absent: true,
+        note: `Honest absence: ${subj} is on the page, but the asked aspect (${asp}) is not recorded.` } };
   }
 
   /* ---------- document metadata (Gutenberg-style headers) ----------
@@ -10652,13 +11086,19 @@ function projectGraph(events, frame = {}) {
       .replace(/([.!?]['"’”)\]]*)\s*((?:\[s(?:\d+|\?)\]\s*)+)/g, ' $2$1')
       .replace(/\s+([.,;:])/g, '$1').trim();
     const texts = doc.sentenceTexts || [];
+    // Chrome is never citable: a reference/external-link line, a heading or a
+    // nav row is page structure, not a source for a claim. A model tag that
+    // points at one (the IMDb "Official website" line the trace cited as
+    // s123) is dropped from the citable pool — the claim holds uncited rather
+    // than laundering chrome into a citation.
+    const chromeSet = (doc._chrome && doc._chrome.length) ? new Set(doc._chrome) : null;
     const parts = splitDraft(raw).filter(p => p.replace(/\[s(?:\d+|\?)\]/g, '').trim());
     const cited = [], held = [];
     let attested = 0, keyed = 0;
     const out = parts.map(sent => {
       const tags = [...String(sent).matchAll(/\[s(\d+|\?)\]/g)].map(m => m[1]);
       const clean = sent.replace(/\[s(?:\d+|\?)\]/g, '').replace(/\s+([.,;:])/g, '$1').replace(/\s{2,}/g, ' ').trim();
-      const keys = tags.filter(t => t !== '?').map(Number).filter(n => n >= 0 && n < texts.length);
+      const keys = tags.filter(t => t !== '?').map(Number).filter(n => n >= 0 && n < texts.length && !(chromeSet && chromeSet.has(n)));
       if (keys.length) {
         keyed++;
         const idx = keys[0];                      // the first tag is the claim's provenance
@@ -11222,7 +11662,8 @@ function projectGraph(events, frame = {}) {
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
     ingestionReport, classifyTokens, evaAcrossDocs, textGraph,
     // multi-doc scope: ground a conversation against an explicit set of sources
-    referencesScope, retrieveScope, routePrimary, referentsScope, answerScope,
+    referencesScope, retrieveScope, routePrimary, discourseBinding, referentsScope, answerScope,
+    resolveSubjectDoc: activeSubjectDoc,
     contextScope, bindCitationsScope, supportProbeTerms,
     // tiered context for the notes-and-spans grounded prompt
     contextParts, contextPartsScope, partsFromHits, readingNotes,

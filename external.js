@@ -603,6 +603,73 @@
     return t ? t.slice(0, 60).trim() : null;
   }
 
+  // Does this turn EXPLICITLY ask to acquire an article — a lookup verb or an
+  // acquisition frame ("look up / find / pull up / search / get the article on
+  // X", or "who is / what is / tell me about <ProperName>")? A bare factual or
+  // follow-up question ("what are his inspirations?", "when was he born?") is
+  // intent: factual, NOT intent: acquire, and must never reach the fetcher.
+  // The discriminator for the who/what/tell-me frames is a proper-name target
+  // in the ORIGINAL casing — "what are his inspirations" has none, so it is
+  // factual; "who is Howard Shore" does, so it is an acquisition candidate
+  // (still gated downstream by corpus-resolution and the active-subject
+  // follow-up check — naming alone never forces a fetch). Pure.
+  function acquireIntent(text) {
+    const q = String(text == null ? '' : text);
+    const t = ' ' + q.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, ' ').trim() + ' ';
+    // explicit lookup verbs / acquisition frames — these carry their own
+    // acquisition force regardless of a capitalized target
+    if (/\b(look\s+(?:up\b|\w+\s+up\b)|pull\s+up\b|search(?:\s+for)?\b|google\b|wikipedia\b|find\s+(?:me\s+)?(?:the\s+)?(?:article|page|entry|wiki|info|information)\b|get\s+(?:me\s+)?(?:the\s+)?(?:article|page|entry|info|information)\b|read\s+(?:up\s+)?(?:on|about)\b)/.test(t)) return true;
+    // definitional / orientation frames acquire only when they name a proper
+    // subject (a capitalized target after the frame, in the original casing)
+    if (/\b(who\s+(?:is|was|are|were)|what\s+(?:is|are|was|were)|what's|tell me about)\b/.test(t)
+        && /\b(?:who\s+(?:is|was|are|were)|what\s+(?:is|are|was|were)|what's|tell\s+me\s+about)\b[^.?!,;:]*?\b\p{Lu}[\p{Ll}'’-]+/u.test(q))
+      return true;
+    return false;
+  }
+
+  /* ============================================================
+     Wikipedia article → ingestible document text.
+
+     The plain-text extract arrives with its outline inline (== Heading ==)
+     and its reference apparatus at the tail. Three moves before ingestion:
+       · the title and short description become their own PUNCTUATED
+         paragraphs — unpunctuated, the segmenter glues them into the first
+         body sentence ("Howard Shore Canadian film score composer (born
+         1946)" as sentence 0), which seeds a polluted entity span;
+       · boilerplate bands (References, External links, See also, Notes,
+         Further reading…) are dropped WHOLE — their link rows otherwise
+         outrank prose in name-overlap retrieval and leak into citations
+         ("Howard Shore at IMDb" as a top hit);
+       · section headings are kept verbatim: the engine's chrome gate reads
+         them as structure (never prose), and they stay fold boundaries.
+     ============================================================ */
+  const WIKI_DROP_SECTIONS = /^(references|external links|see also|notes|further reading|sources|citations|footnotes|works cited)$/i;
+  function stripWikiSections(text) {
+    const out = [];
+    let dropLevel = 0;
+    for (const line of String(text == null ? '' : text).split('\n')) {
+      const h = line.match(/^\s*(={2,6})\s*(.+?)\s*\1\s*$/);
+      if (h) {
+        const level = h[1].length;
+        if (dropLevel && level <= dropLevel) dropLevel = 0;
+        if (!dropLevel && WIKI_DROP_SECTIONS.test(h[2].trim())) { dropLevel = level; continue; }
+      }
+      if (!dropLevel) out.push(line);
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  function articleDocText(p) {
+    if (!p) return '';
+    const dot = (s) => { s = String(s == null ? '' : s).trim(); return s ? (/[.!?…]$/.test(s) ? s : s + '.') : ''; };
+    const parts = [];
+    if (p.title) parts.push(dot(p.title));
+    if (p.description) parts.push(dot(p.description));
+    const body = stripWikiSections((p.text && p.text.trim()) ? p.text : (p.intro || ''));
+    if (body) parts.push(body);
+    if (p.url) parts.push('Source: ' + p.url);
+    return parts.filter(Boolean).join('\n\n').trim();
+  }
+
   /* ============================================================
      The prioritised, budgeted batch. Spend at most `budget` live lookups on
      the most serious needs; the rest come back `skipped` (abstain). Results
@@ -644,7 +711,8 @@
     SCHEMA,
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
-    enrichTerm, article, pickQuery,
+    enrichTerm, article, pickQuery, acquireIntent,
+    stripWikiSections, articleDocText,
     hasConsent, grantConsent, revokeConsent,
     clearCache,
     enabled: () => !!proxyBase() && !!_fetch(),
