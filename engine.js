@@ -8173,8 +8173,29 @@ function projectGraph(events, frame = {}) {
     // edges between the heavy sites, by projectGraph (text-layer SYN)
     let edges = [];
     try { edges = (projectGraph(doc._events).edges || []); } catch (e) {}
+    // A relation is portrayed only when the document states it with BOTH
+    // parties NAMED in at least one sentence. An edge reconstructed solely
+    // through coreference — "she … it", resolved to Gregor — is too weak to
+    // present as one of the relations the document draws, and that is exactly
+    // where the noise lives: dialogue tags ("'Oh God', he thought"), mis-resolved
+    // pronoun objects ("it"/"their" landing on the protagonist), and clauses the
+    // sentence-splitter merged. The golden, named-on-both-ends relation
+    // ("Edith thought Marlow") survives; the coref-only ones drop out.
+    const evBySeq = new Map();
+    for (const ev of (doc._events || [])) if (ev && ev.seq != null) evBySeq.set(ev.seq, ev);
+    const namesBothEnds = (ed) => (ed.eventSeqs || []).some(sq => {
+      const ev = evBySeq.get(sq);
+      return ev && ev.s != null && ev.o != null && !isPronoun(ev.s) && !isPronoun(ev.o);
+    });
+    // A relation verb is a predicate, never a fragment: strip the clause/sentence
+    // punctuation a greedy clause can trap inside it ("thought," , "checking.")
+    // so no edge is ever rendered carrying a comma or a full stop.
+    const cleanRelationVerb = (v) => String(v == null ? '' : v)
+      .replace(/[^\p{L}\s'’-]/gu, ' ').replace(/\s+/g, ' ').trim();
     const heavyEdges = edges
-      .filter(ed => heavyKeys.has(ed.a) && heavyKeys.has(ed.b) && ed.verb)
+      .filter(ed => heavyKeys.has(ed.a) && heavyKeys.has(ed.b) && ed.verb && namesBothEnds(ed))
+      .map(ed => ({ ...ed, verb: cleanRelationVerb(ed.verb) }))
+      .filter(ed => ed.verb)
       .slice(0, 6);
     // DEF assertions the text makes about the heaviest subjects: copular
     // "X is/was Y" and appositive "a TRADE named X" land as DEF path:'class'.
