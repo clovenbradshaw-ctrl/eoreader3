@@ -278,6 +278,29 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     eq(X.pickQuery('Tell me about the Nashville Downtown Partnership'), 'Nashville Downtown Partnership', 'capitalized run after a lead-in');
     eq(X.pickQuery('"quantum entanglement" explained'), 'quantum entanglement', 'a quoted phrase wins');
     eq(X.pickQuery(''), null, 'empty → null');
+    // Compose-style frames must not ship verbatim — the topic the artifact is
+    // ABOUT is the term to look up, not the verb-phrase.
+    eq(X.pickQuery('write me an essay about dolphins'), 'dolphins', 'compose frame: write me an essay about X → X');
+    eq(X.pickQuery('draft an article on quantum physics'), 'quantum physics', 'compose frame: draft an article on X → X');
+    eq(X.pickQuery('make a list of dog breeds'), 'dog breeds', 'compose frame: make a list of X → X');
+    eq(X.pickQuery('give me info about cats'), 'cats', 'compose frame: give me info about X → X');
+    // Lookup verbs strip too — the verb is framing, the topic is the term.
+    eq(X.pickQuery('look up Howard Shore'), 'Howard Shore', 'look up X → X');
+    eq(X.pickQuery('research dolphins for me'), 'dolphins', 'research verb + trailing politeness');
+    eq(X.pickQuery('search for socialism'), 'socialism', 'search for X → X');
+  });
+
+  group('pickQueryInfo() — confidence (the silent-fetch safety net)', () => {
+    // A confident pick (quoted phrase or capitalized run) is a clear referent
+    // — a force may fetch and ground this turn on it. An unconfident pick is
+    // the raw lowercase remainder — even a force should offer candidates
+    // rather than land on whatever a fuzzy search returns.
+    eq(X.pickQueryInfo('"quantum entanglement" explained').confident, true, 'quoted phrase → confident');
+    eq(X.pickQueryInfo('Who is David Corman?').confident, true, 'capitalized run → confident');
+    eq(X.pickQueryInfo('look up Howard Shore').confident, true, 'lookup-strip + caps → confident');
+    eq(X.pickQueryInfo('what is socialism?').confident, false, 'lowercase remainder → not confident');
+    eq(X.pickQueryInfo('write me an essay about dolphins').confident, false, 'compose-strip with no caps → not confident');
+    eq(X.pickQueryInfo('').term, null, 'empty → no term');
   });
 
   group('acquireIntent() — only an explicit acquisition reaches the fetcher', () => {

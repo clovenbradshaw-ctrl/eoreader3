@@ -2371,7 +2371,15 @@ function App() {
     if (!X || !X.enabled || !X.enabled()) return null;
     const E = window.EOEngine;
     const force = !!(opts && opts.force);
-    const term = (X.pickQuery && X.pickQuery(q)) || q;
+    // Pull the picked term AND the confidence we had picking it: a quoted
+    // phrase or a capitalized run is a clear referent (force can fetch and
+    // ground THIS turn); a lowercase, sentence-shaped pick is just framing
+    // and the search will land on whatever fuzzy match comes back, so we
+    // always offer candidates and let the reader choose.
+    const picked = (X.pickQueryInfo && X.pickQueryInfo(q))
+      || { term: (X.pickQuery && X.pickQuery(q)) || q, confident: false };
+    const term = picked.term || q;
+    const confident = !!picked.confident;
     // A vague follow-up ("tell me more", "why?") names no new subject — keep
     // chatting against whatever Wikipedia articles are already in scope rather
     // than pulling a spurious one. The substantive turn did the ingest.
@@ -2414,9 +2422,15 @@ function App() {
     // term is often not what the reader meant, so we surface real choices and let
     // them pick before any full article is fetched. Returns null: this turn
     // answers from the sources already in scope, and the chosen article
-    // (runWikiSearch) grounds later turns. A force is the reader already asking,
-    // so skip the options step and fetch now, grounding THIS turn on the article.
-    if (!force) {
+    // (runWikiSearch) grounds later turns. A force on a CONFIDENT pick (a quoted
+    // phrase or a capitalized referent — the reader already named what they want)
+    // skips the options step and fetches now, grounding THIS turn on the article.
+    // A force on a low-confidence pick (a sentence-shaped or lowercase remainder
+    // like "write me an essay about dolphins") still goes through options — the
+    // search would otherwise land on whatever fuzzy match the upstream returns,
+    // and silently ingesting that as the source is the bug the options step exists
+    // to prevent.
+    if (!force || !confident) {
       offerWikiOptions(turnId, term).catch((e) => eoWarn('wiki-options', e));
       return null;
     }

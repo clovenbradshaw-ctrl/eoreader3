@@ -617,21 +617,36 @@
   }
 
   // Pick the term worth looking up from a free-text chat message: a quoted
-  // phrase, else the longest capitalized run (after stripping a question
-  // lead-in), else the cleaned remainder. Pure — drives the chat enrichment.
-  function pickQuery(text) {
+  // phrase, else the longest capitalized run (after stripping the lead-in
+  // frame), else the cleaned remainder. `confident` distinguishes a clear
+  // referent (the quote or the capitalized run) from the raw fallback — a
+  // lowercase, sentence-shaped pick is the reader handing us framing, not a
+  // term, and the caller should offer candidates rather than fetch on it.
+  // Pure — drives the chat enrichment.
+  function pickQueryInfo(text) {
     let t = String(text == null ? '' : text).trim();
-    if (!t) return null;
+    if (!t) return { term: null, confident: false };
     const quoted = /["“”'’]([^"“”'’]{2,60})["“”'’]/.exec(t);
-    if (quoted && quoted[1].trim()) return quoted[1].trim();
+    if (quoted && quoted[1].trim()) return { term: quoted[1].trim(), confident: true };
+    // Trailing politeness ("…for me", "…please") so it doesn't bleed into the topic
+    t = t.replace(/\s+(?:for me|for us|please|thanks|thank you)[?.!]*\s*$/i, '').trim();
+    // Compose-style frame: "write me [a/an/the] essay about X" → "X". The verb
+    // produces an artifact ABOUT some topic — the topic, not the artifact,
+    // is the term to look up. Without this strip, "write me an essay about
+    // dolphins" ships verbatim and a fuzzy upstream search lands on a random
+    // article ("Hysterical realism") that's then ingested as the source.
+    t = t.replace(/^(?:write|compose|draft|make|create|build|produce|generate|prepare|do|run|give|show)\s+(?:(?:me|us|him|her|them)\s+)?(?:(?:a|an|the|some|short|long|brief|detailed|quick|few)\s+)*(?:essay|paper|article|report|story|song|poem|piece|writeup|write[-\s]?up|note|email|letter|summary|overview|description|brief|paragraph|paragraphs|sentence|sentences|list|outline|review|analysis|response|reply|message|book|chapter|info|information|details|background|context|primer|research)s?\s+(?:about|on|regarding|concerning|covering|describing|involving|of|for)\s+/i, '');
+    // Lookup / acquisition verbs: "look up X", "search for X", "research X" → "X"
+    t = t.replace(/^(?:look\s+up|pull\s+up|search\s+for|search|google(?:\s+for)?|research|investigate|study(?:\s+up\s+on)?|find\s+(?:me\s+)?(?:the\s+)?(?:article|page|entry|wiki|info|information)\s+(?:on|about|for)|get\s+(?:me\s+)?(?:the\s+)?(?:article|page|entry|info|information)\s+(?:on|about|for)|read\s+(?:up\s+)?(?:on|about))\s+/i, '');
     t = t.replace(/^(?:tell me about|tell me|explain|define|describe|summari[sz]e|give me|show me)\b[\s,:'-]*/i, '')
          // strip a RUN of leading question / auxiliary words ("what is", "who was")
          .replace(/^(?:(?:who|what|which|where|when|why|how|whose|whom|is|are|was|were|do|does|did|can|could|would|should)\b[\s,:'-]*)+/i, '')
          .replace(/[?.!]+\s*$/, '').trim();
     const caps = t.match(/\b[A-Z][\w'’-]+(?:\s+(?:of|the|and|de|van|von|du|la|le)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+)*\b/g) || [];
-    if (caps.length) { caps.sort((a, b) => b.length - a.length); return caps[0]; }
-    return t ? t.slice(0, 60).trim() : null;
+    if (caps.length) { caps.sort((a, b) => b.length - a.length); return { term: caps[0], confident: true }; }
+    return { term: t ? t.slice(0, 60).trim() : null, confident: false };
   }
+  function pickQuery(text) { return pickQueryInfo(text).term; }
 
   // Does this turn EXPLICITLY ask to acquire an article — a lookup verb or an
   // acquisition frame ("look up / find / pull up / search / get the article on
@@ -741,7 +756,7 @@
     SCHEMA,
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
-    enrichTerm, article, searchOptions, pickQuery, acquireIntent,
+    enrichTerm, article, searchOptions, pickQuery, pickQueryInfo, acquireIntent,
     stripWikiSections, articleDocText,
     hasConsent, grantConsent, revokeConsent,
     clearCache,
