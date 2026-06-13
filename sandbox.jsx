@@ -186,7 +186,7 @@ function SandboxDrawer({ onClose, onToast, mlcKey, modelReady }) {
     const r3 = (x) => (x == null ? null : Math.round(x * 10000) / 10000);
     const wins = log.filter(g => g.result.surface).sort((a, b) => b.result.qualityDelta - a.result.qualityDelta);
     return {
-      app: 'cleon-evo-sandbox', schema: 'evo-run/1', generatedAt: new Date().toISOString(),
+      app: 'cleo-evo-sandbox', schema: 'evo-run/1', generatedAt: new Date().toISOString(),
       provider, model: provider === 'live' ? liveCfg.model : 'offline', tokensUsed: tokens || 0,
       baseline: { composite: r3(baseline.quality.composite), components: baseline.quality.components },
       results: log.map(g => ({

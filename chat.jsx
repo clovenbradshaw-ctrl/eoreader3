@@ -83,7 +83,7 @@ function AuditBadge({ audit }) {
 }
 
 /* ── Inline "thinking" disclosure ─────────────────────────────────────────
-   A Claude-style collapsible panel under each Cleon answer that narrates the
+   A Claude-style collapsible panel under each Cleo answer that narrates the
    turn's pipeline from window.EOAudit — and, crucially, surfaces the model's
    raw draft even when the veto set it aside, with the reason. The glass box,
    inline: while the turn runs it reads "Thinking…"; once done it collapses to
@@ -472,7 +472,7 @@ class MessageBoundary extends React.Component {
   }
   componentDidCatch(err, info) {
     if (window.eoWarn) window.eoWarn('message render', err);
-    else if (typeof console !== 'undefined') console.error('[Cleon] message render error', err, info);
+    else if (typeof console !== 'undefined') console.error('[Cleo] message render error', err, info);
   }
   render() {
     if (this.state.err) {
@@ -480,7 +480,7 @@ class MessageBoundary extends React.Component {
       return (
         <div className="msg-row asst">
           <div className="msg-asst">
-            <div className="asst-head"><span className="asst-av">Cl</span><span className="asst-name">Cleon</span></div>
+            <div className="asst-head"><span className="asst-av">Cl</span><span className="asst-name">Cleo</span></div>
             {raw
               ? <p style={{ whiteSpace: 'pre-wrap' }}>{String(raw).replace(/\{\{(?:cite|void|infer|absent):[^}]*\}\}/g, '')}</p>
               : <p style={{ opacity: .75 }}>This message couldn’t be displayed.</p>}
@@ -499,7 +499,7 @@ function Message({ msg, onCite, showGrounding }) {
     <div className="msg-row asst">
       <div className="msg-asst">
         <div className="asst-head">
-          <span className="asst-av">Cl</span><span className="asst-name">Cleon</span>
+          <span className="asst-av">Cl</span><span className="asst-name">Cleo</span>
           {msg.mode && <span className="asst-mode-tag">{msg.mode}</span>}
         </div>
         {msg.auditId && <ThinkingBlock auditId={msg.auditId} />}
@@ -603,7 +603,7 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, o
   return (
     <div className="composer-box">
       <SourceChips sources={sources} addable={addable} onAddSource={onAddSource} onRemoveSource={onRemoveSource} />
-      <textarea ref={ref} value={value} rows={1} placeholder={placeholder || 'Message Cleon…'}
+      <textarea ref={ref} value={value} rows={1} placeholder={placeholder || 'Message Cleo…'}
         onChange={e => onChange(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }} />
       <div className="composer-bar">
@@ -646,10 +646,10 @@ function Hero({ composerProps, onAttach, onExample, onPaste, dragOver }) {
     <div className="hero">
       <div className="hero-inner">
         <div className="hero-eyebrow">Private · on your device</div>
-        <h1>Ask Cleon anything.</h1>
+        <h1>Ask Cleo anything.</h1>
         <p className="lede">A private assistant that runs entirely in your browser. Add a document or spreadsheet and it’ll answer straight from it — citing whatever it used.</p>
         <div className={'composer dropzone-ring' + (dragOver ? ' over' : '')}>
-          <Composer {...composerProps} placeholder="Message Cleon — or drop in a file…" />
+          <Composer {...composerProps} placeholder="Message Cleo — or drop in a file…" />
         </div>
         <div className="hero-actions">
           <button className="hero-action primary" onClick={onAttach}><Icon name="upload" size={16} /> Upload a file</button>
@@ -681,7 +681,7 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
         ))}</div>
       </div>
       <div className="composer-wrap">
-        <div className="composer"><Composer {...composerProps} placeholder={narrow ? 'Ask about this document…' : 'Message Cleon…'} /></div>
+        <div className="composer"><Composer {...composerProps} placeholder={narrow ? 'Ask about this document…' : 'Message Cleo…'} /></div>
         <div className="composer-hint">
           <span>Runs locally · <b>{composerProps.mode}</b> mode{composerProps.enrich ? <span> · chatting with <b>Wikipedia</b></span> : null}</span>
           {onExportPrompts && hasTurns && (

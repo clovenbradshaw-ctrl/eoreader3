@@ -1,5 +1,5 @@
 /* ============================================================
-   Cleon — optional embedding reader (transformers.js / MiniLM).
+   Cleo — optional embedding reader (transformers.js / MiniLM).
 
    The STRUCTURE layer's recall booster: when lexical token overlap misses a
    paraphrase ("auto" vs "car"), cosine over sentence embeddings recovers the

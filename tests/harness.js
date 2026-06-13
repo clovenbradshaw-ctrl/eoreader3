@@ -1,5 +1,5 @@
 /* ============================================================
-   Test harness for the Cleon reading engine.
+   Test harness for the Cleo reading engine.
 
    engine.js / pivot.jsx are browser scripts: they run as an IIFE and
    publish onto `window` (window.EOEngine, window.parsePivot, …) and

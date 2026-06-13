@@ -33,7 +33,7 @@
   'use strict';
   const win = (typeof window !== 'undefined') ? window : {};
 
-  const PREF_KEY = 'cleon.python.enabled';   // device-local, independent of the React tree
+  const PREF_KEY = 'cleo.python.enabled';   // device-local, independent of the React tree
   const DEFAULT_TIMEOUT_MS = 15000;
   const OUT_CAP = 20000;                       // cap stdout / result so a runaway print stays bounded
 
@@ -78,10 +78,10 @@
       // After the runtime and its packages have loaded, sever every network
       // bridge reachable from executed Python (pyfetch / js fetch / sockets).
       function lockdownNetwork() {
-        const blocked = function () { throw new Error('network egress is disabled in Cleon (documents stay local)'); };
+        const blocked = function () { throw new Error('network egress is disabled in Cleo (documents stay local)'); };
         try { self.fetch = blocked; } catch (e) {}
-        try { self.XMLHttpRequest = function () { throw new Error('network egress is disabled in Cleon'); }; } catch (e) {}
-        try { self.WebSocket = function () { throw new Error('network egress is disabled in Cleon'); }; } catch (e) {}
+        try { self.XMLHttpRequest = function () { throw new Error('network egress is disabled in Cleo'); }; } catch (e) {}
+        try { self.WebSocket = function () { throw new Error('network egress is disabled in Cleo'); }; } catch (e) {}
         try { self.importScripts = blocked; } catch (e) {}
       }
 

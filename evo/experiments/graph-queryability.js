@@ -363,7 +363,7 @@ function fmtTable(rows, cols) {
 
   if (jsonOut) {
     const payload = {
-      schema: 'cleon-graph-experiment/1', at: new Date().toISOString(),
+      schema: 'cleo-graph-experiment/1', at: new Date().toISOString(),
       cap, topk, qWeights: Q_WEIGHTS, defaults: DEFAULTS, elapsed: +elapsed,
       configs: configs.map(c => ({ label: c.label, config: c.config, agg: c.agg, per: c.per })),
       diagnostic: diagPer,

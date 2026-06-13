@@ -33,7 +33,7 @@ function eq(a, b, msg) { ok(a === b, `${msg} (got ${JSON.stringify(a)}, want ${J
 function group(name, fn) { console.log('• ' + name); return fn(); }
 const laws = (res, inv) => res.bits[inv].findings.map(f => f.law);
 
-/* ---- fixture builder: a coherent cleon-ingestion/1 dump from spans + events ---- */
+/* ---- fixture builder: a coherent cleo-ingestion/1 dump from spans + events ---- */
 function buildDump(name, spans, events, entities, lexicon) {
   const evBySent = new Map();
   const ops = {};
@@ -50,7 +50,7 @@ function buildDump(name, spans, events, entities, lexicon) {
   });
   const dark = sentences.filter(s => s.events === 0).length;
   return {
-    schema: 'cleon-ingestion/1', at: '2026-06-11T00:00:00.000Z',
+    schema: 'cleo-ingestion/1', at: '2026-06-11T00:00:00.000Z',
     doc: { id: name, name, kind: 'prose', lang: 'en', sentences: spans.length },
     words: { occurrences: 0, indexed: 0, stop: 0, dropped: 0 },
     coverage: { sentences: spans.length, withEvents: spans.length - dark, dark },
@@ -318,7 +318,7 @@ async function main() {
     eq(status, 1, 'a nonconformant dump exits 1');
     ok(stdout.includes('0 0 0 0 0 1 0'), 'the vector is printed');
     const rep = JSON.parse(fs.readFileSync(out, 'utf8'));
-    eq(rep.schema, 'cleon-conformance/1', 'the JSON report is stamped');
+    eq(rep.schema, 'cleo-conformance/1', 'the JSON report is stamped');
     eq(rep.conformant, false, 'the JSON report carries the verdict');
     eq(rep.dumps[0].vectorString, '0 0 0 0 0 1 0', 'the JSON report carries the vector');
     fs.unlinkSync(tmp); fs.unlinkSync(out);

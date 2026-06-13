@@ -9,7 +9,7 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, on
   return (
     <aside className={'sidebar' + (collapsed ? ' collapsed' : '')} aria-label="Workspace navigation">
       <div className="sb-top">
-        <div className="brand"><span className="glyph">Cl</span> Cleon</div>
+        <div className="brand"><span className="glyph">Cl</span> Cleo</div>
         <button className="sb-icon-btn" title="Collapse sidebar" onClick={onToggle}><Icon name="sidebar" size={18} /></button>
       </div>
 

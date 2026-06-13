@@ -16,7 +16,7 @@ function ruleJSON(r) {
 function buildExport(rules) {
   const pick = (phase) => rules.filter(r => r.installed && r.phase === phase).map(ruleJSON);
   return {
-    app: 'Cleon', schema: 'cleon-rules/1', exported_at: new Date().toISOString(),
+    app: 'Cleo', schema: 'cleo-rules/1', exported_at: new Date().toISOString(),
     extraction_rules: pick('extraction'),
     chat_rules: pick('chat'),
     medium_constants: pick('medium'),

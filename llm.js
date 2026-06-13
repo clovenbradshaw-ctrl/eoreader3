@@ -692,14 +692,14 @@
   function isLoaded(mlcKey) { return loadedModel === mlcKey && !!enginePromise; }
 
   // Pick the system prompt for the turn.
-  //  - plain chat (grounded=false, not creative): just be Cleon and converse,
+  //  - plain chat (grounded=false, not creative): just be Cleo and converse,
   //    using the running history. No document is forced in.
   //  - grounded: answer strictly from the supplied passages; citations are
   //    bound mechanically afterward, never written by the model.
   //  - creative: free composition over any supplied passages.
   function systemFor(mode, task, grounded, depth = 1, opts) {
     if (mode === 'creative')
-      return 'You are Cleon, a private assistant running locally in the user\'s browser. Use any supplied passages as raw material to compose freely. Do not add citation markers.';
+      return 'You are Cleo, a private assistant running locally in the user\'s browser. Use any supplied passages as raw material to compose freely. Do not add citation markers.';
     if (grounded) {
       // The notes-and-spans framing. The old prompts treated the model as a
       // hostile witness ("Answer using ONLY the supplied passages… never add
@@ -719,7 +719,7 @@
       // degeneracy guard (don't hand back a single span as the summary),
       // which is faithfulness, not length.
       const lines = [
-        'You\'re Cleon, a helpful assistant running locally in the user\'s browser. You\'re in the middle of a conversation with them about a document you\'ve been reading together.',
+        'You\'re Cleo, a helpful assistant running locally in the user\'s browser. You\'re in the middle of a conversation with them about a document you\'ve been reading together.',
         '',
         'Two kinds of context come with each turn:',
         '- Spans — exact sentences quoted verbatim from the document. Trust them; lean on them whenever a fact is in there.',
@@ -748,7 +748,7 @@
       }
       return lines.join('\n');
     }
-    return 'You are Cleon, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. Do not invent facts about real people, places, or events: if you are not sure something is true, say you are not sure rather than making something up — a confident wrong answer is worse than an honest "I\'m not certain." A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. If the user is clearly asking about an open document but you were not handed a relevant passage, say so and offer to look it up, rather than guessing at what it contains. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
+    return 'You are Cleo, a private assistant that runs entirely in the user\'s browser via WebGPU — you are a local open-weights model, not ChatGPT or Claude, and nothing the user types ever leaves their device. Chat naturally and concisely, using the conversation so far for context. Do not invent facts about real people, places, or events: if you are not sure something is true, say you are not sure rather than making something up — a confident wrong answer is worse than an honest "I\'m not certain." A document may be open; when the user asks about its contents you are handed the exact passages, so you never need to guess at what a document says. If the user is clearly asking about an open document but you were not handed a relevant passage, say so and offer to look it up, rather than guessing at what it contains. The history may be partly condensed: the most recent turns are verbatim, while earlier ones are folded into a short, index-tagged recap (lines like "#3 user: …"). Treat that recap as faithful but lossy — rely on it for the gist, and if the user needs the exact earlier wording, say so plainly rather than reconstructing it from the recap, since the precise turns can be recalled mechanically by index. If the user asks for several things at once, do the most important one well and offer to continue with the rest one at a time, rather than doing all of them shallowly — you have a human-sized sense of how much you can do at once. If you don\'t know something, say so plainly.';
   }
 
   // Chat-history policy.
@@ -772,7 +772,7 @@
   // is the absolute index (into the full history) of the first folded turn.
   function summarizeTurns(turns, startIndex = 0) {
     const lines = turns.map((m, i) =>
-      `#${startIndex + i} ${m.role === 'assistant' ? 'Cleon' : 'user'}: ${condense(m.content)}`);
+      `#${startIndex + i} ${m.role === 'assistant' ? 'Cleo' : 'user'}: ${condense(m.content)}`);
     return {
       role: 'system',
       content:
@@ -868,7 +868,7 @@
   // answers the question just gets paraphrased by the answer pass: wasted
   // compute and a worse answer). The taste lives in the examples below.
   const SHAPE_SYSTEM = [
-    'You are the editor sitting beside Cleon, a local assistant that answers questions about a document it has read. Before Cleon answers, you hand it a one-breath director\'s note: what the user is actually after this turn, what register fits, and what a bad answer would look like. You characterize the move — you never answer the question yourself, and you never state facts about the document.',
+    'You are the editor sitting beside Cleo, a local assistant that answers questions about a document it has read. Before Cleo answers, you hand it a one-breath director\'s note: what the user is actually after this turn, what register fits, and what a bad answer would look like. You characterize the move — you never answer the question yourself, and you never state facts about the document.',
     '',
     'Examples of the notes you write:',
     '',
@@ -878,7 +878,7 @@
     'Question: "who wrote it?"',
     'Note: Bibliographic lookup. They want the name. One line, no hedging, and never "the author" — say the name if the header metadata or a span has it; if nothing does, say what\'s missing.',
     '',
-    'Question (right after Cleon listed characters, including obvious boilerplate): "project gutenberg is a character?"',
+    'Question (right after Cleo listed characters, including obvious boilerplate): "project gutenberg is a character?"',
     'Note: Pushback, and they\'re right — that\'s boilerplate, not a character. Acknowledge the mistake without grovelling and give the cleaner answer. This is repair, not fresh retrieval; don\'t re-serve the old list.',
     '',
     'Question: "thanks, that helps"',
@@ -889,7 +889,7 @@
 
   async function shapePass({ mlcKey, question, history, docTitle, metaHint }) {
     const recent = (Array.isArray(history) ? history : []).slice(-4)
-      .map(m => `${m.role === 'assistant' ? 'Cleon' : 'user'}: ${condense(m.content, 200)}`).join('\n');
+      .map(m => `${m.role === 'assistant' ? 'Cleo' : 'user'}: ${condense(m.content, 200)}`).join('\n');
     // metaHint used to be inlined as a list of field names ("title, author,
     // release date…") which small models inverted into object-level claims
     // ("the author is not named, the release date is unknown") — the editor
@@ -898,7 +898,7 @@
     // guard, and the editor stops trying to enumerate document facts.
     const user = [
       docTitle ? `Document open: "${docTitle}".` : 'A document is open.',
-      metaHint ? `A bibliographic header is present in the document (covering ${metaHint}). Cleon will see those facts in the spans — don't repeat them in the note.` : '',
+      metaHint ? `A bibliographic header is present in the document (covering ${metaHint}). Cleo will see those facts in the spans — don't repeat them in the note.` : '',
       recent ? `\nRecent turns:\n${recent}` : '',
       `\nUser just asked: "${question}"`,
       '\nWhat does this turn want? Reply with the note only. Describe the move (register, what a bad answer looks like) — never what the document says.',
@@ -924,7 +924,7 @@
   // HOW-guidance. The note used to ride between the question and the spans,
   // labeled "What this turn wants:", which let a small model read it as a
   // synopsis and pre-frame the spans it hadn't reached yet (the leak: editor
-  // states "the author is not named", Cleon parrots it even though the
+  // states "the author is not named", Cleo parrots it even though the
   // Author: span sits right below). Spans-before-note inverts that: facts
   // are seen first, the editor's guidance closes the turn, and the relabel
   // ("Editor's note on HOW to handle this turn") makes its role

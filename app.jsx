@@ -8,7 +8,7 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 // the errors that are otherwise swallowed by resilience catches. Off by default
 // so a normal session stays quiet, but failures become diagnosable on demand.
 if (typeof window !== 'undefined' && window.EO_DEBUG === undefined) window.EO_DEBUG = false;
-const eoWarn = (...a) => { if (typeof window !== 'undefined' && window.EO_DEBUG) console.warn('[Cleon]', ...a); };
+const eoWarn = (...a) => { if (typeof window !== 'undefined' && window.EO_DEBUG) console.warn('[Cleo]', ...a); };
 if (typeof window !== 'undefined') window.eoWarn = eoWarn;
 
 // Audit log shim — records the chat pipeline when window.EOAudit is present,
@@ -43,7 +43,7 @@ const tableSchemaText = (doc, fileName) => {
     + '\n\nThe first few rows:\n' + sampleCSV;
 };
 // Pull the first fenced Python block out of a local model's reply, mechanically
-// (the rest of Cleon extracts structure by parsing, never by trusting the model
+// (the rest of Cleo extracts structure by parsing, never by trusting the model
 // to self-report). Empty string when there is no block.
 const extractPyFence = (text) => {
   const m = /```(?:python|py)?[ \t]*\r?\n([\s\S]*?)```/i.exec(String(text || ''));
@@ -1614,7 +1614,7 @@ function App() {
             code: { type: 'string', description: 'Python source to execute. Read the CSV with pandas and print or return the result.' },
           }, required: ['code'] },
         }];
-        const system = 'You are Cleon, answering a question about a tabular document the user loaded. You have a run_python tool that executes Python (with pandas) locally over the data, on the user\'s device.\n\n'
+        const system = 'You are Cleo, answering a question about a tabular document the user loaded. You have a run_python tool that executes Python (with pandas) locally over the data, on the user\'s device.\n\n'
           + schema + '\n\n'
           + 'When the question needs any calculation over the data, call run_python with code that computes it and prints or returns the answer, then state the answer in plain words and name the columns and the operation you used. If no calculation is needed, just answer. Never invent a number; every figure must come from the tool output.';
         const msgs = (history || []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content)
@@ -1646,7 +1646,7 @@ function App() {
       // First pass: the model emits a single fenced python block iff a
       // computation is needed; otherwise it answers in words. We parse the
       // fence out mechanically rather than relying on the model to self-report.
-      const fenceSys = 'You are Cleon. The user asked about a CSV table loaded locally on this device. You can run Python (pandas available) over it.\n\n'
+      const fenceSys = 'You are Cleo. The user asked about a CSV table loaded locally on this device. You can run Python (pandas available) over it.\n\n'
         + schema + '\n\n'
         + 'If answering needs a calculation over the data (counting, summing, grouping, sorting, rates, joins), reply with ONE fenced Python code block and nothing else. The code must read "' + fileName + '" with pandas and print the answer. If no calculation is needed, answer the question in plain words instead, with no code block.';
       let first = '';
@@ -1670,7 +1670,7 @@ function App() {
       const resultBlock = 'Python was run locally over the table. Here is exactly what it produced:\n\n'
         + '[code]\n' + code + '\n\n[stdout]\n' + (r.stdout || '(none)') + '\n\n[result]\n' + (r.result || '(none)')
         + (r.ok ? '' : '\n\n[error]\n' + (r.stderr || 'failed'));
-      const phraseSys = 'You are Cleon. A computation was just run locally over the user\'s CSV. State the answer in plain words, using ONLY the numbers in the result below. Name the columns and the operation. Do not invent any figure. If the computation failed, say so plainly and briefly.';
+      const phraseSys = 'You are Cleo. A computation was just run locally over the user\'s CSV. State the answer in plain words, using ONLY the numbers in the result below. Name the columns and the operation. Do not invent any figure. If the computation failed, say so plainly and briefly.';
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
       let answer = '';
       try { answer = await window.EOLLM.phrase({ mlcKey: model.mlc, question: q, contextText: resultBlock, history, mode: 'chat', grounded: false, sysOverride: phraseSys, onToken: streamInto({ mode: 'grounded' }) }); }
@@ -1895,7 +1895,7 @@ function App() {
       // echoed the editor's note, or echoed a single span even after a
       // stricter retry), DON'T substitute a mechanically-generated portrait
       // and present it as if it were the model's reply — that's the "system
-      // response" the user reads as Cleon answering when in fact the model
+      // response" the user reads as Cleo answering when in fact the model
       // failed. Refuse honestly: a plain chat message naming the failure, an
       // audit error step for the trace, and an 'end' that records the
       // refusal. The bind-failure paths below (unbound, contradicts-assertion,
@@ -2751,13 +2751,13 @@ function App() {
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { err: null }; }
   static getDerivedStateFromError(err) { return { err }; }
-  componentDidCatch(err, info) { if (typeof console !== 'undefined') console.error('[Cleon] render error', err, info); }
+  componentDidCatch(err, info) { if (typeof console !== 'undefined') console.error('[Cleo] render error', err, info); }
   render() {
     if (this.state.err) {
       return (
         <div className="crash" role="alert">
           <h1>Something went wrong.</h1>
-          <p>Cleon hit an unexpected error while rendering. Your documents and chat are saved locally — reloading usually recovers.</p>
+          <p>Cleo hit an unexpected error while rendering. Your documents and chat are saved locally — reloading usually recovers.</p>
           <button className="hero-action primary" onClick={() => location.reload()}>Reload</button>
         </div>
       );

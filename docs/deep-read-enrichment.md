@@ -1,11 +1,11 @@
-# Deep-Read Enrichment Spec (`cleon-enrich/1`)
+# Deep-Read Enrichment Spec (`cleo-enrich/1`)
 
-**Scope.** A second, offline pass over a finished `cleon-graph/1` graph. The
+**Scope.** A second, offline pass over a finished `cleo-graph/1` graph. The
 streaming reader (`engine.js`) is greedy: it commits structure as text arrives,
 with only the entity field seen so far. This pass rewalks the whole graph with
 the entire field present and repairs, mints, and composes what the greedy pass
 could not — then emits an enriched graph plus a per-operation ledger
-(`cleon-enrich/1`) that is the publishable receipt for every change.
+(`cleo-enrich/1`) that is the publishable receipt for every change.
 
 Implemented in `enrich.js` (publishes `window.EOEnrich`); exercised by
 `tests/enrich.test.js` against the NDP/Corman fixture.
@@ -88,9 +88,9 @@ discarded — no penalty — and routed to re-attribution or abstain.
    `omission:*` nulls — an auto-generated records-request list (e.g.
    *self-dealing asserted; the contract was never shown*).
 
-## The ledger (`cleon-enrich/1`)
+## The ledger (`cleo-enrich/1`)
 
-One flat-JSONL record per operation (mirrors `cleon-audit/1`), carrying
+One flat-JSONL record per operation (mirrors `cleo-audit/1`), carrying
 `basis_sentence_idx` (the receipt), the `subject_match` veto result,
 `model_calls`, `frames_agreed`, a `confidence` of `settled | supported | open`,
 and an `abstained` flag. A header line records the convergence trace (passes
