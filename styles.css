@@ -1571,7 +1571,10 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 
 .refcard {
   --enc-ink: #2d4a6b;
-  margin-top: 12px; border: 1px solid var(--paper-line); border-radius: var(--r);
+  /* The card heads the reply now, so it carries breathing room on BOTH sides:
+     margin-top clears the thinking block / header above, margin-bottom clears
+     the answer below (message paragraphs reset their own top margin to 0). */
+  margin: 12px 0; border: 1px solid var(--paper-line); border-radius: var(--r);
   background: var(--paper); font-family: var(--serif); color: var(--paper-ink); overflow: hidden;
 }
 .refcard-head { display: flex; align-items: center; gap: 7px; padding: 9px 13px; border-bottom: 1px solid var(--paper-line); }
