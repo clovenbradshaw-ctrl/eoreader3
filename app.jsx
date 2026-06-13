@@ -296,12 +296,14 @@ function App() {
       setBusy(true);
       for (const d of targets) {
         if (tok !== ingestTok.current) break;          // superseded by a newer parse
-        setIngestStatus({ phase: 'structure', stage: 'reading', pct: 0, name: d.name });
+        const big = (d._text ? d._text.length : 0) > 1500000;
+        setIngestStatus({ phase: 'structure', stage: 'reading', pct: 0, name: d.name, big });
         let nd;
         try {
           nd = await window.EOEngine.parseDocument(d._name || d.name, d._text, d.id, (p) => {
             if (tok !== ingestTok.current) return;
-            setIngestStatus({ phase: p.phase, stage: p.stage, pct: p.total ? p.done / p.total : null, name: d.name,
+            setIngestStatus({ phase: p.phase, stage: p.stage, pct: p.total ? p.done / p.total : null, name: d.name, big,
+              done: p.done, total: p.total,
               easing: p.stage === 'easing', usedMB: p.usedMB, capMB: p.capMB });
           });
         } catch (e) { eoWarn('re-parse failed for', d.name, e); continue; }
@@ -618,14 +620,18 @@ function App() {
     }
     const id = uid('doc');
     const tok = ++ingestTok.current;
+    // A big paste is read deliberately — staged and breathed so the tab stays
+    // alive — so the banner says so rather than looking stalled.
+    const big = (text ? text.length : 0) > 1500000;
     setBusy(true);
-    setIngestStatus({ phase: 'existence', stage: 'loading', pct: 0, name });
+    setIngestStatus({ phase: 'existence', stage: 'loading', pct: 0, name, big });
     let doc;
     try {
       doc = await window.EOEngine.parseDocument(name, text, id, (p) => {
         if (tok !== ingestTok.current) return;          // superseded — stop reporting
         const pct = p.total ? p.done / p.total : null;
-        setIngestStatus({ phase: p.phase, stage: p.stage, pct, name,
+        setIngestStatus({ phase: p.phase, stage: p.stage, pct, name, big,
+          done: p.done, total: p.total,
           easing: p.stage === 'easing', usedMB: p.usedMB, capMB: p.capMB });
       });
     } catch (e) {
@@ -2726,7 +2732,10 @@ function App() {
                 {ingestStatus.name && <span className="ib-name">· {ingestStatus.name}</span>}
                 {easing && ingestStatus.usedMB != null
                   ? <span className="ib-mem" title="Holding under the memory ceiling so the tab stays stable">{ingestStatus.usedMB} / {ingestStatus.capMB} MB</span>
-                  : ingestStatus.pct != null && <b className="ib-pct">{Math.round(ingestStatus.pct * 100)}%</b>}
+                  : ingestStatus.pct != null && (
+                    <b className="ib-pct">{Math.round(ingestStatus.pct * 100)}%
+                      {ingestStatus.total ? <span className="ib-count"> · {Number(ingestStatus.done || 0).toLocaleString()} / {Number(ingestStatus.total).toLocaleString()}</span> : null}
+                    </b>)}
               </div>
               <div className="ib-bar"><div className={'ib-fill' + (indet ? ' indet' : '') + (easing ? ' ease' : '')}
                 style={!indet ? { width: Math.round(ingestStatus.pct * 100) + '%' } : undefined} /></div>
@@ -2737,6 +2746,7 @@ function App() {
                   </span>
                 ))}
               </div>
+              {ingestStatus.big && <div className="ib-note">Large document — reading it carefully, a piece at a time, so the tab stays responsive. This can take a moment.</div>}
             </div>
           </div>
         );
