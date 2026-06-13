@@ -105,6 +105,21 @@ function AuditStep({ s }) {
       {s.ms != null && <span className="aud-dt">{s.ms}ms</span>}
     </div>
   );
+  if (s.t === 'compute') return (
+    <div className="aud-step">
+      <span className="aud-st compute">compute</span>
+      <div className="aud-sb">
+        <div className="aud-dim">python · pandas{s.durationMs != null ? ' · ' + s.durationMs + 'ms' : ''}{s.ok ? '' : ' · ⚠ error'}{s.truncated ? ' · truncated' : ''}</div>
+        <details className="aud-det" open>
+          <summary>code run locally</summary>
+          <div className="aud-msg"><span className="aud-role">python</span><pre>{s.code || '∅'}</pre></div>
+        </details>
+        {s.stdout ? <div className="aud-out"><span className="aud-role out">stdout</span><pre>{s.stdout}</pre></div> : null}
+        <div className="aud-out"><span className="aud-role out">{s.ok ? 'result' : 'error'}</span><pre>{s.ok ? (s.result || s.stdout || '∅') : (s.stderr || '∅')}</pre></div>
+      </div>
+      {s.ms != null && <span className="aud-dt">{s.ms}ms</span>}
+    </div>
+  );
   if (s.t === 'veto') return (
     <Line label="veto" kind="veto">
       <b>{s.decision}</b>

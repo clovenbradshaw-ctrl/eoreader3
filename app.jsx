@@ -15,6 +15,40 @@ if (typeof window !== 'undefined') window.eoWarn = eoWarn;
 // and no-ops cleanly when it isn't. Keeps the call sites in the chat path terse.
 const AUD = (m, ...a) => { try { const A = window.EOAudit; return A && A[m] ? A[m](...a) : undefined; } catch (e) { eoWarn('audit', m, e); } };
 const auditScope = (scope) => (scope || []).map(d => ({ id: d.id, name: d.name, kind: d.kind }));
+
+// ---- computational grounding helpers (pyodide.js) ----
+// A table doc keeps no raw CSV (the parser returns columns + rows); rebuild it
+// faithfully so Python reads the same data the user sees, entirely on-device.
+const csvCell = (v) => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+const tableToCSV = (doc) => {
+  const cols = doc.columns || [];
+  const lines = [cols.map(csvCell).join(',')];
+  for (const r of (doc.rows || [])) lines.push(cols.map(c => csvCell(r[c])).join(','));
+  return lines.join('\n');
+};
+// A safe, stable filename for the in-FS CSV the model's code will read.
+const tableSlug = (doc) => (String(doc.name || 'data').replace(/\.[^.]*$/, '').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'data') + '.csv';
+// The SCHEMA the model needs to write code — column names, inferred types, and a
+// few sample rows. On the Claude path this (not the full table) is what travels:
+// the code runs locally over the whole file, but the model only sees the shape.
+const tableSchemaText = (doc, fileName) => {
+  const cols = doc.columns || [];
+  const typeOf = (c) => (doc.money || []).includes(c) ? 'money' : (doc.numeric || []).includes(c) ? 'number'
+    : (doc.date || []).includes(c) ? 'date' : 'text';
+  const colLines = cols.map(c => '  - ' + c + ' (' + typeOf(c) + ')').join('\n');
+  const sample = (doc.rows || []).slice(0, 5);
+  const sampleCSV = [cols.join(',')].concat(sample.map(r => cols.map(c => csvCell(r[c])).join(','))).join('\n');
+  return 'A CSV file named "' + fileName + '" is available in the working directory (read it with pandas: pd.read_csv("' + fileName + '")).\n'
+    + 'It has ' + (doc.rows || []).length + ' rows and these columns:\n' + colLines
+    + '\n\nThe first few rows:\n' + sampleCSV;
+};
+// Pull the first fenced Python block out of a local model's reply, mechanically
+// (the rest of Cleon extracts structure by parsing, never by trusting the model
+// to self-report). Empty string when there is no block.
+const extractPyFence = (text) => {
+  const m = /```(?:python|py)?[ \t]*\r?\n([\s\S]*?)```/i.exec(String(text || ''));
+  return m ? m[1].trim() : '';
+};
 // Re-run the (deterministic, cheap) scope retrieval purely to capture the scored
 // hits for the trace — the engine stays untouched, so this never changes routing.
 const auditHits = (scope, q, k = 6) => {
@@ -151,6 +185,12 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState('system');
   const [reduceMotion, setReduceMotion] = useState(false);
+  // Computational grounding (pyodide.js): when on, a computational turn may run
+  // Python locally over the loaded document (off by default). The pref persists
+  // through savePrefs like theme/reduce-motion, and is wired to EOPython on load
+  // and on change. EOPython owns its own persisted flag too, so enabled() is
+  // authoritative even before the React tree hydrates.
+  const [pythonEnabled, setPythonEnabled] = useState(() => !!(window.EOPython && window.EOPython.enabled && window.EOPython.enabled()));
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
   const [auditCount, setAuditCount] = useState(0);
   // Glass-box export toggles: include the extraction half (graph + processing)
@@ -304,6 +344,7 @@ function App() {
         if (typeof prefs.wikiEnrich === 'boolean') setWikiEnrich(prefs.wikiEnrich);
         if (prefs.theme === 'system' || prefs.theme === 'light' || prefs.theme === 'dark') setTheme(prefs.theme);
         if (typeof prefs.reduceMotion === 'boolean') setReduceMotion(prefs.reduceMotion);
+        if (typeof prefs.pythonEnabled === 'boolean') { setPythonEnabled(prefs.pythonEnabled); if (window.EOPython) window.EOPython.setEnabled(prefs.pythonEnabled); }
         // Restored docs were parsed under the saved modes, so suppress the
         // re-parse the same way rule toggles do (batched into one render).
         if (prefs.langModes && typeof prefs.langModes === 'object') { suppressReparse.current = true; setLangModes(prefs.langModes); }
@@ -362,8 +403,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion });
-  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion, pythonEnabled });
+  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion, pythonEnabled]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -391,6 +432,10 @@ function App() {
   useEffect(() => {
     try { document.documentElement.classList.toggle('reduce-motion', !!reduceMotion); } catch (e) {}
   }, [reduceMotion]);
+  // Wire the computational-grounding pref through to EOPython on change (and on
+  // load, above). EOPython.setEnabled only flips a flag — it never loads the
+  // runtime, which stays lazy until the first actual run.
+  const setPython = useCallback((v) => { setPythonEnabled(!!v); try { if (window.EOPython) window.EOPython.setEnabled(!!v); } catch (e) {} }, []);
 
   // The one destructive affordance: wipe every device-local trace and reload
   // cold. hydrated is flipped off first so the debounced persistence effects
@@ -1500,6 +1545,134 @@ function App() {
     } catch (e) { return false; }
   };
 
+  // COMPUTATIONAL turn (pyodide.js): the second mechanical grounding source.
+  // The model writes Python; Python run locally over the loaded CSV produces the
+  // figure; the model phrases over that result and never reports a number it
+  // computed in its own head. Two backends: Claude uses native tool_use (it
+  // decides when to compute); a local model is steered to emit a single fenced
+  // python block, which we parse out deterministically rather than trusting it
+  // to self-report. Every execution is deposited as a glass-box `compute` step
+  // and surfaced on the message. Defensive throughout: a Python failure settles
+  // as an honest answer, never a broken turn.
+  const runComputeScope = async (doc, q, history) => {
+    const myGen = genRef.current;
+    const fileName = tableSlug(doc);
+    let csv = '';
+    try { csv = tableToCSV(doc); } catch (e) { eoWarn('compute csv', e); }
+    const files = [{ name: fileName, data: csv }];
+    const schema = tableSchemaText(doc, fileName);
+    const calls = [];   // every Python execution this turn — for the audit and the message panel
+
+    // Run one code block locally, recording it as a `compute` step (the code, its
+    // stdout/stderr, the structured result, the duration) so a computed figure is
+    // as traceable as a cited line.
+    const execPython = async (code) => {
+      let res;
+      try { res = await window.EOPython.run({ code, files, timeoutMs: 15000 }); }
+      catch (e) { res = { ok: false, stdout: '', stderr: String((e && e.message) || e), result: '', durationMs: 0, truncated: false }; }
+      const rec = { code: String(code || ''), ok: !!res.ok, stdout: res.stdout || '', stderr: res.stderr || '',
+                    result: res.result || '', durationMs: res.durationMs || 0, truncated: !!res.truncated };
+      calls.push(rec);
+      AUD('step', 'compute', rec);
+      return res;
+    };
+    const payload = () => ({ fileName, columns: doc.columns || [], calls: calls.slice() });
+    const computedAudit = (ok) => ok
+      ? { status: 'computed', grounded: true, covers: '1/1', stable: true,
+          note: 'Computed locally with Python over “' + doc.name + '”. The code and its output are in the glass box and below.' }
+      : { status: 'warn', grounded: false, covers: null,
+          note: 'Tried to compute with Python, but it did not return a usable result. The code and any error are below.' };
+
+    try {
+      // ---- Claude API path: native tool_use ----
+      if (window.EOLLM.isAnthropic && window.EOLLM.isAnthropic(model.mlc)) {
+        const tools = [{
+          name: 'run_python',
+          description: 'Run Python (pandas is available) locally over the loaded CSV to compute an answer. The CSV file is already in the working directory; the data never leaves the device. Use this for any counting, summing, grouping, sorting, joining, or rate calculation over the data. The code\'s printed output and return value are given back to you.',
+          input_schema: { type: 'object', properties: {
+            code: { type: 'string', description: 'Python source to execute. Read the CSV with pandas and print or return the result.' },
+          }, required: ['code'] },
+        }];
+        const system = 'You are Cleon, answering a question about a tabular document the user loaded. You have a run_python tool that executes Python (with pandas) locally over the data, on the user\'s device.\n\n'
+          + schema + '\n\n'
+          + 'When the question needs any calculation over the data, call run_python with code that computes it and prints or returns the answer, then state the answer in plain words and name the columns and the operation you used. If no calculation is needed, just answer. Never invent a number; every figure must come from the tool output.';
+        const msgs = (history || []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content)
+          .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) }));
+        msgs.push({ role: 'user', content: q });
+        patchLast({ typing: true });
+        const modelId = String(model.mlc).replace(/^anthropic:/, '');
+        const out = await window.EOLLM.runAnthropicTools({
+          model: modelId, system, messages: msgs, tools, maxTokens: 1024, maxSteps: 5,
+          runTool: async (name, input) => {
+            if (name !== 'run_python' || !input || !input.code) return { ok: false, stderr: 'no code provided' };
+            const r = await execPython(input.code);
+            return { ok: r.ok, stdout: r.stdout, stderr: r.stderr, result: r.result, durationMs: r.durationMs };
+          },
+        });
+        if (genStale(myGen)) return;
+        const ranOk = calls.length ? calls[calls.length - 1].ok : true;
+        const ok = ranOk && !!(out.text && out.text.trim());
+        const text = (out.text || '').trim()
+          || (calls.length ? 'I ran the computation but came back without a phrased answer. The raw result is below.' : 'I could not produce an answer.');
+        const audit = calls.length ? computedAudit(ok) : { status: 'plain', grounded: false, covers: null, note: 'Answered without computing — no calculation was needed.' };
+        replaceLast({ role: 'assistant', text, audit, mode: 'grounded', compute: calls.length ? payload() : null });
+        AUD('end', { engine: calls.length ? 'compute' : 'compute-none', text, audit: calls.length ? audit : null, cites: [] });
+        setBusy(false);
+        return;
+      }
+
+      // ---- Local-model path: the fenced-block convention ----
+      // First pass: the model emits a single fenced python block iff a
+      // computation is needed; otherwise it answers in words. We parse the
+      // fence out mechanically rather than relying on the model to self-report.
+      const fenceSys = 'You are Cleon. The user asked about a CSV table loaded locally on this device. You can run Python (pandas available) over it.\n\n'
+        + schema + '\n\n'
+        + 'If answering needs a calculation over the data (counting, summing, grouping, sorting, rates, joins), reply with ONE fenced Python code block and nothing else. The code must read "' + fileName + '" with pandas and print the answer. If no calculation is needed, answer the question in plain words instead, with no code block.';
+      let first = '';
+      try { first = await window.EOLLM.phrase({ mlcKey: model.mlc, question: q, contextText: schema, history, mode: 'chat', grounded: false, sysOverride: fenceSys }); }
+      catch (e) { if (window.EOLLM.isAbort(e) || genStale(myGen)) return; first = ''; }
+      if (genStale(myGen)) return;
+      const code = extractPyFence(first);
+      if (!code) {
+        const text = (first || '').trim() || 'I could not produce an answer.';
+        const audit = { status: 'plain', grounded: false, covers: null, note: 'Answered without computing — no calculation was needed.' };
+        replaceLast({ role: 'assistant', text, audit, mode: 'grounded' });
+        AUD('end', { engine: 'compute-none', text, audit: null, cites: [] });
+        setBusy(false);
+        return;
+      }
+      const r = await execPython(code);
+      if (genStale(myGen)) return;
+      // Second pass: phrase over the execution result, streamed in. The result
+      // rides as the only material; the model states the figure, names the
+      // columns/operation, and never invents.
+      const resultBlock = 'Python was run locally over the table. Here is exactly what it produced:\n\n'
+        + '[code]\n' + code + '\n\n[stdout]\n' + (r.stdout || '(none)') + '\n\n[result]\n' + (r.result || '(none)')
+        + (r.ok ? '' : '\n\n[error]\n' + (r.stderr || 'failed'));
+      const phraseSys = 'You are Cleon. A computation was just run locally over the user\'s CSV. State the answer in plain words, using ONLY the numbers in the result below. Name the columns and the operation. Do not invent any figure. If the computation failed, say so plainly and briefly.';
+      replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
+      let answer = '';
+      try { answer = await window.EOLLM.phrase({ mlcKey: model.mlc, question: q, contextText: resultBlock, history, mode: 'chat', grounded: false, sysOverride: phraseSys, onToken: streamInto({ mode: 'grounded' }) }); }
+      catch (e) { if (window.EOLLM.isAbort(e) || genStale(myGen)) return; answer = ''; }
+      if (genStale(myGen)) return;
+      const text = (answer || '').trim()
+        || (r.ok ? ('The computation returned:\n\n' + (r.result || r.stdout || '(no output)')) : ('The computation failed: ' + (r.stderr || 'unknown error')));
+      const audit = computedAudit(r.ok);
+      replaceLast({ role: 'assistant', text, audit, mode: 'grounded', compute: payload() });
+      AUD('end', { engine: 'compute', text, audit, cites: [] });
+      setBusy(false);
+    } catch (e) {
+      if (window.EOLLM.isAbort(e) || genStale(myGen)) return;   // stopped — settled by stopTurn
+      eoWarn('compute', e);
+      AUD('step', 'error', { where: 'compute', message: String((e && e.message) || e) });
+      const text = 'I hit a problem running the computation: ' + String((e && e.message) || e) + '.';
+      const audit = calls.length ? computedAudit(false) : null;
+      replaceLast({ role: 'assistant', text, audit, mode: 'grounded', compute: calls.length ? payload() : null });
+      AUD('end', { engine: 'compute-error', text, audit, cites: [] });
+      setBusy(false);
+    }
+  };
+
   // Document-referencing turn: feed the model the relevant passages and bind
   // citations mechanically. The seeker still decides what's there to say —
   // "who" is exact-mechanical; no ground → honest hold; the model only phrases.
@@ -2140,6 +2313,25 @@ function App() {
     const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
     AUD('set', { modelReady: ready });
 
+    // COMPUTATION: the opt-in second mechanical source (pyodide.js). When the
+    // toggle is on, a model is ready, and a tabular source is in scope, give the
+    // turn the option to COMPUTE — the EO engine grounds prose but structurally
+    // cannot sum a column or group a CSV. The model still only phrases; Python
+    // run locally produces the figure, and the code + its output ride into the
+    // audit and onto the message. The model decides whether a computation is
+    // needed (native tool_use for Claude, a parsed fenced block for a local
+    // model), so a non-computational table question still answers in words.
+    if (mode !== 'creative' && ready && window.EOPython && window.EOPython.enabled && window.EOPython.enabled()) {
+      const pyDoc = scope.find(d => d && d.kind === 'table' && Array.isArray(d.rows) && d.rows.length);
+      if (pyDoc) {
+        AUD('step', 'route', { referencing: true, path: 'compute', reason: 'computation toggle',
+          primary: { id: pyDoc.id, name: pyDoc.name, kind: pyDoc.kind } });
+        lastGroundedRef.current = true; everGroundedRef.current = true;
+        runComputeScope(pyDoc, q, history).catch(turnFailed('compute'));
+        return;
+      }
+    }
+
     // CREATIVE: free composition (needs the model). Phrases over doc passages
     // if one is open, otherwise writes freely. Never cited.
     if (mode === 'creative') {
@@ -2413,6 +2605,7 @@ function App() {
       {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
       {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)}
         theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
+        pythonEnabled={pythonEnabled} onPythonEnabled={setPython} pythonAvailable={!!window.EOPython}
         onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}

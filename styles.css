@@ -324,7 +324,7 @@ button { font-family: inherit; cursor: pointer; }
 .audit-chip .ok { color: var(--good-fg); }
 .audit-chip .no { color: var(--text-3); }
 .audit-chip .sep { color: #cdd0d6; }
-.audit-chip.clean { background: var(--good-bg); border-color: var(--good-bd); }
+.audit-chip.clean, .audit-chip.computed { background: var(--good-bg); border-color: var(--good-bd); }
 .audit-chip.notes { background: var(--warn-bg); border-color: var(--warn-bd); }
 .audit-chip.warn  { background: var(--bad-bg);  border-color: var(--bad-bd); }
 /* held: related lines were found but don't cover the question — shown and cited,
@@ -1178,7 +1178,11 @@ table.grid .member td:first-child { padding-left: 30px; }
 .aud-st.llm { color: #7b4bd0; background: #f4eefc; border-color: #e2d6f6; }
 .aud-st.veto, .aud-st.error { color: var(--bad-fg); background: var(--bad-bg); border-color: var(--bad-bd); }
 .aud-st.answer { color: var(--good-fg); background: var(--good-bg); border-color: var(--good-bd); }
+.aud-st.compute { color: #0a7d6b; background: #e6f6f2; border-color: #c4ebe2; }
 .aud-sb { flex: 1; min-width: 0; color: var(--text); }
+/* computed-answer disclosure: a row of code/result blocks, reusing the
+   mechanical-reading panel's collapsible shell and the raw-prompt styles. */
+.mech.compute .compute-run + .compute-run { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
 .aud-dt { font-family: var(--mono); font-size: 9.5px; color: var(--text-3); flex-shrink: 0; }
 .aud-dim { color: var(--text-3); }
 .aud-void { color: var(--bad-fg); }
