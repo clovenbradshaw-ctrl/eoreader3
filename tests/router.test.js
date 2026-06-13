@@ -95,6 +95,20 @@ async function main() {
       "the answer does not leak Kahan's inspirations — got: " + (plan && plan.text || '').slice(0, 80));
   });
 
+  group('B5.1 — topic-scoped fallback / honest absence within the subject', () => {
+    // doc-2 (Shore) records his profession and an award, not his influences.
+    // "what are Howard Shore's influences?" must NOT dump those unrelated
+    // facts as the answer — it reports the aspect is not covered.
+    const a = E.answer(shore, "what are Howard Shore's influences?");
+    ok(a && !/composer|orchestra|academy|award/i.test(a.text),
+      'a topic the page lacks does not surface the subject’s unrelated facts — got: ' + (a && a.text || '').slice(0, 90));
+    ok(a && a.audit && a.audit.absent, 'the readout reports honest absence for the missing aspect');
+    // a bare identity ask is unchanged — it still reads the class assertion
+    const who = E.answer(shore, 'who is Howard Shore?');
+    ok(who && /composer/i.test(who.text), 'a bare identity ask still answers from the class assertion');
+    ok(who && !(who.audit && who.audit.absent), 'a bare identity ask is never an absence');
+  });
+
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
   if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }

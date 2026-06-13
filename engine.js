@@ -9481,6 +9481,11 @@ function projectGraph(events, frame = {}) {
     // the name IS, not whichever sentence shares the most tokens
     const defined = answerDefine(doc, query, opts);
     if (defined) return defined;
+    // a specific-aspect ask about a present subject reads only the sentences
+    // that speak to that aspect, or says the page doesn't cover it — never the
+    // subject's unrelated facts dragged in by name overlap (B5.1)
+    const aspectAns = answerAspect(doc, query, opts);
+    if (aspectAns) return aspectAns;
     // a kin-shaped ask ("whose son…?") is answered from the possessive-kin
     // record — the possessor named outright, which the raw sentence can't do
     const kin = answerKin(doc, query, opts);
@@ -10153,6 +10158,33 @@ function projectGraph(events, frame = {}) {
      ("what is X's job"), class DEFs first for an identity ask ("who is X");
      the other kind follows only if it adds content tokens. Null when the ask
      isn't definitional, names nothing, or the graph holds nothing. */
+  // The specific ASPECT a definitional ask is about, beyond the entity and
+  // the wh-frame: "what are Howard Shore's influences" → {influences}; a bare
+  // "who is Howard Shore" → {} (identity, no aspect). The mechanical readout
+  // is topic-blind without this — it answered "what are his influences?" with
+  // "Shore is a member of Lighthouse" because it dumped whatever DEF mentioned
+  // the entity. Substantive tokens only (≥5 chars), minus the entity's own.
+  const _ASK_FRAME = new Set(['who','what','which','whose','where','when','about','tell','give','show','their','his','her','its','the','that','this','does','did','was','were','are','is']);
+  function askAspectTokens(query, named) {
+    const entToks = new Set();
+    for (const e of named) for (const t of (tok(e.name) || [])) entToks.add(t);
+    const out = [];
+    for (const t of (tok(query) || [])) {
+      if (t.length < 5 || _ASK_FRAME.has(t) || entToks.has(t)) continue;
+      out.push(t);
+    }
+    return [...new Set(out)];
+  }
+  // Does a DEF value speak to the asked aspect? Stem-tolerant prefix match so
+  // "influences" reaches "influenced"/"influential", "inspirations" reaches
+  // "inspired".
+  function _defMatchesAspect(def, aspect) {
+    const vt = tok(def.is) || [];
+    return aspect.some(a => {
+      const pa = a.slice(0, 5);
+      return vt.some(t => t.slice(0, 5) === pa);
+    });
+  }
   function defineAssertions(doc, query) {
     if (!doc || doc.kind !== 'prose' || !isDefinitionalAsk(query)) return null;
     const named = namedEntitiesIn(doc, query);
@@ -10160,9 +10192,20 @@ function projectGraph(events, frame = {}) {
     let defs = [];
     try { defs = assertionsOf(doc); } catch (e) { return null; }
     const keys = new Set(named.map(e => e.key));
-    const mine = defs.filter(d => keys.has(d.key)
+    let mine = defs.filter(d => keys.has(d.key)
       || (d.key.length >= 4 && [...keys].some(k => _keyWithin(k, d.key) || _keyWithin(d.key, k))));
     if (!mine.length) return null;
+    // TOPIC-SCOPED (B5.1): a non-role aspect ask reads only the assertions
+    // that speak to that aspect. None match ⇒ the page records the subject
+    // but not this aspect — return null so the path falls through to lexical
+    // retrieval (which may find it in prose) or to honest absence, rather
+    // than dumping topically-unrelated DEFs as if they answered the question.
+    const aspect = isRoleAsk(query) ? [] : askAspectTokens(query, named);
+    if (aspect.length) {
+      const onTopic = mine.filter(d => _defMatchesAspect(d, aspect));
+      if (!onTopic.length) return null;
+      mine = onTopic;
+    }
     const roles = mine.filter(d => d.path === 'role');
     const classes = mine.filter(d => d.path !== 'role');
     const ordered = isRoleAsk(query) ? roles.concat(classes) : classes.concat(roles);
@@ -10207,6 +10250,58 @@ function projectGraph(events, frame = {}) {
       audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
         note: 'Read from the page’s recorded assertions (DEF events) about ' + da.subject + ' — no model involved.' },
     };
+  }
+
+  /* ---------- topic-scoped fallback / honest absence (B5.1) ----------
+     A definitional ask about a SPECIFIC aspect of a present subject ("what
+     are Howard Shore's influences?"). The page records the subject but maybe
+     not this aspect. This reads only sentences carrying BOTH the subject and
+     the aspect; finding none, it says so — it never falls through to the
+     entity-overlap retrieval that would surface the subject's UNRELATED facts
+     (a camp friendship, a band membership) as if they answered the question.
+     The mechanical reader was topic-blind here: it answered "influences?"
+     with "Shore was a member of Lighthouse". Null for a bare identity ask
+     (no aspect) or a non-definitional turn, so every other path is
+     byte-identical. */
+  function answerAspect(doc, query, opts = {}) {
+    if (!doc || doc.kind !== 'prose' || !isDefinitionalAsk(query) || isRoleAsk(query)) return null;
+    const named = namedEntitiesIn(doc, query);
+    if (!named.length) return null;
+    const aspect = askAspectTokens(query, named);
+    if (!aspect.length) return null;                 // bare identity ask → not ours
+    // referential absence (the subject isn't on the page at all) is the
+    // void's job, not this path's
+    try {
+      let { antimatter } = referents(doc, query);
+      if (opts.voidWhitelist) antimatter = antimatter.filter(t => opts.voidWhitelist.has(t));
+      if (antimatter.length) return null;
+    } catch (e) {}
+    const texts = doc.sentenceTexts || [];
+    const chromeSet = (doc._chrome && doc._chrome.length) ? new Set(doc._chrome) : null;
+    const onAspect = (i) => {
+      const vt = tok(texts[i]) || [];
+      return aspect.some(a => { const pa = a.slice(0, 5); return vt.some(t => t.slice(0, 5) === pa); });
+    };
+    const onSubject = (i) => {
+      const lc = ' ' + String(texts[i]).toLowerCase().replace(/\s+/g, ' ') + ' ';
+      return named.some(e => lc.includes(' ' + String(e.name).toLowerCase() + ' ')
+        || (e.surfaceForms || []).some(f => String(f).length >= 3 && lc.includes(' ' + String(f).toLowerCase() + ' ')));
+    };
+    const hits = [];
+    for (let i = 0; i < texts.length; i++) {
+      if (chromeSet && chromeSet.has(i)) continue;
+      if (onAspect(i) && onSubject(i)) hits.push(i);
+    }
+    if (hits.length) {
+      const cites = hits.slice(0, 2).map(i => ({ docId: doc.id, idx: i }));
+      const text = hits.slice(0, 2).map(i => `${String(texts[i]).trim()} {{cite:${doc.id}:${i}:s${i}}}`).join(' ');
+      return { text, cites, audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
+        note: 'Read from the sentences that speak to the asked aspect — no model involved.' } };
+    }
+    const subj = named[0].name, asp = aspect.join(' ');
+    return { text: `The document covers ${subj}, but records nothing about ${subj}’s ${asp}.`,
+      cites: [], audit: { status: 'notes', grounded: true, covers: '0/1', stable: true, absent: true,
+        note: `Honest absence: ${subj} is on the page, but the asked aspect (${asp}) is not recorded.` } };
   }
 
   /* ---------- document metadata (Gutenberg-style headers) ----------
