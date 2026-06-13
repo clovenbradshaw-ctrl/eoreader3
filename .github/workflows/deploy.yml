@@ -1,0 +1,40 @@
+name: Deploy to GitHub Pages
+
+# Cleo is a no-build static site: index.html loads the engine as plain scripts
+# (engine.js / compute.js / embed.js / llm.js) and the UI via in-browser Babel.
+# So "deploy" is just publishing the committed files. `git archive HEAD` exports
+# exactly the tracked tree — every file the app needs, and nothing untracked
+# (.git, node_modules, gitignored artifacts). Sibling apps (e.g. the bare-metal
+# matrix app's Ask view) load window.EOEngine et al. from this deployment.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export tracked files to _site
+        run: |
+          mkdir -p _site
+          git archive --format=tar HEAD | tar -x -C _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
