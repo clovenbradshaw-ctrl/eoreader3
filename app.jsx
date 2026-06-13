@@ -2358,10 +2358,11 @@ function App() {
   // unchanged and still FAILS CLOSED — a missing or throwing decider SUPPRESSES
   // the privileged off-device fetch rather than waving it through. What changed:
   // a turn that passes the gate on its own (Auto mode) no longer silently fetches
-  // and ingests an article for whatever term pickQuery landed on — it PROPOSES
-  // the search, surfacing an editable confirm card on the live reply so the
-  // reader can correct the term before anything leaves the device (runWikiSearch
-  // fires the request on click). An explicit force — `opts.force`, i.e. the
+  // and ingests an article for whatever term pickQuery landed on — it runs a
+  // lightweight OPTIONS search and offers the candidates on the live reply ("want
+  // me to research one of these?"), so the reader picks the right subject before
+  // any full article is fetched (runWikiSearch fires that on click). An explicit
+  // force — `opts.force`, i.e. the
   // per-message FORCE button or 'on' mode — is the reader already asking to look
   // it up, so it skips both the gate AND the confirm step and fetches straight
   // into THIS turn's scope.
@@ -2408,21 +2409,46 @@ function App() {
     // "look up Shore" while a different Shore is active) must not silently
     // fetch-and-swap; hold (gate only — a force overrides).
     if (!force && hot && _termCollidesWithActive(term, hot)) return null;
-    // The gates passed. An AUTOMATIC pass only PROPOSES the search: the picked
-    // term is often not what the reader meant, so surface an editable confirm
-    // card and return null — this turn answers from the sources already in scope,
-    // and a confirmed article (runWikiSearch) grounds later turns. A force is the
-    // reader already asking, so fetch now and ground THIS turn on the article.
+    // The gates passed. An AUTOMATIC pass does the lightweight OPTIONS search and
+    // offers the candidates ("want me to research one of these?") — the picked
+    // term is often not what the reader meant, so we surface real choices and let
+    // them pick before any full article is fetched. Returns null: this turn
+    // answers from the sources already in scope, and the chosen article
+    // (runWikiSearch) grounds later turns. A force is the reader already asking,
+    // so skip the options step and fetch now, grounding THIS turn on the article.
     if (!force) {
-      setMessages(ms => ms.map(m => m.turnId === turnId
-        ? { ...m, enrichment: { status: 'confirm', term } } : m));
+      offerWikiOptions(turnId, term).catch((e) => eoWarn('wiki-options', e));
       return null;
     }
     return await fetchWikiArticle(turnId, term, false);
   };
 
-  // The confirmed fetch — the reader pressed Search on the confirm card, with the
-  // term as picked or as they corrected it. NOW the off-device request fires. The
+  // The "initial search → offer options" step (the AUTOMATIC path). A cheap
+  // list=search surfaces the candidate articles for the term; the reader then
+  // chooses which (if any) to research. The only off-device request here is the
+  // search — nothing is fetched in full or ingested until the reader picks an
+  // option (runWikiSearch → fetchWikiArticle). Best-effort; drives the live
+  // message's card by turnId through its searching → options lifecycle.
+  const offerWikiOptions = async (turnId, term) => {
+    const X = window.EOExternal;
+    const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
+    try { X && X.grantConsent && X.grantConsent(); } catch (e) {}
+    // Older external.js without the options search → degrade to a single editable
+    // confirm card (the picked term), so the feature still works.
+    if (!X || typeof X.searchOptions !== 'function') { tag({ status: 'confirm', term }); return; }
+    tag({ status: 'searching', term });
+    let res;
+    try { res = await X.searchOptions(term); }
+    catch (e) { res = { status: 'error', error: String((e && e.message) || e) }; }
+    if (!res || res.status === 'disabled') { tag(null); return; }          // lookups off → no card
+    if (res.status === 'gated') { tag({ status: 'gated', term }); return; }
+    if (res.status === 'error') { tag({ status: 'error', term, error: res.error }); return; }
+    if (res.status === 'hit' && res.options && res.options.length) { tag({ status: 'options', term, options: res.options.slice(0, 6) }); return; }
+    tag({ status: 'no-options', term });
+  };
+
+  // The confirmed fetch — the reader chose an option to research (or, on the
+  // fallback confirm card, pressed Search on the term). NOW the request fires. The
   // new source lands for the NEXT turn (React state updates after this handler),
   // so the card's footer says "ask a follow-up to ground on it" (deferred) rather
   // than claiming the reply already shown used it.

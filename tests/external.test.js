@@ -243,6 +243,26 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     eq(g.status, 'gated', 'article honours the private-individual gate');
   });
 
+  await group('searchOptions() — the lightweight options step (offer, do not fetch)', async () => {
+    log.length = 0;
+    const r = await X.searchOptions('socialism');
+    eq(r.status, 'hit', 'options hit');
+    ok(Array.isArray(r.options) && r.options.length >= 1, 'options carried as a list');
+    eq(r.options[0].title, 'Socialism', 'top option is the matching title');
+    ok(r.options.some(o => o.title === 'Other Thing'), 'sibling candidates carried too (a real choice)');
+    ok(!/[<>]/.test(r.options[0].snippet || ''), 'option snippet stripped of markup');
+    eq(r.basis.src, 'search', 'basis stamped src=search');
+    eq(log.filter(e => e.kind === 'wiki-search').length, 1, 'exactly one search request');
+    eq(log.filter(e => e.kind === 'wiki-extract').length, 0, 'no article extract fetched at the options step');
+    const miss = await X.searchOptions('Nonexistent Subject Xyzzy');
+    eq(miss.status, 'miss', 'no hits → miss, never fabricated');
+    const g = await X.searchOptions('Mrs. Mill');
+    eq(g.status, 'gated', 'options honour the private-individual gate');
+    X.setConfig({ proxy: '' });
+    eq((await X.searchOptions('socialism')).status, 'disabled', 'no proxy → disabled, not a guess');
+    X.setConfig({ proxy: 'http://proxy.test/feed' });
+  });
+
   await group('enrichTerm() — the normalized /lookup card', async () => {
     log.length = 0;
     const r = await X.enrichTerm('socialism');

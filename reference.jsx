@@ -283,15 +283,63 @@ function ConfirmCard({ term, onConfirm, onDismiss }) {
   );
 }
 
+/* The "initial search → offer options" step: the candidate articles for the
+   term, each a button that triggers the deeper research (full article +
+   ingest). Only the cheap search has run; researching is the reader's explicit
+   choice. Also renders the searching / no-matches states for that step. */
+function OptionsCard({ status, term, options, onResearch, onDismiss }) {
+  const head = (
+    <div className="refcard-head">
+      <Icon name="book" size={13} /> <span className="refcard-title">Wikipedia</span>
+      {term ? <span className="refcard-term">{term}</span> : null}
+      <span className="refcard-src">en.wikipedia.org</span>
+    </div>
+  );
+  if (status === 'searching') return <div className="refcard refcard-options">{head}<p className="refdesk-loading">Searching Wikipedia for “{term}”…</p></div>;
+  const opts = options || [];
+  if (status === 'no-options' || !opts.length) return (
+    <div className="refcard refcard-options">{head}
+      <div className="refcard-options-body">
+        <p className="refcard-options-ask">No Wikipedia matches for “{term}”.</p>
+        <div className="refcard-options-actions"><button type="button" className="refcard-dismiss" onClick={() => onDismiss && onDismiss()}>Dismiss</button></div>
+      </div>
+    </div>
+  );
+  return (
+    <div className="refcard refcard-options">{head}
+      <div className="refcard-options-body">
+        <p className="refcard-options-ask">Want me to research {opts.length === 1 ? 'this' : 'one of these'}?</p>
+        <ul className="refcard-options-list">
+          {opts.map((o, i) => (
+            <li key={i}>
+              <button type="button" className="refcard-option" onClick={() => onResearch && onResearch(o.title)}>
+                <span className="refcard-option-title">{o.title}</span>
+                {o.snippet ? <span className="refcard-option-snippet">{o.snippet}</span> : null}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="refcard-options-actions">
+          <button type="button" className="refcard-dismiss" onClick={() => onDismiss && onDismiss()}>No thanks</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* The card pinned at the TOP of a chat message's reply when Wikipedia
-   enrichment is on. Before a fetch it shows the proposed search for
-   confirmation (ConfirmCard); once the reader confirms it renders the article
-   that was pulled in and signals that it was INGESTED into the graph as a
-   citable source. Handles the loading / abstain / miss states inline. */
+   enrichment is on. First it offers the search candidates (OptionsCard, "want
+   me to research one of these?"); once the reader picks one it renders the
+   article that was pulled in and signals that it was INGESTED into the graph as
+   a citable source. Handles the loading / abstain / miss states inline.
+   (ConfirmCard is the fallback for an older external.js with no options step.) */
 function ReferenceCard({ data, onConfirm, onDismiss, onOpen }) {
   if (!data) return null;
   const term = data.term || data.query || '';
-  // Before the fetch: the proposed search, awaiting the reader's confirmation.
+  // The initial search → offer options step: search, then choose what to research.
+  if (data.status === 'searching' || data.status === 'options' || data.status === 'no-options')
+    return <OptionsCard status={data.status} term={term} options={data.options} onResearch={onConfirm} onDismiss={onDismiss} />;
+  // Fallback (older external.js with no options search): confirm a single term.
   if (data.status === 'confirm') return <ConfirmCard term={term} onConfirm={onConfirm} onDismiss={onDismiss} />;
   const head = (
     <div className="refcard-head">

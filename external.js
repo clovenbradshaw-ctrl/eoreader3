@@ -586,6 +586,36 @@
     }
   }
 
+  /* ============================================================
+     searchOptions() — the lightweight "what could this be?" step.
+
+     A single list=search request (no summary, no extract) that returns the
+     candidate articles for a query, so the chat can OFFER real options to
+     research rather than guess one term and fetch it. The deep fetch
+     (article → ingest) is a separate, user-chosen step. Rate-limited, gated,
+     abstaining; not frozen — it is a cheap index the reader acts on at once.
+     ============================================================ */
+  async function searchOptions(q, opts) {
+    opts = opts || {};
+    q = String(q == null ? '' : q).trim();
+    if (!q) return { status: 'miss', query: q };
+    if (!opts.allowPrivate && privateIndividual(q, opts.type)) return { status: 'gated', reason: 'private-individual', query: q };
+    if (!proxyBase() || !_fetch()) return { status: 'disabled', query: q };
+    if (opts.replayOnly) return { status: 'pending', query: q };
+    try {
+      const limit = Math.max(1, Math.min(10, opts.limit || 6));
+      const searchUrl = 'https://en.wikipedia.org/w/api.php?format=json&action=query&list=search&srlimit=' + limit + '&srsearch=' + encodeURIComponent(q);
+      const searchTxt = await proxyText(searchUrl, opts.severity || 0);
+      const hits = (((safeJSON(searchTxt) || {}).query) || {}).search || [];
+      const basis = { src: 'search', term: q, url: searchUrl, fetched_at: new Date().toISOString(), hash: hashTag(searchTxt || ''), schema: SCHEMA };
+      const options = hits.map(h => ({ title: h.title, snippet: stripTags(h.snippet || '') })).filter(o => o.title);
+      return options.length ? { status: 'hit', query: q, basis, options } : { status: 'miss', query: q, basis };
+    } catch (e) {
+      if (e && e.disabled) return { status: 'disabled', query: q };
+      return { status: 'error', error: String((e && e.message) || e), query: q };
+    }
+  }
+
   // Pick the term worth looking up from a free-text chat message: a quoted
   // phrase, else the longest capitalized run (after stripping a question
   // lead-in), else the cleaned remainder. Pure — drives the chat enrichment.
@@ -711,7 +741,7 @@
     SCHEMA,
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
-    enrichTerm, article, pickQuery, acquireIntent,
+    enrichTerm, article, searchOptions, pickQuery, acquireIntent,
     stripWikiSections, articleDocText,
     hasConsent, grantConsent, revokeConsent,
     clearCache,

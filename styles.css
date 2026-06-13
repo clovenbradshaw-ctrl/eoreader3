@@ -1660,6 +1660,15 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .refcard-confirm-actions { display: flex; align-items: center; gap: 8px; }
 .refcard-dismiss { font-family: var(--mono); font-size: 11.5px; letter-spacing: .04em; border: 1px solid var(--border); background: transparent; color: var(--text-2); padding: 4px 10px; border-radius: var(--r-sm); cursor: pointer; }
 .refcard-dismiss:hover { background: var(--bg-subtle); color: var(--text); }
+/* the initial search → offer options step (OptionsCard) */
+.refcard-options-body { padding: 11px 13px; }
+.refcard-options-ask { font-family: var(--sans); font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 9px; }
+.refcard-options-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.refcard-option { display: block; width: 100%; text-align: left; cursor: pointer; font-family: var(--sans); background: var(--bg-subtle); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 11px; }
+.refcard-option:hover { border-color: var(--enc-ink); background: var(--paper); }
+.refcard-option-title { display: block; font-size: 13.5px; font-weight: 600; color: var(--text); }
+.refcard-option-snippet { display: block; font-size: 12px; color: var(--text-3); margin-top: 2px; line-height: 1.4; }
+.refcard-options-actions { display: flex; }
 .refcard .refdesk-thumb { float: right; margin: 0 0 8px 12px; max-width: 104px; width: 34%; border: 1px solid var(--paper-line); border-radius: var(--r-xs); }
 .refcard .refdesk-headword { font-size: 17px; font-weight: 600; margin: 0 0 3px; }
 .refcard .refdesk-headword a { color: var(--paper-ink); text-decoration: none; border-bottom: 1px solid var(--enc-ink); }
