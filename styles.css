@@ -713,6 +713,37 @@ table.grid .member td:first-child { padding-left: 30px; }
 .status-tag.open { color: var(--accent); background: var(--accent-tint); }
 .status-tag.lost { color: var(--bad-fg); background: var(--bad-bg); }
 
+/* clickable record rows: a subtle cursor cue, the hover tint inherited from
+   tbody tr:hover above gives the affordance without a louder color shift. */
+table.grid tbody tr.clickable { cursor: pointer; }
+table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ── Record side panel (clicked row → drawer with every field) ──
+   Reuses the shared .overlay/.drawer chrome for animation, focus trap, escape
+   key. The body is a one-column list of label → value rows. */
+.record-drawer { width: min(440px, 100vw); }
+.record-drawer .rec-eyebrow {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-3); font-weight: 650; margin-bottom: 4px;
+}
+.record-drawer .rec-title {
+  font-family: var(--mono); font-size: 16px; font-weight: 650; letter-spacing: -.005em;
+  margin: 0; word-break: break-word;
+}
+.record-body { padding: 4px 0 40px; }
+.rec-field {
+  display: grid; grid-template-columns: 130px 1fr; gap: 14px; align-items: baseline;
+  padding: 11px 20px; border-bottom: 1px solid var(--border);
+}
+.rec-field:last-child { border-bottom: 0; }
+.rec-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-3); font-weight: 650; word-break: break-word;
+}
+.rec-value { font-size: 13.5px; color: var(--text); word-break: break-word; }
+.rec-value.num { font-family: var(--mono); }
+.rec-empty { color: var(--text-3); }
+
 /* ============================================================ RULES PANEL */
 .overlay { position: fixed; inset: 0; background: rgba(22,24,28,.42); z-index: 90; display: flex; justify-content: flex-end; animation: fade .18s ease; }
 @keyframes fade { from { opacity: 0; } }

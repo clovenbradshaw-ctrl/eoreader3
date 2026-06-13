@@ -152,6 +152,13 @@ function TableDoc({ doc, initialSpec }) {
   React.useEffect(() => { if (initialSpec) setSpec(initialSpec); }, [initialSpec]);
   const fold = window.foldPivot(doc, spec);
   const [openGroups, setOpenGroups] = React.useState({});
+  // The clicked record (a row), shown in the side panel. Cleared on close or
+  // when the open document changes, so a panel from one CSV can't linger over
+  // another. Stored as the row object itself; the panel reads every column off
+  // it. (Pivoted/grouped views still show one record per data row, so the side
+  // panel works the same way in both layouts.)
+  const [activeRecord, setActiveRecord] = React.useState(null);
+  React.useEffect(() => { setActiveRecord(null); }, [doc.id]);
   const numCols = doc.numeric || [];
   const moneyCols = doc.money || [];
   const key0 = doc.columns[0];
@@ -209,7 +216,8 @@ function TableDoc({ doc, initialSpec }) {
                       <td className="num">{g.agg.value == null ? '—' : (fold.isMoneyCol(fold.aggregate?.col) ? window.fmtMoney(g.agg.value) : window.fmtNum(g.agg.value))}</td>
                     </tr>
                     {openGroups[gi] && g.rows.map((r, ri) => (
-                      <tr key={ri} className="member"><td>{r[key0]}</td>
+                      <tr key={ri} className="member clickable" onClick={() => setActiveRecord(r)}>
+                        <td>{r[key0]}</td>
                         <td className="num" colSpan={2}>{doc.columns.slice(1).map(c => fmt(c, r[c])).join('  ·  ')}</td></tr>
                     ))}
                   </React.Fragment>
@@ -222,7 +230,7 @@ function TableDoc({ doc, initialSpec }) {
             <thead><tr>{doc.columns.map(c => <th key={c} className={numCols.includes(c) ? 'num' : ''}>{c}</th>)}</tr></thead>
             <tbody>
               {fold.rows.map((r, ri) => (
-                <tr key={ri}>{doc.columns.map(c => (
+                <tr key={ri} className="clickable" onClick={() => setActiveRecord(r)}>{doc.columns.map(c => (
                   <td key={c} className={numCols.includes(c) ? 'num' : ''}>
                     {c === 'status' && ['won', 'open', 'lost'].includes(String(r[c]).toLowerCase())
                       ? <span className={'status-tag ' + r[c].toLowerCase()}>{r[c]}</span> : fmt(c, r[c])}
@@ -232,6 +240,55 @@ function TableDoc({ doc, initialSpec }) {
           </table>
         )}
         <div className="pv-note" style={{ marginTop: 10 }}>{fold.total} rows · pivot questions you ask in chat are computed here directly.</div>
+      </div>
+      {activeRecord && <RecordPanel doc={doc} record={activeRecord} onClose={() => setActiveRecord(null)} />}
+    </div>
+  );
+}
+
+/* Side panel showing every field of a clicked record. Slides in over the table
+   using the shared .overlay/.drawer chrome (same affordance as Rules/Settings).
+   Values format the same way the cells do: money as currency, numerics with
+   thousands separators, status as the colored chip. */
+function RecordPanel({ doc, record, onClose }) {
+  const dialogRef = window.useDialog(onClose);
+  const numCols = doc.numeric || [];
+  const moneyCols = doc.money || [];
+  const fmt = (col, v) => moneyCols.includes(col) ? window.fmtMoney(window.num(v))
+    : numCols.includes(col) ? window.fmtNum(window.num(v)) : v;
+  const title = record[doc.columns[0]];
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="drawer record-drawer" role="dialog" aria-modal="true"
+           aria-label={'Record ' + title} tabIndex={-1} ref={dialogRef}
+           onClick={e => e.stopPropagation()}>
+        <div className="drawer-head">
+          <div className="row1">
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="rec-eyebrow">{doc.name} · record</div>
+              <h2 className="rec-title">{title}</h2>
+            </div>
+            <button className="x" onClick={onClose} aria-label="Close record"><Icon name="x" size={18} /></button>
+          </div>
+        </div>
+        <div className="drawer-body record-body">
+          {doc.columns.map(c => {
+            const v = record[c];
+            const empty = v == null || v === '';
+            const isStatus = c === 'status' && !empty && ['won', 'open', 'lost'].includes(String(v).toLowerCase());
+            const isNum = numCols.includes(c);
+            return (
+              <div key={c} className="rec-field">
+                <div className="rec-label">{c}</div>
+                <div className={'rec-value' + (isNum ? ' num' : '')}>
+                  {empty ? <span className="rec-empty">—</span>
+                    : isStatus ? <span className={'status-tag ' + String(v).toLowerCase()}>{v}</span>
+                    : fmt(c, v)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -356,4 +413,4 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
   );
 }
 
-Object.assign(window, { DocPane, ProseDoc, TableDoc, EntityView, EntityModal });
+Object.assign(window, { DocPane, ProseDoc, TableDoc, EntityView, EntityModal, RecordPanel });
