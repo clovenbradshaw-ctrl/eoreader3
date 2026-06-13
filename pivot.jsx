@@ -22,11 +22,19 @@ function aggregate(rows, agg) {
   return { op: agg.op, col: agg.col, value: Math.round(v * 100) / 100 };
 }
 
+// Filter equality is accent-, case-, and whitespace-insensitive: real data
+// mixes "México"/"Mexico"/" mexico ", and a resolved filter must match every
+// variant that means the same value (not just the one stored form it snapped to).
+const _fEq = (a, b) => {
+  const n = (s) => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+  return n(a) === n(b);
+};
+
 function foldPivot(doc, spec) {
   spec = spec || {};
   let rows = doc.rows.slice();
   for (const f of (spec.filters || [])) {
-    rows = rows.filter(r => String(r[f.col] ?? '').toLowerCase() === String(f.val).toLowerCase());
+    rows = rows.filter(r => _fEq(r[f.col], f.val));
   }
   const isMoneyCol = (c) => (doc.money || []).includes(c);
   if (!spec.groupBy) {

@@ -174,7 +174,7 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
               <div className="set-row">
                 <div className="set-row-main">
                   <div className="set-label">Run Python over your documents</div>
-                  <div className="set-sub">Lets Cleo run Python locally to answer computational questions a reader can't — sum a column, count rows, group a CSV. The code it runs and the output it gets are recorded in the glass box, and it all runs entirely on your device. Off by default.</div>
+                  <div className="set-sub">Lets Cleo run Python locally to answer computational questions a reader can't — sum a column, count rows, group a CSV. The code it runs and the output it gets are recorded in the glass box, and it all runs entirely on your device. On by default; the runtime downloads only on the first actual run.</div>
                 </div>
                 <button className={'switch' + (pythonEnabled ? ' on' : '')} role="switch"
                         aria-checked={!!pythonEnabled} aria-label="Run Python over your documents"

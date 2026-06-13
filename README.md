@@ -71,7 +71,7 @@ the reader strictly local. See `docs/external-reference-desk.md`.
 A second, separate opt-in is **computational grounding** (`pyodide.js`,
 `window.EOPython`): turned on in Settings, it lets Cleo run Python locally over
 a loaded CSV to answer questions a prose reader structurally can't — sum a
-column, count rows, group and sort. It is off by default and the runtime (loaded
+column, count rows, group and sort. It is on by default and the runtime (loaded
 from `cdn.jsdelivr.net`, the same CDN as the models) is fetched only on the
 first actual run, never at page load. Python runs in a Web Worker with network
 egress blocked, so executed code cannot reach the network and document content
@@ -111,6 +111,15 @@ The intelligence is **mechanical**; the language model only phrases things.
   writes its own citations and never overrides the page.
 - **`pivot.jsx`** — deterministic pivot/fold over tables (totals, counts,
   grouping) driven by a small natural-language → spec parser.
+- **`tablequery.js`** — schema-aware table filtering (`window.EOTableQuery`).
+  Reads the loaded table's **own** columns and distinct values to turn a plain
+  question — "clients from Mexico" — into a real filter (`Country = Mexico`),
+  matching values case- and accent-insensitively. When a value is ambiguous (it
+  lives in several columns) it asks one short clarifying question and continues
+  the **back-and-forth**; an auto-loaded small local model handles the harder
+  intent and disambiguation, but only ever picks columns/values that exist —
+  `foldPivot` still computes the count, so the number stays exact. The result
+  can be expanded into a tab and **saved as a view** under the table.
 - **`compute.js`** — the auditable calculator (`window.EOCompute`). When a turn
   is essentially a math expression ("15% of $240,000", "sqrt(144)+3^2"), math.js
   evaluates it deterministically (BigNumber precision, so money doesn't drift)

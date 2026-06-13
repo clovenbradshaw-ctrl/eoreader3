@@ -165,6 +165,9 @@
      a turn is actually a calculation. -->
 <script src="compute.js"></script>
 <script src="enrich.js"></script>
+<!-- schema-aware table query: turns "clients from Mexico" into a real filter by
+     reading the loaded table's own columns & values (window.EOTableQuery). -->
+<script src="tablequery.js"></script>
 <!-- the external-knowledge stratum: an opt-in reference desk (Wikipedia +
      Wiktionary) through the proxy, rate-limited and prioritised. Inert unless
      window.EO_REFERENCE_PROXY resolves; clear it to keep the reader local. -->

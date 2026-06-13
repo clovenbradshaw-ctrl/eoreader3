@@ -722,7 +722,7 @@ class MessageBoundary extends React.Component {
   }
 }
 
-function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc }) {
+function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply }) {
   if (msg.role === 'user') return <div className="msg-row user"><div className="bubble-user">{msg.text}</div></div>;
   return (
     <div className="msg-row asst">
@@ -783,6 +783,26 @@ function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onO
               {msg.compute && <ComputationPanel data={msg.compute} />}
               {msg.calc && <WorkedMath data={msg.calc} onCite={onCite} />}
               {msg.mechanical && <MechanicalReading data={msg.mechanical} onCite={onCite} />}
+              {/* Schema resolver asked which field is meant — quick replies that
+                  continue the back-and-forth as the next turn. */}
+              {msg.clarify && Array.isArray(msg.clarify.options) && msg.clarify.options.length > 0 && (
+                <div className="tq-options">
+                  {msg.clarify.options.map((opt, k) => (
+                    <button key={k} type="button" className="tq-chip" onClick={() => onQuickReply && onQuickReply(opt)}>{opt}</button>
+                  ))}
+                </div>
+              )}
+              {/* A resolved filter: expand it into a tab, or save it as a view. */}
+              {msg.tableView && (
+                <div className="tq-actions">
+                  <button type="button" className="tq-btn primary" onClick={() => onApplyTableView && onApplyTableView(msg.tableView.docId, msg.tableView.spec)}>
+                    <Icon name="table" size={14} /> Open as tab
+                  </button>
+                  <button type="button" className="tq-btn" onClick={() => onSaveTableView && onSaveTableView(msg.tableView.docId, msg.tableView.spec, msg.tableView.describe)}>
+                    <Icon name="plus" size={14} /> Save as view
+                  </button>
+                </div>
+              )}
             </React.Fragment>}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
@@ -828,7 +848,7 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich }) {
+function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich, smartParse, onSmartParse, hasTable }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
@@ -859,6 +879,13 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, o
             title="Search Wikipedia for this message now — surface matching articles to research, even in Auto (skips the gate, not the choice). Only the search term (not the document) goes to Wikipedia through the proxy; nothing is pulled in until you pick one."
             onClick={onForceEnrich}>
             <Icon name="book" size={15} /> Wikipedia
+          </button>
+        )}
+        {hasTable && onSmartParse && (
+          <button type="button" className={'comp-btn enrich' + (smartParse ? ' on' : '')} aria-pressed={!!smartParse}
+            title="Smart parse — read a data question against the table's own columns and values (e.g. “clients from Mexico” → Country = Mexico), asking which field is meant when a value is ambiguous. Off falls back to the plain pivot parser."
+            onClick={onSmartParse}>
+            <Icon name="sparkle" size={15} /> Smart parse
           </button>
         )}
         <div className="comp-spacer" />
@@ -894,7 +921,7 @@ function Hero({ composerProps, onAttach, onExample, onPaste, dragOver }) {
   );
 }
 
-function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc }) {
+function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply }) {
   const streamRef = React.useRef(null);
   React.useEffect(() => { const el = streamRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages]);
   // Only offer the export once a turn has actually been recorded.
@@ -906,7 +933,8 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
           <MessageBoundary key={i}
             resetKey={(m.text ? m.text.length : 0) + ':' + (m.streaming ? 1 : 0) + ':' + (m.typing ? 1 : 0) + ':' + (m.loading ? 1 : 0) + ':' + (m.audit ? 1 : 0)}
             raw={m.role === 'assistant' ? m.text : null}>
-            <Message msg={m} onCite={onCite} showGrounding={showGrounding} onConfirmWiki={onConfirmWiki} onDismissWiki={onDismissWiki} onOpenDoc={onOpenDoc} />
+            <Message msg={m} onCite={onCite} showGrounding={showGrounding} onConfirmWiki={onConfirmWiki} onDismissWiki={onDismissWiki} onOpenDoc={onOpenDoc}
+              onApplyTableView={onApplyTableView} onSaveTableView={onSaveTableView} onQuickReply={onQuickReply} />
           </MessageBoundary>
         ))}</div>
       </div>

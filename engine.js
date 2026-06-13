@@ -11482,6 +11482,10 @@ function projectGraph(events, frame = {}) {
       const ql = ' ' + String(q).toLowerCase() + ' ';
       if ((d.columns || []).some(c => ql.includes(' ' + String(c).toLowerCase() + ' ')))
         return { decision: 'mechanical', confidence: 'high', reason: 'table-column', primary: d, intent };
+      // Schema-aware lock: the question names a VALUE this table holds ("clients
+      // from Mexico" → a Country value) even when pivot.jsx's narrower cue set
+      // missed it. Guarded so engine tests without tablequery.js are unaffected.
+      try { if (window.EOTableQuery && window.EOTableQuery.looksLikeTableQuery(q, d)) return { decision: 'mechanical', confidence: 'high', reason: 'table-value', primary: d, intent }; } catch (e) {}
     }
     // STRUCTURE (entity) — the question names someone/somewhere in a source.
     if (ds.some(d => namesEntity(d, q)))

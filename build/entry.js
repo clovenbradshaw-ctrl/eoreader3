@@ -9,6 +9,7 @@ import '../audit.js';
 import '../pyodide.js';
 import '../compute.js';
 import '../enrich.js';
+import '../tablequery.js';
 import '../external.js';
 import '../data.jsx';
 import '../pivot.jsx';
