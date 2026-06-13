@@ -216,6 +216,10 @@ function App() {
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
   const [modelProgress, setModelProgress] = useState(0);
   const [modelLoadText, setModelLoadText] = useState(''); // WebLLM's live status line ("12MB fetched…", "Loading GPU shaders…")
+  // User-uploaded GGUF models. Session-only: the File reference is held in
+  // llm.js's in-memory registry and lost on refresh, so these entries are not
+  // persisted to prefs.
+  const [uploadedModels, setUploadedModels] = useState([]);
   const [anthropicKeySet, setAnthropicKeySet] = useState(!!(window.EOLLM && window.EOLLM.hasAnthropicKey && window.EOLLM.hasAnthropicKey()));
   // Gate for the startup auto-load: flipped true once local persistence has
   // rehydrated (or is known absent). The auto-load waits for it so it resumes
@@ -800,6 +804,23 @@ function App() {
     else if (!saved && model && model.provider === 'anthropic') setModelStatus('idle');
   };
   const pickModel = (m) => { setModel(m); setModelStatus('idle'); loadModel(m); };
+  // Register a user-uploaded GGUF as a new wllama (CPU) model, add it to the
+  // popover list, and immediately pick it. Session-only — see uploadedModels.
+  const uploadModel = (file) => {
+    if (!file) return;
+    if (!window.EOLLM || !window.EOLLM.registerUploadedModel) { showToast('Local model module unavailable.'); return; }
+    if (window.EOLLM.hasWasm && !window.EOLLM.hasWasm()) { showToast('This browser can’t run uploaded models (no WebAssembly).'); return; }
+    if (!/\.gguf$/i.test(file.name)) { showToast('Upload a .gguf file — that’s the format the on-device CPU runtime reads.'); return; }
+    const id = 'up-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+    const mlcKey = window.EOLLM.registerUploadedModel(id, file);
+    if (!mlcKey) { showToast('Couldn’t register the uploaded model.'); return; }
+    const mb = file.size / (1024 * 1024);
+    const size = mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
+    const name = file.name.replace(/\.gguf$/i, '') || 'Uploaded model';
+    const m = { id, name, detail: size + ' · uploaded · CPU', provider: 'wllama', mlc: mlcKey, uploaded: true };
+    setUploadedModels(prev => [...prev, m]);
+    pickModel(m);
+  };
   // Download every recorded turn — including the exact prompt the model saw and
   // its raw output on each call — as one JSON file, straight from the chat page.
   // Empty when audit recording is paused (the dot next to the title is off).
@@ -2808,10 +2829,11 @@ function App() {
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
       {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
-      {modelOpen && <ModelPopover models={window.MODELS} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
+      {modelOpen && <ModelPopover models={window.MODELS.concat(uploadedModels)} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
                      status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel}
                      webgpu={!!(window.EOLLM && window.EOLLM.hasWebGPU && window.EOLLM.hasWebGPU())}
-                     anthropicKeySet={anthropicKeySet} onSetAnthropicKey={setAnthropicKey} />}
+                     anthropicKeySet={anthropicKeySet} onSetAnthropicKey={setAnthropicKey}
+                     onUploadModel={uploadModel} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (
         <EntityModal doc={d} name={entityModal.name} onCite={flashCitation} onEntity={(n) => setEntityModal({ docId: d.id, name: n })}
           onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />

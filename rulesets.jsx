@@ -321,8 +321,9 @@ function RulesDrawer({ rules, langModes, learnedByLang, onToggle, onInstall, onS
 }
 
 /* ============================================================ Model popover */
-function ModelPopover({ models, current, onPick, onClose, anchor, status, progress, loadText, onReset, onCancel, webgpu, anthropicKeySet, onSetAnthropicKey }) {
+function ModelPopover({ models, current, onPick, onClose, anchor, status, progress, loadText, onReset, onCancel, webgpu, anthropicKeySet, onSetAnthropicKey, onUploadModel }) {
   const ref = window.useDialog(onClose);
+  const uploadRef = React.useRef(null);
   React.useEffect(() => {
     // Close only on a genuine outside press. A containment check on mousedown
     // (instead of a bare window 'click' → onClose) means a press on a model
@@ -341,7 +342,8 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
   const pct = Math.round((progress || 0) * 100);
   const [keyDraft, setKeyDraft] = React.useState('');
   const gpu = models.filter(m => !m.provider);
-  const cpu = models.filter(m => m.provider === 'wllama');
+  const cpu = models.filter(m => m.provider === 'wllama' && !m.uploaded);
+  const uploaded = models.filter(m => m.provider === 'wllama' && m.uploaded);
   const cloud = models.filter(m => m.provider === 'anthropic');
   const curIsCloud = current.provider === 'anthropic';
   const curIsCpu = current.provider === 'wllama';
@@ -398,7 +400,22 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
             <div className="ph" style={{ paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 4 }}>On your CPU · WebAssembly · no GPU needed</div>
             {cpu.map(row)}
             <div className="pop-status wrap">Runs the model on your CPU — works in any browser and stands in automatically when a GPU model stalls. Slower than the GPU tier; downloads once, then cached.</div>
-            {status === 'loading' && curIsCpu && loadBar}
+            {status === 'loading' && curIsCpu && !current.uploaded && loadBar}
+          </React.Fragment>
+        )}
+
+        {onUploadModel && (
+          <React.Fragment>
+            <div className="ph" style={{ paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 4 }}>Upload your own · GGUF</div>
+            {uploaded.map(row)}
+            <input ref={uploadRef} type="file" accept=".gguf,application/octet-stream"
+              style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files && e.target.files[0]; if (f) onUploadModel(f); e.target.value = ''; }} />
+            <button type="button" className="pop-reset" onClick={() => uploadRef.current && uploadRef.current.click()}>
+              Choose a .gguf file…
+            </button>
+            <div className="pop-status wrap">Loads a GGUF you already have on disk into the on-device CPU runtime — handy for a model that isn’t listed above. Kept for this session only; a refresh forgets it.</div>
+            {status === 'loading' && curIsCpu && current.uploaded && loadBar}
           </React.Fragment>
         )}
 

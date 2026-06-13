@@ -236,7 +236,19 @@
     'llama32-1b':   { name: 'Llama 3.2 1B', url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf' },
     'llama32-3b':   { name: 'Llama 3.2 3B', url: 'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf' },
   };
-  const wllamaSource = (key) => WLLAMA_MODELS[wllamaId(key)] || null;
+  // User-uploaded GGUFs. Session-only — File handles can't be persisted to
+  // localStorage, so a refresh loses them. Kept in a separate map so the
+  // canonical registry (wllamaModels()) only carries URL-backed entries.
+  const WLLAMA_UPLOADED = {};
+  function registerUploadedModel(id, file) {
+    if (!id || !file) return null;
+    WLLAMA_UPLOADED[String(id)] = { name: file.name || String(id), blob: file };
+    return WLLAMA_PREFIX + String(id);
+  }
+  const wllamaSource = (key) => {
+    const id = wllamaId(key);
+    return WLLAMA_UPLOADED[id] || WLLAMA_MODELS[id] || null;
+  };
   const wllamaModels = () => Object.assign({}, WLLAMA_MODELS);
   // The CPU model used for the automatic fallback (no WebGPU / GPU stall). 0.5B
   // is a sane balance of quality and CPU speed; override with EO_CPU_FALLBACK_ID.
@@ -310,7 +322,17 @@
       },
     };
     if (isolated) loadOpts.n_threads = Math.min(4, Math.max(1, cores - 1));
-    await instance.loadModelFromUrl(src.url, loadOpts);
+    // Uploaded GGUFs come in as a Blob/File rather than a URL; loadModel() reads
+    // the bytes directly without going through the cache (the file is already
+    // on the user's disk, so caching adds nothing here).
+    if (src.blob) {
+      if (typeof instance.loadModel !== 'function')
+        throw new Error('This build of the CPU runtime can’t load a model from a file.');
+      const { useCache, ...blobOpts } = loadOpts;
+      await instance.loadModel([src.blob], blobOpts);
+    } else {
+      await instance.loadModelFromUrl(src.url, loadOpts);
+    }
     if (myToken !== loadToken) { try { await instance.exit(); } catch (_) {} if (activeWllama === instance) activeWllama = null; throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' }); }
     if (onProgress) onProgress(1, '');
     return {
@@ -1145,5 +1167,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, registerUploadedModel, fallbackKey, prewarmFallback, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
