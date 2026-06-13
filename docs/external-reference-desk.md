@@ -76,16 +76,27 @@ composer** goes further: it makes Wikipedia a first-class knowledge source the
 grounded reader works over. When it is on and you send a message:
 
 1. `pickQuery` extracts the salient term from your message (a quoted phrase, a
-   capitalized run, or the cleaned remainder; a vague follow-up like "tell me
-   more" pulls nothing and chats against what is already loaded).
-2. `article(term)` pulls the **full plain-text article** (search → extracts),
-   not just the lead — rate-limited, cached, gated, capped so a parse stays
-   responsive.
-3. The article is **ingested into the graph** as a real prose source
-   (`Wikipedia · <title>`), threaded into *this* turn's scope, so the grounded
-   answer reads and **cites** it like any uploaded document. The mechanical
-   audit (grounded / covers / stable) applies unchanged.
-4. The card under the message shows what was pulled and confirms it was added
+   capitalized run, or — after stripping compose-style framing like "write me
+   an essay about X" or lookup verbs like "look up X" — the cleaned remainder;
+   a vague follow-up like "tell me more" pulls nothing and chats against what
+   is already loaded). `pickQueryInfo` carries a `confident` flag so the chat
+   can tell a clear referent (quote or proper noun) apart from a lowercase,
+   sentence-shaped remainder.
+2. A lightweight `searchOptions` runs first and the card under the message
+   offers the candidate articles ("want me to research one of these?"). A
+   force on a low-confidence pick (e.g. "write me an essay about dolphins" →
+   "dolphins") still goes through this step rather than silently fetching
+   whatever fuzzy match the upstream returns. A force on a confident pick
+   (you named the subject) skips it.
+3. When you pick an option (or a confident force fires directly), `article(term)`
+   pulls the **full plain-text article** (search → extracts), not just the
+   lead — rate-limited, cached, gated, capped so a parse stays responsive.
+4. The article is **ingested into the graph** as a real prose source
+   (`Wikipedia · <title>`), threaded into *this* turn's scope (for a forced
+   fetch) or the next turn's (for a confirmed pick), so the grounded answer
+   reads and **cites** it like any uploaded document. The mechanical audit
+   (grounded / covers / stable) applies unchanged.
+5. The card under the message shows what was pulled and confirms it was added
    to the graph.
 
 So with no document loaded at all, toggling Wikipedia on turns Cleo into a
@@ -102,6 +113,7 @@ prefs, and inert when the proxy is cleared.
 // chat-with-Wikipedia (knowledge augmentation)
 EOExternal.article(q)                // search → FULL plain-text extract, for ingestion
 EOExternal.pickQuery(text)           // the salient term from a free-text message (pure)
+EOExternal.pickQueryInfo(text)       // { term, confident } — confident = quote or proper noun
 EOExternal.enrichTerm(q)             // the normalized /lookup node: { encyclopedia, dictionary, sources }
 
 // the read-only desk
