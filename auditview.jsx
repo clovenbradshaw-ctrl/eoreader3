@@ -327,7 +327,8 @@ function GraphView({ doc }) {
         <div className="graph-sec">
           <h4>Asserts <span className="graph-dim">— what the text states outright</span></h4>
           <div className="graph-asserts">
-            {snap.assertions.map((a, i) => <div key={i} className="graph-assert"><b>{a.subject}</b> is {a.is}</div>)}
+            {snap.assertions.slice(0, 60).map((a, i) => <div key={i} className="graph-assert"><b>{a.subject}</b> is {a.is}</div>)}
+            {snap.assertions.length > 60 && <div className="graph-dim">…{snap.assertions.length - 60} more (the full set is in the export)</div>}
           </div>
         </div>
       )}

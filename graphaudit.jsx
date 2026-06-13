@@ -343,45 +343,126 @@ function GaxEntities({ doc, report, onPick }) {
   );
 }
 
-/* ---------- Graph: assertions, relations, kin — each cited to its span ---------- */
+/* ---------- Graph: assertions, relations, kin — each cited to its span ----------
+   A single document can extract tens of thousands of linked records; drawing
+   them all at once floods the DOM and freezes (or crashes) the tab. So this tab
+   does NOT render the graph on open — it ASKS first: which kinds of record, an
+   optional text filter, and how many to show. Only on the reader's confirmation
+   does it draw, and even then each list paginates. A graph small enough not to
+   overwhelm (under the gate threshold) arms itself and renders straight away. */
 function GaxGraphTab({ doc, onPick }) {
   const E = window.EOEngine;
   const asserts = React.useMemo(() => { try { return E.assertionsOf(doc) || []; } catch (e) { return []; } }, [doc]);
   const kin = React.useMemo(() => { try { return E.kinRecords(doc) || []; } catch (e) { return []; } }, [doc]);
   const edges = React.useMemo(() => { try { return (E.graphSnapshot(doc) || {}).edges || []; } catch (e) { return []; } }, [doc]);
+  const total = asserts.length + edges.length + kin.length;
+  const HEAVY = 200;        // above this many records, draw nothing until the reader chooses
+
+  const [show, setShow] = React.useState({ asserts: true, edges: true, kin: true });
+  const [q, setQ] = React.useState('');
+  const [cap, setCap] = React.useState(100);
+  // The gate. A heavy graph stays un-drawn until the reader confirms a filter +
+  // a count; a light one arms itself (it cannot overwhelm the tab).
+  const [armed, setArmed] = React.useState(total <= HEAVY);
+
+  const ql = q.trim().toLowerCase();
+  const hit = (s) => !ql || s.toLowerCase().includes(ql);
+  const fAsserts = React.useMemo(() => show.asserts ? asserts.filter(a => hit((a.subject || '') + ' ' + (a.is || '') + ' ' + (a.path || ''))) : [], [asserts, show.asserts, ql]);
+  const fEdges = React.useMemo(() => show.edges ? edges.filter(e => hit((e.aName || '') + ' ' + (e.verb || '') + ' ' + (e.bName || ''))) : [], [edges, show.edges, ql]);
+  const fKin = React.useMemo(() => show.kin ? kin.filter(k => hit((k.possessor || '') + ' ' + (k.kin || ''))) : [], [kin, show.kin, ql]);
+  const matched = fAsserts.length + fEdges.length + fKin.length;
+
+  const pAsserts = useGaxPaging(fAsserts, cap);
+  const pEdges = useGaxPaging(fEdges, cap);
+  const pKin = useGaxPaging(fKin, cap);
+
   const span = (i) => (i != null && doc.sentenceTexts ? doc.sentenceTexts[i] : null);
   const Cite = ({ i }) => i == null ? <span className="gax-dim">no span</span>
     : <button className="gax-evidence" onClick={() => onPick(i)} title="show this span in Reading"><span className="gax-sid">s{i}</span> <span className="gax-evidence-t">{span(i)}</span></button>;
-  return (
-    <div className="gax-pane">
-      <div className="gax-sec">
-        <h4>Assertions <span className="gax-dim">— what the page states outright (DEF), each shown against its source span</span></h4>
-        {asserts.length ? asserts.map((a, i) => (
-          <div key={i} className="gax-claim">
-            <div className="gax-claim-prop"><b>{a.subject}</b> is {a.is}{a.path ? <span className="gax-dim gax-mono"> · {a.path}</span> : null}</div>
-            <Cite i={a.sent} />
-          </div>
-        )) : <div className="gax-dim">none</div>}
-      </div>
+  const More = ({ p }) => p.more
+    ? <div className="gax-more"><button className="mini-btn" onClick={p.showMore}>Show {Math.min(cap, p.total - p.shown).toLocaleString()} more</button><span className="gax-dim"> · {p.shown.toLocaleString()} / {p.total.toLocaleString()}</span><button className="mini-btn" onClick={p.all}>all</button></div>
+    : null;
 
-      <div className="gax-sec">
-        <h4>Relations <span className="gax-dim">— edges drawn between referents (SYN)</span></h4>
-        <div className="gax-rels">
-          {edges.length ? edges.map((e, i) => (
-            <div key={i} className="gax-rel"><span className="gax-a">{e.aName}</span><span className="gax-verb">{e.verb || '—'}</span><span className="gax-b">{e.bName}</span>{e.weight > 1 && <span className="gax-dim gax-mono">×{e.weight}</span>}</div>
-          )) : <div className="gax-dim">none</div>}
+  const toolbar = (
+    <div className="gax-toolbar">
+      <input className="gax-search" placeholder="filter by name, value, relation…" value={q} onChange={e => setQ(e.target.value)} aria-label="Filter graph records" />
+      <label className="gax-check"><input type="checkbox" checked={show.asserts} onChange={e => setShow(s => ({ ...s, asserts: e.target.checked }))} /> assertions <span className="gax-dim">{asserts.length.toLocaleString()}</span></label>
+      <label className="gax-check"><input type="checkbox" checked={show.edges} onChange={e => setShow(s => ({ ...s, edges: e.target.checked }))} /> relations <span className="gax-dim">{edges.length.toLocaleString()}</span></label>
+      <label className="gax-check"><input type="checkbox" checked={show.kin} onChange={e => setShow(s => ({ ...s, kin: e.target.checked }))} /> kin <span className="gax-dim">{kin.length.toLocaleString()}</span></label>
+      <div style={{ flex: 1 }} />
+      <label className="gax-check">show
+        <select className="graph-pick" value={cap} onChange={e => setCap(+e.target.value)} aria-label="How many records to show">
+          <option value={50}>50</option><option value={100}>100</option><option value={250}>250</option><option value={500}>500</option><option value={1000}>1000</option><option value={1e9}>all</option>
+        </select>
+      </label>
+    </div>
+  );
+
+  if (!total) return <div className="gax-pane"><div className="gax-dim" style={{ padding: 30 }}>This source produced no assertions, relations, or kin.</div></div>;
+
+  if (!armed) {
+    const shown = Math.min(cap, matched);
+    return (
+      <div className="gax-pane">
+        {toolbar}
+        <div className="gax-gate">
+          <p>This document's graph carries <b>{total.toLocaleString()}</b> linked records — drawing them all at once can overwhelm the tab. Choose what to show and how many, then render.</p>
+          <button className="mini-btn primary" disabled={!matched} onClick={() => setArmed(true)}>
+            {matched
+              ? 'Show ' + (matched > cap ? shown.toLocaleString() + ' of ' + matched.toLocaleString() : matched.toLocaleString()) + ' record' + (shown === 1 ? '' : 's')
+              : 'Nothing matches that filter'}
+          </button>
         </div>
       </div>
+    );
+  }
 
-      {kin.length > 0 && (
+  return (
+    <div className="gax-pane">
+      {toolbar}
+      <div className="gax-count gax-dim" style={{ marginBottom: 10 }}>
+        {matched.toLocaleString()} of {total.toLocaleString()} records match
+        {total > HEAVY ? <> · <button className="mini-btn" onClick={() => setArmed(false)}>change filter</button></> : null}
+      </div>
+
+      {show.asserts && (
+        <div className="gax-sec">
+          <h4>Assertions <span className="gax-dim">— what the page states outright (DEF), each shown against its source span</span></h4>
+          {pAsserts.slice.map((a, i) => (
+            <div key={i} className="gax-claim">
+              <div className="gax-claim-prop"><b>{a.subject}</b> is {a.is}{a.path ? <span className="gax-dim gax-mono"> · {a.path}</span> : null}</div>
+              <Cite i={a.sent} />
+            </div>
+          ))}
+          {!fAsserts.length && <div className="gax-dim">none{ql ? ' match' : ''}</div>}
+          <More p={pAsserts} />
+        </div>
+      )}
+
+      {show.edges && (
+        <div className="gax-sec">
+          <h4>Relations <span className="gax-dim">— edges drawn between referents (SYN)</span></h4>
+          <div className="gax-rels">
+            {pEdges.slice.map((e, i) => (
+              <div key={i} className="gax-rel"><span className="gax-a">{e.aName}</span><span className="gax-verb">{e.verb || '—'}</span><span className="gax-b">{e.bName}</span>{e.weight > 1 && <span className="gax-dim gax-mono">×{e.weight}</span>}</div>
+            ))}
+            {!fEdges.length && <div className="gax-dim">none{ql ? ' match' : ''}</div>}
+          </div>
+          <More p={pEdges} />
+        </div>
+      )}
+
+      {show.kin && kin.length > 0 && (
         <div className="gax-sec">
           <h4>Kin <span className="gax-dim">— possessive kin resolved into the graph (the riskiest inference: a pronoun's owner)</span></h4>
-          {kin.map((k, i) => (
+          {pKin.slice.map((k, i) => (
             <div key={i} className="gax-claim">
               <div className="gax-claim-prop"><b>{k.possessor}</b>'s {k.kin}{k.anchor ? <span className="gax-dim gax-mono"> · anchor {k.anchor}</span> : null}</div>
               <Cite i={k.sent} />
             </div>
           ))}
+          {!fKin.length && <div className="gax-dim">none{ql ? ' match' : ''}</div>}
+          <More p={pKin} />
         </div>
       )}
     </div>
@@ -523,7 +604,7 @@ function GraphAuditDrawer({ onClose, onToast, docs }) {
             : tab === 'reading' ? <GaxReading key={jump ? jump.n : 0} doc={doc} report={report} evBySent={evBySent} anchorOf={anchorOf} initialAt={jump ? jump.at : 0} />
             : tab === 'lexicon' ? <GaxLexicon report={report} onPick={pick} />
             : tab === 'entities' ? <GaxEntities doc={doc} report={report} onPick={pick} />
-            : tab === 'graph' ? <GaxGraphTab doc={doc} onPick={pick} />
+            : tab === 'graph' ? <GaxGraphTab key={doc.id} doc={doc} onPick={pick} />
             : <GaxEvents doc={doc} report={report} onPick={pick} />}
         </div>
 
