@@ -1,7 +1,7 @@
 /* ============================================================
    external.js — the external-knowledge stratum, shipped.
 
-   Cleon reads in a closed world: every claim is bound to a line on the page
+   Cleo reads in a closed world: every claim is bound to a line on the page
    and audited mechanically. This module is the ONE deliberate crack in that
    wall — an opt-in reference desk that fetches an encyclopaedia article
    (Wikipedia) and a dictionary entry (Wiktionary) for a term the reader could
@@ -45,7 +45,7 @@
 (function () {
   'use strict';
 
-  const SCHEMA = 'cleon-external/1';
+  const SCHEMA = 'cleo-external/1';
   const DEFAULT_PROXY = 'https://n8n.intelechia.com/webhook/feed';
 
   /* ---- configuration (mirrors the EO_CONVENTIONS_ENDPOINT idiom) ----
@@ -700,7 +700,7 @@
 
   /* ---- consent: an explicit, remembered grant before the first off-device
      query. Kept in localStorage so it is independent of the React tree. ---- */
-  const CONSENT_KEY = 'cleon.reference.consent';
+  const CONSENT_KEY = 'cleo.reference.consent';
   function hasConsent() {
     try { return localStorage.getItem(CONSENT_KEY) === '1'; } catch (e) { return false; }
   }

@@ -1139,7 +1139,7 @@ await group('graph portrait — widened surface stays additive', async () => {
   ok(p.frame && p.frame.gamma != null && p.frame.delta != null && !!p.frame.couplings, 'frame carries gamma/delta/couplings');
   const snap = E.graphSnapshot(voss);
   ok(['tail', 'nulls', 'signals', 'defs'].every(k => k in snap), 'graphSnapshot surfaces tail/nulls/signals/defs');
-  eq(snap.schema, 'cleon-graph/1', 'snapshot schema unchanged');
+  eq(snap.schema, 'cleo-graph/1', 'snapshot schema unchanged');
 });
 
 // ── talker portrait + the one LLM step + mechanical EVA (WI-5) ────────

@@ -324,7 +324,7 @@ function fmtTable(rows, cols) {
   }
 
   if (jsonOut) {
-    fs.writeFileSync(jsonOut, JSON.stringify({ schema: 'cleon-prompt-audit/1', at: new Date().toISOString(), modelCtx: MODEL_CTX, variants, rows }, null, 1));
+    fs.writeFileSync(jsonOut, JSON.stringify({ schema: 'cleo-prompt-audit/1', at: new Date().toISOString(), modelCtx: MODEL_CTX, variants, rows }, null, 1));
     console.log('\nwrote ' + jsonOut);
   }
 })().catch(e => { console.error(e); process.exit(1); });

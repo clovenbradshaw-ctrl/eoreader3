@@ -1,5 +1,5 @@
 /* ============================================================
-   Cleon — configuration (not sample data).
+   Cleo — configuration (not sample data).
    Models, the rule registry (auditable/exportable), example RAW text
    the engine parses live, and the rule-pack schema + authoring prompt.
    ============================================================ */
@@ -243,7 +243,7 @@ const RULE_PACK_SCHEMA = {
 };
 
 const AUTHOR_PROMPT =
-`You are authoring a rule pack for Cleon, an in-browser grounded document reader.
+`You are authoring a rule pack for Cleo, an in-browser grounded document reader.
 A rule pack is a JSON object that adds installable, toggleable reading rules.
 
 Return ONLY a JSON object with this exact shape:

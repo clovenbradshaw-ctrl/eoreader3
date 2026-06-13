@@ -1,11 +1,11 @@
 /* ============================================================
-   Cleon reading engine — the real EO graph extractor.
+   Cleo reading engine — the real EO graph extractor.
 
    Ported from eo-extractor.html: the language packs, the rules
    ledger, extractEoGraph (the nine EO operators — NUL/SIG/INS/
    SEG/CON/SYN/DEF/EVA/REC), and projectGraph (events → entities).
    A thin adapter at the bottom maps the graph to the doc / entity /
-   QA shapes the Cleon UI consumes, and keeps the mechanical
+   QA shapes the Cleo UI consumes, and keeps the mechanical
    retrieval, coverage, void, and citation-binding paths.
 
    CONTRACT, unchanged: parsing stores only invariants (the event
@@ -6940,7 +6940,7 @@ function projectGraph(events, frame = {}) {
 }
 
   /* ============================================================
-     ====================  CLEON ADAPTER  =======================
+     ====================  CLEO ADAPTER  =======================
      Maps the EO graph (events / projectGraph) onto the doc,
      entity, and QA shapes the React UI consumes, and keeps the
      mechanical retrieval / coverage / citation paths.
@@ -6959,7 +6959,7 @@ function projectGraph(events, frame = {}) {
     return 'prose';
   }
 
-  /* ---------- CSV table (Cleon's pivot path, not the graph) ---------- */
+  /* ---------- CSV table (Cleo's pivot path, not the graph) ---------- */
   function splitRow(l) {
     const out = []; let cur = '', q = false;
     for (const ch of l) {
@@ -7119,7 +7119,7 @@ function projectGraph(events, frame = {}) {
      A rule's `value` is its CEILING (the value at the deepest stop); depth scales
      each knob from an inert FLOOR up to that ceiling. The floor is today: at
      level 1 every EFFORT knob resolves to its inert value, so the dial's floor
-     is byte-identical to current Cleon and parity holds there. One deliberate
+     is byte-identical to current Cleo and parity holds there. One deliberate
      exception: assertion-check is an HONESTY knob, not an effort knob, and runs
      at every depth (see its note below). */
   const DEPTH_LEVELS = 3;
@@ -7386,7 +7386,7 @@ function projectGraph(events, frame = {}) {
       };
     });
     return {
-      schema: 'cleon-textgraph/1',
+      schema: 'cleo-textgraph/1',
       doc: r.doc, words: r.words,
       coverage: { spans: spans.length, lit, chrome, dark },
       spans,
@@ -8115,7 +8115,7 @@ function projectGraph(events, frame = {}) {
   // weight, which edges run between them, what the text asserted about them,
   // and the section spine. This takes that photo at the end position and says
   // it in words — mechanically, no model. Ported from eo-extractor.html's
-  // graphPortrait(); reads Cleon's projected entities + edges + sections.
+  // graphPortrait(); reads Cleo's projected entities + edges + sections.
   // ── Portrait substrate collectors (WI-2) ──────────────────────────
   // These surface the NUL log, the signal substrate, and the full DEF set
   // for the talker-portrait composer. They read only the event log; they
@@ -8530,7 +8530,7 @@ function projectGraph(events, frame = {}) {
   // between them, the copular assertions, the section spine, the physics frame,
   // and the full event log — "all the processing that took place". This is what
   // the Graph explorer reads and what the unified export writes as a
-  // `cleon-graph/1` line. Read-only; never mutates the doc.
+  // `cleo-graph/1` line. Read-only; never mutates the doc.
   function graphSnapshot(doc) {
     if (!doc || doc.kind !== 'prose' || !doc._events) return null;
     const clone = (v) => { try { return v == null ? v : JSON.parse(JSON.stringify(v)); } catch (e) { return null; } };
@@ -8539,7 +8539,7 @@ function projectGraph(events, frame = {}) {
     const { entities } = projectEntities(doc);
     const p = graphPortrait(doc) || { assertions: [], spine: [] };
     return {
-      schema: 'cleon-graph/1',
+      schema: 'cleo-graph/1',
       at: new Date().toISOString(),
       doc: { id: doc.id, name: doc.name, kind: doc.kind, lang: doc._lang || 'en', genre: doc._genre || null, sentences: (doc.sentenceTexts || []).length },
       // `site` is the generated cell; `address` shows the subtype as a
@@ -8680,7 +8680,7 @@ function projectGraph(events, frame = {}) {
         level_error: ENTITY_SUBTYPES.has(String(ev.site).toLowerCase()) });
     }
     return {
-      schema: 'cleon-ingestion/1',
+      schema: 'cleo-ingestion/1',
       at: new Date().toISOString(),
       doc: { id: doc.id, name: doc.name, kind: doc.kind, lang: doc._lang || 'en',
              genre: doc._genre || null, sentences: sents.length,

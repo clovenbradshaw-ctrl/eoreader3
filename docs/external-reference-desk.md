@@ -88,7 +88,7 @@ grounded reader works over. When it is on and you send a message:
 4. The card under the message shows what was pulled and confirms it was added
    to the graph.
 
-So with no document loaded at all, toggling Wikipedia on turns Cleon into a
+So with no document loaded at all, toggling Wikipedia on turns Cleo into a
 grounded reader of Wikipedia: ask a question, the article enters the graph, and
 the answer is bound to its lines. Articles accumulate across a conversation —
 the tool's knowledge grows as you chat. It is wired in `app.jsx`

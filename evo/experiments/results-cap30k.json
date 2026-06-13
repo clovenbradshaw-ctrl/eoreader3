@@ -1,5 +1,5 @@
 {
- "schema": "cleon-graph-experiment/1",
+ "schema": "cleo-graph-experiment/1",
  "at": "2026-06-10T19:33:05.836Z",
  "cap": 30000,
  "topk": 5,

@@ -70,7 +70,7 @@ positions in the log. Mass, mention positions, cursor — that's it. Move the
 cursor, the same log measures differently, *and now that is literally true* with
 no accumulator at all. This relocates the recency law from the significance layer
 (the reader's internal time) to the structure layer (the medium's geometry) — the
-same retagging the Cleon spec did for `δ`.
+same retagging the Cleo spec did for `δ`.
 
 ### 3. Tokens are the honest distance metric
 

@@ -143,7 +143,7 @@ function fmt(rows, cols) {
   const jsonOut = arg('--json', null);
   if (jsonOut) {
     fs.writeFileSync(jsonOut, JSON.stringify({
-      schema: 'cleon-conformance-sweep/1', at: new Date().toISOString(), cap: CAP, bare: BARE,
+      schema: 'cleo-conformance-sweep/1', at: new Date().toISOString(), cap: CAP, bare: BARE,
       rows: rows.map(r => ({ id: r.id, lang: r.lang, pack: r.pack, sents: r.sents, ents: r.ents, events: r.events, ops: r.ops, vector: r.vector, laws: r.lawHist })),
     }, null, 1));
     console.log('\nwrote ' + jsonOut);

@@ -304,7 +304,7 @@ group('buildUserContent — tiered spans/notes, question first and last', () => 
 // rides the user message AFTER the spans, as closing guidance about HOW to
 // answer. The old order (note before spans, labeled "What this turn wants:")
 // let a small model read the note as a synopsis and pre-frame the spans it
-// hadn't reached yet — Cleon parroted "the author is not named" even when
+// hadn't reached yet — Cleo parroted "the author is not named" even when
 // the Author: span sat right below. Spans-before-note inverts that.
 group('shape pass — a director\'s note AFTER spans, framed as guidance', () => {
   ok(/never answer the question yourself/.test(LLM.SHAPE_SYSTEM), 'the shape prompt forbids answering');
@@ -330,7 +330,7 @@ group('shape pass — a director\'s note AFTER spans, framed as guidance', () =>
   ok(!/What this turn wants/.test(u) && !/What this turn wants/.test(bare), 'the old "What this turn wants:" label is gone (read as a synopsis by small models)');
 
   // The grounded system prompt names the editor's note as a third context
-  // type and tells Cleon it's guidance, not source — the standing guard
+  // type and tells Cleo it's guidance, not source — the standing guard
   // that backs the reorder. Without it, a model that still reads the note
   // as facts has nothing in the system prompt to pull it back.
   const sys = LLM.systemFor('grounded', 'answer', true, 1);

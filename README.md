@@ -1,6 +1,6 @@
-# Cleon
+# Cleo
 
-A private, in-browser assistant for reading documents. Cleon is a ChatGPT-style
+A private, in-browser assistant for reading documents. Cleo is a ChatGPT-style
 chat app with a twist: when you ask about a document you've loaded, its answers
 are **grounded** — every claim is bound to the exact line it came from and
 audited mechanically, not by the language model.
@@ -69,7 +69,7 @@ private individuals. Clear `window.EO_REFERENCE_PROXY` to disable it and keep
 the reader strictly local. See `docs/external-reference-desk.md`.
 
 A second, separate opt-in is **computational grounding** (`pyodide.js`,
-`window.EOPython`): turned on in Settings, it lets Cleon run Python locally over
+`window.EOPython`): turned on in Settings, it lets Cleo run Python locally over
 a loaded CSV to answer questions a prose reader structurally can't — sum a
 column, count rows, group and sort. It is off by default and the runtime (loaded
 from `cdn.jsdelivr.net`, the same CDN as the models) is fetched only on the
@@ -132,7 +132,7 @@ The intelligence is **mechanical**; the language model only phrases things.
 
 ### Chat behaviour
 
-By default Cleon just talks with you — multi-turn, with the conversation passed
+By default Cleo just talks with you — multi-turn, with the conversation passed
 to the model intact. It only pulls in document context when you're actually
 referencing the loaded document (asking what it says, who's in it, summarizing
 it, naming something from it). That keeps ordinary conversation simple while
@@ -272,7 +272,7 @@ or comes back empty, parrots the director's note as if it were the answer,
 or echoes a single passage even after a stricter retry — the turn now
 **refuses** rather than substituting a mechanically-generated portrait. A
 mechanical fallback in those cases would land as if the model had answered,
-and the user reads the result as Cleon talking when in fact the draft was
+and the user reads the result as Cleo talking when in fact the draft was
 rejected; refusing names the failure plainly ("I drafted, but the model
 came back empty…") and emits an audit error step instead. The bind-failure
 paths (unbound, contradicts-assertion, kin-subject-mismatch) keep their
@@ -300,7 +300,7 @@ Form is measured against a library of pre-written **exemplars**
 (`exemplars.jsonl` — 373 exemplars across 22 intents: lookup, synthesis,
 connect-passages, clarify-question, pushback-repair, hedge-uncertain,
 disagree-with-source, refusal-without-condescension, out-of-scope-offer,
-name-tension, meta-about-cleon, and the rest). Their *content* is incidental
+name-tension, meta-about-cleo, and the rest). Their *content* is incidental
 and their *shape* is the signal — full length range (two-word answers to
 essay-length syntheses, plus a few ASCII diagrams), and **both poles of every
 interpretable axis** anchored via each line's `anchor_axes` (short↔long,
@@ -480,7 +480,7 @@ over them. For each turn it records, step by step:
 
 Recording is on by default and in-memory (a capped ring buffer); the durable
 artifact is the **Export JSONL** button — one self-contained turn per line
-(schema `cleon-audit/1`), ready for `jq`/grep or a notebook. Copy and Clear sit
+(schema `cleo-audit/1`), ready for `jq`/grep or a notebook. Copy and Clear sit
 beside it, and recording can be paused. This is the tool for the question "why
 did it answer that?" — when a `summarize` returns raw opening lines, or a
 retrieval grabs page chrome, the trace shows exactly where.
@@ -520,7 +520,7 @@ bottom — and refuses to summarize anything away:
 The per-word classification is not a re-implementation of the tokenizer — it *calls*
 it (`EOEngine.classifyTokens`), so what the audit shows is bit-identical to what
 retrieval indexes; the audit cannot drift from the engine. The whole report is one
-self-contained JSON object (schema `cleon-ingestion/1`, `EOEngine.ingestionReport`)
+self-contained JSON object (schema `cleo-ingestion/1`, `EOEngine.ingestionReport`)
 behind the **Export JSON** button — spans, lexicon, coverage, entities, and the
 event log, ready for `jq` or a notebook. `tests/ingestion.test.js` pins the
 contract (tokenizer fidelity, total word accounting, honest coverage); the parse
@@ -534,9 +534,9 @@ What an ingestion log *should* hold is written down once, as law:
 mechanical check and a witness from the permanent failing corpus (the Toronto
 Life ingestion of 2026-06-11, which scores `0 0 0 0 0 1 0`).
 `tools/conformance.js` is the instrument: it scores any exported
-`cleon-ingestion/1` dump as the 7-bit vector, citing the exact events that earn
+`cleo-ingestion/1` dump as the 7-bit vector, citing the exact events that earn
 each violation, with optional session-side advisory checks over a
-`cleon-audit/1` JSONL export.
+`cleo-audit/1` JSONL export.
 
 ```sh
 npm run conformance -- dump.json            # score an exported dump

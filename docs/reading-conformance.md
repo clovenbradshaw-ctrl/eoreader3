@@ -5,7 +5,7 @@ questions by walking the projected graph. This spec defines seven invariants.
 Each invariant states the law in one sentence, the signature of a log that
 follows it, the signature of a log that violates it, a mechanical check, and a
 witness. Witnesses cite the Toronto Life ingestion of 2026-06-11
-(`cleon-ingestion/1`, doc-2), which violates six of seven and serves as the
+(`cleo-ingestion/1`, doc-2), which violates six of seven and serves as the
 permanent failing corpus.
 
 **The whole spec in one sentence.** The machine follows when every answer is a
@@ -233,7 +233,7 @@ not belong.
 ## Mechanization in this repo
 
 The spec above is the law; `tools/conformance.js` is the instrument. It scores
-a `cleon-ingestion/1` dump (the Ingestion drawer's **Export JSON**) as the
+a `cleo-ingestion/1` dump (the Ingestion drawer's **Export JSON**) as the
 7-bit vector, and every verdict cites the events or entities that earned it.
 `tests/conformance.test.js` pins the instrument with two frozen fixtures — a
 conforming log that scores `1 1 1 1 1 1 1` and a Toronto-shaped log that scores

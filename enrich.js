@@ -1,11 +1,11 @@
 /* ============================================================
-   Cleon Deep-Read Enrichment — the second, offline pass.
+   Cleo Deep-Read Enrichment — the second, offline pass.
 
    The streaming reader (engine.js) is greedy: it commits structure as the
    text arrives, with only the entity field seen so far. This pass rewalks a
-   FINISHED `cleon-graph/1` with the whole field present and repairs, mints,
+   FINISHED `cleo-graph/1` with the whole field present and repairs, mints,
    and composes what the greedy pass could not — then emits an enriched graph
-   plus a per-operation ledger (`cleon-enrich/1`) that is the publishable
+   plus a per-operation ledger (`cleo-enrich/1`) that is the publishable
    receipt for every change.
 
    The governing rule: IF A RULE CAN DECIDE IT, THE MODEL NEVER SEES IT. The
@@ -26,13 +26,13 @@
    mechanically and marks every model-dependent decision `deferred`.
 
    Published as window.EOEnrich. No engine dependency — it operates on the
-   portable `cleon-graph/1` snapshot alone, so it can be tested and run on any
+   portable `cleo-graph/1` snapshot alone, so it can be tested and run on any
    graph the engine emitted.
    ============================================================ */
 (function () {
   'use strict';
 
-  const SCHEMA = 'cleon-enrich/1';
+  const SCHEMA = 'cleo-enrich/1';
 
   /* ---- small mechanical helpers (self-contained; no engine import) ---- */
 
@@ -89,7 +89,7 @@
 
   /* ---- structured error for the alignment precondition (§1.1) ---- */
   function alignmentError(code, detail) {
-    const e = new Error('cleon-enrich alignment: ' + code);
+    const e = new Error('cleo-enrich alignment: ' + code);
     e.code = code; e.detail = detail; e.schema = SCHEMA; e.fatal = true;
     return e;
   }
@@ -1230,7 +1230,7 @@
     for (const a of (graph.assertions || [])) delete a._supportChecked;
   }
 
-  /* ---- JSONL serialization for the ledger (mirrors cleon-audit/1 style) ---- */
+  /* ---- JSONL serialization for the ledger (mirrors cleo-audit/1 style) ---- */
   function toJSONL(result) {
     const lines = [];
     if (result.header) lines.push(JSON.stringify(result.header));

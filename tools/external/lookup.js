@@ -74,7 +74,7 @@ async function lookup(src, term, { live = false } = {}) {
 
   const url = SOURCES[src].url(term);
   try {
-    const res = await fetch(url, { headers: { 'user-agent': 'cleon-external-read/1 (read-only measurement)' } });
+    const res = await fetch(url, { headers: { 'user-agent': 'cleo-external-read/1 (read-only measurement)' } });
     const text = await res.text();
     const found = res.status === 200 && text.length > 0 && !/no definitions found/i.test(text);
     let payload = null;

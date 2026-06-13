@@ -1,5 +1,5 @@
 /* ============================================================
-   Cleon — the SHAPE layer (shape-steered generation).
+   Cleo — the SHAPE layer (shape-steered generation).
 
    The content layer (engine.js) hands the model what's true and relevant;
    THIS layer steers the model toward the right FORM. They are kept apart on
@@ -67,7 +67,7 @@
   }
 
   /* ---- the exemplar library (§3.2) ---------------------------------------
-     A JSONL file of pre-written responses spanning every shape Cleon makes.
+     A JSONL file of pre-written responses spanning every shape Cleo makes.
      Each line: { intent, shape_tags, user_turn, context_sketch, response,
      notes, weight }. The content is deliberately topic-neutral — the SHAPE is
      the signal. parseExemplars is defensive like the conventions loader:
