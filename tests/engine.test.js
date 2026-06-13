@@ -1123,31 +1123,6 @@ await group('answerProse — a strong lexical hit grounds despite a long questio
   ok(/\{\{cite:reef:\d+:s\d+\}\}/.test(a.text), 'and the grounding line is still cited');
 });
 
-// ── mechanical arithmetic: exact, no model ──
-// A small on-device model is an unreliable calculator ("42 + 8" came back 42).
-// A self-contained expression is computed exactly and never handed to a model.
-group('answerArithmetic — a pure expression is computed exactly, never guessed', () => {
-  const val = (q) => { const r = E.answerArithmetic(q); return r ? r.text : null; };
-  eq(val('42 + 8'), '42 + 8 = 50', 'addition is exact (the on-device model returned 42)');
-  eq(val('17 × 23'), '17 × 23 = 391', 'multiplication with the × sign');
-  eq(val('17 * 23'), '17 × 23 = 391', 'multiplication with an asterisk');
-  eq(val('100 / 4'), '100 ÷ 4 = 25', 'division');
-  eq(val('3*(4+5)'), '3 × (4 + 5) = 27', 'parentheses override precedence');
-  eq(val('2^10'), '2 ^ 10 = 1024', 'exponent');
-  eq(val('5 plus 3'), '5 + 3 = 8', 'word operators');
-  eq(val('10 minus 4'), '10 - 4 = 6', 'a worded minus is intent, not a range');
-  eq(val('what is 42 + 8?'), '42 + 8 = 50', 'a calc lead and trailing punctuation are stripped');
-  eq(val('1,000 + 1'), '1000 + 1 = 1001', 'thousands separators');
-  const ar = E.answerArithmetic('42 + 8');
-  eq(ar.audit.status, 'clean', 'arithmetic wears a clean badge');
-  eq(ar.cites.length, 0, 'and carries no citations (nothing to cite — it is computed)');
-  // NON-arithmetic stays null so ordinary chat / document questions are untouched
-  eq(val('what is the 42nd amendment'), null, 'a number inside a phrase is not a calculation');
-  eq(val('I have 42 apples and 8 oranges'), null, 'a sentence with numbers is not a calculation');
-  eq(val('the year 2020-2021'), null, 'a year range is not a subtraction');
-  eq(val('2020-2021'), null, 'a bare hyphenated range is not a subtraction');
-  eq(val('who founded Veldmar'), null, 'an ordinary question is not a calculation');
-});
 
 // ── widened graph-portrait surface (WI-1..4) ──────────────────────────
 const MACHINERY_RE = /\{\{|\[s\d+\]|\bs\d+\b|\b(mass|momentum|gravity|coupling|frame|rules_rev|NUL|SIG|INS|SEG|CON|SYN|DEF|EVA|REC|cite|void|infer|absent)\b/i;

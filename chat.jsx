@@ -355,6 +355,61 @@ function MechanicalReading({ data, onCite }) {
   );
 }
 
+/* ── "Show the math" disclosure ───────────────────────────────────────────
+   The auditable calculator. The answer above is the result; this panel is the
+   glass box for it: the formula as typed, then every figure it used. A figure
+   that also appears in an open source carries a citation chip — click it to
+   jump to the exact line, the same as any other citation — so the reader can
+   confirm each input came from the right place. (That is the only kind of math
+   error an evaluator can't catch: right arithmetic over a wrong number.) We
+   show the operands and their sources, and the full-precision value when the
+   display was rounded — but no "verified ✓": the arithmetic is correct by
+   construction, so a checkmark there would reassure about the wrong thing. */
+function WorkedMath({ data, onCite }) {
+  const [open, setOpen] = React.useState(false);
+  if (!data) return null;
+  const ops = data.operands || [];
+  const linked = (data.cites || []).length;
+  return (
+    <div className={'mech calc' + (open ? ' open' : '')}>
+      <button type="button" className="mech-toggle" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <Icon name="calculator" size={13} className="mech-ico" />
+        <span className="mech-label">Show the math</span>
+        <Icon name="chevron" size={13} className={'mech-chev' + (open ? ' open' : '')} />
+      </button>
+      {open && (
+        <div className="mech-body">
+          <div className="calc-formula"><code>{data.shown} = {data.display}</code></div>
+          {ops.length > 0 && (
+            <div className="calc-ops">
+              {ops.map((op, i) => (
+                <div key={i} className="calc-op">
+                  <span className="calc-op-val">{op.raw}</span>
+                  {op.cite
+                    ? <React.Fragment>
+                        <button type="button" className="cite" title={'Jump to s' + op.cite.idx + ' in the document'}
+                          onClick={() => onCite(op.cite.docId, op.cite.idx)}>s{op.cite.idx}</button>
+                        <span className="calc-op-src">{op.cite.text}</span>
+                      </React.Fragment>
+                    : <span className="calc-op-lit" title="A literal in your expression — not from a document">literal</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          {data.exact && data.exact !== data.display && !data.isUnit && (
+            <div className="calc-exact">exact: <code>{data.exact}</code></div>
+          )}
+          <div className="calc-note">
+            {linked
+              ? linked + ' of ' + ops.length + ' figures link to the document above — click each to check it came from the right place. math.js did the arithmetic; the model didn’t.'
+              : 'math.js evaluated this deterministically — the model didn’t do the arithmetic.'}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Per-message render guard ──────────────────────────────────────────────
    A render error inside ONE message (an unexpected audit/marker shape from a
    model draft, a malformed citation, a content edge case) used to throw all
@@ -448,6 +503,7 @@ function Message({ msg, onCite, showGrounding }) {
               {/* a retraction outranks the badge the answer originally earned */}
               {msg.retracted && <div className="retract-note">⊘ Retracted — a later check against the page found a claim here unsupported.</div>}
               {!msg.interrupted && showGrounding !== false && <AuditBadge audit={msg.audit} />}
+              {msg.calc && <WorkedMath data={msg.calc} onCite={onCite} />}
               {msg.mechanical && <MechanicalReading data={msg.mechanical} onCite={onCite} />}
             </React.Fragment>}
         {msg.enrichment && window.ReferenceCard && <window.ReferenceCard data={msg.enrichment} />}

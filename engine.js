@@ -9153,63 +9153,6 @@ function projectGraph(events, frame = {}) {
     if (!predicate) return null;
     return { subject: subject.trim(), negated, predicate, verbal };
   }
-  // ── Mechanical arithmetic ──────────────────────────────────────────────
-  // A self-contained calculation is computed EXACTLY and answered with no
-  // model. A small on-device model is an unreliable calculator ("42 + 8" came
-  // back 42 in testing, while "17 × 23" happened to land) — a pure expression
-  // is truth, not a guess. Returns null on anything that isn't wholly an
-  // expression, so ordinary chat and document questions never route here.
-  // No eval — a tiny precedence-correct recursive parser over a fixed grammar.
-  function _evalArith(expr) {
-    const toks = expr.match(/\d+\.?\d*|\.\d+|[+\-*/^()%]/g);
-    if (!toks || !toks.length) return null;
-    let i = 0;
-    const peek = () => toks[i];
-    const eat = () => toks[i++];
-    function pExpr() { let v = pTerm(); while (peek() === '+' || peek() === '-') { const o = eat(); const r = pTerm(); v = o === '+' ? v + r : v - r; } return v; }
-    function pTerm() { let v = pPow(); while (peek() === '*' || peek() === '/' || peek() === '%') { const o = eat(); const r = pPow(); v = o === '*' ? v * r : o === '/' ? v / r : v % r; } return v; }
-    function pPow() { const v = pUnary(); if (peek() === '^') { eat(); return Math.pow(v, pPow()); } return v; }
-    function pUnary() { if (peek() === '-') { eat(); return -pUnary(); } if (peek() === '+') { eat(); return pUnary(); } return pAtom(); }
-    function pAtom() {
-      if (peek() === '(') { eat(); const v = pExpr(); if (peek() === ')') eat(); else throw new Error('unbalanced'); return v; }
-      const t = eat(); const n = parseFloat(t);
-      if (t == null || isNaN(n)) throw new Error('expected number');
-      return n;
-    }
-    const out = pExpr();
-    if (i !== toks.length) throw new Error('trailing input');   // unconsumed tokens → not clean arithmetic
-    return out;
-  }
-  function answerArithmetic(query) {
-    const raw = String(query == null ? '' : query).trim();
-    if (!raw) return null;
-    const lead = /^\s*(?:what(?:'?s| is| are)?|whats|how much is|how many is|calculate|compute|evaluate|solve|work out|tell me)\s+/i;
-    const hadLead = lead.test(raw);
-    let s = raw.replace(lead, '').replace(/\s*[=?]+\s*$/g, '').trim();
-    const spacedMinus = /\d\s+-\s+\d/.test(s);
-    const hadWordOp = /\b(?:plus|minus|times|multiplied by|divided by|over)\b/i.test(s);
-    s = s.replace(/\bplus\b/gi, '+').replace(/\bminus\b/gi, '-')
-         .replace(/\b(?:times|multiplied by)\b/gi, '*').replace(/\b(?:divided by|over)\b/gi, '/')
-         .replace(/(\d)\s*[xX]\s*(?=\d)/g, '$1*')               // "3x4" → "3*4", but never a stray x
-         .replace(/[×·∗]/g, '*').replace(/[÷]/g, '/').replace(/[–—]/g, '-');
-    if (!/\d/.test(s) || !/[+\-*/^%]/.test(s)) return null;          // needs a number AND an operator
-    const expr = s.replace(/(\d),(?=\d{3}(?:\D|$))/g, '$1');         // drop thousands separators (1,000)
-    if (!/^[\d\s+\-*/^().%]+$/.test(expr)) return null;             // nothing but math survives
-    // a bare "2020-2021" reads as a range / identifier, not subtraction, unless
-    // a calc word or spacing signals the intent to compute.
-    if (!hadLead && !hadWordOp && !spacedMinus && /^\d+(?:\.\d+)?-\d+(?:\.\d+)?$/.test(expr.replace(/\s+/g, ''))) return null;
-    let value; try { value = _evalArith(expr); } catch (e) { return null; }
-    if (value == null || !isFinite(value)) return null;
-    const out = String(Math.round((value + Number.EPSILON) * 1e10) / 1e10);
-    const shown = expr.replace(/\s+/g, '').replace(/\*/g, '×').replace(/\//g, '÷')
-      .replace(/([+\-×÷^%])/g, ' $1 ').replace(/\(\s*/g, '(').replace(/\s*\)/g, ')').replace(/\s+/g, ' ').trim();
-    return {
-      text: `${shown} = ${out}`,
-      cites: [],
-      audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
-        note: 'Computed mechanically — exact arithmetic, no model involved.' },
-    };
-  }
   function answerConfirm(doc, query, opts = {}) {
     if (!doc || doc.kind !== 'prose') return null;
     const props = [];
@@ -11419,8 +11362,6 @@ function projectGraph(events, frame = {}) {
     // (DEF assertions, SIG attribution slots, absence attested with ⊥ receipts),
     // and the abbreviation-aware draft splitter the binders/veto share
     answerConfirm, answerConfirmScope, splitDraft, holdsSpeakerSlot,
-    // a self-contained calculation, computed exactly with no model
-    answerArithmetic,
     // the embedder as a wandering reader: associative, δ-gated neighbors (no-op without an embedder)
     associativeNeighbors,
     // impression query: the embedder as a fuzzy graph query — the question

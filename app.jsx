@@ -2100,24 +2100,6 @@ function App() {
     // starts; the turn then proceeds, lagging on its own without holding the UI.
     await new Promise(res => setTimeout(res, 0)); // yield to paint
 
-    // MECHANICAL ARITHMETIC — a self-contained calculation is computed exactly
-    // and answered with no model (a small on-device model gets "42 + 8" wrong).
-    // Checked before Wikipedia enrichment and before any model load; inert on
-    // anything that isn't a pure expression, so chat and document questions are
-    // untouched.
-    const arith = (window.EOEngine && window.EOEngine.answerArithmetic) ? window.EOEngine.answerArithmetic(q) : null;
-    if (arith) {
-      if (genStale(myGen)) return;
-      lastGroundedRef.current = false;
-      const aId = AUD('begin', { input: q, mode, scope: [], model: { id: model.id, name: model.name, mlc: model.mlc } });
-      if (aId) patchLast({ auditId: aId });
-      AUD('step', 'route', { path: 'arithmetic', reason: 'pure-arithmetic', referencing: false });
-      replaceLast({ role: 'assistant', text: arith.text, audit: arith.audit });
-      AUD('end', { engine: 'mechanical', text: arith.text, audit: arith.audit, reason: 'arithmetic' });
-      setBusy(false);
-      return;
-    }
-
     // CHAT WITH WIKIPEDIA: when enrichment is on, pull the salient term's
     // article and INGEST it into the graph as a citable source before reading,
     // so this turn grounds on it (and cites it), not on a sidecar card. The
@@ -2163,6 +2145,24 @@ function App() {
     // prior message, so this id rides through every settle path. (null when
     // recording is paused → the panel renders nothing.)
     if (auditId) patchLast({ auditId });
+
+    // DETERMINISTIC ARITHMETIC (mechanical, no model). A turn that is
+    // essentially a math expression is evaluated by math.js; figures that also
+    // appear in an open source are bound to their line so the worked math is
+    // checkable. Non-math turns return null here and fall through to ordinary
+    // routing. Runs before the model loads — a sum shouldn't wake a model.
+    let calc = null;
+    try { calc = (window.EOCompute && window.EOCompute.detect) ? window.EOCompute.detect(q, scope) : null; }
+    catch (e) { eoWarn('calc', e); }
+    if (calc) {
+      lastGroundedRef.current = false;
+      AUD('step', 'route', { referencing: calc.cites.length > 0, reason: 'calculation', path: 'calc' });
+      AUD('step', 'calculation', { shown: calc.shown, eval: calc.eval, display: calc.display, result: calc.result, operands: calc.operands, cites: calc.cites });
+      replaceLast({ role: 'assistant', text: calc.text, audit: null, mode: 'grounded', calc });
+      AUD('end', { engine: 'mechanical', text: calc.text, audit: calc.audit, cites: calc.cites });
+      setBusy(false);
+      return;
+    }
 
     // load the real model on demand if it isn't ready yet
     if (canLLM && !wasLoaded) {
