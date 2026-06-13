@@ -68,6 +68,21 @@ remembered consent), rate-limited, prioritised, and gated against resolving
 private individuals. Clear `window.EO_REFERENCE_PROXY` to disable it and keep
 the reader strictly local. See `docs/external-reference-desk.md`.
 
+A second, separate opt-in is **computational grounding** (`pyodide.js`,
+`window.EOPython`): turned on in Settings, it lets Cleon run Python locally over
+a loaded CSV to answer questions a prose reader structurally can't — sum a
+column, count rows, group and sort. It is off by default and the runtime (loaded
+from `cdn.jsdelivr.net`, the same CDN as the models) is fetched only on the
+first actual run, never at page load. Python runs in a Web Worker with network
+egress blocked, so executed code cannot reach the network and document content
+never leaves the device on the local-model path. The model still only phrases:
+mechanical execution produces the figure, and the exact code, its stdout, and
+its result are deposited in the glass-box audit (a `compute` step) and shown on
+the message. On the Claude API path the model sees only the table's **schema**
+(column names, types, a few sample rows) and the `code` it writes; that code
+runs locally over the whole file, so the full data is not sent — it travels
+under the same consent as any other Claude turn, no wider.
+
 ## How it works
 
 The intelligence is **mechanical**; the language model only phrases things.

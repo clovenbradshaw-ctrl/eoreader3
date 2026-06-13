@@ -143,6 +143,67 @@
     }
   }
 
+  // Run a Claude turn that may call tools. Unlike streamAnthropic (which streams
+  // one plain answer), this drives the native tool_use loop NON-streaming: each
+  // step posts the conversation; if Claude asks to run a tool, runTool(name,
+  // input) executes it locally (e.g. window.EOPython.run over the document) and
+  // its result is fed back as a tool_result, looping until Claude returns a
+  // final text answer. The model phrases over the execution result — it never
+  // reports a number it computed in its own head as grounded. Plain streaming
+  // turns (streamAnthropic / streamChat) are untouched; this is a separate entry
+  // point used only when a computational tool is offered. Returns
+  // { text, calls:[{name,input,output}], steps }. calls carries every tool run
+  // so the chat loop can deposit them into the audit and surface them to the user.
+  async function runAnthropicTools({ model, system, messages, tools, runTool, maxTokens, maxSteps }) {
+    if (!anthropicKey) throw Object.assign(new Error('Add your Anthropic API key to use Claude.'), { code: 'NOKEY' });
+    const steps = Math.max(1, (maxSteps | 0) || 4);
+    const headers = {
+      'content-type': 'application/json',
+      'x-api-key': anthropicKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    };
+    const msgs = (messages || []).slice();
+    const calls = [];
+    let text = '';
+    for (let i = 0; i < steps; i++) {
+      const body = { model, max_tokens: Math.max(1024, (maxTokens | 0) || 1024), messages: msgs };
+      if (tools && tools.length) body.tools = tools;
+      if (system) body.system = system;
+      let resp;
+      try {
+        resp = await fetch(ANTHROPIC_URL, { method: 'POST', headers, body: JSON.stringify(body) });
+      } catch (e) {
+        throw Object.assign(new Error('Could not reach the Claude API — check your connection.'), { code: 'ANTHROPIC_NET' });
+      }
+      if (!resp.ok) {
+        let msg = `Claude API error (${resp.status}).`;
+        if (resp.status === 401) msg = 'Claude rejected the API key (401). Check the key and try again.';
+        else { try { const j = await resp.json(); if (j && j.error && j.error.message) msg = j.error.message; } catch (_) {} }
+        throw Object.assign(new Error(msg), { code: 'ANTHROPIC', status: resp.status });
+      }
+      let data; try { data = await resp.json(); } catch (e) { throw Object.assign(new Error('Claude returned an unreadable response.'), { code: 'ANTHROPIC' }); }
+      const content = Array.isArray(data.content) ? data.content : [];
+      text = content.filter(b => b && b.type === 'text').map(b => b.text || '').join('').trim();
+      const toolUses = content.filter(b => b && b.type === 'tool_use');
+      if (!toolUses.length || data.stop_reason !== 'tool_use') return { text, calls, steps: i + 1 };
+      // Record Claude's turn verbatim (the tool_use blocks must round-trip), run
+      // each tool, and feed the results back for the next phrasing pass.
+      msgs.push({ role: 'assistant', content });
+      const results = [];
+      for (const tu of toolUses) {
+        let out;
+        try { out = await runTool(tu.name, tu.input || {}); }
+        catch (e) { out = { ok: false, stderr: String((e && e.message) || e) }; }
+        calls.push({ name: tu.name, input: tu.input || {}, output: out });
+        const contentStr = typeof out === 'string' ? out : JSON.stringify(out);
+        results.push({ type: 'tool_result', tool_use_id: tu.id, content: contentStr || '(no output)' });
+      }
+      msgs.push({ role: 'user', content: results });
+    }
+    return { text, calls, steps, exhausted: true };
+  }
+
   // ---- wllama (CPU / WebAssembly) backend ---------------------------------
   // A third backend alongside WebLLM (GPU) and Anthropic (cloud): llama.cpp
   // compiled to WebAssembly, running a GGUF model on the CPU with NO WebGPU.
@@ -1083,5 +1144,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, phrase, shapePass, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();

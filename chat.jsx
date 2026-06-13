@@ -161,6 +161,12 @@ function narrateTurn(turn) {
         else if (draft) push('Drafted an answer in its own words:', draft);
         break;
       }
+      case 'compute':
+        push(s.ok
+          ? 'Ran Python locally over the table' + (s.durationMs != null ? ' (' + fmtMs(s.durationMs) + ')' : '') + ' and used its result — the code and output are recorded below.'
+          : 'Ran Python locally over the table, but it returned no usable result' + (s.stderr ? ' (' + String(s.stderr).split('\n').pop() + ')' : '') + '.',
+          s.code != null ? String(s.code) : undefined);
+        break;
       case 'veto':
         if (s.decision === 'model')
           push('Checked the draft against the document — every name and claim binds to a passage — so I kept it' + (s.boundCovers ? ' (covers ' + s.boundCovers + ').' : '.'));
@@ -355,6 +361,39 @@ function MechanicalReading({ data, onCite }) {
   );
 }
 
+/* ── "Show computation" disclosure ────────────────────────────────────────
+   A computed answer must let the human see the column names and operations it
+   came from — in this domain a confidently wrong number is worse than no
+   answer. This surfaces the executed Python and its raw result one tap away,
+   beside the audit's glass-box trace. Reuses the same collapsible shape as the
+   mechanical-reading panel; no new visual language. */
+function ComputationPanel({ data }) {
+  const [open, setOpen] = React.useState(false);
+  if (!data || !data.calls || !data.calls.length) return null;
+  return (
+    <div className={'mech compute' + (open ? ' open' : '')}>
+      <button type="button" className="mech-toggle" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <Icon name="table" size={13} className="mech-ico" />
+        <span className="mech-label">Show computation{data.calls.length > 1 ? ' (' + data.calls.length + ' runs)' : ''}</span>
+        <Icon name="chevron" size={13} className={'mech-chev' + (open ? ' open' : '')} />
+      </button>
+      {open && (
+        <div className="mech-body">
+          {data.calls.map((c, i) => (
+            <div key={i} className="compute-run">
+              <div className="raw-role">Python{c.durationMs != null ? ' · ' + c.durationMs + 'ms' : ''}{c.ok ? '' : ' · error'}</div>
+              <pre className="raw-pre">{c.code || '∅'}</pre>
+              {c.stdout ? <React.Fragment><div className="raw-role out">stdout</div><pre className="raw-pre">{c.stdout}</pre></React.Fragment> : null}
+              <div className="raw-role out">{c.ok ? 'result' : 'error'}</div>
+              <pre className="raw-pre">{c.ok ? (c.result || c.stdout || '∅') : (c.stderr || 'failed')}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── "Show the math" disclosure ───────────────────────────────────────────
    The auditable calculator. The answer above is the result; this panel is the
    glass box for it: the formula as typed, then every figure it used. A figure
@@ -503,6 +542,7 @@ function Message({ msg, onCite }) {
               {/* a retraction outranks the badge the answer originally earned */}
               {msg.retracted && <div className="retract-note">⊘ Retracted — a later check against the page found a claim here unsupported.</div>}
               {!msg.interrupted && <AuditBadge audit={msg.audit} />}
+              {msg.compute && <ComputationPanel data={msg.compute} />}
               {msg.calc && <WorkedMath data={msg.calc} onCite={onCite} />}
               {msg.mechanical && <MechanicalReading data={msg.mechanical} onCite={onCite} />}
             </React.Fragment>}
@@ -644,4 +684,4 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
   );
 }
 
-Object.assign(window, { ChatPane, Hero, Composer, Message, MessageBoundary, AuditBadge, MechanicalReading, renderAnswer, ThinkingBlock, narrateTurn });
+Object.assign(window, { ChatPane, Hero, Composer, Message, MessageBoundary, AuditBadge, MechanicalReading, ComputationPanel, renderAnswer, ThinkingBlock, narrateTurn });

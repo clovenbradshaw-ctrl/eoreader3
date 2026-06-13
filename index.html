@@ -65,7 +65,7 @@
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
-<!-- engine (plain scripts; expose window.EOEngine / window.EOLLM / window.EOStore / window.EOAudit) -->
+<!-- engine (plain scripts; expose window.EOEngine / window.EOLLM / window.EOStore / window.EOAudit / window.EOPython / window.EOCompute) -->
 <script src="engine.js"></script>
 <script src="llm.js"></script>
 <!-- the conventions graph: everything human-language-specific, as an
@@ -154,6 +154,12 @@
 </script>
 <script src="store.js"></script>
 <script src="audit.js"></script>
+<!-- computational grounding: an opt-in, manually-gated second mechanical source
+     (Pyodide in a Web Worker) for questions the prose engine structurally can't
+     answer — sum a column, count rows, join two CSVs. Off by default; the
+     runtime loads from cdn.jsdelivr.net only on the first actual run, never at
+     page load. Network egress from executed Python is blocked. -->
+<script src="pyodide.js"></script>
 <!-- deterministic arithmetic (window.EOCompute): detects a math turn, evaluates
      it with math.js, and binds figures to the lines they came from. Inert until
      a turn is actually a calculation. -->

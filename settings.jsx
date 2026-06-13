@@ -23,6 +23,7 @@ function applyTheme(theme) {
 window.EOTheme = { apply: applyTheme };
 
 function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
+                         pythonEnabled, onPythonEnabled, pythonAvailable,
                          onClearData, storageOK }) {
   const dialogRef = window.useDialog(onClose);
   const [confirmClear, setConfirmClear] = React.useState(false);
@@ -72,6 +73,22 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                       onClick={() => onReduceMotion(!reduceMotion)} />
             </div>
           </section>
+
+          {pythonAvailable && (
+            <section className="set-section">
+              <h3 className="set-h">Computation</h3>
+
+              <div className="set-row">
+                <div className="set-row-main">
+                  <div className="set-label">Run Python over your documents</div>
+                  <div className="set-sub">Lets Cleon run Python locally to answer computational questions a reader can't — sum a column, count rows, group a CSV. The code it runs and the output it gets are recorded in the glass box, and it all runs entirely on your device. Off by default.</div>
+                </div>
+                <button className={'switch' + (pythonEnabled ? ' on' : '')} role="switch"
+                        aria-checked={!!pythonEnabled} aria-label="Run Python over your documents"
+                        onClick={() => onPythonEnabled(!pythonEnabled)} />
+              </div>
+            </section>
+          )}
 
           <section className="set-section">
             <h3 className="set-h">Privacy &amp; data</h3>
