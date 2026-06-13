@@ -399,7 +399,7 @@ class MessageBoundary extends React.Component {
   }
 }
 
-function Message({ msg, onCite }) {
+function Message({ msg, onCite, showGrounding }) {
   if (msg.role === 'user') return <div className="msg-row user"><div className="bubble-user">{msg.text}</div></div>;
   return (
     <div className="msg-row asst">
@@ -447,7 +447,7 @@ function Message({ msg, onCite }) {
               {msg.interrupted && <div className="stopped-note">⏹ Stopped — you interrupted this reply{(msg.text && String(msg.text).trim()) ? '; the text above is as far as it got' : ''}.</div>}
               {/* a retraction outranks the badge the answer originally earned */}
               {msg.retracted && <div className="retract-note">⊘ Retracted — a later check against the page found a claim here unsupported.</div>}
-              {!msg.interrupted && <AuditBadge audit={msg.audit} />}
+              {!msg.interrupted && showGrounding !== false && <AuditBadge audit={msg.audit} />}
               {msg.mechanical && <MechanicalReading data={msg.mechanical} onCite={onCite} />}
             </React.Fragment>}
         {msg.enrichment && window.ReferenceCard && <window.ReferenceCard data={msg.enrichment} />}
@@ -557,7 +557,7 @@ function Hero({ composerProps, onAttach, onExample, onPaste, dragOver }) {
   );
 }
 
-function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts }) {
+function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts, showGrounding }) {
   const streamRef = React.useRef(null);
   React.useEffect(() => { const el = streamRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages]);
   // Only offer the export once a turn has actually been recorded.
@@ -569,7 +569,7 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
           <MessageBoundary key={i}
             resetKey={(m.text ? m.text.length : 0) + ':' + (m.streaming ? 1 : 0) + ':' + (m.typing ? 1 : 0) + ':' + (m.loading ? 1 : 0) + ':' + (m.audit ? 1 : 0)}
             raw={m.role === 'assistant' ? m.text : null}>
-            <Message msg={m} onCite={onCite} />
+            <Message msg={m} onCite={onCite} showGrounding={showGrounding} />
           </MessageBoundary>
         ))}</div>
       </div>

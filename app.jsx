@@ -152,6 +152,9 @@ function App() {
   const [theme, setTheme] = useState('system');
   const [reduceMotion, setReduceMotion] = useState(false);
   const [auditEnabled, setAuditEnabled] = useState(() => (window.EOAudit ? window.EOAudit.isEnabled() : true));
+  // Show the per-answer grounding badge (grounded · covers · stable + its note).
+  // Some readers want the answer without the audit chrome; persisted with prefs.
+  const [groundingInfo, setGroundingInfo] = useState(true);
   const [auditCount, setAuditCount] = useState(0);
   // Glass-box export toggles: include the extraction half (graph + processing)
   // and/or the chat half (audit turns). Persisted with prefs. Both on by default.
@@ -304,6 +307,7 @@ function App() {
         if (typeof prefs.wikiEnrich === 'boolean') setWikiEnrich(prefs.wikiEnrich);
         if (prefs.theme === 'system' || prefs.theme === 'light' || prefs.theme === 'dark') setTheme(prefs.theme);
         if (typeof prefs.reduceMotion === 'boolean') setReduceMotion(prefs.reduceMotion);
+        if (typeof prefs.groundingInfo === 'boolean') setGroundingInfo(prefs.groundingInfo);
         // Restored docs were parsed under the saved modes, so suppress the
         // re-parse the same way rule toggles do (batched into one render).
         if (prefs.langModes && typeof prefs.langModes === 'object') { suppressReparse.current = true; setLangModes(prefs.langModes); }
@@ -362,8 +366,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion });
-  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion, groundingInfo });
+  }, [rules, langModes, model, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiEnrich, theme, reduceMotion, groundingInfo]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -419,11 +423,20 @@ function App() {
   };
 
   const backingDoc = () => {
-    if (activeTab) {
+    // The implicit grounding doc follows what's actually OPEN. A closed/detached
+    // document must not linger as scope: once you move on, plain chat shouldn't
+    // be answered against a doc you've put away. (The old `docs[last]` fallback
+    // kept the last-loaded doc in scope forever, even with no tab open.)
+    if (activeTab && openTabs.includes(activeTab)) {
       if (activeTab.startsWith('@ent/')) return docsById[activeTab.split('/')[1]] || null;
       if (docsById[activeTab]) return docsById[activeTab];
     }
-    return docs[docs.length - 1] || null;
+    for (let i = openTabs.length - 1; i >= 0; i--) {
+      const t = openTabs[i];
+      const id = t && t.startsWith('@ent/') ? t.split('/')[1] : t;
+      if (docsById[id]) return docsById[id];
+    }
+    return null;
   };
   const proseDocFor = () => {
     const b = backingDoc(); if (b && b.kind === 'prose') return b;
@@ -489,6 +502,10 @@ function App() {
       if (activeTab === id) setActiveTab(next[next.length - 1] || null);
       return next;
     });
+    // Closing a document detaches it from the conversation's implicit scope, so
+    // plain chat after you move on isn't answered against a doc you've put away.
+    // A named project owns its source set explicitly, so leave those alone.
+    if (!activeProject) setSources(s => s.filter(x => x !== id));
   };
 
   // ---- the convention proposer (idle, budgeted, toggleable) ----
@@ -2083,6 +2100,24 @@ function App() {
     // starts; the turn then proceeds, lagging on its own without holding the UI.
     await new Promise(res => setTimeout(res, 0)); // yield to paint
 
+    // MECHANICAL ARITHMETIC — a self-contained calculation is computed exactly
+    // and answered with no model (a small on-device model gets "42 + 8" wrong).
+    // Checked before Wikipedia enrichment and before any model load; inert on
+    // anything that isn't a pure expression, so chat and document questions are
+    // untouched.
+    const arith = (window.EOEngine && window.EOEngine.answerArithmetic) ? window.EOEngine.answerArithmetic(q) : null;
+    if (arith) {
+      if (genStale(myGen)) return;
+      lastGroundedRef.current = false;
+      const aId = AUD('begin', { input: q, mode, scope: [], model: { id: model.id, name: model.name, mlc: model.mlc } });
+      if (aId) patchLast({ auditId: aId });
+      AUD('step', 'route', { path: 'arithmetic', reason: 'pure-arithmetic', referencing: false });
+      replaceLast({ role: 'assistant', text: arith.text, audit: arith.audit });
+      AUD('end', { engine: 'mechanical', text: arith.text, audit: arith.audit, reason: 'arithmetic' });
+      setBusy(false);
+      return;
+    }
+
     // CHAT WITH WIKIPEDIA: when enrichment is on, pull the salient term's
     // article and INGEST it into the graph as a citable source before reading,
     // so this turn grounds on it (and cites it), not on a sidecar card. The
@@ -2392,7 +2427,7 @@ function App() {
             <React.Fragment>
               {showChat && (
                 <div style={{ flexBasis: showDocPane ? (splitRatio * 100) + '%' : '100%', flexGrow: showDocPane ? 0 : 1, flexShrink: 0, display: 'flex', minWidth: 0 }}>
-                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} />
+                  <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} />
                 </div>
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}
@@ -2413,6 +2448,7 @@ function App() {
       {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
       {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)}
         theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
+        groundingInfo={groundingInfo} onGroundingInfo={setGroundingInfo}
         onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
