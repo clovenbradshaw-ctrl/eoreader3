@@ -2129,6 +2129,24 @@ function App() {
     // recording is paused → the panel renders nothing.)
     if (auditId) patchLast({ auditId });
 
+    // DETERMINISTIC ARITHMETIC (mechanical, no model). A turn that is
+    // essentially a math expression is evaluated by math.js; figures that also
+    // appear in an open source are bound to their line so the worked math is
+    // checkable. Non-math turns return null here and fall through to ordinary
+    // routing. Runs before the model loads — a sum shouldn't wake a model.
+    let calc = null;
+    try { calc = (window.EOCompute && window.EOCompute.detect) ? window.EOCompute.detect(q, scope) : null; }
+    catch (e) { eoWarn('calc', e); }
+    if (calc) {
+      lastGroundedRef.current = false;
+      AUD('step', 'route', { referencing: calc.cites.length > 0, reason: 'calculation', path: 'calc' });
+      AUD('step', 'calculation', { shown: calc.shown, eval: calc.eval, display: calc.display, result: calc.result, operands: calc.operands, cites: calc.cites });
+      replaceLast({ role: 'assistant', text: calc.text, audit: null, mode: 'grounded', calc });
+      AUD('end', { engine: 'mechanical', text: calc.text, audit: calc.audit, cites: calc.cites });
+      setBusy(false);
+      return;
+    }
+
     // load the real model on demand if it isn't ready yet
     if (canLLM && !wasLoaded) {
       patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name, loadCloud: model.provider === 'anthropic', loadCpu: model.provider === 'wllama' });

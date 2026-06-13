@@ -45,6 +45,14 @@ function AuditStep({ s }) {
   );
   if (s.t === 'intent') return <Line label="intent" kind="intent"><b>{s.intent}</b></Line>;
   if (s.t === 'model') return <Line label="model" kind="model">{s.action} {s.model} {s.ok ? '✓ loaded' : '✗ failed'}</Line>;
+  if (s.t === 'calculation') return (
+    <Line label="calc" kind="answer">
+      <code className="aud-calc">{s.shown} = {s.display}</code>
+      {(s.operands && s.operands.length)
+        ? <span className="aud-dim"> · {s.operands.map(op => op.raw + (op.cite ? ' (s' + op.cite.idx + ')' : '')).join(', ')}</span>
+        : null}
+    </Line>
+  );
   if (s.t === 'ground') return (
     <Line label="ground" kind="ground">
       <b>{s.hasGround ? 'has ground' : 'no ground'}</b>
