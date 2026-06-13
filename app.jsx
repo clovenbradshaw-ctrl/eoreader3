@@ -104,9 +104,11 @@ const cpuFallbackModel = () => {
 };
 
 // Which local model to start on. The 0.5B is a fine phone default — small
-// download, runs anywhere — but on a desktop it's too small to phrase well, so
-// default desktops to the 1.5B "balanced" model. Either can be switched live
-// from the picker; switching now releases the old model before loading the new.
+// download, runs anywhere. On a desktop Llama 3.2 3B in q4f16_1 is the sweet
+// spot: strong synthesis, ~2.3 GB downloads once and stays on disk via OPFS/
+// IndexedDB, and the fp16 build runs faster than fp32 on Apple Silicon and
+// any healthy fp16 GPU. Either can be switched live from the picker; switching
+// now releases the old model before loading the new.
 const defaultModel = () => {
   const by = (id) => window.MODELS.find(m => m.id === id);
   const L = typeof window !== 'undefined' ? window.EOLLM : null;
@@ -118,7 +120,7 @@ const defaultModel = () => {
     if (cpu) return cpu;
   }
   const phone = typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches;
-  return (phone ? by('qwen-05') : by('qwen-15')) || window.MODELS[0];
+  return (phone ? by('qwen-05') : by('llama-3')) || by('llama-1') || window.MODELS[0];
 };
 
 // Human-readable label for an ingest phase. The phases are the medium's own
@@ -816,14 +818,43 @@ function App() {
   // restored from prefs — instead of the default. Weights are cached (WebLLM
   // cache / wllama useCache), so this re-instantiates fast and re-downloads
   // nothing: a refresh comes back to a loaded model.
+  // Ask the browser to mark this origin's storage persistent the instant the
+  // app boots, BEFORE any model load. Best-effort: Chrome grants from a
+  // heuristic (visits, engagement) with no prompt; Firefox shows a permission
+  // prompt on the next user gesture. Either way, getting the ask in early
+  // means a download that starts a second later will be writing to a bucket
+  // the browser has already promised not to evict — the single biggest
+  // mitigation against the "I just had to reinstall on refresh" failure mode.
+  const [storagePersisted, setStoragePersisted] = useState(null);
+  useEffect(() => {
+    if (!window.EOLLM || !window.EOLLM.persistStorage) return;
+    (async () => {
+      try {
+        const ok = await window.EOLLM.persistStorage();
+        setStoragePersisted(!!ok);
+      } catch (e) {}
+    })();
+  }, []);
+  // Re-attempt persistence on the first user click anywhere in the app — that
+  // gesture is what Firefox needs to show the permission prompt, and a denied
+  // request earlier in this session may now succeed.
+  useEffect(() => {
+    if (storagePersisted) return;
+    if (!window.EOLLM || !window.EOLLM.persistStorage) return;
+    let armed = true;
+    const retry = async () => {
+      if (!armed) return; armed = false;
+      try {
+        const ok = await window.EOLLM.persistStorage();
+        if (ok) setStoragePersisted(true);
+      } catch (e) {}
+    };
+    document.addEventListener('pointerdown', retry, { once: true, capture: true });
+    return () => { armed = false; document.removeEventListener('pointerdown', retry, { capture: true }); };
+  }, [storagePersisted]);
+
   useEffect(() => {
     if (!bootReady || !window.EOLLM) return;
-    // Ask the browser to mark this origin's storage persistent so the cached
-    // model shards (IndexedDB for WebLLM, Cache API for wllama) survive
-    // eviction under storage pressure — the single biggest reason a model
-    // appears to "redownload" on a return visit. Idempotent; quietly no-ops
-    // on browsers without the Storage API.
-    try { window.EOLLM.persistStorage && window.EOLLM.persistStorage(); } catch (e) {}
     if (model.provider === 'anthropic') {
       // A persisted Claude selection resumes if its key is stored; otherwise stay
       // idle and let the popover collect the key.
@@ -833,9 +864,14 @@ function App() {
     } else if (window.EOLLM.hasWebGPU()) {
       loadModel(model);
       // Keep the CPU backup READY: pre-import the wllama runtime (small, cached)
-      // in the background so a later GPU stall can switch to it without also
-      // paying the runtime fetch. The model weights still download on switch.
-      if (window.EO_CPU_FALLBACK !== 'off') { try { window.EOLLM.prewarmFallback && window.EOLLM.prewarmFallback(); } catch (e) {} }
+      // AND pre-fetch the tiny fallback GGUF into OPFS in the background, so a
+      // later GPU stall swaps over with NO download — only wllama init. This
+      // is what makes the fallback feel instant instead of a several-minute
+      // wait while a multi-hundred-MB model trickles in over the wire.
+      if (window.EO_CPU_FALLBACK !== 'off') {
+        try { window.EOLLM.prewarmFallback && window.EOLLM.prewarmFallback(); } catch (e) {}
+        try { window.EOLLM.prewarmFallbackModel && window.EOLLM.prewarmFallbackModel(); } catch (e) {}
+      }
     } else {
       // A GPU model with no WebGPU here → drop straight to the on-device CPU model.
       if (window.EO_CPU_FALLBACK !== 'off') fallbackToCPU();

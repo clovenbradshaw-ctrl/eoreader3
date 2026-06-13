@@ -230,17 +230,33 @@
   // Hugging Face (its resolve endpoint sends browser-friendly CORS) and are
   // cached on the device (useCache) so a refresh re-instantiates without
   // re-downloading.
+  // Per-model registry: {name, url, bytes?, quant?}. `bytes` is the GGUF size
+  // (used to surface a sensible "this much will download" hint and to size the
+  // progress estimate when the server omits Content-Length); `quant` is the
+  // weight precision, surfaced as a quality tier in the picker so the user can
+  // pick a higher-quality version of the same base model without knowing what
+  // Q4_K_M means. Adding a new entry — a Q5 of an existing model, a different
+  // 1B — is a single object literal; no other code change is required.
   const WLLAMA_MODELS = (typeof window !== 'undefined' && window.EO_WLLAMA_MODELS) || {
-    'smollm2-360m': { name: 'SmolLM2 360M', url: 'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf' },
-    'qwen25-05b':   { name: 'Qwen2.5 0.5B', url: 'https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf' },
-    'llama32-1b':   { name: 'Llama 3.2 1B', url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf' },
+    // Tiny: the seamless fallback. ~95 MB downloads in seconds on any connection,
+    // and we pre-fetch it to OPFS in the background on first launch so a later
+    // "GPU stalled" event swaps over with no fetch at all — only wllama init.
+    'smollm2-135m': { name: 'SmolLM2 135M', url: 'https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf', bytes: 95 * 1024 * 1024, quant: 'Q4_K_M' },
+    'smollm2-360m': { name: 'SmolLM2 360M', url: 'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf', bytes: 270 * 1024 * 1024, quant: 'Q4_K_M' },
+    'qwen25-05b':   { name: 'Qwen2.5 0.5B', url: 'https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf', bytes: 380 * 1024 * 1024, quant: 'Q4_K_M' },
+    'qwen25-05b-q8':{ name: 'Qwen2.5 0.5B (high quality)', url: 'https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q8_0.gguf', bytes: 530 * 1024 * 1024, quant: 'Q8_0' },
+    'llama32-1b':   { name: 'Llama 3.2 1B', url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf', bytes: 770 * 1024 * 1024, quant: 'Q4_K_M' },
+    'llama32-1b-q8':{ name: 'Llama 3.2 1B (high quality)', url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf', bytes: 1320 * 1024 * 1024, quant: 'Q8_0' },
   };
   const wllamaSource = (key) => WLLAMA_MODELS[wllamaId(key)] || null;
   const wllamaModels = () => Object.assign({}, WLLAMA_MODELS);
-  // The CPU model used for the automatic fallback (no WebGPU / GPU stall). 0.5B
-  // is a sane balance of quality and CPU speed; override with EO_CPU_FALLBACK_ID.
+  // The CPU model used for the automatic fallback (no WebGPU / GPU stall). The
+  // smallest viable model wins this slot — at ~95 MB it downloads in seconds
+  // and runs anywhere wllama can — so when a GPU model stalls or there's no
+  // WebGPU here, the swap is immediate rather than a several-minute wait. Pick
+  // higher quality from the picker once you've used the page enough to want it.
   function fallbackKey() {
-    const id = (typeof window !== 'undefined' && window.EO_CPU_FALLBACK_ID) || 'qwen25-05b';
+    const id = (typeof window !== 'undefined' && window.EO_CPU_FALLBACK_ID) || 'smollm2-135m';
     if (WLLAMA_MODELS[id]) return WLLAMA_PREFIX + id;
     const first = Object.keys(WLLAMA_MODELS)[0];
     return first ? WLLAMA_PREFIX + first : null;
@@ -277,6 +293,110 @@
     return wllamaMod;
   }
 
+  // OPFS-backed GGUF cache. wllama's built-in useCache writes through the
+  // Cache API, which the browser treats as best-effort: a tab refresh after a
+  // few days, or storage pressure from another origin, evicts it and the next
+  // load re-fetches hundreds of MB — exactly the "I just had to reinstall on
+  // refresh" failure mode. The Origin Private File System is the durable
+  // counterpart: not best-effort, not exposed to the user via "Clear cache,"
+  // not bucketed alongside Cache API entries. We fetch the GGUF once, write
+  // it here as a single blob, and from then on every load pulls bytes from
+  // disk and hands them to wllama via loadModel(Blob) — no network, no Cache
+  // API. A best-effort no-op on browsers without OPFS (none of the supported
+  // browsers today, but the fall-through to the legacy URL load still works).
+  const OPFS_DIR = 'eo-models';
+  async function opfsRoot() {
+    if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.getDirectory !== 'function') return null;
+    try {
+      const root = await navigator.storage.getDirectory();
+      return await root.getDirectoryHandle(OPFS_DIR, { create: true });
+    } catch (_) { return null; }
+  }
+  async function opfsGet(name) {
+    try {
+      const dir = await opfsRoot(); if (!dir) return null;
+      const handle = await dir.getFileHandle(name);
+      const f = await handle.getFile();
+      return f && f.size > 0 ? f : null;
+    } catch (_) { return null; }
+  }
+  async function opfsHas(name) {
+    try { const dir = await opfsRoot(); if (!dir) return false; await dir.getFileHandle(name); return true; }
+    catch (_) { return false; }
+  }
+  async function opfsPut(name, blob) {
+    try {
+      const dir = await opfsRoot(); if (!dir) return false;
+      const handle = await dir.getFileHandle(name, { create: true });
+      const w = await handle.createWritable();
+      await w.write(blob);
+      await w.close();
+      return true;
+    } catch (_) { return false; }
+  }
+  async function opfsDelete(name) {
+    try { const dir = await opfsRoot(); if (!dir) return false; await dir.removeEntry(name); return true; }
+    catch (_) { return false; }
+  }
+  async function opfsClearAll() {
+    try {
+      const dir = await opfsRoot(); if (!dir) return false;
+      if (typeof dir.values === 'function') {
+        for await (const h of dir.values()) {
+          try { await dir.removeEntry(h.name); } catch (_) {}
+        }
+      }
+      return true;
+    } catch (_) { return false; }
+  }
+  // Per-wllama-id filename. Quant is in the id, so a Q4 and a Q8 of the same
+  // base model never collide on disk.
+  const opfsName = (mlcKey) => 'wllama-' + wllamaId(mlcKey) + '.gguf';
+
+  // Fetch a GGUF with progress and stash it in OPFS in one pass. Cancellable
+  // via the load token (a superseded build aborts its in-flight reader so the
+  // next-current load can race). Returns the Blob it wrote, so callers can hand
+  // it straight to wllama without re-reading the file.
+  async function fetchAndCacheGGUF(mlcKey, onProgress, myToken) {
+    const src = wllamaSource(mlcKey);
+    if (!src) throw new Error('Unknown on-device model: ' + mlcKey);
+    let resp;
+    try { resp = await fetch(src.url); }
+    catch (e) { throw Object.assign(new Error('Could not reach the on-device model host — check your connection.'), { code: 'NET' }); }
+    if (!resp || !resp.ok || !resp.body) throw new Error('Could not download the on-device model (HTTP ' + (resp && resp.status) + ').');
+    // Prefer Content-Length when the server sends it; fall back to the registry
+    // estimate so the progress bar still moves on hosts that don't (Hugging
+    // Face's resolve endpoint does, but a mirror might not).
+    const total = +(resp.headers && resp.headers.get('content-length')) || src.bytes || 0;
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (myToken !== loadToken) {
+          try { reader.cancel(); } catch (_) {}
+          throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' });
+        }
+        chunks.push(value);
+        loaded += value.byteLength || value.length || 0;
+        if (onProgress) {
+          const p = total ? Math.min(1, loaded / total) : 0;
+          onProgress(p, total ? 'Downloading the on-device model — ' + Math.round(p * 100) + '%' : 'Downloading the on-device model…');
+        }
+      }
+    } catch (e) {
+      if (e && e.code === 'CANCEL') throw e;
+      throw e;
+    }
+    const blob = new Blob(chunks, { type: 'application/octet-stream' });
+    // Best-effort persist: a write failure (OPFS unavailable, quota exceeded)
+    // shouldn't fail the load — the in-memory Blob still loads this session.
+    await opfsPut(opfsName(mlcKey), blob);
+    return blob;
+  }
+
   // Pre-import the runtime (small JS + wasm) WITHOUT loading a model, so the
   // later switch-to-CPU pays only the model download, not the runtime fetch +
   // compile. This is the cheap "keep a backup ready" step: a single resident
@@ -284,9 +404,28 @@
   // alongside a live GPU one — but we CAN have the runtime cached and ready.
   async function prewarmFallback() { try { return await importWllama(); } catch (e) { return null; } }
 
-  // Build (and resolve to) a resident wllama engine for `mlcKey`. Mirrors the
-  // WebLLM build: progress is gated on the load token so a superseded build goes
-  // inert, and the instance frees itself (exit) if a newer load supersedes it.
+  // Pre-fetch the fallback CPU model into OPFS, in the background, so a later
+  // "GPU stalled" event swaps in the CPU model with no download at all — only
+  // wllama init. This is what makes the fallback FEEL instantaneous instead of
+  // taking minutes. Idempotent: a no-op once the file is on disk; safe to call
+  // every boot. Runs at low priority and silently — a fetch failure just
+  // leaves the user without the pre-warm, never surfaces an error.
+  async function prewarmFallbackModel() {
+    try {
+      const key = fallbackKey();
+      if (!key) return false;
+      if (await opfsHas(opfsName(key))) return true;
+      await fetchAndCacheGGUF(key, null, loadToken);
+      return true;
+    } catch (_) { return false; }
+  }
+
+  // Build (and resolve to) a resident wllama engine for `mlcKey`. The fast path:
+  // bytes are already in OPFS → hand them to wllama as a Blob, no network. The
+  // cold path: fetch to OPFS first, then load. Either way the CACHED state on
+  // the next refresh is identical (OPFS file present), so a tab reload always
+  // re-instantiates from disk and never re-downloads. Older wllama builds
+  // without loadModel(Blob) fall back to the URL path with Cache API caching.
   async function buildWllama(mlcKey, onProgress, myToken) {
     const { Wllama, wasmPaths } = await importWllama();
     if (typeof Wllama !== 'function') throw new Error('The CPU model runtime (wllama) did not load.');
@@ -299,17 +438,33 @@
     const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
     const instance = new Wllama(wasmPaths, { parallelDownloads: 3, logger: WLLAMA_LOGGER });
     activeWllama = instance;
-    const loadOpts = {
-      n_ctx: (typeof window !== 'undefined' && +window.EO_WLLAMA_NCTX) || 4096,
-      useCache: true,
-      progressCallback: ({ loaded, total }) => {
-        if (myToken !== loadToken) return;                 // superseded → go inert
+    const loadOpts = { n_ctx: (typeof window !== 'undefined' && +window.EO_WLLAMA_NCTX) || 4096 };
+    if (isolated) loadOpts.n_threads = Math.min(4, Math.max(1, cores - 1));
+
+    const canLoadBlob = typeof instance.loadModel === 'function';
+    let blob = canLoadBlob ? await opfsGet(opfsName(mlcKey)) : null;
+
+    if (!blob && canLoadBlob) {
+      if (onProgress) onProgress(0, 'Downloading the on-device model…');
+      blob = await fetchAndCacheGGUF(mlcKey, onProgress, myToken);
+    }
+
+    if (blob && canLoadBlob) {
+      if (onProgress) onProgress(blob.size ? 1 : 0, 'Loading the on-device model…');
+      await instance.loadModel(blob, loadOpts);
+    } else {
+      // Legacy path: wllama too old for loadModel(Blob), OR OPFS unavailable
+      // and the in-memory fetch failed. Hand wllama the URL and let its own
+      // Cache-API caching apply. Same progress wiring as before.
+      loadOpts.useCache = true;
+      loadOpts.progressCallback = ({ loaded, total }) => {
+        if (myToken !== loadToken) return;
         const p = total ? loaded / total : 0;
         if (onProgress) onProgress(p, total ? 'Downloading the on-device model — ' + Math.round(p * 100) + '%' : 'Downloading the on-device model…');
-      },
-    };
-    if (isolated) loadOpts.n_threads = Math.min(4, Math.max(1, cores - 1));
-    await instance.loadModelFromUrl(src.url, loadOpts);
+      };
+      await instance.loadModelFromUrl(src.url, loadOpts);
+    }
+
     if (myToken !== loadToken) { try { await instance.exit(); } catch (_) {} if (activeWllama === instance) activeWllama = null; throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' }); }
     if (onProgress) onProgress(1, '');
     return {
@@ -479,15 +634,33 @@
   // or a genuine load error is NOT a reason to abandon the worker path for the
   // session — those propagate so the caller (buildOnce) handles them.
   const WORKER_HANDSHAKE_MS = 20000;
+  // WebLLM's default cache backend is the Cache API, which the browser treats
+  // as best-effort — even with navigator.storage.persist() granted, our users
+  // keep coming back to a refreshed tab whose shards are gone. Forcing the
+  // IndexedDB backend (useIndexedDBCache: true) puts the shards in IndexedDB
+  // instead, which is the more durable bucket on every major engine: a tab
+  // refresh, a few-day gap, even a "clear cache" that spares site data leaves
+  // these alive. Combined with persistStorage(), this is what locks the
+  // multi-GB download to a one-time cost. The prebuiltAppConfig (the model
+  // registry WebLLM ships) is spread first so we don't drop any entries.
+  function webllmAppConfig() {
+    try {
+      const m = mod; if (!m) return undefined;
+      const base = m.prebuiltAppConfig || {};
+      return Object.assign({}, base, { useIndexedDBCache: true });
+    } catch (_) { return undefined; }
+  }
   async function createEngine(mlcKey, opts) {
     const webllm = await importWebLLM();
+    const appConfig = webllmAppConfig();
+    const optsWithConfig = appConfig ? Object.assign({}, opts, { appConfig }) : opts;
     if (!workerBroken && typeof Worker !== 'undefined' && typeof webllm.CreateWebWorkerMLCEngine === 'function') {
       let worker = null, sawProgress = false;
       try {
         worker = spawnWorker();
         activeWorker = worker;
-        const userCb = opts && opts.initProgressCallback;
-        const wrapped = Object.assign({}, opts, {
+        const userCb = optsWithConfig && optsWithConfig.initProgressCallback;
+        const wrapped = Object.assign({}, optsWithConfig, {
           initProgressCallback: (r) => { sawProgress = true; if (userCb) userCb(r); },
         });
         // A worker whose module import is blocked would otherwise leave the
@@ -524,7 +697,7 @@
         }
       }
     }
-    return webllm.CreateMLCEngine(mlcKey, opts);
+    return webllm.CreateMLCEngine(mlcKey, optsWithConfig);
   }
 
   // No init-progress callback for this long ⇒ the download has stalled. WebLLM
@@ -695,14 +868,17 @@
   // UI when a row in the picker is a fast re-instantiate (no download) rather
   // than a multi-gigabyte fetch. Best-effort across backends:
   //  - Anthropic: nothing to cache.
-  //  - wllama: walk open Cache instances for the GGUF URL.
-  //  - WebLLM: use the library's own hasModelInCache helper.
+  //  - wllama: OPFS first (the durable side-cache buildWllama writes), then
+  //    the legacy Cache API entries left by an earlier session.
+  //  - WebLLM: use the library's own hasModelInCache helper, which reads the
+  //    IndexedDB bucket we force on for durability.
   // Resolves to { cached, kind } so callers can render a badge without
   // knowing the backend; unknown flips false rather than throwing.
   async function cacheStatus(mlcKey) {
     if (isAnthropic(mlcKey)) return { cached: false, kind: 'cloud' };
     if (isWllama(mlcKey)) {
       try {
+        if (await opfsHas(opfsName(mlcKey))) return { cached: true, kind: 'cpu' };
         const src = wllamaSource(mlcKey);
         if (!src || typeof caches === 'undefined') return { cached: false, kind: 'cpu' };
         const keys = await caches.keys();
@@ -718,7 +894,7 @@
     try {
       const webllm = await importWebLLM();
       if (typeof webllm.hasModelInCache === 'function') {
-        const yes = await webllm.hasModelInCache(mlcKey);
+        const yes = await webllm.hasModelInCache(mlcKey, webllmAppConfig());
         return { cached: !!yes, kind: 'gpu' };
       }
     } catch (_) {}
@@ -741,13 +917,30 @@
   // scratch — the escape hatch when a half-finished download left a corrupt
   // shard that keeps re-stalling on every reload. Best-effort and feature-
   // detected across WebLLM versions; resolves false if nothing could be cleared.
+  // For wllama also clears the OPFS copy; otherwise the "stuck cache" reset
+  // would leave the corrupt blob right there for the next load to pick up.
   async function clearCache(mlcKey) {
+    if (isWllama(mlcKey)) {
+      let did = false;
+      try { if (await opfsDelete(opfsName(mlcKey))) did = true; } catch (_) {}
+      // Also wipe any legacy Cache-API entry from before OPFS was the primary.
+      try {
+        const src = wllamaSource(mlcKey);
+        if (src && typeof caches !== 'undefined') {
+          const keys = await caches.keys();
+          for (const k of keys) {
+            try { const c = await caches.open(k); if (await c.delete(src.url)) did = true; } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      return did;
+    }
     try {
       const webllm = await importWebLLM();
-      if (typeof webllm.deleteModelAllInfoInCache === 'function') { await webllm.deleteModelAllInfoInCache(mlcKey); return true; }
+      if (typeof webllm.deleteModelAllInfoInCache === 'function') { await webllm.deleteModelAllInfoInCache(mlcKey, webllmAppConfig()); return true; }
       let did = false;
       for (const name of ['deleteModelInCache', 'deleteModelWasmInCache', 'deleteChatConfigInCache'])
-        if (typeof webllm[name] === 'function') { try { await webllm[name](mlcKey); did = true; } catch (_) {} }
+        if (typeof webllm[name] === 'function') { try { await webllm[name](mlcKey, webllmAppConfig()); did = true; } catch (_) {} }
       return did;
     } catch (_) { return false; }
   }
@@ -1208,5 +1401,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
