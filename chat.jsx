@@ -594,12 +594,15 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, enrich, onToggleEnrich }) {
+function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
-  // The reference desk is off (proxy cleared) ⇒ no toggle, the chat stays local.
+  // The reference desk needs a configured proxy; in 'off' mode (or with no proxy)
+  // the composer shows no Wikipedia control and the chat stays local. In 'auto'/
+  // 'on' the button is a per-message FORCE ("look it up now"), not a global toggle.
   const canEnrich = !!(window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled());
+  const showWiki = canEnrich && wikiMode && wikiMode !== 'off';
   return (
     <div className="composer-box">
       <SourceChips sources={sources} addable={addable} onAddSource={onAddSource} onRemoveSource={onRemoveSource} />
@@ -616,19 +619,11 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, o
             </button>
           ))}
         </div>
-        {onToggleEnrich && (
-          <button type="button" role="switch" aria-checked={!!enrich} disabled={!canEnrich}
-            className={'wiki-toggle' + (enrich ? ' on' : '')}
-            title={canEnrich
-              ? (enrich
-                  ? 'Wikipedia is ON — your message pulls the relevant article into the graph and cites it. Click to turn off.'
-                  : 'Wikipedia is OFF — turn on to chat with Wikipedia: your message pulls the relevant article into the graph and cites it.')
-              : 'Wikipedia lookups are off — set window.EO_REFERENCE_PROXY to enable.'}
-            onClick={() => canEnrich && onToggleEnrich()}>
-            <Icon name="book" size={14} />
-            <span className="wiki-toggle-label">Wikipedia</span>
-            <span className="wiki-toggle-state">{enrich ? 'On' : 'Off'}</span>
-            <span className="wiki-switch" aria-hidden="true"><span className="wiki-knob" /></span>
+        {showWiki && onForceEnrich && (
+          <button type="button" className={'comp-btn enrich' + (forceEnrich ? ' on' : '')} aria-pressed={!!forceEnrich}
+            title="Look it up on Wikipedia now — fetch an encyclopaedia + dictionary card for this one message, bypassing the gate even in Auto. Sends only the looked-up term (not the document) to Wikipedia & Wiktionary through the proxy."
+            onClick={onForceEnrich}>
+            <Icon name="book" size={15} /> Wikipedia
           </button>
         )}
         <div className="comp-spacer" />
@@ -683,7 +678,7 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
       <div className="composer-wrap">
         <div className="composer"><Composer {...composerProps} placeholder={narrow ? 'Ask about this document…' : 'Message Cleo…'} /></div>
         <div className="composer-hint">
-          <span>Runs locally · <b>{composerProps.mode}</b> mode{composerProps.enrich ? <span> · chatting with <b>Wikipedia</b></span> : null}</span>
+          <span>Runs locally · <b>{composerProps.mode}</b> mode{composerProps.wikiMode && composerProps.wikiMode !== 'off' ? <span> · Wikipedia: <b>{composerProps.wikiMode}</b></span> : null}</span>
           {onExportPrompts && hasTurns && (
             <button type="button" className="export-prompts" onClick={onExportPrompts}>
               <Icon name="expand" size={12} /> Export prompts (JSON)

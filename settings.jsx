@@ -24,7 +24,8 @@ window.EOTheme = { apply: applyTheme };
 
 function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                          pythonEnabled, onPythonEnabled, pythonAvailable,
-                         groundingInfo, onGroundingInfo, onClearData, storageOK }) {
+                         groundingInfo, onGroundingInfo, wikiMode, onWikiMode,
+                         onClearData, storageOK }) {
   const dialogRef = window.useDialog(onClose);
   const [confirmClear, setConfirmClear] = React.useState(false);
 
@@ -33,6 +34,14 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
   ];
+
+  // Reference desk (Wikipedia) — a tri-state mirroring the answer-mode control.
+  const WIKI_MODES = [
+    { id: 'off', label: 'Off', sub: 'Never contacts Wikipedia. Fully local.' },
+    { id: 'auto', label: 'Auto', sub: 'Looks something up only when you ask to (a “look up X” style request) and it isn’t already in your documents.' },
+    { id: 'on', label: 'On', sub: 'Attaches a Wikipedia + Wiktionary card to every message.' },
+  ];
+  const wikiSub = (WIKI_MODES.find(w => w.id === wikiMode) || WIKI_MODES[1]).sub;
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -101,6 +110,23 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
               <button className={'switch' + (groundingInfo !== false ? ' on' : '')} role="switch"
                       aria-checked={groundingInfo !== false} aria-label="Grounding details"
                       onClick={() => onGroundingInfo(groundingInfo === false)} />
+            </div>
+          </section>
+
+          <section className="set-section">
+            <h3 className="set-h">Reference desk</h3>
+
+            <div className="set-row">
+              <div className="set-row-main">
+                <div className="set-label">Wikipedia reference desk</div>
+                <div className="set-sub">{wikiSub}</div>
+              </div>
+              <div className="set-seg" role="group" aria-label="Wikipedia reference desk">
+                {WIKI_MODES.map(w => (
+                  <button key={w.id} className={wikiMode === w.id ? 'on' : ''}
+                          aria-pressed={wikiMode === w.id} onClick={() => onWikiMode(w.id)}>{w.label}</button>
+                ))}
+              </div>
             </div>
           </section>
 
