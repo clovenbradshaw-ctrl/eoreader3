@@ -28,6 +28,7 @@ const E = loadEngine().EOEngine;
 
 let pass = 0, fail = 0; const fails = [];
 function ok(cond, msg) { if (cond) { pass++; } else { fail++; fails.push(msg); console.error('  ✗ ' + msg); } }
+function eq(a, b, msg) { ok(a === b, `${msg} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`); }
 function group(name, fn) { console.log('• ' + name); return fn(); }
 
 // doc-2: Howard Shore. Note it carries NO "inspiration"/"influence" content
@@ -49,9 +50,22 @@ const KAHAN = [
   'Noah Kahan released Stick Season to wide acclaim.',
 ].join(' ');
 
+// doc-dogs: the regression from the prompt trace. "search for dogs" with this
+// document in scope used to lock onto the page (the entity "dogs" matched
+// namesEntity) and route to the grounded-LLM reader — but the turn is a
+// command to PERFORM a search, not a question about the document. The router
+// must take command-shaped imperatives to chat regardless of lexical overlap.
+const DOGS = [
+  'Cadaver dogs are working dogs trained to find human remains.',
+  'Cadaver dogs are sometimes called HRD dogs (human remains detection).',
+  'A handler trains the cadaver dogs on a scent pad over many sessions.',
+  'Search teams deploy cadaver dogs at disaster sites and on cold cases.',
+].join(' ');
+
 async function main() {
   const shore = await E.parseDocument('doc-2', SHORE, 'doc-2');
   const kahan = await E.parseDocument('doc-3', KAHAN, 'doc-3');
+  const dogs = await E.parseDocument('doc-dogs', DOGS, 'doc-dogs');
   const scope = [shore, kahan];
   const hot = { hotEntity: 'Howard Shore' };
 
@@ -107,6 +121,40 @@ async function main() {
     const who = E.answer(shore, 'who is Howard Shore?');
     ok(who && /composer/i.test(who.text), 'a bare identity ask still answers from the class assertion');
     ok(who && !(who.audit && who.audit.absent), 'a bare identity ask is never an absence');
+  });
+
+  group('command — an imperative to act outside the document exits to chat', () => {
+    // The regression: "search for dogs" with a Cadaver-dogs document in
+    // scope. The entity reader matches "dogs" → names-entity → mechanical →
+    // grounded-LLM, even though the turn asks the assistant to perform a
+    // search, not to read the page. Imperatives for action route to chat
+    // unconditionally — the lexical/entity overlap is a coincidence, not a
+    // signal about what the user wants.
+    const sc = [dogs];
+    const r = E.routeTurn(sc, 'search for dogs', {});
+    eq(r.reason, 'command', '"search for dogs" → command, not names-entity');
+    eq(r.decision, 'chat', 'a command turn decides chat, not mechanical');
+    eq(r.intent, 'command', 'classifyIntent surfaces the command class');
+    eq(E.classifyIntent('search for dogs'), 'command', 'classifyIntent recognises "search for X"');
+    eq(E.routeTurn(sc, 'google cadaver dogs', {}).reason, 'command', '"google X" → command');
+    eq(E.routeTurn(sc, 'websearch dogs', {}).reason, 'command', '"websearch X" → command');
+    eq(E.routeTurn(sc, 'web search dogs', {}).reason, 'command', '"web search X" → command (separable verb)');
+    eq(E.routeTurn(sc, 'look up dogs', {}).reason, 'command', '"look up X" → command');
+    eq(E.routeTurn(sc, 'lookup dogs', {}).reason, 'command', '"lookup X" (one word) → command');
+    eq(E.routeTurn(sc, 'please search for cadaver dogs', {}).reason, 'command', 'polite hedging is still a command');
+    eq(E.routeTurn(sc, 'can you google cadaver dogs', {}).reason, 'command', '"can you X" is a command, not a confirm');
+    // The escape clause: an explicit in-the-doc anchor pulls the turn back to
+    // the page. The user is not asking for an external action; they're
+    // asking the assistant to find something WITHIN the source.
+    ok(E.routeTurn(sc, 'look up dogs in the document', {}).reason !== 'command',
+      'an in-the-document lookup is not a command — got ' + E.routeTurn(sc, 'look up dogs in the document', {}).reason);
+    ok(E.routeTurn(sc, 'search for dogs in the text', {}).reason !== 'command',
+      'an in-the-text search is not a command — got ' + E.routeTurn(sc, 'search for dogs in the text', {}).reason);
+    // Adjacent shapes that aren't commands — the regex anchors at the head,
+    // so a content question that merely mentions "search" or "look" elsewhere
+    // is unaffected.
+    ok(E.routeTurn(sc, 'what does the search team do with the dogs?', {}).reason !== 'command',
+      'a content question containing "search" is not a command — got ' + E.routeTurn(sc, 'what does the search team do with the dogs?', {}).reason);
   });
 
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

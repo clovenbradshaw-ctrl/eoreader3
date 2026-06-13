@@ -7768,6 +7768,22 @@ function projectGraph(events, frame = {}) {
     // the interrogative overviews above use.
     if (/\b(write|draft|compose|put together|give me|make me|prepare|generate|create)\b[^?!.]*\b(report|essay|summary|overview|synopsis|recap|rundown|write[\s-]?up|breakdown)\b/.test(t)) return 'summary';
     if (/\b(write|report|essay|tell me|talk to me)\b[^?!.]*\babout\s+(this|the\s+(document|text|story|file|piece|passage|reading|script|screenplay|book))\b/.test(t)) return 'summary';
+    // COMMAND — a verb-led imperative for the assistant to PERFORM an action
+    // outside the page ("search for dogs", "google X", "websearch X", "look up
+    // X"). These are not questions about the source; treating them as such
+    // lets a content noun shared with an open document drag them onto the
+    // page via lexical/entity coincidence (the trace's "search for dogs"
+    // matched the "dogs" entity in a Cadaver-dogs article and was answered as
+    // a grounded read). Conservative by design: anchored at the head of the
+    // turn (with optional polite hedging), and the object must not point
+    // INSIDE the document ("look up X in the text" stays factual so a real
+    // doc-internal lookup can't be miscategorised). Independent of
+    // EOExternal.acquireIntent, which is broader (definitional "tell me about
+    // <ProperName>" frames also acquire); 'command' is the narrower set —
+    // unambiguous, action-directed verbs only.
+    if (/^\s*(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?(?:search|google|web\s*-?\s*search|websearch|look\s*up|lookup)(?:\s+(?:for|up))?\s+\S/.test(t)
+        && !/\bin\s+(?:the|this)\s+(?:doc(?:ument)?|text|passage|file|story|book|article|chapter|page|paragraph|line|sentence|reading|script|screenplay)\b/.test(t))
+      return 'command';
     // CONFIRM/DENY — the turn proposes a proposition and asks the reading to
     // check it ("Is Amos Dresser the white minister…?", "he's not a speaker",
     // "you said he was a speaker"). The operator-void, made an intent: these
@@ -11437,6 +11453,14 @@ function projectGraph(events, frame = {}) {
     const ds = scopeDocs(docs);
     if (!ds.length) return { decision: 'chat', confidence: 'none', reason: 'no-scope' };
     const intent = classifyIntent(q);
+    // COMMAND — an imperative for the assistant to act outside the document
+    // ("search for X", "google X", "look up X"). Exits to chat regardless of
+    // lexical/entity overlap with the scope, so a content noun the page
+    // happens to share cannot drag the turn into a grounded read of a
+    // document the turn was never about. classifyIntent has already ruled
+    // out doc-internal anchors ("look up X in the text" stays factual).
+    if (intent === 'command')
+      return { decision: 'chat', confidence: 'high', reason: 'command', intent };
     // CONVERSATIONAL REPAIR — the turn is about the EXCHANGE (pushing back on
     // the previous reply), not fresh content. Checked before every lexical
     // reader, because a repair turn dragged onto the page by token overlap
