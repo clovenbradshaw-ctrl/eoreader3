@@ -1,0 +1,13 @@
+{
+  "id": "ndp-followups",
+  "_comment": "Routing/resolution fitness (Phase 4): a multi-turn conversation that leans on anaphoric follow-ups. Unlabeled — the score is the engine's OWN witness degree on the turns it decides to read the page, so the loop raises it by routing and resolving better (e.g. tuning chat_field_mass / the binding confidences, or flipping binding_resolution on), never by editing the grounder. The first turn names Tom Turner; the follow-ups carry him only by pronoun — exactly where the binding earns its witness.",
+  "doc": "Downtown Nashville Security: Who Pays, Who Profits\n\nDowntown business owners pay an annual assessment to the Nashville Downtown Partnership. The Partnership is meant to fund cleaning, marketing, and security for the district.\n\nThe security contract is unusual. It is run through a recently created entity called NDMC PSO LLC — a shell company of the District Management Corporation (the DMC), created by the same person who runs the DMC and who then hires his own firm, NDP, to manage the downtown security operations through it. That person is Tom Turner.\n\nTom Turner is the president of the Nashville Downtown Partnership. He also chairs the board of the District Management Corporation. Christina Kane, a parking customer, said \"it's like nobody cares.\" David Corman, who leads the rival firm Solaren Risk Management, called the arrangement \"Operation Flood the Zone.\"\n\nThe Metro Council will vote on the contract next month. Council member Freddie O'Connell wrote on Twitter that the deal \"deserves real scrutiny.\" Mayor Cooper has not commented.",
+  "turns": [
+    { "q": "who is Tom Turner" },
+    { "q": "what about his role" },
+    { "q": "tell me more about him" },
+    { "q": "what else did he do" },
+    { "q": "what does the partnership fund" },
+    { "q": "what happens next month" }
+  ]
+}

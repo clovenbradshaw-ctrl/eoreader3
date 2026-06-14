@@ -795,8 +795,8 @@ const READING_RULES = {
   },
   // ── The active-referent binding — the field points at the best guess ──
   binding_resolution: {
-    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
-    desc: 'When ON, the active referent the next turn reads is resolved as a defeasible BINDING (surface=the Given the person typed, name=the Meant it resolved to, a base-rate-calibrated confidence, and one of the three NUL states resolved|ambiguous|absent) instead of a bare top-of-heat entity name. One resolution, two consumers: the router reads it for the route and the tool-query builder reads it for the search, so a pronoun resolved once steers both. Precedence ladder: an explicit name in the prompt wins; else the chat field\'s hot figure (the underspecified case); else the document\'s local salience is the floor. OFF ships today\'s hotEntity (the heaviest hot entity, name only) byte-identical — the parity floor; resolveBinding returns name-only with confidence null and never rewrites a query.',
+    value: true, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, the active referent the next turn reads is resolved as a defeasible BINDING (surface=the Given the person typed, name=the Meant it resolved to, a base-rate-calibrated confidence, and one of the three NUL states resolved|ambiguous|absent) instead of a bare top-of-heat entity name. One resolution, two consumers: the router reads it for the route and the tool-query builder reads it for the search, so a pronoun resolved once steers both. Precedence ladder: an explicit name in the prompt wins; else the chat field\'s hot figure (the underspecified case); else the document\'s local salience is the floor. Now ships ON: the router-reading read verified the golden is byte-identical dial-on, so the live flip is parity-clean. Set value:false to restore the floor — resolveBinding then returns name-only with confidence null, routes via continuity, and never rewrites a query, exactly as before the build.',
   },
   chat_field_mass: {
     value: 1.2, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
@@ -809,6 +809,10 @@ const READING_RULES = {
   binding_spend_floor: {
     value: 0.70, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'The confidence at/above which a resolved binding is spent on a confident action (a direct Wikipedia article fetch). Below it — or when the state is ambiguous/absent — the tool OFFERS the candidates the field nominated rather than firing a confident wrong search. Maps the three NUL states onto the existing disambiguate path: spend, offer, or ask. Inert unless binding_resolution is ON.',
+  },
+  binding_subject_weight: {
+    value: 2.0, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'How much more mass a settled turn deposits on the figure the USER NAMED (the conversational subject) than on figures that merely appear in the answer (ground). At 1.0 every name ties (today\'s behavior) and a co-mentioned org makes the next bare pronoun ambiguous, so the binding never spends; above 1.0 the subject dominates and the follow-up resolves. This is the deposit half of "the field points at the best guess" — without it the binding is correct but inert on real multi-turn conversations. Inert unless binding_resolution is ON (OFF deposits all names at weight 1 — the parity floor).',
   },
   // Base-rate-calibrated confidences — seated on the router-reading read\'s
   // measured hit-rates, NOT on raw heat (which over-states certainty: read B.3
@@ -2284,7 +2288,7 @@ const REPLAY_PHASE_IDS = new Set(['decay_gamma', 'inertia_delta', 'eva_energy_bu
   'proposal_auto_accept_sim', 'sentinel_draft_overlap', 'sentinel_budget_ratio', 'sentinel_max_drafts',
   'relation_gate', 'relation_align_floor', 'relation_rel_floor', 'cross_source',
   'binding_resolution', 'chat_field_mass', 'binding_ambiguous_margin', 'binding_spend_floor',
-  'binding_conf_named', 'binding_conf_chat', 'binding_conf_ambiguous', 'binding_conf_doc']);
+  'binding_subject_weight', 'binding_conf_named', 'binding_conf_chat', 'binding_conf_ambiguous', 'binding_conf_doc']);
 function _rulePhase(id) { return REPLAY_PHASE_IDS.has(id) ? 'replay' : 'extract'; }
 function _packsKey(packs) { return [...packs].sort().join('|'); }
 function _strHash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return h >>> 0; }
@@ -7522,6 +7526,7 @@ function projectGraph(events, frame = {}) {
     'chat-field-mass': 'chat_field_mass',
     'binding-ambiguous-margin': 'binding_ambiguous_margin',
     'binding-spend-floor': 'binding_spend_floor',
+    'binding-subject-weight': 'binding_subject_weight',
     'binding-conf-named': 'binding_conf_named',
     'binding-conf-chat': 'binding_conf_chat',
     'binding-conf-ambiguous': 'binding_conf_ambiguous',
@@ -12198,6 +12203,13 @@ function projectGraph(events, frame = {}) {
     // answer mechanically so it resolves to the void rather than wandering to chat.
     if (referentsScope(ds, q).antimatter.length)
       return { decision: 'mechanical', confidence: 'high', reason: 'antimatter-void', primary: routePrimary(ds, q, ctx), intent };
+    // STRUCTURE (carried entity) — the prompt names nothing on the page, but the
+    // conversation field carries a resolved referent that IS on the page (the
+    // binding). Route via the carried referent for the RIGHT reason — names-entity
+    // — so the trace says what is true and the loop can score it, instead of the
+    // turn surviving as continuity by luck. Gated; off-dial inert (parity floor).
+    if (ctx && ctx.hotBinding && bindingResolutionEnabled() && bindingCarriesEntity(ds, ctx.hotBinding))
+      return { decision: 'mechanical', confidence: 'high', reason: 'names-entity', primary: routePrimary(ds, q, ctx), intent, via: 'binding' };
     // continuity — an anaphoric, deictic ("in there") or elliptical ("but why
     // not?") follow-up to a grounded conversation stays on the page.
     if (ds.some(d => continuesPrior(d, q, ctx)))
@@ -12573,6 +12585,57 @@ function projectGraph(events, frame = {}) {
     try { return String(q).replace(new RegExp('\\b' + binding.surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i'), binding.name); }
     catch (e) { return q; }
   }
+  /* Does the conversation CARRY a resolved in-scope referent for this turn? True
+     when the binding was resolved by the chat field (not the document-salience
+     floor) and its figure projects onto a scope graph. The router uses this so an
+     anaphoric follow-up that names nothing ("what about his role") routes via
+     names-entity — the carried referent, the RIGHT reason — instead of surviving
+     as continuity. Inert unless binding_resolution is ON. */
+  function bindingCarriesEntity(ds, b) {
+    if (!b || !b.name || b.confidence == null) return false;
+    if (!(b.via && /^chat-field/.test(b.via))) return false;   // carried by the conversation, not the page floor
+    return ds.some(d => (projectEntities(d).entities || []).some(e => _bindNameEq(b.name, e.name)));
+  }
+  /* Deposit a settled turn's referents into the conversation field with the
+     conversational SUBJECT weighted above incidental mentions. The user's NAMED
+     referent (what they asked about) is the figure the conversation is on; the
+     names that merely appear in the answer are ground. Depositing them all at
+     weight 1 (today) lets a co-mentioned org tie the subject, so the next bare
+     pronoun reads ambiguous and the binding can never spend — the field never
+     points at a best guess. With binding_resolution ON, the q-named subject
+     carries binding_subject_weight× the mass, so it dominates and the follow-up
+     resolves. OFF, this is byte-identical to today (all names, weight 1, deduped)
+     — the parity floor. Returns the deduped names (for the trace). */
+  function depositTurn(field, q, answerText) {
+    const on = bindingResolutionEnabled();
+    const seen = new Set(); const qNames = [], aNames = [];
+    try { for (const n of (namedReferents(q) || [])) { const k = normSurface(n); if (k && !seen.has(k)) { seen.add(k); qNames.push(n); } } } catch (e) {}
+    try { for (const n of (namedReferents(answerText || '') || [])) { const k = normSurface(n); if (k && !seen.has(k)) { seen.add(k); aNames.push(n); } } } catch (e) {}
+    const all = qNames.concat(aNames);
+    if (!field || !field.deposit || !all.length) return all;
+    if (!on) { field.deposit({ entities: all }, 1); return all; }   // parity floor
+    const W = _bindRuleNum('binding_subject_weight', 2) || 1;
+    if (qNames.length) field.deposit({ entities: qNames }, W);       // the named subject carries more mass
+    if (aNames.length) field.deposit({ entities: aNames }, 1);       // incidental mentions are ground
+    return all;
+  }
+  /* Answer with the binding resolved INTO the question first: a carried pronoun
+     ("what about his role") is rewritten to its referent ("what about Tom Turner
+     role") before the mechanical reader runs, so the answer binds and witnesses
+     where the bare pronoun found nothing (the brief's "the entry already
+     correct"). Spends only on a CONFIDENT referent (named or a dominant chat
+     figure) — an ambiguous or document-salience-only guess answers the original
+     question (hold, never guess). Off-dial / no pronoun ⇒ exactly
+     answerScope(scope, q, ctx) — the parity floor. */
+  function answerResolved(scope, q, ctx) {
+    let qa = q;
+    if (bindingResolutionEnabled()) {
+      const b = (ctx && ctx.hotBinding) ? ctx.hotBinding : resolveBinding(scope, q, conversationField, { heatFloor: 0 });
+      if (b && b.confidence != null && b.state === 'resolved' && b.via && b.via !== 'document salience' && b.surface && b.name)
+        qa = bindingQuery(q, b);
+    }
+    return answerScope(scope, qa, ctx);
+  }
 
   /* ---------- Working memory: the conversation field as a hot subgraph ----------
      buildWorkingMemory reads the conversation field through the turn's budget and
@@ -12710,7 +12773,7 @@ function projectGraph(events, frame = {}) {
     thinkingBudget, conversationField, buildWorkingMemory, recallByHeat,
     // the active-referent binding (the field's best guess) + the tool-query
     // builder that consumes it. Inert when binding_resolution is OFF (parity).
-    resolveBinding, bindingQuery,
+    resolveBinding, bindingQuery, bindingCarriesEntity, answerResolved, depositTurn,
     // iterative seeking: coverage + which query clusters a retrieval leaves uncovered
     coverage, coverageGaps, seekableTerms,
     // graph traversal: the graph as the answer mechanism (entries → walk →

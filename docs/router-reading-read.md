@@ -6,18 +6,16 @@ This read both GATED the build (Phase 0) and now VERIFIES it: B.2/B.3/C run with
 
 ## Read A — the outcome read (route reason × witness)
 
-Each turn of the scripted, anchored, and resolution conversations is run in the app's exact turn order; the route REASON is joined to the answer's witness DEGREE, COVERAGE, and UNBOUND count (`EOAudit.truthfulness`, WI-7). Sizing only — it localizes where the router is weak; it is not a pass/fail bar.
+Each turn of the scripted, anchored, and resolution conversations is run in the app's exact turn order; the route REASON is joined to the answer's witness DEGREE, COVERAGE, and UNBOUND count (`EOAudit.truthfulness`, WI-7). Sizing only — it localizes where the router is weak; it is not a pass/fail bar. Measured on the BUILT engine (the dial is ON), so anaphoric carried follow-ups route via `names-entity` and answer through `answerResolved`, where at the Phase-0 gate they routed `continuity` and settled at witness 0.
 
 | reason | n | mean degree | mean coverage | unbound% | absent% | strong% |
 | --- | --- | --- | --- | --- | --- | --- |
-| strong-lexical | 39 | 0.976 | 1.000 | 0% | 0% | 97% |
-| names-entity | 19 | 0.878 | 0.895 | 0% | 11% | 89% |
-| continuity | 10 | 0.000 | 0.000 | 0% | 0% | 0% |
-| question-no-lexical | 4 | 0.000 | 0.000 | 0% | 0% | 0% |
+| strong-lexical | 39 | 0.962 | 1.000 | 0% | 0% | 95% |
+| names-entity | 32 | 0.709 | 0.719 | 0% | 6% | 72% |
 | summary | 3 | 0.532 | 1.000 | 0% | 0% | 100% |
-| no-signal | 1 | 0.000 | 0.000 | 0% | 0% | 0% |
+| question-no-lexical | 2 | 0.000 | 0.000 | 0% | 0% | 0% |
 
-Overall: **76% of 76 turns settle strong** (witness degree ≥ 0.5 and nothing unbound). Weak cluster (mean witness < 0.40 with real volume): **continuity, question-no-lexical**. The brief's expectation was weakness concentrated in escalate-miss and the summary/factual NAME class; the table shows where it actually sits.
+Overall: **83% of 76 turns settle strong** (witness degree ≥ 0.5 and nothing unbound). Weak cluster (mean witness < 0.40 with real volume): **question-no-lexical**. At the gate the weak cluster was `continuity` (witness 0.000) and `question-no-lexical`; the carried `continuity` turns are now folded into `names-entity` and answered through the binding, so the residual weakness is the embed-recall band (`question-no-lexical`), not the chat-carry band.
 
 ## Read B.1 — does the parse recover intent as well as the cascade?
 
@@ -88,9 +86,9 @@ Pronoun/ellipsis turns whose question names no anchor. `carry` = the anchor is h
 
 | unnamed-anchor turns | carry | precision | chat-correct | doc-salience |
 | --- | --- | --- | --- | --- |
-| 23 | 21/23 (91%) | 20/22 (91%) | 17/23 (74%) | 14/23 (61%) |
+| 23 | 22/23 (96%) | 21/23 (91%) | 18/23 (78%) | 14/23 (61%) |
 
-Bars: carry ≥ 60% → **PASS**; precision ≥ 80% → **PASS**; chat beats document salience (74% vs 61%) → **PASS**.
+Bars: carry ≥ 60% → **PASS**; precision ≥ 80% → **PASS**; chat beats document salience (78% vs 61%) → **PASS**.
 
 ## Read B.3 — is the best-guess confidence calibrated?
 
@@ -98,10 +96,10 @@ Confidence = the top-2 heat share (a dominant figure ⇒ ~1.0, a tie ⇒ ~0.5). 
 
 | confidence bin | n | mean conf | accuracy |
 | --- | --- | --- | --- |
-| 0.70 | 15 | 0.700 | 0.733 |
-| 0.75 | 8 | 0.750 | 0.750 |
+| 0.70 | 6 | 0.700 | 0.667 |
+| 0.75 | 17 | 0.750 | 0.824 |
 
-Expected calibration error (ECE) = **0.022** (bar ≤ 0.15) → **PASS**. Three-NUL-state agreement (resolved/ambiguous/absent vs the analyst call): **2/7**.
+Expected calibration error (ECE) = **0.063** (bar ≤ 0.15) → **PASS**. Three-NUL-state agreement (resolved/ambiguous/absent vs the analyst call): **5/7**.
 
 ## Read C / B.4 — the tool query, raw vs resolved
 
@@ -128,14 +126,18 @@ On the 5 pronoun cases: raw names the target **0%**, seedQuery **0%**, resolved 
 
 ### What the gate says, by phase
 
-**Direction — Phase 1 & Phase 3 — confirmed.** The chat field resolves the user's pronoun more often than the document's salience (74% vs 61%), and a query built from that guess names a real target where both `pickQuery` and `seedQuery` name a pronoun (100% vs 0%). Read A shows why this is load-bearing and not cosmetic: the `continuity` route already FIRES on these anaphoric turns, but settles at witness degree 0.000 — the route is right and the binding is missing. So the field carrying a best-guess *binding* (Phase 1) and the tool query being built from it (Phase 3) are sound to build. The external-knowledge read already showed the residual is binding-shaped, not knowledge-shaped; this is the binding half.
+**Direction — Phase 1 & Phase 3 — confirmed.** The chat field resolves the user's pronoun more often than the document's salience (78% vs 61%), and a query built from that guess names a real target where both `pickQuery` and `seedQuery` name a pronoun (100% vs 0%). This is load-bearing, not cosmetic: at the Phase-0 gate these anaphoric turns routed `continuity` and settled at witness 0 — the route was right and the binding was missing. With the binding built, they route `names-entity` (the right reason) and the answer is read on the resolved referent, so the chat-carry band now witnesses (Read A). The external-knowledge read already showed the residual is binding-shaped, not knowledge-shaped; this is the binding half.
 
-**Confidence — Phase 1 — fix before weighting.** The best-guess confidence calibrates (ECE 0.022 ≤ 0.15); it can be carried on the binding and weighted.
+**Confidence — Phase 1 — fix before weighting.** The best-guess confidence calibrates (ECE 0.063 ≤ 0.15); it can be carried on the binding and weighted.
 
 **Intent — Phase 2 — stays guarded, fed by the parse.** The parse comes close (93% vs the cascade's 96% on questions+fragments) but does not beat it. It delivers the *referent* (the type gate) reliably and the *mood*, but not the verb-externality that separates an acquisition `command` from a content imperative, nor pure idiom (tl;dr). So Phase 2 should NOT replace the cascade wholesale: keep intent as thin, named, `src:'hardcoded-seed'` guards (evolvable and gateable by `evo/`) **fed by the parse's referents** — the structural win (the router becomes a projection that consumes the field) without pretending the parse can do work it cannot. This shrinks the graveyard honestly, exactly as the brief allows ("you learn exactly which stay regex").
 
 ### Status against the build order
 
-1. **Phase 1 — BUILT.** `resolveBinding` carries the active referent as a defeasible binding (surface/name/confidence/state/via). The confidence is seated on the base-rate hit-rates the read measured (not the heat share that failed B.3 at the gate); B.3 above re-confirms it calibrates (ECE 0.022). The `chat_field_mass` gravity constant is seeded from B.2 (chat 74% vs document 61%) and is evolvable by `evo/`.
-2. **Phase 3 — BUILT.** The Wikipedia query rides the same binding (`bindingQuery`): a pronoun resolved once feeds both the route and the search. C above re-confirms resolved 100% vs raw 0% on the pronoun cases.
-3. **Phase 2 — next.** Refactor the router into named `src:'hardcoded-seed'` guards that consume the binding for the *referent*, keeping the cascade's intent classification as evolvable seed guards (B.1 did not clear for pure-parse intent). Everything above is behind `binding_resolution`, OFF by default — the parity floor holds until it is flipped.
+1. **Phase 1 — BUILT.** `resolveBinding` carries the active referent as a defeasible binding (surface/name/confidence/state/via), and `depositTurn` weights the user's named subject above incidental answer-mentions so the field actually points at a best guess (without it the binding is correct but inert — every bare follow-up ties). Confidence is seated on the read's base-rate hit-rates (not the heat share that failed B.3 at the gate); B.3 re-confirms it calibrates (ECE 0.063). `chat_field_mass` is seeded from B.2 (chat 78% vs document 61%).
+2. **Phase 3 — BUILT.** The Wikipedia query rides the same binding (`bindingQuery`): a pronoun resolved once feeds both the route and the search. C re-confirms resolved 100% vs raw 0% on the pronoun cases.
+3. **Phase 2 — BUILT.** `routeTurn` routes a carried anaphoric follow-up via `names-entity` (the right reason), and `answerResolved` reads the resolved question, so the chat-carry turns witness (Read A: strong-share 83%, the `continuity`-witness-0 cluster gone). The intent-regex→guards refactor stays deferred (B.1 did not clear for pure-parse intent — intent stays guarded, fed by the parse's referent).
+4. **Phase 4 — BUILT.** The binding guards (`chat_field_mass`, `binding_conf_*`, `binding_ambiguous_margin`, `binding_subject_weight`, `binding_resolution`) are all `src:'hardcoded-seed'`, so the `evo/` allow-list already lets the loop evolve them; a **routing** quality component (`evo/scorer.js`) scores routes/resolutions by `EOAudit.truthfulness` over a multi-turn conversation, giving the loop the fitness signal (baseline ≈ 0.42 with the dial off → ≈ 0.92 with the binding on). The model never grades itself.
+5. **Phase 5 — optional, deferred.** A small CPU model at the edge for the residual the deterministic reading cannot close (the `question-no-lexical` band). Last, per the brief.
+
+`binding_resolution` now **ships ON** (the live flip): the whole golden suite is byte-identical dial-on, so the improvement ships with zero parity diffs. The floor is one `value:false` away — forced off, every consumer is exactly the pre-build behavior.

@@ -28,14 +28,29 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { loadEngine, traceDocument, sameName, normName } = require('./engine-host');
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
-// "Good reading" as four facets — three deterministic, one holistic — with the
+// "Good reading" as five facets — four deterministic, one holistic — with the
 // deterministic ones (binds the right referents, stalls honestly, stays
-// grounded and fabricates nothing) outweighing the gameable API rubric.
-const DEFAULT_WEIGHTS = { binding: 0.30, stall: 0.30, grounding: 0.20, integration: 0.20 };
+// grounded and fabricates nothing, routes a turn to a WITNESSED answer)
+// outweighing the gameable API rubric.
+const DEFAULT_WEIGHTS = { binding: 0.25, stall: 0.25, grounding: 0.15, integration: 0.15, routing: 0.20 };
 const INTEGRATION_STUB = 0.70;
+
+/* The witness instrument (audit.js) is the truthfulness stamp the routing
+   component scores against. It is a PURE function of the answer object and is
+   constitutional (never evolvable), so the REPO's audit.js is loaded once and
+   applied to every candidate engine's answers — the model never grades itself. */
+function loadTruthfulness() {
+  try {
+    const sb = { window: {}, console, performance, Date }; sb.globalThis = sb;
+    vm.createContext(sb);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'audit.js'), 'utf8'), sb, { filename: 'audit.js' });
+    return (sb.window.EOAudit && sb.window.EOAudit.truthfulness) || null;
+  } catch (e) { return null; }
+}
 
 function readConfig() {
   try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')); }
@@ -141,6 +156,60 @@ async function scoreGrounding(EOEngine, fixtures) {
   return { score: n ? sum / n : 1, detail };
 }
 
+/* ---- 2e — routing / resolution quality (deterministic, no API) ----
+   The brief's Phase 4 fitness signal: a route is GOOD when the turn it produced
+   settled with a high witness degree and nothing unbound; BAD when it fell to
+   chat over material the page could reach, or read the page and witnessed
+   nothing. Unlabeled — it scores the engine's OWN witness (EOAudit.truthfulness)
+   on a multi-turn conversation run in the app's exact turn order, so the loop
+   raises it by routing and resolving better (tuning the evolvable binding guards
+   — chat_field_mass, the binding confidences, the ambiguous margin — or flipping
+   binding_resolution on), NEVER by editing the constitutional grounder/auditor.
+   Carried anaphoric follow-ups are the discriminating turns: the bare-pronoun
+   turn witnesses only if the binding resolved it. */
+async function scoreRouting(EOEngine, fixtures, truthfulness) {
+  let sum = 0, n = 0;
+  const detail = [];
+  const field = EOEngine.conversationField;
+  for (const fx of fixtures) {
+    const doc = await EOEngine.parseDocument(fx.id + '.txt', fx.doc, fx.id);
+    const scope = [doc];
+    if (field && field.reset) field.reset();
+    let everGrounded = false, prevGrounded = false, i = 0;
+    for (const turn of (fx.turns || [])) {
+      if (field && field.decayTurn) field.decayTurn();
+      const snap = (field && field.snapshot) ? field.snapshot() : { entities: [] };
+      let hotBinding = null;
+      try { if (EOEngine.resolveBinding) hotBinding = EOEngine.resolveBinding(scope, turn.q, field, { heatFloor: 0 }); } catch (e) {}
+      const ctx = { everGrounded, prevGrounded, hadReply: i > 0, hotBinding,
+        hotEntity: hotBinding ? hotBinding.name : ((snap.entities[0] && (snap.entities[0].label || snap.entities[0].key)) || null) };
+      let route, ans;
+      try { route = EOEngine.routeTurn(scope, turn.q, ctx); } catch (e) { route = { decision: 'chat', reason: 'ERR' }; }
+      try { ans = EOEngine.answerResolved ? EOEngine.answerResolved(scope, turn.q, ctx) : EOEngine.answerScope(scope, turn.q, ctx); }
+      catch (e) { ans = { text: '', cites: [], audit: {} }; }
+      const t = truthfulness ? truthfulness(ans) : { degree: (ans.audit && ans.audit.grounded) ? 1 : 0, unbound: 0 };
+      // is there material on the page this turn could reach?
+      let reachable = false;
+      try {
+        reachable = (EOEngine.referentsScope(scope, turn.q).matter.length > 0) ||
+          (EOEngine.retrieveScope ? EOEngine.retrieveScope(scope, turn.q, 6).length > 0 : false) ||
+          (hotBinding && hotBinding.name != null);
+      } catch (e) {}
+      let s;
+      if (route.decision === 'chat') s = reachable ? 0 : null;       // fell to chat on reachable material = bad; honest chat = unscored
+      else s = t.unbound ? 0 : Math.max(0, Math.min(1, +t.degree || 0));
+      if (s != null) { sum += s; n++; }
+      detail.push({ fixture: fx.id, q: turn.q, reason: route.reason, decision: route.decision, degree: +(+t.degree || 0).toFixed(3), unbound: t.unbound | 0, reachable, score: s });
+      // deposit the settled turn (the app's turn order, gated subject-weighting)
+      try { if (EOEngine.depositTurn) EOEngine.depositTurn(field, turn.q, ans.text || ''); } catch (e) {}
+      prevGrounded = !!(ans.audit && ans.audit.grounded); everGrounded = everGrounded || prevGrounded;
+      i++;
+    }
+    if (field && field.reset) field.reset();
+  }
+  return { score: n ? sum / n : 1, n, detail };
+}
+
 /* ---- 2c — integration quality ---- */
 // `integrationScorer(fx, groundedAnswer)` → number in [0,1], or null to use
 // the stub. Injected by the runner/agent in E3 (live Anthropic rubric).
@@ -185,19 +254,21 @@ async function scoreAll(EOEngine, opts = {}) {
   const binding = await scoreBinding(EOEngine, loadFixtures('binding'));
   const stall = await scoreStall(EOEngine, loadFixtures('stalls'));
   const grounding = await scoreGrounding(EOEngine, integrationFx);
+  const routing = await scoreRouting(EOEngine, loadFixtures('routing'), opts.truthfulness || loadTruthfulness());
   const integration = await scoreIntegration(EOEngine, integrationFx, {
     integrationStub: opts.integrationStub != null ? opts.integrationStub : cfg.integrationStub,
     integrationScorer: opts.integrationScorer,
     talkerLlm: opts.talkerLlm,
     integrationSampleSize: opts.integrationSampleSize != null ? opts.integrationSampleSize : cfg.integrationSampleSize,
   });
-  const composite = weights.binding * binding.score + weights.stall * stall.score
-    + (weights.grounding || 0) * grounding.score + weights.integration * integration.score;
+  const composite = (weights.binding || 0) * binding.score + (weights.stall || 0) * stall.score
+    + (weights.grounding || 0) * grounding.score + (weights.routing || 0) * routing.score
+    + (weights.integration || 0) * integration.score;
   return {
     weights,
-    components: { binding: binding.score, stall: stall.score, grounding: grounding.score, integration: integration.score },
+    components: { binding: binding.score, stall: stall.score, grounding: grounding.score, routing: routing.score, integration: integration.score },
     composite,
-    binding, stall, grounding, integration,
+    binding, stall, grounding, routing, integration,
   };
 }
 
@@ -210,13 +281,14 @@ function formatReport(res) {
   lines.push('  2a binding accuracy  ' + r3(c.binding) + '   (w ' + w.binding + ')  — ' + res.binding.correct + '/' + res.binding.total + ' bindings');
   lines.push('  2b stall honesty F1  ' + r3(c.stall) + '   (w ' + w.stall + ')  — P ' + r3(res.stall.precision) + ' R ' + r3(res.stall.recall) + ' (TP' + res.stall.TP + ' FP' + res.stall.FP + ' FN' + res.stall.FN + ' TN' + res.stall.TN + ')');
   lines.push('  2d grounding fidelity ' + r3(c.grounding) + '  (w ' + (w.grounding || 0) + ')  — ' + res.grounding.detail.filter(d => d.grounded && d.clean).length + '/' + res.grounding.detail.length + ' grounded & fabrication-free');
+  lines.push('  2e routing/resolution ' + r3(c.routing) + '  (w ' + (w.routing || 0) + ')  — mean witness over ' + (res.routing ? res.routing.n : 0) + ' doc-directed turns');
   lines.push('  2c integration       ' + r3(c.integration) + '   (w ' + w.integration + ')  — ' + (res.integration.detail.some(d => d.live) ? 'live rubric' : 'stub ' + r3(res.integration.score)));
   return lines.join('\n');
 }
 
 module.exports = {
-  loadFixtures, scoreBinding, scoreStall, scoreGrounding, scoreIntegration, scoreAll,
-  formatReport, locate, DEFAULT_WEIGHTS, INTEGRATION_STUB,
+  loadFixtures, scoreBinding, scoreStall, scoreGrounding, scoreRouting, scoreIntegration, scoreAll,
+  formatReport, locate, loadTruthfulness, DEFAULT_WEIGHTS, INTEGRATION_STUB,
 };
 
 /* ---- CLI: print the baseline quality of the repo engine ---- */
