@@ -184,6 +184,11 @@ function App() {
   // Auditing mode: a glass box over the chat pipeline (window.EOAudit), inspected
   // in a drawer and exportable as JSONL. Recording is on by default.
   const [auditOpen, setAuditOpen] = useState(false);
+  // EO-MRI: the cognition instrument beside the Glass box. Where the Glass box is
+  // the audit LOG, EO-MRI is the SCAN — the EO cube's three faces (Act operators +
+  // order-check, Site, Resolution) and the operator(site, resolution) address,
+  // drawn live as a turn runs (window.EOMRIDrawer). See docs/eo-mri.md.
+  const [eomriOpen, setEomriOpen] = useState(false);
   // Ingestion audit: a glass box over the BUILD — the graph word by word, in
   // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
   const [graphAuditOpen, setGraphAuditOpen] = useState(false);
@@ -3954,6 +3959,9 @@ function App() {
             <Icon name="activity" size={15} /> <span className="tb-pill-lbl">Glass box{auditCount ? ' · ' + auditCount : ''}</span>
             {auditEnabled && <span className="dot rec" title="Recording" />}
           </button>
+          <button className="tb-pill" onClick={() => setEomriOpen(true)} title="EO-MRI — a live cross-section of the reader's turn: the EO cube's three faces (operators · site · resolution) and the operator(site, resolution) address">
+            <Icon name="cube" size={15} /> <span className="tb-pill-lbl">EO-MRI</span>
+          </button>
           {docs.some(d => d.kind === 'prose') && (
             <button className="tb-pill tb-pill-adv" onClick={() => setGraphAuditOpen(true)} title="Ingestion audit — the graph as it is built, word by word, in reading order, with full provenance">
               <Icon name="book" size={15} /> <span className="tb-pill-lbl">Ingestion</span>
@@ -4008,6 +4016,7 @@ function App() {
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
+      {eomriOpen && <EOMRIDrawer onClose={() => setEomriOpen(false)} />}
       {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
       {promptFlowOpen && <PromptFlowDrawer onClose={() => setPromptFlowOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
       {modelOpen && <ModelPopover models={window.MODELS.concat(uploadedModels)} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
