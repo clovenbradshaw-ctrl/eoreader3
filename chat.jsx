@@ -362,7 +362,7 @@ function narrateTurn(turn) {
           const sub = (s.subquery || '').trim();
           push('Still hadn’t covered ' + (sub ? '“' + sub + '”' : 'part of the question') + ', so I sought again' + (s.newHits ? ' and found ' + s.newHits + ' more passage' + (s.newHits === 1 ? '' : 's') : '') + '.');
         } else {
-          push('Pulled the ' + n + ' most relevant passage' + (n === 1 ? '' : 's') + '.');
+          push('Pulled the ' + n + ' most relevant passage' + (n === 1 ? '' : 's') + (s.viaSemantic ? ' (by meaning).' : '.'));
         }
         break;
       }

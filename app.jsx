@@ -184,6 +184,11 @@ function App() {
   // Auditing mode: a glass box over the chat pipeline (window.EOAudit), inspected
   // in a drawer and exportable as JSONL. Recording is on by default.
   const [auditOpen, setAuditOpen] = useState(false);
+  // EO-MRI: the cognition instrument beside the Glass box. Where the Glass box is
+  // the audit LOG, EO-MRI is the SCAN — the EO cube's three faces (Act operators +
+  // order-check, Site, Resolution) and the operator(site, resolution) address,
+  // drawn live as a turn runs (window.EOMRIDrawer). See docs/eo-mri.md.
+  const [eomriOpen, setEomriOpen] = useState(false);
   // Ingestion audit: a glass box over the BUILD — the graph word by word, in
   // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
   const [graphAuditOpen, setGraphAuditOpen] = useState(false);
@@ -2436,7 +2441,14 @@ function App() {
     } else {
       parts = window.EOEngine.contextPartsScope(scope, q, 6);
     }
-    AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
+    // Report the passages that ACTUALLY fed the prompt. When semantic recall
+    // drove the turn (an anaphoric ask like "who are his kids?" has no lexical
+    // home), the lexical auditHits read "0" and buried that the answer is
+    // grounded — so surface the recovered hits, flagged as found by meaning.
+    const retrievedForAudit = hasSemantic
+      ? semanticHits.map(h => ({ docId: h.docId, idx: h.i, score: Math.round((h.score || 0) * 1e4) / 1e4, overlap: h.overlap, text: h.t }))
+      : auditHits(scope, q, 6);
+    AUD('step', 'retrieve', { k: 6, task, engine: hasSemantic ? 'embedding' : 'model-context', viaSemantic: hasSemantic, hits: retrievedForAudit });
     // GRAPH TRAVERSAL (depth > 1): depth buys graph work, not just more
     // retrieval. Walk out from the entities the question names PLUS the
     // entities the conversation field holds hot — an anaphoric follow-up
@@ -2490,8 +2502,11 @@ function App() {
     const wm = buildWMForTurn(scope, q);
     // Discourse precedence: the active subject (conversation field) holds the
     // bound document, so a follow-up never silently rebinds to whichever
-    // source has the strongest content-word overlap.
-    const primaryDoc = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
+    // source has the strongest content-word overlap. When semantic recall
+    // already located the answer, the passages it returned point at the source
+    // we focused on — so the impression query and prompt title stay on the
+    // document that actually answered, not the first tagged chip.
+    const primaryDoc = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity(), hits: semanticHits }) || scope[0];
     // IMPRESSION QUERY (the embedder as a fuzzy graph query): alongside the
     // lexical retrieval, query the page by MEANING — gather the semantically
     // related region and hand the model both the verbatim related spans AND the
@@ -3830,7 +3845,7 @@ function App() {
       if (genStale(myGen)) return;                  // stopped during the recall — stand down
       const recovered = hits.length && (reader.indexOf('embedding') >= 0 ? hits.some(h => h.semantic) : true);
       AUD('step', 'escalate', { reason: route.reason, reader, found: hits.length, recovered: !!recovered });
-      if (recovered) { route.decision = 'mechanical'; route.confidence = 'recovered'; semanticHits = hits.filter(h => h.semantic).length ? hits : null; route.primary = route.primary || window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0]; }
+      if (recovered) { route.decision = 'mechanical'; route.confidence = 'recovered'; semanticHits = hits.filter(h => h.semantic).length ? hits : null; route.primary = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity(), hits }) || route.primary || scope[0]; }
       else { route.decision = 'chat'; }
     }
 
@@ -3859,7 +3874,7 @@ function App() {
         if (route.decision === 'chat') {
           route.decision = 'mechanical'; route.confidence = 'carry';
           route.reason += '+carry';
-          route.primary = route.primary || window.EOEngine.routePrimary(scope, cq, { hotEntity: hotEntity() }) || scope[0];
+          route.primary = window.EOEngine.routePrimary(scope, cq, { hotEntity: hotEntity(), hits: carryHits }) || route.primary || scope[0];
         }
       }
     }
@@ -4051,6 +4066,9 @@ function App() {
             <Icon name="activity" size={15} /> <span className="tb-pill-lbl">Glass box{auditCount ? ' · ' + auditCount : ''}</span>
             {auditEnabled && <span className="dot rec" title="Recording" />}
           </button>
+          <button className="tb-pill" onClick={() => setEomriOpen(true)} title="EO-MRI — a live cross-section of the reader's turn: the EO cube's three faces (operators · site · resolution) and the operator(site, resolution) address">
+            <Icon name="cube" size={15} /> <span className="tb-pill-lbl">EO-MRI</span>
+          </button>
           {docs.some(d => d.kind === 'prose') && (
             <button className="tb-pill tb-pill-adv" onClick={() => setGraphAuditOpen(true)} title="Ingestion audit — the graph as it is built, word by word, in reading order, with full provenance">
               <Icon name="book" size={15} /> <span className="tb-pill-lbl">Ingestion</span>
@@ -4105,6 +4123,7 @@ function App() {
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
+      {eomriOpen && <EOMRIDrawer onClose={() => setEomriOpen(false)} />}
       {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
       {promptFlowOpen && <PromptFlowDrawer onClose={() => setPromptFlowOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
       {modelOpen && <ModelPopover models={window.MODELS.concat(uploadedModels)} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}

@@ -133,8 +133,14 @@ The intelligence is **mechanical**; the language model only phrases things.
   turn's pipeline step by step and exports it as JSONL. In-memory; deterministic;
   no model involved.
 - **UI** (`app.jsx`, `chat.jsx`, `docview.jsx`, `sidebar.jsx`, `rulesets.jsx`,
-  `auditview.jsx`, `icons.jsx`) — React via in-browser Babel; `styles.css` for
-  the look.
+  `auditview.jsx`, `eomri.jsx`, `icons.jsx`) — React via in-browser Babel;
+  `styles.css` for the look.
+- **`eomri.jsx`** — **EO-MRI**, the cognition instrument beside the Glass box.
+  Where the Glass box is the audit *log*, EO-MRI is the *scan*: a live
+  cross-section of a turn as it runs, drawn as the EO cube's three faces — the
+  operator helix + order-check (EO reader compliance), the Site face, the
+  Resolution face — and the `operator(Site, Resolution)` 3-fold address. See
+  `docs/eo-mri.md`.
 - **`data.jsx`** — example documents, model list, and the reading rulesets.
 - **`store.js`** — local persistence (IndexedDB for docs/chat, localStorage for
   prefs/rules and the learned rules-ledger delta).
