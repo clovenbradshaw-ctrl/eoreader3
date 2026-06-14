@@ -396,6 +396,42 @@ await group('generateUnit — the re-citation rescue credits a paraphrase, refus
   eq(out2.route.decision, 'fetch', 'with nothing retrieved or bound, the monitor fetches');
 });
 
+await group('evaluateProse + the rewrite loop — "is it succeeding?", "is it repeating?", guided correction', async () => {
+  const [doc, frame] = C.newDoc({ goal: 'inform', genre: 'plain-report' });
+  const unit = C.make.unit({ doc_id: doc.id, job: 'report the eviction count', order: 0 });
+  const spans = [{ text: 'The city logged twelve thousand eviction filings in 2023.', score: 2.0, docId: doc.id, idx: 4 }];
+  const embed = async () => [0.1, 0.2, 0.3];
+  const deps = { unit, frame, embed };
+
+  // the loop's success test: the monitor's decision over the candidate
+  const good = await C.evaluateProse(deps, 'The city logged twelve thousand eviction filings in 2023.', spans);
+  eq(good.decision, 'advance', 'a grounded passage evaluates as succeeding (advance) → the loop can stop');
+  ok(good.score > 0, 'and carries a positive score');
+  const bad = await C.evaluateProse(deps, 'A clandestine cabal secretly orchestrated everything.', spans);
+  eq(bad.decision, 'revise', 'an ungrounded passage (material found, unused) routes to revise → the loop rewrites');
+  ok(bad.score < good.score, 'and scores below the grounded one (so an improving rewrite is detectable)');
+  ok(typeof bad.predicate === 'string' && bad.predicate.length > 0, 'the evaluation names the gate that fired');
+
+  // error-correction guidance is concrete and keyed to the shortfall
+  ok(/material/i.test(C.reviseGuidance(bad.decision, bad.predicate)), 'a witness/retrieval shortfall → guidance points at the source material');
+  ok(/coherent|contradiction/i.test(C.reviseGuidance('restructure', 'coherence < 0.4 across multiple units')), 'a restructure shortfall → guidance points at coherence');
+
+  // the improvement metric weights witness most and never credits the unmeasured
+  ok(C.scoreConfidence({ witness: 0.8 }) > C.scoreConfidence({ witness: 0.2 }), 'a higher witness scores higher');
+  eq(C.scoreConfidence({}), 0, 'nothing measured → score 0 (no false credit)');
+
+  // the "not getting in its own way" signals: novelty + sentence dedup
+  const existing = 'The tower is 330 metres tall. It opened in 1889.';
+  ok(C.noveltyRatio(existing, 'A separate report covers visitor numbers and ticketing.') > 0.5, 'fresh material reads as novel → keep expanding');
+  ok(C.noveltyRatio(existing, 'The tower is 330 metres tall.') < 0.2, 'a restatement reads as NOT novel → stop expanding');
+  const deduped = C.dropDuplicateSentences(existing, 'The tower is 330 metres tall. A genuinely different clause follows here.');
+  ok(!/330 metres tall/.test(deduped) && /genuinely different/.test(deduped), 'duplicate sentences are dropped, genuinely new ones kept');
+
+  // the corrective rewrite carries the guidance into the prompt
+  ok(/FIX-THIS-SPECIFICALLY/.test(C.buildRevisePrompt({ job: unit.job, frame, spans, draft: 'x', guidance: 'FIX-THIS-SPECIFICALLY' }).user),
+    'buildRevisePrompt threads the guidance into the rewrite instruction');
+});
+
 group('the non-breaking floor — empty / garbage logs fold to nothing, never throw', () => {
   ok(C.fold([]).units.length === 0, 'an empty log folds to no units');
   let threw = false;
