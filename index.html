@@ -142,6 +142,10 @@
 <script src="adapters/layout/docling-lite.js"></script>
 <script src="adapters/embed/minilm.js"></script>
 <script src="adapters/embed/clip.js"></script>
+<!-- the perceptual-ingest bridge (window.EOIngestAdapters): the pack-side glue
+     that routes a dropped audio/image/PDF file to its adapter and folds the
+     adapter's events back into the text the engine reads. -->
+<script src="ingest-adapters.js"></script>
 <!-- the shape layer (shape-steered generation): the exemplar library + the
      drafting controller, discriminative score, and interpretable axes. -->
 <script src="shape.js"></script>
