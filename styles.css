@@ -1148,6 +1148,40 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
 .model-loading .ml-status { font-family: var(--mono); font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-loading .ml-meta + .ml-note { margin-top: 7px; }
 
+/* first-download size gate — a small modal confirming a one-time multi-GB fetch
+   before it starts (boot / first-use auto-loads only; explicit picks skip it). */
+.dl-gate-backdrop {
+  position: fixed; inset: 0; z-index: 300; display: grid; place-items: center;
+  padding: 20px; background: rgba(22,24,28,.5); backdrop-filter: blur(3px);
+  animation: fade .16s ease;
+}
+.dl-gate {
+  width: min(420px, 100%); padding: 22px; text-align: center;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--sh-lg);
+  animation: dlgpop .22s cubic-bezier(.2,.8,.2,1);
+}
+.dl-gate:focus { outline: none; }
+.dl-gate .dlg-icon {
+  width: 46px; height: 46px; margin: 0 auto 13px; border-radius: 50%;
+  display: grid; place-items: center; color: var(--evidence);
+  background: var(--evidence-tint); border: 1px solid var(--evidence-tint-2);
+}
+.dl-gate .dlg-title { margin: 0 0 8px; font-size: 17px; font-weight: 600; }
+.dl-gate .dlg-body { margin: 0 0 12px; font-size: 13.5px; line-height: 1.55; color: var(--text-2); }
+.dl-gate .dlg-body b { color: var(--text); font-family: var(--mono); }
+.dl-gate .dlg-hint { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 18px; font-size: 12px; color: var(--text-3); }
+.dl-gate .dlg-actions { display: flex; gap: 10px; justify-content: center; }
+.dl-gate .dlg-btn {
+  flex: 1; padding: 10px 14px; border-radius: var(--r-sm); font-size: 13.5px; font-weight: 550; cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text);
+  transition: background .15s, border-color .15s;
+}
+.dl-gate .dlg-btn:hover { background: var(--bg-subtle); }
+.dl-gate .dlg-btn.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.dl-gate .dlg-btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+@keyframes dlgpop { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+
 /* staged-ingest progress banner (existence → structure → significance) */
 .ingest-banner {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
