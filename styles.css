@@ -539,6 +539,11 @@ ol.md-list { list-style: decimal; }
 .src-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); flex: none; }
 .src-dot.table { background: #2f9e6b; }
 .src-chip.table .src-dot { background: #2f9e6b; }
+/* web sources carry a globe glyph + an amber accent, distinct from uploaded docs */
+.src-globe { color: #c0791f; flex: none; }
+.src-chip.web { border-color: #e7c79a; background: #fbf3e6; color: #7a5316; }
+[data-theme="dark"] .src-chip.web { border-color: #5a4421; background: #2a2113; color: #d9b577; }
+[data-theme="dark"] .src-globe { color: #d9a85a; }
 .src-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .src-x { border: 0; background: none; cursor: pointer; color: var(--text-3); font-size: 15px; line-height: 1; padding: 0 1px; border-radius: 4px; }
 .src-x:hover { color: var(--text); background: var(--border); }
@@ -2227,3 +2232,62 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 @media (max-width: 1000px) {
   .eomri-drawer { width: 100vw; height: 100vh; border-radius: 0; }
 }
+
+/* ============================================================
+   Web sources — the "add a web source" panel (websearch.jsx) and its
+   composer button. Reuses the app palette so it tracks light/dark.
+   ============================================================ */
+.comp-btn.enrich.web.on,
+.comp-btn.enrich.web:hover { background: #8a5a12; border-color: #8a5a12; color: #fff; }
+.comp-btn.enrich.web:hover svg { color: #fff; }
+
+.websearch {
+  width: min(580px, 94vw); max-height: min(82vh, 680px);
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg); display: flex; flex-direction: column; overflow: hidden;
+}
+.ws-head { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.ws-head > svg { color: #c0791f; flex: none; }
+.ws-title { font-weight: 650; font-size: 15px; flex: 1; color: var(--text); }
+.ws-x { border: 0; background: none; cursor: pointer; color: var(--text-3); padding: 4px; border-radius: 6px; display: inline-flex; }
+.ws-x:hover { color: var(--text); background: var(--bg-subtle); }
+.ws-note {
+  display: flex; align-items: flex-start; gap: 7px; padding: 10px 16px; font-size: 12px; line-height: 1.45;
+  color: var(--text-3); background: var(--bg-sunken); border-bottom: 1px solid var(--border);
+}
+.ws-note > svg { flex: none; margin-top: 1px; }
+.ws-search { display: flex; gap: 8px; padding: 12px 16px; }
+.ws-search input {
+  flex: 1; height: 38px; padding: 0 12px; font-size: 14px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+}
+.ws-search input:focus { outline: none; border-color: var(--accent); }
+.ws-go {
+  display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 14px; cursor: pointer;
+  background: var(--accent); border: 1px solid var(--accent); border-radius: var(--r-sm); color: #fff; font-size: 13px; font-weight: 550;
+}
+.ws-go:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.ws-go:disabled { opacity: .5; cursor: default; }
+.ws-cancel { height: 32px; padding: 0 12px; cursor: pointer; background: none; border: 1px solid var(--border-strong); border-radius: var(--r-sm); color: var(--text-2); font-size: 12.5px; }
+.ws-cancel:hover { background: var(--bg-subtle); color: var(--text); }
+.ws-error { margin: 0 16px 8px; padding: 8px 11px; font-size: 12.5px; color: #b23c2e; background: #fcebe8; border: 1px solid #f3c9c2; border-radius: var(--r-sm); }
+[data-theme="dark"] .ws-error { color: #f0a99e; background: #3a1f1b; border-color: #5a302a; }
+.ws-results { overflow-y: auto; padding: 2px 8px 10px; }
+.ws-empty { padding: 20px; text-align: center; color: var(--text-3); font-size: 13px; }
+.ws-result { padding: 11px 8px; border-bottom: 1px solid var(--border); }
+.ws-result:last-child { border-bottom: 0; }
+.ws-r-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.ws-r-url { font-size: 11.5px; color: var(--text-3); margin-top: 1px; }
+.ws-r-snip { font-size: 12.5px; color: var(--text-2); margin: 4px 0; line-height: 1.45; }
+.ws-r-action { margin-top: 4px; }
+.ws-add { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; cursor: pointer; background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r-sm); color: var(--accent); font-size: 12px; font-weight: 550; }
+.ws-add:hover { background: var(--accent-tint); }
+.ws-added { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #2f9e6b; font-weight: 550; }
+.ws-fetching { font-size: 12px; color: var(--text-3); }
+.ws-confirm { margin-top: 6px; padding: 9px 11px; background: var(--accent-tint); border: 1px solid var(--accent-tint-2); border-radius: var(--r-sm); }
+.ws-confirm-note { font-size: 12px; color: var(--text); line-height: 1.45; margin-bottom: 7px; }
+.ws-confirm-row { display: flex; gap: 8px; }
+.ws-off { padding: 18px 16px; font-size: 13px; color: var(--text-2); line-height: 1.5; }
+.ws-off p { margin: 0 0 9px; }
+.ws-off code { font-size: 12px; background: var(--bg-subtle); padding: 1px 5px; border-radius: 4px; }
+.ws-off-doc { color: var(--text-3); font-size: 12px; }
