@@ -5,6 +5,13 @@ the model sees when it does. File:line references are the locations at
 the time of writing; the flow names, predicates, and prompt text are the
 durable scaffolding.
 
+> **Live companion:** the **Prompt flow** dashboard (toolbar pill →
+> `promptflow.jsx`, data from `window.EOPromptFlow`) renders this same map
+> from the code — every prompt string is read live from `llm.js`, so it can't
+> drift the way these hand-written file:line refs do. It also shows, for the
+> currently-selected model, whether the shape/editor prompt is actually fed to
+> the model or skipped. See `docs/prompt-flow-dashboard.md`.
+
 ## A. Dispatcher decision tree
 
 The single entry point is `runTurn` in `app.jsx:2616`, which assembles

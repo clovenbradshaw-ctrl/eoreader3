@@ -650,6 +650,47 @@ const READING_RULES = {
     desc: 'Quote delimiter pairs used in this language. English uses curly and straight double quotes (and matching singles). Languages like French use «» and German uses „".',
   },
 
+  // ── English grammatical inventories — lifted out of inline engine code so
+  //    the reading paths carry no hardcoded language. Each is a convention the
+  //    en module supplies and empties for a non-English register (the way
+  //    kin_terms / depict_* / role_* already do), so a pack can override it.
+  //    See rebuildLangSets for where each becomes a live Set / RegExp.
+  copular_verbs: {
+    value: ['is','was','are','were','am','been','being','becomes?','became','remained?','remains'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Copular / linking verb forms (regex alternates, joined verbatim into a ^(…)$ test). A clause whose predicate is a copula states a definition ("Sam Gor IS a syndicate"), not an act with a depicted address — the SVO readers skip it so a copula never mints a bogus relation edge. English inventory; a non-English register supplies its own (ser/estar, 是).',
+  },
+  auxiliary_verbs: {
+    value: ['have','has','had','do','does','did','got','get','be','been','being'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Auxiliary / light verb forms (regex alternates). A clause whose head verb is a bare auxiliary carries no act of its own, so the SVO readers and the relation gate skip it rather than read "has" / "did" as a predicate. English inventory.',
+  },
+  deictic_pronouns: {
+    value: ['i','we','you','us','me'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'First- and second-person pronouns. Deictic: they resolve by speech context (who addresses whom), not by narrative momentum, so the activation resolver never binds them to the warmest site. English inventory; a pack supplies its own (yo/tú, 我/你).',
+  },
+  title_case_minor_words: {
+    value: ['a','an','the','and','or','nor','of','to','in','on','at','by','for','with','from','as','vs','via','per'],
+    mass: 1, layer: 'existence', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Minor words a Title Case heading leaves lowercase ("of", "the"). The paragraph unwrapper counts a line as a heading when nearly every word is capitalized OR one of these, so a hard-wrapped prose line is not mistaken for a title and split. English title-case convention.',
+  },
+  relation_gate_stopwords: {
+    value: ['the','a','an','his','her','their','its','this','that','of','to','own','mr','mrs'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Function words and bare titles dropped when the relation gate tokenizes a subject / object for subset comparison, so "his family" and "the family" align on "family". English inventory; the gate is inert unless relation_gate is ON.',
+  },
+  relation_gate_pronouns: {
+    value: ['he','she','it','they','him','her','them','his','hers','their','its','i','we','you','who','whom','that','this','those','these','me','us','one','nobody','everyone','someone'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Pronoun and indefinite surfaces (regex alternates) the relation gate treats as un-nameable subjects: a claim whose subject is one of these carries no relational verdict (nothing to align against an edge). English inventory.',
+  },
+  relation_gate_attribution_verbs: {
+    value: ['said','says','say','answered','replied','wrote','called','told','asked','exclaimed','shouted','whispered','muttered','added','stated','noted','remarked','commented','argued'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Speech verbs the relation gate recognizes when binding a quoted clause to its speaker — a fixed inventory (distinct from the induced attribution_verbs class) used only on the gated path. English inventory.',
+  },
+
   // ── Shape rules — what counts as a promotable entity surface ──
   promote_requires_uppercase_first: {
     value: true, mass: 1, layer: 'existence', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -867,6 +908,27 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
     desc: 'Category / architecture / framework nouns that read as a PATTERN target — a regularity across moments, not a single moment. Crossed with the operator\'s Domain they name the Pattern column: Existence→Kind, Structure→Network, Interpretation→Paradigm. English register cue.',
   },
+
+  // ── Interaction-side English inventories — lifted out of inline code. These
+  //    read the user's QUESTION or an English CLAIM (not the document's own
+  //    register), so they stay register-agnostic core: an English question on a
+  //    Spanish document still parses. A pack may override per-bucket. See
+  //    rebuildLangSets.
+  irregular_past_verbs: {
+    value: ['wrote','made','built','led','ran','won','lost','sold','bought','gave','took','held','met','sent','drew','spoke','knew','grew','became','left','kept','told','brought','drove','chose','rose','broke','spent','paid','founded','signed'],
+    mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Common irregular past-tense verbs. A finite past verb heads a verb-predicate proposition ("Mara FOUNDED Veldmar") the page can be checked against; with the regular -ed test, this closed set lets the claim reader tell an assertion from a bare-stem instruction ("tell", "list"). English morphology.',
+  },
+  question_frame_words: {
+    value: ['who','what','which','whose','where','when','about','tell','give','show','their','his','her','its','the','that','this','does','did','was','were','are','is'],
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Question-frame and aspect words stripped when reading the ASPECT a definitional ask is about ("what are X\'s influences" → {influences}), so the readout is topic-specific instead of dumping every DEF that mentions the entity. English interrogative frame.',
+  },
+  followup_glue: {
+    value: ['but','so','and','or','yet','though','although','still','anyway','ok','okay','oh','well','hmm','huh','no','not','yes','yeah','nope','do','don','does','is','are','was','be','being','mean','means','meant','come','go','on','again','really','actually','exactly','specifically','explain','elaborate','clarify','expand','justify','elucidate','rephrase','simplify'],
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Discourse glue: connectives, negation, acknowledgers, light auxiliaries and meta-discourse verbs that carry no topic of their own. An elliptical follow-up made entirely of these plus function words and a wh/meta token ("but why not?") continues the prior grounded turn. Routing-only, never identity-bearing; deliberately excludes gratitude. English inventory.',
+  },
 };
 
 // Helper: is a language module enabled?
@@ -907,7 +969,9 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE,
     GUTENBERG_START_RES, GUTENBERG_END_RES,
     CHROME_RES, METAPHOR_RES, TYPE_KW_ORG, TYPE_KW_PLACE, TYPE_KW_PERSON,
-    NP_GENERIC_HEADS, SITE_GROUND_CUES, SITE_PATTERN_CUES;
+    NP_GENERIC_HEADS, SITE_GROUND_CUES, SITE_PATTERN_CUES,
+    COPULAR, AUX_VERBS_RE, RG_PRONOUN_RE, DEICTIC_PRONOUNS, IRREG_PAST,
+    TITLE_CASE_MINOR, FOLLOWUP_GLUE, ASK_FRAME, RG_STOP, RG_ATTRIB;
 function rebuildLangSets() {
   STOP = new Set([
     ...mod_values('base_stopwords'),
@@ -985,6 +1049,22 @@ function rebuildLangSets() {
   NP_GENERIC_HEADS = new Set(mod_values('np_generic_heads'));
   SITE_GROUND_CUES = new Set(mod_values('site_ground_cues'));
   SITE_PATTERN_CUES = new Set(mod_values('site_pattern_cues'));
+  // Grammatical inventories lifted out of inline code — built here so the
+  // reading paths stay language-neutral (the data is a convention). An empty
+  // inventory yields a never-match RegExp ((?!) — matches nothing, not even the
+  // empty string, exactly like the populated ^(…)$ test on a non-member) or an
+  // empty Set, never a throw.
+  const _anchoredRe = (id) => { const v = mod_values(id); return v.length ? new RegExp('^(' + v.join('|') + ')$', 'i') : /(?!)/; };
+  COPULAR = _anchoredRe('copular_verbs');
+  AUX_VERBS_RE = _anchoredRe('auxiliary_verbs');
+  RG_PRONOUN_RE = _anchoredRe('relation_gate_pronouns');
+  DEICTIC_PRONOUNS = new Set(mod_values('deictic_pronouns'));
+  IRREG_PAST = new Set(mod_values('irregular_past_verbs'));
+  TITLE_CASE_MINOR = new Set(mod_values('title_case_minor_words'));
+  FOLLOWUP_GLUE = new Set(mod_values('followup_glue'));
+  ASK_FRAME = new Set(mod_values('question_frame_words'));
+  RG_STOP = new Set(mod_values('relation_gate_stopwords'));
+  RG_ATTRIB = new Set(mod_values('relation_gate_attribution_verbs'));
 }
 // Apply a language pack: write its detectors into the rules with
 // provenance, register the module, rebuild the lexical sets. English
@@ -1232,7 +1312,8 @@ function _conventionsExport() {
     'chrome_patterns', 'metaphor_frames',
     'type_keywords_org', 'type_keywords_place', 'type_keywords_person',
     'np_generic_heads',
-    'site_ground_cues', 'site_pattern_cues'];
+    'site_ground_cues', 'site_pattern_cues',
+    'irregular_past_verbs', 'question_frame_words', 'followup_glue'];
   const coreConventions = {};
   for (const id of CORE_IDS) if (READING_RULES[id]) coreConventions[id] = READING_RULES[id].value;
   const modules = {
@@ -2420,7 +2501,7 @@ function deriveSets(proj, opts = {}) {
   compileLiteralPacks();
   deriveSets(projectRules(RULES_LEDGER, currentFrame()));
 let MASS_WEIGHT = READING_RULES.mass_weight.value;
-const COPULAR = /^(is|was|are|were|am|been|being|becomes?|became|remained?|remains)$/i;
+// COPULAR is built in rebuildLangSets from the copular_verbs convention.
 
 // Determine gender from a name's leading title token. "Princess Mary" → 'f',
 // "Prince Andrew" → 'm', "Marshal" / "Napoleon" → null (unknown).
@@ -3174,8 +3255,8 @@ const PRONOUN_LEAD_SET = new Set(READING_RULES.pronoun_lead_disqualify.value);
 // First/second-person pronouns are deictic: they resolve by speech
 // context (who is speaking to whom), not by narrative momentum. Binding
 // "us" or "I" to whichever site is warmest is a category error — the
-// activation resolver never sees them.
-const DEICTIC_PRONOUNS = new Set(['i', 'we', 'you', 'us', 'me']);
+// activation resolver never sees them. DEICTIC_PRONOUNS is built in
+// rebuildLangSets from the deictic_pronouns convention.
 
 // RULES_REV (declared with the ledger above) is the rule-state revision.
 // Frame stamps cite it, so any recorded observation names the exact
@@ -3824,7 +3905,6 @@ async function extractEoGraph(text, onProgress) {
   // sentence. Hard-wrapped prose fails the Title Case ratio or the
   // capitalized-next-line check, so genuine wraps still unwrap.
   {
-    const TITLE_LOWER = new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'as', 'vs', 'via', 'per']);
     const lines = text.split('\n');
     for (let li = 0; li < lines.length - 1; li++) {
       const L = lines[li].trim(), next = lines[li + 1].trim();
@@ -3834,7 +3914,7 @@ async function extractEoGraph(text, onProgress) {
       const words = L.split(/\s+/);
       if (words.length < 3 || words.length > 16) continue;
       const titleish = words.filter(w => /^["“'‘(]?[\p{Lu}\d]/u.test(w)
-        || TITLE_LOWER.has(w.toLowerCase().replace(/[^\p{L}]+/gu, ''))).length;
+        || TITLE_CASE_MINOR.has(w.toLowerCase().replace(/[^\p{L}]+/gu, ''))).length;
       if (titleish / words.length < 0.9) continue;
       lines[li] += '\n';                                           // promote to paragraph boundary
     }
@@ -5377,7 +5457,7 @@ async function extractEoGraph(text, onProgress) {
       if (normSurface(s) === normSurface(o)) return;
       const vFirst = v.split(/\s+/)[0];
       if (COPULAR.test(vFirst)) return;
-      if (/^(have|has|had|do|does|did|got|get|be|been|being)$/i.test(vFirst)) return;
+      if (AUX_VERBS_RE.test(vFirst)) return;
       // Expletive "it": "It appeared that...", "It seemed..." — the
       // pronoun is grammatical filler, not a reference to any site.
       if (/^it$/i.test(s) && /^(appear|seem|happen|turn|occur)/i.test(vFirst)) return;
@@ -8168,14 +8248,12 @@ function projectGraph(events, frame = {}) {
     }
     return false;
   }
-  // Discourse glue for the ellipsis reader below: connectives, negation,
-  // acknowledgers, light auxiliaries and meta-discourse verbs that carry no
-  // topic of their own. Routing-only (like QA_STOP), never identity-bearing.
-  // Deliberately EXCLUDES gratitude words ("thanks") so "thanks, that helps"
-  // keeps reading as chit-chat, and greetings never reach here (no wh-token).
-  const FOLLOWUP_GLUE = new Set(('but so and or yet though although still anyway ok okay oh well hmm huh '
-    + 'no not yes yeah nope do don does is are was be being mean means meant come go on again really '
-    + 'actually exactly specifically explain elaborate clarify expand justify elucidate rephrase simplify').split(' '));
+  // Discourse glue for the ellipsis reader below (the followup_glue
+  // convention, built in rebuildLangSets): connectives, negation, acknowledgers,
+  // light auxiliaries and meta-discourse verbs that carry no topic of their own.
+  // Routing-only (like QA_STOP), never identity-bearing. Deliberately EXCLUDES
+  // gratitude words ("thanks") so "thanks, that helps" keeps reading as
+  // chit-chat, and greetings never reach here (no wh-token).
   // Conversation continuity (mechanical, ruliad-driven). A turn that resolves to
   // no subject of its own still belongs to the page when it CONTINUES the prior
   // grounded turn, three ways:
@@ -9513,10 +9591,10 @@ function projectGraph(events, frame = {}) {
   // of common irregular pasts. Bare-stem imperatives ("tell", "list", "show")
   // and function words never match, so an INSTRUCTION is never read as a CLAIM
   // — only an assertion the page can actually be checked against.
-  const _IRREG_PAST = new Set('wrote made built led ran won lost sold bought gave took held met sent drew spoke knew grew became left kept told brought drove chose rose broke spent paid founded signed'.split(' '));
+  // IRREG_PAST is the irregular_past_verbs convention, built in rebuildLangSets.
   function _isPredVerb(w) {
     const x = String(w == null ? '' : w).toLowerCase().replace(/[^a-z]/g, '');
-    return _IRREG_PAST.has(x) || /^[a-z]{3,}ed$/.test(x);
+    return IRREG_PAST.has(x) || /^[a-z]{3,}ed$/.test(x);
   }
   // Does an ordered token phrase sit as a CONTIGUOUS run inside a token list?
   // The DEF check uses this instead of unordered set-membership: a predicate's
@@ -10511,13 +10589,13 @@ function projectGraph(events, frame = {}) {
   // is topic-blind without this — it answered "what are his influences?" with
   // "Shore is a member of Lighthouse" because it dumped whatever DEF mentioned
   // the entity. Substantive tokens only (≥5 chars), minus the entity's own.
-  const _ASK_FRAME = new Set(['who','what','which','whose','where','when','about','tell','give','show','their','his','her','its','the','that','this','does','did','was','were','are','is']);
+  // ASK_FRAME is the question_frame_words convention, built in rebuildLangSets.
   function askAspectTokens(query, named) {
     const entToks = new Set();
     for (const e of named) for (const t of (tok(e.name) || [])) entToks.add(t);
     const out = [];
     for (const t of (tok(query) || [])) {
-      if (t.length < 5 || _ASK_FRAME.has(t) || entToks.has(t)) continue;
+      if (t.length < 5 || ASK_FRAME.has(t) || entToks.has(t)) continue;
       out.push(t);
     }
     return [...new Set(out)];
@@ -11094,9 +11172,10 @@ function projectGraph(events, frame = {}) {
   // arrives as 1; the seed is boolean false. Either truthy form means ON.
   function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
 
-  const _RG_STOP = new Set(['the', 'a', 'an', 'his', 'her', 'their', 'its', 'this', 'that', 'of', 'to', 'own', 'mr', 'mrs']);
+  // RG_STOP / RG_PRONOUN_RE / RG_ATTRIB are the relation_gate_* conventions,
+  // built in rebuildLangSets (auxiliary verbs reuse AUX_VERBS_RE).
   const _rgToks = (s) => String(s || '').toLowerCase().replace(/['’]s\b/g, '')
-    .replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter(t => t && !_RG_STOP.has(t));
+    .replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter(t => t && !RG_STOP.has(t));
   function _rgSubset(a, b) {
     const ta = _rgToks(a), tb = _rgToks(b);
     if (!ta.length || !tb.length) return false;
@@ -11135,11 +11214,7 @@ function projectGraph(events, frame = {}) {
     return (va && vb) ? _cosineNorm(va, vb) : null;
   }
 
-  const _RG_AUX = /^(have|has|had|do|does|did|got|get|be|been|being)$/i;
-  const _RG_PRONOUN = /^(he|she|it|they|him|her|them|his|hers|their|its|i|we|you|who|whom|that|this|those|these|me|us|one|nobody|everyone|someone)$/i;
   const _RG_QUOTEY = /["“”]/;
-  const _RG_ATTRIB = new Set(['said', 'says', 'say', 'answered', 'replied', 'wrote', 'called', 'told', 'asked',
-    'exclaimed', 'shouted', 'whispered', 'muttered', 'added', 'stated', 'noted', 'remarked', 'commented', 'argued']);
 
   /* Claim/span SVO candidates — the parse's own clause heuristic (first
      noun / last verb / last noun) plus the head-verb variant, because a
@@ -11160,7 +11235,7 @@ function projectGraph(events, frame = {}) {
         const s = nouns[0];
         if (!s || !v || !o || normSurface(s) === normSurface(o)) continue;
         const vFirst = String(v).toLowerCase().split(/\s+/)[0];
-        if (_RG_AUX.test(vFirst)) continue;
+        if (AUX_VERBS_RE.test(vFirst)) continue;
         const copular = COPULAR.test(vFirst);
         if (cands.some(c => normSurface(c.s) === normSurface(s) && _rgNormRel(c.v) === _rgNormRel(v) && normSurface(c.o) === normSurface(o))) continue;
         cands.push({ s, v: String(v).toLowerCase(), o, copular });
@@ -11185,7 +11260,7 @@ function projectGraph(events, frame = {}) {
       } else if (ev.op === 'SYN' && !Array.isArray(ev.sites) && ev.s && ev.v && ev.o) {
         edges.push({
           s: (ev.sHint && ev.sHint.name) || ev.s, v: ev.v, o: (ev.oHint && ev.oHint.name) || ev.o,
-          sent: ev.sentence_idx, via: 'SYN', pronoun: !ev.sHint && _RG_PRONOUN.test(String(ev.s).trim()),
+          sent: ev.sentence_idx, via: 'SYN', pronoun: !ev.sHint && RG_PRONOUN_RE.test(String(ev.s).trim()),
         });
       }
     }
@@ -11202,7 +11277,7 @@ function projectGraph(events, frame = {}) {
       const t = (doc.sentenceTexts || [])[idx] || '';
       const out = _rgSvo(t)
         .filter(c => !c.copular && !_RG_QUOTEY.test(c.s) && !_RG_QUOTEY.test(c.o))
-        .map(c => ({ s: c.s, v: c.v, o: c.o, sent: idx, via: 'span-svo', pronoun: _RG_PRONOUN.test(String(c.s).trim()) }));
+        .map(c => ({ s: c.s, v: c.v, o: c.o, sent: idx, via: 'span-svo', pronoun: RG_PRONOUN_RE.test(String(c.s).trim()) }));
       live.set(idx, out);
       return out;
     };
@@ -11267,7 +11342,7 @@ function projectGraph(events, frame = {}) {
       for (const c of _rgSvo(sent)) {
         const vHead = _rgNormRel(c.v).split(' ')[0] || String(c.v).split(/\s+/).pop();
         // attribution claims check the SIG record first: who held the slot
-        if (_RG_ATTRIB.has(vHead) && boundIdx != null) {
+        if (RG_ATTRIB.has(vHead) && boundIdx != null) {
           const sig = rel.sigs.find(g => g.sent === boundIdx && g.speaker && g.speaker !== '?');
           if (sig) {
             if ((await align(c.s, sig.speaker)) >= ALIGN_FLOOR) continue;   // the right voice
