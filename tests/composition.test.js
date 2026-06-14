@@ -76,6 +76,13 @@ group('Phase one — newDoc spins up a doc + its frame', () => {
   eq(f.frame.genre, 'plain-report', 'the frame points at a genre');
   eq(f.units.length, 0, 'a fresh doc owes no units yet');
   eq(f.doc.frame_id, f.frame.id, 'the doc references its frame');
+  // the two outset dials default on the frame and fold through
+  eq(f.frame.target_words, 800, 'the frame carries a default target length (≈ words)');
+  eq(f.frame.mode, 'grounded', 'the frame defaults to grounded mode');
+  const fc = C.fold(C.newDoc({ target_words: 2500, mode: 'creative' }));
+  eq(fc.frame.target_words, 2500, 'a requested target length is honoured');
+  eq(fc.frame.mode, 'creative', 'a requested creative mode is honoured');
+  eq(C.fold(C.newDoc({ mode: 'nonsense' })).frame.mode, 'grounded', 'an unknown mode falls back to grounded');
 });
 
 group('Phase one — a unit is owed, then drafted, then stamped (state folds over events)', () => {
@@ -331,6 +338,89 @@ await group('generateUnit — retrieve → phrase → stamp → route, end to en
   const out2 = await C.generateUnit({ unit, frame, doc_id: doc.id, retrieve, phrase: phraseBad, embed });
   ok(out2.confidence.witness < 0.4, 'an ungrounded draft has low witness');
   ok(out2.route.decision === 'revise', 'with material found but unused, the monitor routes to revise');
+});
+
+await group('deriveFrame — read the corpus, propose the brief (the Go button\'s autonomy)', async () => {
+  // a corpus the framer reads: one doc carries sentenceTexts (a projection), the
+  // other carries sentences ([{i,t}]) (an ingested prose doc) — sampleCorpus reads both.
+  const docs = [
+    { name: 'City housing report', sentenceTexts: ['Eviction filings rose sharply in 2023.', 'The winter moratorium expired in March.', 'Legal aid groups reported a surge in calls.'] },
+    { name: 'Council memo', sentences: [{ i: 0, t: 'The council debated a rent stabilization ordinance.' }, { i: 1, t: 'No vote was scheduled.' }] },
+  ];
+  const sample = C.sampleCorpus(docs);
+  eq(sample.length, 2, 'sampleCorpus pulls one entry per document');
+  ok(/Eviction filings/.test(sample[0].text) && sample[0].name === 'City housing report', 'each entry is the doc name + its leading sentences');
+  ok(/rent stabilization/.test(sample[1].text), 'a prose doc with {i,t} sentences samples the same way as a projection');
+
+  // a framer shown the sample answers in the labelled format
+  let sawSample = false;
+  const phrase = async ({ system, user }) => { sawSample = /Eviction filings/.test(user) && /grounded/.test(system); return 'THESIS: Eviction filings rose after the winter moratorium ended.\nREADER: city council members\nGOAL: persuade\nGENRE: news article'; };
+  const patch = await C.deriveFrame({ sample, phrase });
+  ok(sawSample, 'the framer is shown the corpus sample and told to stay grounded — not asked to invent from nothing');
+  eq(patch.thesis_or_question, 'Eviction filings rose after the winter moratorium ended.', 'parses the proposed thesis');
+  eq(patch.reader, 'city council members', 'parses the reader');
+  eq(patch.goal, 'persuade', 'parses the goal');
+  eq(patch.genre, 'news-article', 'snaps a loose genre ("news article") to the known set');
+
+  // the budget bounds the sample regardless of corpus size
+  const many = Array.from({ length: 50 }, (_, k) => ({ name: 'doc ' + k, sentenceTexts: ['Sentence about topic number ' + k + ' goes on at some length here.'] }));
+  ok(C.sampleCorpus(many).length < 50, 'sampleCorpus caps the sample to a character budget regardless of corpus size');
+
+  // an unparseable answer invents NO fields (they stay blank, editable); genre defaults
+  const patch2 = await C.deriveFrame({ sample, phrase: async () => 'I am not sure what to write.' });
+  eq(patch2.thesis_or_question, undefined, 'an unparseable answer proposes no thesis — the frame stays blank');
+  eq(patch2.reader, undefined, 'and no reader');
+  eq(patch2.genre, 'plain-report', 'genre defaults to plain-report when none was proposed');
+
+  // the non-breaking floor: no corpus → nothing to read → null
+  eq(await C.deriveFrame({ sample: [], phrase }), null, 'no corpus sample → deriveFrame returns null (autopilot falls back to the existing frame)');
+  eq(C.sampleCorpus([]).length, 0, 'sampleCorpus of nothing is empty');
+  eq(C.sampleCorpus(null).length, 0, 'sampleCorpus of null never throws');
+  // parseFrameLines is lenient about label synonyms and surrounding punctuation
+  const p3 = C.parseFrameLines('QUESTION: "Did rents stabilize?"\nAUDIENCE: tenants\nGENRE: encyclopedic-summary');
+  eq(p3.thesis_or_question, 'Did rents stabilize?', 'QUESTION is accepted as the thesis label and quotes are stripped');
+  eq(p3.reader, 'tenants', 'AUDIENCE is accepted as the reader label');
+  eq(p3.genre, 'encyclopedic-summary', 'an exact genre is kept');
+});
+
+await group('grounded drafting — the talker is fed grounded, citations bind, markers are stripped', async () => {
+  const spans = [
+    { text: 'The city logged twelve thousand eviction filings in 2023.', score: 2, docId: 'd1', idx: 4 },
+    { text: 'The winter moratorium lapsed in March.', score: 1.5, docId: 'd1', idx: 9 },
+  ];
+  // [sN] tags (1-based into the handed span list) resolve to those spans' events
+  const b1 = C.bindTalkerCites('Filings hit twelve thousand [s1]. The freeze ended in March [s2].', spans);
+  ok(!/\[s\d\]/.test(b1.prose), 'the [sN] markers are stripped from the prose');
+  eq(b1.cites.length, 2, 'both cited spans are bound');
+  ok(b1.cites.some(c => c.docId === 'd1' && c.idx === 4) && b1.cites.some(c => c.idx === 9), 'each [sN] maps to its span\'s docId/idx');
+  // a bracket bundling several tags is tolerated
+  const bM = C.bindTalkerCites('A synthesis across both [s1, s2].', spans);
+  ok(!/\[s/.test(bM.prose) && bM.cites.length === 2, 'a multi-tag bracket [s1, s2] strips and binds both');
+  // {{cite:doc:idx}} (the engine's own form) and [s?] both handled
+  const b2 = C.bindTalkerCites('A claim {{cite:d2:7}} and an unknown one [s?].', spans);
+  ok(b2.cites.some(c => c.docId === 'd2' && c.idx === 7), '{{cite:doc:idx}} binds');
+  ok(!/\{\{|\[s\?\]/.test(b2.prose), 'the {{cite}} and [s?] markers are stripped');
+  // no markers → nothing bound, prose untouched
+  const b3 = C.bindTalkerCites('Plain prose with no markers.', spans);
+  eq(b3.cites.length, 0, 'unmarked prose binds nothing');
+  eq(b3.prose, 'Plain prose with no markers.', 'unmarked prose is returned unchanged');
+
+  // generateUnit: a grounded flag is threaded to the talker; emitted [sN] become
+  // the draft's source_events, and the displayed prose is clean.
+  const [doc, frame] = C.newDoc({ genre: 'plain-report' });
+  const unit = C.make.unit({ doc_id: doc.id, job: 'report the eviction count', order: 0 });
+  let sawGrounded = null;
+  const retrieve = async () => spans;
+  const phrase = async (spec) => { sawGrounded = spec.grounded; return 'The city logged twelve thousand filings [s1].'; };
+  const out = await C.generateUnit({ unit, frame, doc_id: doc.id, grounded: true, retrieve, phrase, embed: async () => [0.1, 0.2] });
+  eq(sawGrounded, true, 'generateUnit threads grounded:true to the injected talker');
+  ok(!/\[s1\]/.test(out.draft.prose), 'the citation marker is stripped from the stored draft');
+  ok(out.draft.source_events.some(s => s.docId === 'd1' && s.idx === 4), 'the cited span becomes a source_event');
+  // creative: grounded:false reaches the talker, free composition still stamps/routes
+  let sawCreative = null;
+  const out2 = await C.generateUnit({ unit, frame, doc_id: doc.id, grounded: false, retrieve, phrase: async (s) => { sawCreative = s.grounded; return 'A freely composed line.'; }, embed: async () => [0.1, 0.2] });
+  eq(sawCreative, false, 'generateUnit threads grounded:false (creative) to the talker');
+  ok(out2.draft && out2.route, 'a creative draft is still stamped and routed');
 });
 
 group('the non-breaking floor — empty / garbage logs fold to nothing, never throw', () => {

@@ -17,7 +17,6 @@
    ============================================================ */
 
 const CMP_GENRES = ['plain-report', 'news-article', 'encyclopedic-summary', 'obituary', 'letter', 'recipe'];
-const CMP_GRAINS = ['Figure', 'Ground', 'Pattern'];
 // Confidence components, in display order, with one-word glosses for the hover.
 const CMP_COMPONENTS = [
   ['witness', 'how much of the prose a span backs'],
@@ -28,6 +27,37 @@ const CMP_COMPONENTS = [
   ['frame', "the job's alignment with the doc's goal"],
 ];
 const BAND_LABEL = { owed: 'owed', advance: 'advance', revise: 'revise', fetch: 'fetch', contested: 'contested', held: 'held', drafted: 'drafted' };
+
+// The tessellation bounds. The document grows toward target_words by deepening
+// sections into subsections; these keep "any length" from running away.
+const CMP_WORDS_PER_UNIT = 150;   // a single drafted unit's rough contribution
+const CMP_MAX_UNITS = 48;         // hard ceiling on total units
+const CMP_MAX_DEPTH = 4;          // spirals within spirals, bounded
+
+// Parse an outline reply into jobs — one per line, list markers stripped, blanks
+// and stray labels dropped, capped so a runaway reply can't explode the tree.
+function cmpParseJobs(text, cap) {
+  return String(text || '').split(/\n+/)
+    .map(s => s.replace(/^\s*[-*\d.)]+\s*/, '').trim())
+    .filter(s => s.length > 2)
+    .slice(0, cap || 8);
+}
+
+// Phrase one unit's job as a request the grounded/creative talker answers — the
+// frame for orientation, the neighbour seam for continuity, never the spans
+// (those ride in as evidence). Mirrors the closing of composition.js's
+// buildTalkerPrompt, minus the inline material.
+function cmpQuestion(spec) {
+  const s = spec || {};
+  const f = s.frame || {};
+  const bits = [];
+  if (f.thesis_or_question) bits.push('This is one passage of a document about: ' + f.thesis_or_question + '.');
+  if (f.reader) bits.push('It is written for: ' + f.reader + '.');
+  const seam = (s.neighbors || []).map(n => n && n.prose).filter(Boolean).map(p => '…' + String(p).slice(-200)).join(' ');
+  if (seam) bits.push('For a smooth seam it sits beside: ' + seam);
+  bits.push('Write this passage as flowing prose, no heading: ' + (s.job || ''));
+  return bits.join(' ');
+}
 
 /* A single Confidence vector, as a row of labelled bars. A component that was
    not measured is shown as `null` — never a zero-height bar, which would read as
@@ -99,7 +129,28 @@ function FrameEditor({ frame, onChange, corpus, allProse, onCorpus, modelName })
       </button>
       {open && (
         <div className="cmp-frame-body">
-          {fld('thesis_or_question', 'Thesis / question', 'What is this document arguing or asking?')}
+          {/* The two outset dials: how long, and how grounded. Set them, press Go. */}
+          <div className="cmp-dials">
+            <label className="cmp-dial">
+              <span className="cmp-field-l">Length</span>
+              <span className="cmp-dial-len">
+                <input className="cmp-input cmp-len-input" type="number" min="100" step="100"
+                  value={f.target_words != null ? f.target_words : 800}
+                  onChange={e => onChange({ target_words: Math.max(0, parseInt(e.target.value, 10) || 0) })} />
+                <span className="cmp-muted">≈ words</span>
+              </span>
+            </label>
+            <div className="cmp-dial">
+              <span className="cmp-field-l">Mode</span>
+              <span className="cmp-seg" role="group" aria-label="grounded or creative">
+                <button type="button" className={'cmp-seg-btn' + ((f.mode || 'grounded') !== 'creative' ? ' on' : '')}
+                  title="cite the sources, the same way a chat answer is grounded" onClick={() => onChange({ mode: 'grounded' })}>Grounded</button>
+                <button type="button" className={'cmp-seg-btn' + ((f.mode || 'grounded') === 'creative' ? ' on' : '')}
+                  title="compose freely, using the sources as raw material" onClick={() => onChange({ mode: 'creative' })}>Creative</button>
+              </span>
+            </div>
+          </div>
+          {fld('thesis_or_question', 'Thesis / question', 'What is this document arguing or asking? (or just press Go)')}
           {fld('reader', 'Implied reader', 'Who is this for?')}
           {fld('goal', 'Rhetorical goal', 'persuade · inform · narrate · …')}
           <label className="cmp-field">
@@ -135,9 +186,9 @@ function FrameEditor({ frame, onChange, corpus, allProse, onCorpus, modelName })
 }
 
 /* One node in the plan tree. The colour band is the single scalar projection;
-   the predicate that produced it shows on the band's hover. A hole is visibly
-   distinct (a marked node with its owed-grain and no draft). */
-function PlanNode({ node, depth, selectedId, onSelect, onJob, onMove, onCut, onGrain }) {
+   the predicate that produced it shows on the band's hover. Children nest under
+   their parent — a section's subsections, to whatever depth the document needs. */
+function PlanNode({ node, depth, selectedId, onSelect, onJob, onMove, onCut }) {
   const [editing, setEditing] = React.useState(false);
   const [job, setJob] = React.useState(node.job || '');
   React.useEffect(() => { setJob(node.job || ''); }, [node.job]);
@@ -158,25 +209,19 @@ function PlanNode({ node, depth, selectedId, onSelect, onJob, onMove, onCut, onG
                 {node.job || <span className="cmp-muted">(empty job — double-click to write it)</span>}
               </span>}
           <span className="cmp-node-meta">
-            <span className={'cmp-state cmp-state-' + node.state}>{node.hole ? 'hole' : node.state}</span>
-            {node.hole && <span className="cmp-grain" title="the kind of evidence this hole awaits">⟨{node.hole.owed_grain}⟩</span>}
+            <span className={'cmp-state cmp-state-' + node.state}>{node.state}</span>
             <ConfSpark confidence={node.confidence} />
           </span>
         </span>
         <span className="cmp-node-tools" onClick={e => e.stopPropagation()}>
           <button className="cmp-mini" title="move up" onClick={() => onMove(node.id, -1)}><Icon name="chevron-up" size={12} /></button>
           <button className="cmp-mini" title="move down" onClick={() => onMove(node.id, 1)}><Icon name="chevron-down" size={12} /></button>
-          <select className="cmp-mini-sel" title="owe a grain (make this a hole)" value={node.hole ? node.hole.owed_grain : ''}
-            onChange={e => onGrain(node.id, e.target.value)}>
-            <option value="">grain…</option>
-            {CMP_GRAINS.map(g => <option key={g} value={g}>{g}</option>)}
-          </select>
           <button className="cmp-mini danger" title="cut this unit" onClick={() => onCut(node.id)}><Icon name="x" size={12} /></button>
         </span>
       </div>
       {(node.children || []).map(ch => (
         <PlanNode key={ch.id} node={ch} depth={depth + 1} selectedId={selectedId}
-          onSelect={onSelect} onJob={onJob} onMove={onMove} onCut={onCut} onGrain={onGrain} />
+          onSelect={onSelect} onJob={onJob} onMove={onMove} onCut={onCut} />
       ))}
     </div>
   );
@@ -230,8 +275,6 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
               onClick={e => e.stopPropagation()}
               onBlur={() => { setEditing(false); if (text !== node.draft.prose) onProse(node.id, text); }} />
           : <div className="cmp-prose" onClick={e => { e.stopPropagation(); onSelect(node.id); setEditing(true); }} title="click to edit — your changes are attributed to you"><ProvenanceProse draft={node.draft} /></div>
-      ) : node.hole ? (
-        <div className="cmp-owe">This unit is a <b>hole</b> — it owes a <b>{node.hole.owed_grain}</b>. {grainOwe(node.hole.owed_grain)}</div>
       ) : (
         <div className="cmp-owe">Owed — not drafted yet. <span className="cmp-muted">{node.job}</span></div>
       )}
@@ -252,9 +295,6 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
     </div>
   );
 }
-function grainOwe(g) {
-  return g === 'Figure' ? 'It expects a citation.' : g === 'Ground' ? 'It expects a context.' : 'It expects corroborating instances.';
-}
 
 /* The action surface — contextual to what is selected. Every action is an event,
    so every action is undoable. */
@@ -266,15 +306,17 @@ function ActionSurface({ folded, selectedId, busy, modelReady, onAct, progress }
   );
   const hasUnits = folded.counts.units > 0;
   const status = !busy ? null
+    : progress && progress.phase === 'frame' ? 'Reading the sources…'
     : progress && progress.phase === 'outline' ? 'Outlining…'
+    : progress && progress.phase === 'deepen' ? 'Deepening a section…'
     : progress && progress.phase === 'draft' ? 'Drafting ' + progress.i + '/' + progress.n + (progress.job ? ' — ' + (progress.job.length > 36 ? progress.job.slice(0, 36) + '…' : progress.job) : '')
     : 'working…';
   return (
     <div className="cmp-actions">
       <div className="cmp-actions-grp">
         <span className="cmp-actions-l">Doc</span>
-        <Btn act="write" label={hasUnits ? '✍ Write the rest' : '✍ Write it'} primary disabled={!modelReady}
-          title={modelReady ? 'outline if needed, then draft every unit — watch it write' : 'load a model first'} />
+        <Btn act="write" label={hasUnits ? '▶ Write the rest' : '▶ Go'} primary disabled={!modelReady}
+          title={modelReady ? (hasUnits ? 'draft every remaining unit — watch it write' : 'one press: read the sources, frame the document, outline it, then draft every unit') : 'load a model first'} />
         <Btn act="planFromFrame" label="Outline only" disabled={!modelReady} title={modelReady ? 'propose a tree of units from the frame, without drafting' : 'load a model first'} />
         <Btn act="addUnit" label="+ Unit" />
         <Btn act="restampAll" label="Restamp all" />
@@ -331,9 +373,36 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     try { hits = window.EOEngine.retrieveScope(corpusDocs, job, 8) || []; } catch (e) { hits = []; }
     return hits.map(h => ({ text: h.t, score: h.score, docId: h.docId, idx: h.i }));
   }, [corpusDocs.map(d => d.id).join(',')]);
-  const phrase = React.useCallback(async ({ system, user, max_tokens }, onToken) => {
+  // The injected talker. Three shapes share one entry point:
+  //  • a GROUNDED draft (spec.grounded && spec.spans) goes through the SAME path a
+  //    chat answer takes — the canonical grounded system prompt, the spans handed
+  //    in as witnessed evidence, the grounded params (temp 0.12) — so a section is
+  //    grounded exactly the way a chat reply is. The job + frame become the
+  //    "question"; the spans carry their own [sN]/docId so cites resolve.
+  //  • a CREATIVE draft (spec.grounded === false) composes freely over the spans
+  //    as raw material (creative prompt, warmer temp).
+  //  • a planning / framing call (just {system,user}) keeps the original behaviour.
+  const phrase = React.useCallback(async (spec, onToken) => {
     if (!window.EOLLM || !model || !window.EOLLM.isLoaded(model.mlc)) return '';
+    const { system, user, max_tokens } = spec || {};
     try {
+      if (spec && spec.grounded && Array.isArray(spec.spans) && spec.spans.length) {
+        const spans = spec.spans.map((s, i) => ({ tag: 's' + (i + 1), text: s.text, idx: s.idx, docId: s.docId }));
+        return await window.EOLLM.phrase({
+          mlcKey: model.mlc, question: cmpQuestion(spec), spans, history: [],
+          mode: 'grounded', task: 'answer', grounded: true, provenanceKeys: true,
+          docTitle: (spec.frame && spec.frame.thesis_or_question) || undefined,
+          maxTokens: max_tokens || 320, onToken: onToken || undefined,
+        });
+      }
+      if (spec && spec.grounded === false) {
+        const material = (spec.spans || []).map((s, i) => '[' + (i + 1) + '] ' + s.text).join('\n');
+        return await window.EOLLM.phrase({
+          mlcKey: model.mlc, question: cmpQuestion(spec), contextText: material || undefined,
+          history: [], mode: 'creative', grounded: false,
+          maxTokens: max_tokens || 320, onToken: onToken || undefined,
+        });
+      }
       return await window.EOLLM.phrase({
         mlcKey: model.mlc, question: user, sysOverride: system, history: [],
         mode: 'grounded', grounded: false, maxTokens: max_tokens || 320,
@@ -374,6 +443,8 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
       doc_id: doc.id,
       thesis_or_question: frame.thesis_or_question || '', reader: frame.reader || '',
       goal: frame.goal || '', constraints: frame.constraints || [], genre: frame.genre || 'plain-report',
+      target_words: frame.target_words != null ? frame.target_words : 800,
+      mode: frame.mode === 'creative' ? 'creative' : 'grounded',
     }, patch));
     appendBatch([next]);
   };
@@ -400,13 +471,6 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     appendBatch([C.make.edit({ doc_id: doc.id, edit_kind: 'cut', affected_unit_ids: [id], reason: 'cut by hand' })]);
     if (selectedId === id) setSelectedId(null);
   };
-  const setGrain = (id, grain) => {
-    if (!grain) return;
-    appendBatch([
-      C.make.unit({ doc_id: doc.id, id, owed_grain: grain }),
-      C.make.hole({ doc_id: doc.id, unit_id: id, owed_grain: grain }),
-    ]);
-  };
   const holdUnit = (id) => {
     const u = folded.unitsById[id];
     appendBatch([C.make.hold({ doc_id: doc.id, unit_id: id, held: u.state !== 'held' })]);
@@ -422,13 +486,15 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   // stamp + route as one batch. The caller owns `busy`.
   const draftOne = async (unit, opts) => {
     const o = opts || {};
+    const fr = o.frame || frame;
+    const grounded = o.grounded != null ? o.grounded : (fr.mode !== 'creative');
     setSelectedId(unit.id); setStreaming({ unitId: unit.id, text: '' });
     try {
       const streamPhrase = (p) => phrase(p, (delta) => setStreaming(s => s && s.unitId === unit.id ? { unitId: unit.id, text: (s.text || '') + delta } : s));
       const out = await C.generateUnit({
-        unit, frame, doc_id: doc.id,
+        unit, frame: fr, doc_id: doc.id, grounded,
         retrieve, phrase: streamPhrase, embed, formLib: formLibRef.current,
-        neighbors: o.neighbors || [],
+        neighbors: o.neighbors || [], maxTokens: o.maxTokens,
       });
       if (out && out.draft) appendBatch([out.draft, out.stamp, out.route]);
       return out;
@@ -441,20 +507,86 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     catch (e) { if (window.eoWarn) window.eoWarn('draftUnit', e); }
     finally { setBusy(false); }
   };
-  // AUTOPILOT — one move that writes the whole document, visibly: outline first
-  // (streamed, so you watch it form), then draft every undrafted unit in order,
-  // each streaming its tokens, with live progress. This is "start writing."
+  // AUTOPILOT — the "Go" button: one move that writes the whole document,
+  // visibly, from nothing, and keeps going until it reaches the length the dial
+  // asks for. If the user never said what the document is, it READS the sources
+  // and frames it first (so you don't have to prompt it). Then it outlines from
+  // that frame — streamed, so you watch the sections arrive — drafts every unit
+  // in order (grounded like a chat answer, or freely if the mode dial says
+  // creative), and finally TESSELLATES: while still under the target word count
+  // it deepens the most-developed section into subsections and drafts those —
+  // spirals within spirals — bounded by depth and a hard unit ceiling so any
+  // length still terminates. A running registry tracks every unit and its words
+  // without waiting for a re-fold between appends.
   const write = async () => {
     if (busy || !modelReady) return;
     setBusy(true);
     try {
-      let units = folded.units.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
-      if (!units.length) { setProgress({ phase: 'outline' }); units = await planFromFrame({ keepBusy: true }); }
-      const drafted = folded.unitsById;
-      const todo = units.filter(u => !(drafted[u.id] && drafted[u.id].draft));
-      for (let i = 0; i < todo.length; i++) {
-        setProgress({ phase: 'draft', i: i + 1, n: todo.length, job: todo[i].job });
-        await draftOne(todo[i], {});
+      let liveFrame = frame;
+      if (!frame.thesis_or_question && corpusDocs.length) {
+        setProgress({ phase: 'frame' });
+        const derived = await deriveFrameFromCorpus();
+        if (derived) liveFrame = derived;
+      }
+      const grounded = liveFrame.mode !== 'creative';
+      const target = Math.max(0, (liveFrame.target_words | 0) || 0);
+
+      const reg = new Map();
+      for (const u of folded.units) reg.set(u.id, { unit: u, prose: (u.draft && u.draft.prose) || '', drafted: !!u.draft });
+      const words = (s) => (String(s || '').trim().match(/\S+/g) || []).length;
+      const total = () => { let n = 0; for (const r of reg.values()) n += words(r.prose); return n; };
+      const note = (u, prose) => { const r = reg.get(u.id) || { unit: u }; r.unit = u; r.prose = prose || ''; r.drafted = true; reg.set(u.id, r); };
+      // a thin neighbour seam from the registry — the previous drafted sibling
+      const regNeighbors = (u) => {
+        const sibs = [...reg.values()].map(r => r.unit).filter(x => (x.parent_id || null) === (u.parent_id || null)).sort((a, b) => (a.order || 0) - (b.order || 0));
+        const i = sibs.findIndex(x => x.id === u.id);
+        if (i > 0) { const p = reg.get(sibs[i - 1].id); if (p && p.prose) return [{ job: sibs[i - 1].job, prose: p.prose }]; }
+        return [];
+      };
+
+      // (1) top-level outline if there is none yet
+      let units = [...reg.values()].map(r => r.unit);
+      if (!units.length) {
+        setProgress({ phase: 'outline' });
+        const created = await planFromFrame({ keepBusy: true, frame: liveFrame });
+        for (const u of created) reg.set(u.id, { unit: u, prose: '', drafted: false });
+        units = created;
+      }
+
+      // per-unit word budget from the target so each section is ~the right size
+      const seeds = units.length || 1;
+      const planned = target ? Math.max(seeds, Math.ceil(target / CMP_WORDS_PER_UNIT)) : seeds;
+      const perUnitWords = target ? Math.max(60, Math.round(target / planned)) : 0;
+      const maxTokens = perUnitWords ? Math.min(700, Math.round(perUnitWords * 1.7)) : undefined;
+
+      // (2) draft every undrafted unit we have, in reading order
+      const pend = [...reg.values()].filter(r => !r.drafted).map(r => r.unit).sort((a, b) => (a.order || 0) - (b.order || 0));
+      for (let i = 0; i < pend.length; i++) {
+        setProgress({ phase: 'draft', i: i + 1, n: pend.length, job: pend[i].job });
+        const out = await draftOne(pend[i], { frame: liveFrame, grounded, maxTokens, neighbors: regNeighbors(pend[i]) });
+        note(pend[i], out && out.prose);
+      }
+
+      // (3) tessellate toward the target length
+      const hasKids = (id) => [...reg.values()].some(r => (r.unit.parent_id || null) === id);
+      const depthOf = (u) => { let d = 0, x = u, g = 0; while (x && x.parent_id && reg.has(x.parent_id) && g++ < 12) { d++; x = reg.get(x.parent_id).unit; } return d; };
+      const noExpand = new Set();
+      let guard = 0;
+      while (target && total() < target && reg.size < CMP_MAX_UNITS && guard++ < CMP_MAX_UNITS) {
+        const leaves = [...reg.values()]
+          .filter(r => r.drafted && !noExpand.has(r.unit.id) && !hasKids(r.unit.id) && depthOf(r.unit) < CMP_MAX_DEPTH && words(r.prose) >= 40)
+          .sort((a, b) => words(b.prose) - words(a.prose));
+        if (!leaves.length) break;
+        const parent = leaves[0].unit;
+        setProgress({ phase: 'deepen', job: parent.job });
+        const kids = await planFromUnit(parent, leaves[0].prose, liveFrame);
+        if (!kids.length) { noExpand.add(parent.id); continue; }
+        for (const k of kids) reg.set(k.id, { unit: k, prose: '', drafted: false });
+        for (let i = 0; i < kids.length && total() < target && reg.size <= CMP_MAX_UNITS; i++) {
+          setProgress({ phase: 'draft', i: i + 1, n: kids.length, job: kids[i].job });
+          const out = await draftOne(kids[i], { frame: liveFrame, grounded, maxTokens, neighbors: regNeighbors(kids[i]) });
+          note(kids[i], out && out.prose);
+        }
       }
     } catch (e) { if (window.eoWarn) window.eoWarn('write', e); }
     finally { setBusy(false); setProgress(null); }
@@ -516,20 +648,21 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   // it created so the autopilot can draft them without waiting for a re-fold.
   const planFromFrame = async (opts) => {
     const o = opts || {};
+    const fr = o.frame || frame;
     if (!o.keepBusy) { if (busy || !modelReady) return []; setBusy(true); }
-    setPlanning('');
+    setPlanning({ label: 'Outlining…', text: '' });
     try {
       const system = 'You are planning the STRUCTURE of a document, not writing it. Propose between four and seven sections. Each section is ONE line: a short job describing what that section must DO (its direction), never its content. No numbering, no prose, no blank lines — one job per line.';
       const u = [];
-      if (frame.thesis_or_question) u.push('Document: ' + frame.thesis_or_question);
-      if (frame.reader) u.push('For: ' + frame.reader);
-      if (frame.goal) u.push('Goal: ' + frame.goal);
-      if ((frame.constraints || []).length) u.push('Constraints: ' + frame.constraints.join('; '));
-      u.push('Genre: ' + (frame.genre || 'plain-report'));
+      if (fr.thesis_or_question) u.push('Document: ' + fr.thesis_or_question);
+      if (fr.reader) u.push('For: ' + fr.reader);
+      if (fr.goal) u.push('Goal: ' + fr.goal);
+      if ((fr.constraints || []).length) u.push('Constraints: ' + fr.constraints.join('; '));
+      u.push('Genre: ' + (fr.genre || 'plain-report'));
       u.push('');
       u.push('Propose the sections, one job per line:');
-      const text = await phrase({ system, user: u.join('\n'), max_tokens: 260 }, (delta) => setPlanning(t => (t || '') + delta));
-      const jobs = String(text || '').split(/\n+/).map(s => s.replace(/^\s*[-*\d.)]+\s*/, '').trim()).filter(s => s.length > 2).slice(0, 8);
+      const text = await phrase({ system, user: u.join('\n'), max_tokens: 260 }, (delta) => setPlanning(t => ({ label: 'Outlining…', text: ((t && t.text) || '') + delta })));
+      const jobs = cmpParseJobs(text, 8);
       let created = [];
       if (jobs.length) {
         let order = nextOrder();
@@ -542,6 +675,73 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
       return created;
     } catch (e) { if (window.eoWarn) window.eoWarn('planFromFrame', e); return []; }
     finally { setPlanning(null); if (!o.keepBusy) setBusy(false); }
+  };
+  // Expand ONE section into subsections — the recursion that lets the document
+  // tessellate to any length: a section's job + what it currently says go in, two
+  // to four child jobs come out, parented under it. Streamed like the outline, and
+  // appended with a plan-edit recording WHY the section deepened. Caller owns busy.
+  const planFromUnit = async (parent, parentProse, fr0) => {
+    const fr = fr0 || frame;
+    const short = (parent.job || '').slice(0, 28) + ((parent.job || '').length > 28 ? '…' : '');
+    const label = 'Deepening “' + short + '”…';
+    setPlanning({ label, text: '' });
+    try {
+      const system = 'You are EXPANDING one section of a document into subsections — going deeper into it, not restating it. Propose between two and four subsections. Each is ONE line: a short job describing what that subsection must DO (its direction), never its content. No numbering, no prose — one job per line.';
+      const u = [];
+      if (fr.thesis_or_question) u.push('Document: ' + fr.thesis_or_question);
+      u.push('Section to deepen: ' + (parent.job || ''));
+      if (parentProse) u.push('What it says so far: ' + String(parentProse).slice(0, 400));
+      u.push('');
+      u.push('Propose its subsections, one job per line:');
+      const text = await phrase({ system, user: u.join('\n'), max_tokens: 200 }, (delta) => setPlanning(t => ({ label, text: ((t && t.text) || '') + delta })));
+      const jobs = cmpParseJobs(text, 4);
+      let created = [];
+      if (jobs.length) {
+        let order = 0;
+        created = jobs.map(j => C.make.unit({ doc_id: doc.id, job: j, order: order++, parent_id: parent.id }));
+        const evts = created.slice();
+        evts.push(C.make.planEdit({ doc_id: doc.id, edit_kind: 'add-unit', affected_unit_ids: created.map(e => e.id), reason: 'deepened “' + short + '” into subsections', confidence: C.confidence({ frame: 0.5 }) }));
+        appendBatch(evts);
+      }
+      return created;
+    } catch (e) { if (window.eoWarn) window.eoWarn('planFromUnit', e); return []; }
+    finally { setPlanning(null); }
+  };
+  // Read a sample of the source corpus and PROPOSE a frame (thesis/reader/goal/
+  // genre) — so "Go" needs no hand-written brief. Streamed into the plan pane
+  // (you watch it read the sources), then appended as a frame event merged over
+  // whatever the user already set — their fields win, we only fill the blanks.
+  // Returns the merged frame so the in-flight autopilot uses it before the fold
+  // re-derives; with no corpus it no-ops (the autopilot falls back to the frame).
+  const deriveFrameFromCorpus = async () => {
+    const sample = C.sampleCorpus(corpusDocs);
+    if (!sample.length) return null;
+    const READING = 'Reading the sources…';
+    setPlanning({ label: READING, text: '' });
+    try {
+      const patch = await C.deriveFrame({
+        sample, genres: CMP_GENRES, phrase,
+        onToken: (delta) => setPlanning(t => ({ label: READING, text: ((t && t.text) || '') + delta })),
+      });
+      if (!patch) return null;
+      // the user's own fields win; fill only what they left blank (genre counts as
+      // unset while still at its plain-report default, so a derived genre can land)
+      const merged = {
+        doc_id: doc.id,
+        thesis_or_question: frame.thesis_or_question || patch.thesis_or_question || '',
+        reader: frame.reader || patch.reader || '',
+        goal: frame.goal || patch.goal || '',
+        constraints: frame.constraints || [],
+        genre: (frame.genre && frame.genre !== 'plain-report') ? frame.genre : (patch.genre || 'plain-report'),
+        // the user's outset dials ride through untouched — deriving the brief
+        // never changes how long or how grounded they asked for
+        target_words: frame.target_words != null ? frame.target_words : 800,
+        mode: frame.mode === 'creative' ? 'creative' : 'grounded',
+      };
+      appendBatch([C.make.frame(merged)]);
+      return merged;
+    } catch (e) { if (window.eoWarn) window.eoWarn('deriveFrameFromCorpus', e); return null; }
+    finally { setPlanning(null); }
   };
 
   // undo: supersede every live event of the most recent batch (REC supersession).
@@ -583,13 +783,13 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
           <div className="cmp-tree">
             {planning != null ? (
               <div className="cmp-outlining">
-                <div className="cmp-outlining-h"><span className="cmp-orb" /> Outlining…</div>
-                <pre className="cmp-outlining-body">{planning || '…'}</pre>
+                <div className="cmp-outlining-h"><span className="cmp-orb" /> {planning.label || 'Outlining…'}</div>
+                <pre className="cmp-outlining-body">{planning.text || '…'}</pre>
               </div>
             ) : folded.tree.length ? folded.tree.map(n => (
               <PlanNode key={n.id} node={n} depth={0} selectedId={selectedId} onSelect={setSelectedId}
-                onJob={editJob} onMove={moveUnit} onCut={cutUnit} onGrain={setGrain} />
-            )) : <div className="cmp-empty">No plan yet. Set a thesis above, then press <b>✍ Write it</b> — it outlines, then drafts every unit, live. (Or <b>Outline only</b>, or add a unit by hand.)</div>}
+                onJob={editJob} onMove={moveUnit} onCut={cutUnit} />
+            )) : <div className="cmp-empty">No plan yet. Just press <b>▶ Go</b> — it reads your sources, frames the document, outlines it, then drafts every unit, live. (Or set a thesis above and use <b>Outline only</b>, or add a unit by hand.)</div>}
           </div>
           {folded.planEdits.length > 0 && (
             <div className="cmp-planlog">
@@ -611,7 +811,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
             {flat.length ? flat.map(n => (
               <UnitCard key={n.id} node={n} selected={selectedId === n.id} onSelect={setSelectedId}
                 onProse={editProse} streaming={streaming} onCite={onCite} />
-            )) : <div className="cmp-empty">Press <b>✍ Write it</b> and watch it draft, unit by unit — each claim bound to evidence, each unit stamped with its full confidence vector.</div>}
+            )) : <div className="cmp-empty">Press <b>▶ Go</b> and watch it draft, unit by unit — each claim bound to evidence, each unit stamped with its full confidence vector.</div>}
           </div>
         </div>
       </div>

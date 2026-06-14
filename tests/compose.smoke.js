@@ -70,7 +70,12 @@ let html = container.innerHTML;
 ok(/Plan/.test(html) && /Document/.test(html), 'both panes render (Plan / Document headers)');
 ok(/Set the thesis or question/.test(html) || /cmp-frame/.test(html), 'the frame editor renders');
 ok(/No plan yet/.test(html), 'the empty plan shows its prompt');
-ok(/Write it/.test(html) && /Outline only/.test(html) && /\+ Unit/.test(html), 'the doc action surface renders (Write / Outline / + Unit)');
+ok(/Go/.test(html) && /Outline only/.test(html) && /\+ Unit/.test(html), 'the doc action surface renders (Go / Outline / + Unit)');
+ok(/reads your sources/.test(html), 'the empty plan tells you Go is autonomous (reads the sources, no hand-written brief)');
+// the two outset dials render, and the Figure/Ground/Pattern grain knob is gone
+ok(/Length/.test(html) && /≈ words/.test(html), 'the length dial renders (≈ words)');
+ok(/Grounded/.test(html) && /Creative/.test(html), 'the grounded / creative mode toggle renders');
+ok(!/grain…/.test(html), 'the Figure/Ground/Pattern grain selector is gone from the plan node');
 
 // (2) a POPULATED fold — a unit, drafted by the talker, lightly edited by the
 // user so authorship is mixed; stamped figure-grounded / advance.

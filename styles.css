@@ -2046,6 +2046,16 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .cmp-frame-body { padding: 6px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 .cmp-field { display: flex; flex-direction: column; gap: 3px; }
 .cmp-field-l { font-size: 11px; color: var(--text-3); font-weight: 600; }
+/* The two outset dials (length + grounded/creative), sat side by side. */
+.cmp-dials { display: flex; gap: 12px; flex-wrap: wrap; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.cmp-dial { display: flex; flex-direction: column; gap: 3px; }
+.cmp-dial-len { display: inline-flex; align-items: baseline; gap: 6px; }
+.cmp-len-input { width: 84px; }
+.cmp-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-sm); overflow: hidden; }
+.cmp-seg-btn { font-family: var(--sans); font-size: 12px; color: var(--text-2); background: var(--bg);
+  border: 0; padding: 6px 12px; cursor: pointer; }
+.cmp-seg-btn + .cmp-seg-btn { border-left: 1px solid var(--border-strong); }
+.cmp-seg-btn.on { background: var(--accent); color: #fff; font-weight: 600; }
 .cmp-input { font-family: var(--sans); font-size: 13px; color: var(--text); background: var(--bg);
   border: 1px solid var(--border-strong); border-radius: var(--r-sm); padding: 6px 8px; width: 100%; }
 .cmp-input:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
@@ -2074,13 +2084,11 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .cmp-node-meta { display: flex; align-items: center; gap: 7px; }
 .cmp-state { font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .03em;
   color: var(--void-fg); background: var(--void-bg); border: 1px solid var(--void-bd); border-radius: var(--r-pill); padding: 1px 7px; }
-.cmp-grain { font-family: var(--mono); font-size: 11px; color: var(--evidence-ink); }
 .cmp-node-tools { display: flex; align-items: center; gap: 2px; opacity: .35; }
 .cmp-node:hover .cmp-node-tools, .cmp-node.sel .cmp-node-tools { opacity: 1; }
 .cmp-mini { background: none; border: 0; color: var(--text-3); padding: 2px; border-radius: 4px; display: inline-flex; }
 .cmp-mini:hover { background: var(--bg-subtle); color: var(--text); }
 .cmp-mini.danger:hover { background: var(--bad-bg); color: var(--bad-fg); }
-.cmp-mini-sel { font-size: 10px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg); color: var(--text-3); padding: 1px 2px; }
 
 /* the confidence sparkline (tree) — bars never zero-height; null is its own state */
 .cmp-spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
