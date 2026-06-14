@@ -429,7 +429,9 @@ function App() {
         // Rebuild the local span table for restored docs (h → doc/sentence),
         // so provenance anchors stay resolvable on-device without a re-parse.
         if (window.EOEngine && window.EOEngine._provenance) {
-          for (const d of savedDocs) { try { window.EOEngine._provenance.registerDocSpans(d); } catch (e) {} }
+          // prose only — a composition doc's _events are composition events, not
+          // the engine's span log, and must never enter the provenance path.
+          for (const d of savedDocs) { if (d.kind === 'prose') try { window.EOEngine._provenance.registerDocSpans(d); } catch (e) {} }
         }
       }
       if (savedChat) {
@@ -619,6 +621,36 @@ function App() {
     // A named project owns its source set explicitly, so leave those alone.
     if (!activeProject) setSources(s => s.filter(x => x !== id));
   };
+
+  // ---- composition documents (the long-form artifact) --------------------
+  // A composition Doc is a doc whose state is a FOLD of its _events log (see
+  // composition.js). It is deliberately NOT added to the chat's source scope —
+  // it is something the system writes, not a corpus it reads — so it never
+  // enters retrieval, working memory, or the grounded prompt. Spinning one up
+  // emits the doc + frame events; every later edit appends more.
+  const newComposition = useCallback(() => {
+    if (!window.EOComposition) { showToast('Composition layer unavailable.'); return; }
+    const evts = window.EOComposition.newDoc({ genre: 'plain-report' });
+    const docEv = evts[0], frameEv = evts[1];
+    const doc = { id: docEv.id, name: 'Untitled composition', kind: 'composition', _events: evts, frame_id: frameEv.id, meta: 'composition' };
+    setDocs(ds => [...ds, doc]);
+    setOpenTabs(t => [...t, doc.id]);
+    setActiveTab(doc.id);
+    if (mobileRef.current) { setLayout('doc'); setCollapsed(true); } else setLayout('split');
+  }, []);
+
+  // Append events to a composition doc's log and re-derive its tab name from the
+  // (possibly new) frame thesis. Pure append — the fold does the rest.
+  const appendCompositionEvents = useCallback((docId, newEvents) => {
+    if (!newEvents || !newEvents.length) return;
+    setDocs(ds => ds.map(d => {
+      if (d.id !== docId || d.kind !== 'composition') return d;
+      const _events = [...(d._events || []), ...newEvents];
+      let name = d.name;
+      for (const e of newEvents) if (e.kind === 'frame' && e.thesis_or_question) name = e.thesis_or_question.slice(0, 60);
+      return Object.assign({}, d, { _events, name });
+    }));
+  }, []);
 
   // ---- the convention proposer (idle, budgeted, toggleable) ----
   // After a parse leaves registered friction, and only when the local model
@@ -3950,6 +3982,9 @@ function App() {
               <button className={layout === 'doc' ? 'on' : ''} onClick={() => setLayout('doc')} title="Fullscreen document"><Icon name="expand" size={14} /></button>
             </div>
           )}
+          <button className="tb-pill" onClick={newComposition} title="Compose — spin up a long-form, grounded document: a revisable plan and a drafted output, every claim bound to evidence, the whole production a reviewable event log">
+            <Icon name="edit" size={15} /> <span className="tb-pill-lbl">Compose</span>
+          </button>
           <button className="tb-pill" onClick={() => setAuditOpen(true)} title="Glass box — the extracted graph and every step the chat takes, exportable as JSONL">
             <Icon name="activity" size={15} /> <span className="tb-pill-lbl">Glass box{auditCount ? ' · ' + auditCount : ''}</span>
             {auditEnabled && <span className="dot rec" title="Recording" />}
@@ -3985,7 +4020,8 @@ function App() {
                   onActivate={setActiveTab} onClose={closeTab} layout={layout} onLayout={setLayout}
                   explore={explore} onToggleExplore={() => setExplore(x => !x)}
                   onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={flashCitation} tableSpec={tableSpec}
-                  savedViews={savedViews} onApplyView={applyTableView} onSaveView={saveTableView} onDeleteView={deleteTableView} />
+                  savedViews={savedViews} onApplyView={applyTableView} onSaveView={saveTableView} onDeleteView={deleteTableView}
+                  allDocs={docs} model={model} modelReady={modelStatus === 'ready'} onCompositionEvent={appendCompositionEvents} />
               )}
             </React.Fragment>
           )}

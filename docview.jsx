@@ -398,7 +398,8 @@ function EntityModal({ doc, name, onCite, onEntity, onOpenTab, onClose }) {
 /* the doc pane shell: tabs + tools + content */
 function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, onLayout,
                   explore, onToggleExplore, onEntity, activeEntity, flashSent, onCite, tableSpec,
-                  savedViews, onApplyView, onSaveView, onDeleteView }) {
+                  savedViews, onApplyView, onSaveView, onDeleteView,
+                  allDocs, model, modelReady, onCompositionEvent }) {
   const resolve = (id) => {
     if (id.startsWith('@ent/')) {
       const [, docId, ...rest] = id.split('/'); return { kind: 'entity', doc: docsById[docId], name: decodeURIComponent(rest.join('/')) };
@@ -408,7 +409,7 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
   const cur = activeTab ? resolve(activeTab) : null;
   const iconFor = (id) => {
     if (id.startsWith('@ent/')) return 'sparkle';
-    const d = docsById[id]; return !d ? 'doc' : d.kind === 'table' ? 'table' : 'doc';
+    const d = docsById[id]; return !d ? 'doc' : d.kind === 'table' ? 'table' : d.kind === 'composition' ? 'edit' : 'doc';
   };
   const labelFor = (id) => {
     if (id.startsWith('@ent/')) { const [, , ...rest] = id.split('/'); return decodeURIComponent(rest.join('/')); }
@@ -438,6 +439,9 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
         : cur.kind === 'entity' ? <EntityView doc={cur.doc} name={cur.name} onCite={onCite} onEntity={onEntity} />
         : cur.kind === 'table' ? <TableDoc doc={cur.doc} initialSpec={tableSpec}
             savedViews={(savedViews && savedViews[cur.doc.id]) || []} onApplyView={onApplyView} onSaveView={onSaveView} onDeleteView={onDeleteView} />
+        : cur.kind === 'composition' ? (window.CompositionView
+            ? <window.CompositionView key={cur.doc.id} doc={cur.doc} onAppend={onCompositionEvent} model={model} modelReady={modelReady} allDocs={allDocs || []} onCite={onCite} />
+            : <div className="empty-doc">Composition layer not loaded.</div>)
         : <ProseDoc key={cur.doc.id} doc={cur.doc} explore={explore} onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={onCite} />}
     </aside>
   );
