@@ -184,6 +184,11 @@ function App() {
   // Auditing mode: a glass box over the chat pipeline (window.EOAudit), inspected
   // in a drawer and exportable as JSONL. Recording is on by default.
   const [auditOpen, setAuditOpen] = useState(false);
+  // EO-MRI: the cognition instrument beside the Glass box. Where the Glass box is
+  // the audit LOG, EO-MRI is the SCAN — the EO cube's three faces (Act operators +
+  // order-check, Site, Resolution) and the operator(site, resolution) address,
+  // drawn live as a turn runs (window.EOMRIDrawer). See docs/eo-mri.md.
+  const [eomriOpen, setEomriOpen] = useState(false);
   // Ingestion audit: a glass box over the BUILD — the graph word by word, in
   // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
   const [graphAuditOpen, setGraphAuditOpen] = useState(false);
@@ -227,6 +232,15 @@ function App() {
   // options, bypassing the acquisition gate. One-shot — consumed/cleared on send.
   const [forceEnrich, setForceEnrich] = useState(false);
   const [model, setModel] = useState(defaultModel);
+  // Auto model selection. When on (the default for a fresh install), Cleo probes
+  // the device on boot and loads the model that runs best here — see the boot
+  // effect and EOLLM.recommendModel. Picking a specific model turns it off
+  // (an explicit choice wins); the "Auto" affordance in the picker turns it back
+  // on. Persisted with prefs as `autoModel`. `autoPick` carries the resolved
+  // recommendation ({ id, reason, tier, path }) so the picker can explain it.
+  const [autoModel, setAutoModel] = useState(true);
+  const autoModelRef = useRef(autoModel); autoModelRef.current = autoModel;
+  const [autoPick, setAutoPick] = useState(null);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
   const [modelProgress, setModelProgress] = useState(0);
@@ -376,6 +390,12 @@ function App() {
           setRules(rs => rs.map(r => { const p = prefs.rules.find(x => x.id === r.id); return p ? { ...r, ...p } : r; }));
         }
         if (prefs.modelId) { const m = window.MODELS.find(x => x.id === prefs.modelId); if (m) setModel(m); }
+        // Auto model selection: ON by default for new users. A returning user who
+        // had explicitly picked a model before this existed (a stored modelId, no
+        // autoModel flag) is treated as a manual choice, so we never yank their
+        // model out from under them on upgrade.
+        if (typeof prefs.autoModel === 'boolean') setAutoModel(prefs.autoModel);
+        else if (prefs.modelId) setAutoModel(false);
         if (Array.isArray(prefs.fallbackModelIds)) {
           const slots = [null, null, null];
           for (let i = 0; i < 3; i++) {
@@ -429,7 +449,9 @@ function App() {
         // Rebuild the local span table for restored docs (h → doc/sentence),
         // so provenance anchors stay resolvable on-device without a re-parse.
         if (window.EOEngine && window.EOEngine._provenance) {
-          for (const d of savedDocs) { try { window.EOEngine._provenance.registerDocSpans(d); } catch (e) {} }
+          // prose only — a composition doc's _events are composition events, not
+          // the engine's span log, and must never enter the provenance path.
+          for (const d of savedDocs) { if (d.kind === 'prose') try { window.EOEngine._provenance.registerDocSpans(d); } catch (e) {} }
         }
       }
       if (savedChat) {
@@ -486,8 +508,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
-  }, [rules, langModes, model, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, autoModel, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
+  }, [rules, langModes, model, autoModel, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews]);
   // Hiding the answer-mode control means every turn runs on Auto: hold `mode`
   // there whenever the toggle is off, so a 'grounded'/'creative' left in prefs
   // (or any stray set) can't keep steering turns from behind a hidden control.
@@ -611,10 +633,28 @@ function App() {
   // The documents the turn grounds against: the explicit source set if any,
   // otherwise the focused doc (preserves the single-doc experience).
   const scopeList = () => {
-    const ds = sources.map(id => docsById[id]).filter(Boolean);
-    if (ds.length) return ds;
-    const b = backingDoc();
-    return b ? [b] : [];
+    let ds = sources.map(id => docsById[id]).filter(Boolean);
+    if (!ds.length) { const b = backingDoc(); ds = b ? [b] : []; }
+    return withCompositionProjections(ds);
+  };
+
+  // A composition is queryable by the chat through its PROJECTION — a prose
+  // shape (sentences + per-sentence provenance) the retriever reads like any
+  // source — never its raw event log. The talker sees only the text; the
+  // authorship rides in the projection's _provenance for the audit/UI. Any
+  // composition that lands in scope is mapped to its projection, and every OPEN
+  // composition with drafted content is auto-included, so "what does my document
+  // say…" works whenever one is open (the user's "auto when open" choice).
+  const withCompositionProjections = (ds) => {
+    if (!window.EOComposition) return ds.filter(d => d.kind !== 'composition');
+    const out = [], seen = new Set();
+    const addProj = (d) => {
+      if (seen.has(d.id)) return;
+      try { const p = window.EOComposition.project(d); if (p && !p._empty) { out.push(p); seen.add(d.id); } } catch (e) {}
+    };
+    for (const d of ds) { if (d.kind === 'composition') addProj(d); else out.push(d); }
+    for (const id of openTabs) { const d = docsById[id]; if (d && d.kind === 'composition') addProj(d); }
+    return out;
   };
 
   const openTab = useCallback((id) => {
@@ -636,6 +676,36 @@ function App() {
     // A named project owns its source set explicitly, so leave those alone.
     if (!activeProject) setSources(s => s.filter(x => x !== id));
   };
+
+  // ---- composition documents (the long-form artifact) --------------------
+  // A composition Doc is a doc whose state is a FOLD of its _events log (see
+  // composition.js). It is deliberately NOT added to the chat's source scope —
+  // it is something the system writes, not a corpus it reads — so it never
+  // enters retrieval, working memory, or the grounded prompt. Spinning one up
+  // emits the doc + frame events; every later edit appends more.
+  const newComposition = useCallback(() => {
+    if (!window.EOComposition) { showToast('Composition layer unavailable.'); return; }
+    const evts = window.EOComposition.newDoc({ genre: 'plain-report' });
+    const docEv = evts[0], frameEv = evts[1];
+    const doc = { id: docEv.id, name: 'Untitled composition', kind: 'composition', _events: evts, frame_id: frameEv.id, meta: 'composition' };
+    setDocs(ds => [...ds, doc]);
+    setOpenTabs(t => [...t, doc.id]);
+    setActiveTab(doc.id);
+    if (mobileRef.current) { setLayout('doc'); setCollapsed(true); } else setLayout('split');
+  }, []);
+
+  // Append events to a composition doc's log and re-derive its tab name from the
+  // (possibly new) frame thesis. Pure append — the fold does the rest.
+  const appendCompositionEvents = useCallback((docId, newEvents) => {
+    if (!newEvents || !newEvents.length) return;
+    setDocs(ds => ds.map(d => {
+      if (d.id !== docId || d.kind !== 'composition') return d;
+      const _events = [...(d._events || []), ...newEvents];
+      let name = d.name;
+      for (const e of newEvents) if (e.kind === 'frame' && e.thesis_or_question) name = e.thesis_or_question.slice(0, 60);
+      return Object.assign({}, d, { _events, name });
+    }));
+  }, []);
 
   // ---- the convention proposer (idle, budgeted, toggleable) ----
   // After a parse leaves registered friction, and only when the local model
@@ -946,7 +1016,23 @@ function App() {
     if (saved && model && model.provider === 'anthropic') loadModel(model);
     else if (!saved && model && model.provider === 'anthropic') setModelStatus('idle');
   };
-  const pickModel = (m) => { setModel(m); setModelStatus('idle'); loadModel(m); };
+  // An explicit pick: pin this model and turn auto off (a chosen model wins).
+  const pickModel = (m) => { setAutoModel(false); setAutoPick(null); setModel(m); setModelStatus('idle'); loadModel(m); };
+  // Re-enable auto and (re)pick the model that runs best on this device, then
+  // load it. The "Auto" affordance in the model picker / Settings. Keeps the
+  // single-resident-engine flow: switch the active model, then load it.
+  const chooseAuto = async () => {
+    setAutoModel(true); setAutoPick(null);
+    if (!window.EOLLM || !window.EOLLM.recommendModel) return;
+    try {
+      const rec = await window.EOLLM.recommendModel({ preferCached: true });
+      if (!rec || !rec.key) return;
+      const chosen = window.MODELS.concat(uploadedModels).find(x => x.mlc === rec.key);
+      if (!chosen) return;
+      setAutoPick({ id: chosen.id, reason: rec.reason, tier: rec.tier, path: rec.path });
+      setModel(chosen); setModelStatus('idle'); loadModel(chosen);
+    } catch (e) {}
+  };
   // Register a user-uploaded GGUF as a new wllama (CPU) model, add it to the
   // popover list, and immediately pick it. Session-only — see uploadedModels.
   const uploadModel = (file) => {
@@ -1029,16 +1115,18 @@ function App() {
     return () => { armed = false; document.removeEventListener('pointerdown', retry, { capture: true }); };
   }, [storagePersisted]);
 
-  useEffect(() => {
-    if (!bootReady || !window.EOLLM) return;
-    if (model.provider === 'anthropic') {
-      // A persisted Claude selection resumes if its key is stored; otherwise stay
-      // idle and let the popover collect the key.
-      if (window.EOLLM.hasAnthropicKey()) loadModel(model);
-    } else if (model.provider === 'wllama') {
-      loadModel(model);                      // on-device CPU — no WebGPU needed
+  // Load `m` with the right boot-time treatment per backend: Claude resumes only
+  // if its key is stored; the CPU model runs anywhere; a GPU model also pre-warms
+  // the instant CPU fallback; a GPU model with no WebGPU drops to CPU. Extracted
+  // so the auto-pick path runs the same dispatch once the recommendation lands.
+  const bootLoad = (m) => {
+    if (!m || !window.EOLLM) return;
+    if (m.provider === 'anthropic') {
+      if (window.EOLLM.hasAnthropicKey()) loadModel(m);
+    } else if (m.provider === 'wllama') {
+      loadModel(m);                          // on-device CPU — no WebGPU needed
     } else if (window.EOLLM.hasWebGPU()) {
-      loadModel(model);
+      loadModel(m);
       // Keep the CPU backup READY: pre-import the wllama runtime (small, cached)
       // AND pre-fetch the tiny fallback GGUF into OPFS in the background, so a
       // later GPU stall swaps over with NO download — only wllama init. This
@@ -1052,10 +1140,38 @@ function App() {
       // A GPU model with no WebGPU here → drop straight to the on-device CPU model.
       if (window.EO_CPU_FALLBACK !== 'off') fallbackToCPU();
     }
+  };
+
+  useEffect(() => {
+    if (!bootReady || !window.EOLLM) return;
+    let cancelled = false;
+    (async () => {
+      let m = model;
+      // Auto mode (no model pinned): probe the device and switch to the
+      // recommended pick BEFORE loading, so the very first download is already
+      // the right one — no guess-then-redownload. recommendModel is cheap (it
+      // never imports a runtime) and preferCached makes an already-downloaded,
+      // good-enough model win, which is the "as quickly as possible" half.
+      if (autoModelRef.current && window.EOLLM.recommendModel) {
+        try {
+          const rec = await window.EOLLM.recommendModel({ preferCached: true });
+          if (!cancelled && rec && rec.key) {
+            const chosen = window.MODELS.find(x => x.mlc === rec.key);
+            if (chosen) {
+              m = chosen;
+              if (chosen.id !== model.id) setModel(chosen);
+              setAutoPick({ id: chosen.id, reason: rec.reason, tier: rec.tier, path: rec.path });
+            }
+          }
+        } catch (e) {}
+      }
+      if (!cancelled) bootLoad(m);
+    })();
     // Warm the structure-layer embedding reader in the background so the first
     // escalation isn't also paying the (one-time, cached) model download. Inert
     // if embed.js is absent or the model fails to load — routing stays lexical.
     try { if (window.EOEmbed && window.EOEmbed.warm) window.EOEmbed.warm(); } catch (e) {}
+    return () => { cancelled = true; };
   }, [bootReady]);
 
   // ---- responsive: collapse the sidebar to an off-canvas drawer on phones and
@@ -2554,6 +2670,11 @@ function App() {
     // every draft claim is checked relation-against-relation. Down ⇒ every
     // step below is byte-identical to today (the parity floor).
     const gateOn = !!(window.EOEngine.relationGateEnabled && window.EOEngine.relationGateEnabled());
+    // The cross-source veto (cross_source rule, OFF by default). Up, a draft
+    // over ≥2 sources is checked claim-by-claim for a subject bound to a source
+    // it never appears in (the multi-document conflation). Down or single-source
+    // ⇒ vacuous, byte-identical to today (the parity floor).
+    const crossOn = !!(window.EOEngine.crossSourceEnabled && window.EOEngine.crossSourceEnabled());
     if (genStale(myGen)) return;                  // stopped during shaping — stand down
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
@@ -2939,6 +3060,21 @@ function App() {
               edge: m.edge ? `${m.edge.s} —${m.edge.v}→ ${m.edge.o}` : null, sent: m.edge ? m.edge.sent : null })),
           });
         }
+        // CROSS-SOURCE VETO (cross_source rule): with two or more sources in
+        // scope, the draft's own graph (each claim → the source it binds to) is
+        // checked against the sources' entity membership — a claim whose subject
+        // lives in one source but binds to ANOTHER, where that subject never
+        // appears, is the multi-document conflation the within-source vetoes
+        // (assertion/kin/relation, each reading one graph) structurally can't
+        // see. Its own audit step; flag down or single-source ⇒ never reached.
+        let conflations = [];
+        if (crossOn && scope.length > 1 && window.EOEngine.checkCrossSource) {
+          try { conflations = window.EOEngine.checkCrossSource(scope, fullForChecks, { topic: hotEntity() }) || []; }
+          catch (e) { eoWarn('cross-source-check', e); }
+          if (conflations.length) AUD('step', 'cross-source', {
+            conflations: conflations.map(c => ({ subject: c.subject, subjectDoc: c.subjectDoc,
+              boundDoc: c.boundDoc, sent: c.sent, anaphor: c.anaphor, claim: c.claim })) });
+        }
         // GROUNDING ENVELOPE (mechanism D, embedder-backed): each cited
         // claim's embedding distance to the span its OWN footnote names —
         // drift from the cited source flags; style never does. Vacuous
@@ -3013,6 +3149,15 @@ function App() {
             relationMismatches: relationMismatches.map(m => ({ kind: m.kind, claim: m.claim, docId: m.docId })),
             boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
           flagModel('relation-mismatch', 'Kept the model’s answer, but one claim’s relation doesn’t match the page’s recorded edge — flagged. The mechanical reading is one click away.');
+        } else if (conflations.length) {
+          // A claim that attributes to a subject from one source a fact that
+          // lives only in another — the multi-document conflation. Kept but
+          // flagged, the misattribution named, mirroring the flags above.
+          const c = conflations[0];
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'cross-source-conflation',
+            conflations: conflations.map(x => ({ subject: x.subject, subjectDoc: x.subjectDoc, boundDoc: x.boundDoc, sent: x.sent, anaphor: x.anaphor, claim: x.claim })),
+            boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
+          flagModel('cross-source-conflation', `Kept the model’s answer, but it ties ${c.subject} (from “${c.subjectDoc}”) to something that appears only in “${c.boundDoc}”, where ${c.subject} is never mentioned — the two sources aren’t joined on the page. Flagged; the mechanical reading is one click away.`);
         } else if (kinMismatches.length) {
           AUD('step', 'veto', { decision: 'model-flagged', reason: 'kin-subject-mismatch',
             kinMismatches: kinMismatches.map(m => ({ possessor: m.possessor, kin: m.kin, sent: m.sent, claim: m.claim, docId: m.docId })),
@@ -4028,9 +4173,15 @@ function App() {
               <button className={layout === 'doc' ? 'on' : ''} onClick={() => setLayout('doc')} title="Fullscreen document"><Icon name="expand" size={14} /></button>
             </div>
           )}
+          <button className="tb-pill" onClick={newComposition} title="Compose — spin up a long-form, grounded document: a revisable plan and a drafted output, every claim bound to evidence, the whole production a reviewable event log">
+            <Icon name="edit" size={15} /> <span className="tb-pill-lbl">Compose</span>
+          </button>
           <button className="tb-pill" onClick={() => setAuditOpen(true)} title="Glass box — the extracted graph and every step the chat takes, exportable as JSONL">
             <Icon name="activity" size={15} /> <span className="tb-pill-lbl">Glass box{auditCount ? ' · ' + auditCount : ''}</span>
             {auditEnabled && <span className="dot rec" title="Recording" />}
+          </button>
+          <button className="tb-pill" onClick={() => setEomriOpen(true)} title="EO-MRI — a live cross-section of the reader's turn: the EO cube's three faces (operators · site · resolution) and the operator(site, resolution) address">
+            <Icon name="cube" size={15} /> <span className="tb-pill-lbl">EO-MRI</span>
           </button>
           {docs.some(d => d.kind === 'prose') && (
             <button className="tb-pill tb-pill-adv" onClick={() => setGraphAuditOpen(true)} title="Ingestion audit — the graph as it is built, word by word, in reading order, with full provenance">
@@ -4063,7 +4214,8 @@ function App() {
                   onActivate={setActiveTab} onClose={closeTab} layout={layout} onLayout={setLayout}
                   explore={explore} onToggleExplore={() => setExplore(x => !x)}
                   onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={flashCitation} tableSpec={tableSpec}
-                  savedViews={savedViews} onApplyView={applyTableView} onSaveView={saveTableView} onDeleteView={deleteTableView} />
+                  savedViews={savedViews} onApplyView={applyTableView} onSaveView={saveTableView} onDeleteView={deleteTableView}
+                  allDocs={docs} model={model} modelReady={modelStatus === 'ready'} onCompositionEvent={appendCompositionEvents} />
               )}
             </React.Fragment>
           )}
@@ -4080,17 +4232,19 @@ function App() {
         groundingInfo={groundingInfo} onGroundingInfo={setGroundingInfo}
         showModeToggle={showModeToggle} onShowModeToggle={setShowModeToggle}
         wikiMode={wikiMode} onWikiMode={changeWikiMode}
-        models={window.MODELS.concat(uploadedModels)} defaultModelId={model.id} onDefaultModel={(id) => { const m = window.MODELS.concat(uploadedModels).find(x => x.id === id); if (m) pickModel(m); }}
+        models={window.MODELS.concat(uploadedModels)} autoModel={autoModel} defaultModelId={autoModel ? 'auto' : model.id} onDefaultModel={(id) => { if (id === 'auto') { chooseAuto(); return; } const m = window.MODELS.concat(uploadedModels).find(x => x.id === id); if (m) pickModel(m); }}
         fallbackModelIds={fallbackModelIds} onFallbackModelIds={setFallbackModelIds}
         onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
+      {eomriOpen && <EOMRIDrawer onClose={() => setEomriOpen(false)} />}
       {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
       {promptFlowOpen && <PromptFlowDrawer onClose={() => setPromptFlowOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
       {modelOpen && <ModelPopover models={window.MODELS.concat(uploadedModels)} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
                      status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel}
                      webgpu={!!(window.EOLLM && window.EOLLM.hasWebGPU && window.EOLLM.hasWebGPU())}
+                     autoModel={autoModel} autoPick={autoPick} onAuto={chooseAuto}
                      anthropicKeySet={anthropicKeySet} onSetAnthropicKey={setAnthropicKey}
                      onUploadModel={uploadModel} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (

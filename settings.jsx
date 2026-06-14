@@ -129,7 +129,7 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                          pythonEnabled, onPythonEnabled, pythonAvailable,
                          groundingInfo, onGroundingInfo,
                          showModeToggle, onShowModeToggle, wikiMode, onWikiMode,
-                         models, defaultModelId, onDefaultModel,
+                         models, defaultModelId, onDefaultModel, autoModel,
                          fallbackModelIds, onFallbackModelIds,
                          onClearData, storageOK }) {
   const dialogRef = window.useDialog(onClose);
@@ -232,11 +232,12 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
               <div className="set-row set-row-col">
                 <div className="set-row-main">
                   <div className="set-label">Default model</div>
-                  <div className="set-sub">The model loaded at startup and used for every turn. Switching here loads it immediately and remembers it across refreshes.</div>
+                  <div className="set-sub">The model loaded at startup and used for every turn. Switching here loads it immediately and remembers it across refreshes. <b>Auto</b> probes your device and picks the model that runs best here.</div>
                 </div>
-                <select className="set-select" value={defaultModelId || ''}
+                <select className="set-select" value={defaultModelId || (autoModel ? 'auto' : '')}
                         aria-label="Default model"
                         onChange={(e) => onDefaultModel(e.target.value)}>
+                  <option value="auto">Auto — best for this device</option>
                   {models.map(m => (
                     <option key={m.id} value={m.id}>{m.name}{m.detail ? ' — ' + m.detail : ''}</option>
                   ))}

@@ -331,6 +331,256 @@
     return first ? WLLAMA_PREFIX + first : null;
   }
   const hasWasm = () => typeof WebAssembly === 'object' && typeof WebAssembly.instantiate === 'function';
+
+  // ---- device probe + auto model recommendation --------------------------
+  // "Figure out which model runs best here, and start the right download
+  // immediately." Two pieces: probeDevice() reads the cheap capability signals
+  // the browser exposes (the WebGPU adapter + its limits, device RAM, CPU cores,
+  // mobile, WebAssembly); recommendModel() maps that profile onto an exact
+  // catalog entry (data.jsx MODELS[].mlc).
+  //
+  // Deliberately CHEAP. probeDevice asks for a WebGPU adapter (a few ms) but
+  // NEVER imports the multi-megabyte WebLLM/wllama runtimes, so it runs on boot
+  // before anything downloads — the whole point is to kick off the RIGHT
+  // download first rather than guess, load, then re-download. Every threshold is
+  // overridable on window for tuning and tests: EO_PROBE_OVERRIDE injects a whole
+  // profile; EO_DEVICE_MOBILE forces the mobile flag; recommendModel() also takes
+  // an explicit { probe } and { models }.
+
+  // Is this a phone/tablet? UA-CH first (navigator.userAgentData.mobile is the
+  // honest answer where present), then a UA-string fallback, then a coarse
+  // touch + small-screen heuristic (iPadOS 13+ reports a desktop UA). A touch
+  // laptop with a big screen stays "desktop". Overridable via EO_DEVICE_MOBILE.
+  function isMobileDevice() {
+    if (typeof window !== 'undefined' && typeof window.EO_DEVICE_MOBILE === 'boolean') return window.EO_DEVICE_MOBILE;
+    try {
+      const nav = typeof navigator !== 'undefined' ? navigator : null;
+      if (!nav) return false;
+      if (nav.userAgentData && typeof nav.userAgentData.mobile === 'boolean') return nav.userAgentData.mobile;
+      const ua = String(nav.userAgent || '');
+      if (/Mobi|Android|iPhone|iPod|iPad|Windows Phone/i.test(ua)) return true;
+      if ((nav.maxTouchPoints || 0) > 1 && typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) {
+        const w = (typeof screen !== 'undefined' && screen.width) || 0;
+        if (w && w <= 1024) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  // Probe the GPU adapter WITHOUT importing WebLLM. Returns the adapter's
+  // reported limits (weak but real capacity hints), its identity (vendor /
+  // architecture / description — commonly redacted to '' for privacy, so treated
+  // as a soft bonus, never a gate), and whether it's a SOFTWARE fallback adapter
+  // — which we treat as "no real GPU" so we don't recommend a GPU model that
+  // would crawl. Resolves to null when there's no WebGPU or the request fails.
+  // The promise is memoized: probing once per session is plenty.
+  let _adapterProbe = null;
+  async function probeAdapter(fresh) {
+    if (_adapterProbe && !fresh) return _adapterProbe;
+    _adapterProbe = (async () => {
+      try {
+        if (typeof navigator === 'undefined' || !navigator.gpu || typeof navigator.gpu.requestAdapter !== 'function') return null;
+        let adapter = null;
+        try { adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }); } catch (_) {}
+        if (!adapter) { try { adapter = await navigator.gpu.requestAdapter(); } catch (_) {} }
+        if (!adapter) return null;
+        const lim = adapter.limits || {};
+        const MB = 1024 * 1024;
+        // adapter.info is synchronous in newer browsers; requestAdapterInfo() is
+        // the older promise form. Either may be redacted — that's fine.
+        let info = adapter.info || null;
+        if (!info && typeof adapter.requestAdapterInfo === 'function') {
+          try { info = await adapter.requestAdapterInfo(); } catch (_) {}
+        }
+        return {
+          maxBufferMB: Math.round((lim.maxBufferSize || 0) / MB),
+          maxStorageMB: Math.round((lim.maxStorageBufferBindingSize || 0) / MB),
+          fallbackAdapter: !!adapter.isFallbackAdapter,
+          vendor: (info && info.vendor) || '',
+          architecture: (info && info.architecture) || '',
+          description: (info && info.description) || '',
+        };
+      } catch (_) { return null; }
+    })();
+    return _adapterProbe;
+  }
+
+  // The full device profile recommendModel() reads. Cheap; re-reads the
+  // key/wasm flags each call (they can change mid-session) and reuses the
+  // memoized adapter probe. EO_PROBE_OVERRIDE short-circuits the whole thing.
+  async function probeDevice(opts) {
+    const o = opts || {};
+    if (typeof window !== 'undefined' && window.EO_PROBE_OVERRIDE) return window.EO_PROBE_OVERRIDE;
+    const nav = typeof navigator !== 'undefined' ? navigator : {};
+    const webgpu = hasWebGPU();
+    const adapter = webgpu ? await probeAdapter(o.fresh) : null;
+    return {
+      webgpu,
+      adapter: !!adapter,
+      gpu: !!(adapter && !adapter.fallbackAdapter),     // a USABLE hardware GPU
+      fallbackAdapter: !!(adapter && adapter.fallbackAdapter),
+      maxBufferMB: adapter ? adapter.maxBufferMB : 0,
+      maxStorageMB: adapter ? adapter.maxStorageMB : 0,
+      gpuVendor: adapter ? adapter.vendor : '',
+      gpuArchitecture: adapter ? adapter.architecture : '',
+      gpuDescription: adapter ? adapter.description : '',
+      deviceMemoryGB: (typeof nav.deviceMemory === 'number') ? nav.deviceMemory : null,
+      cores: (typeof nav.hardwareConcurrency === 'number' && nav.hardwareConcurrency) || null,
+      mobile: isMobileDevice(),
+      wasm: hasWasm(),
+      anthropicKey: hasAnthropicKey(),
+    };
+  }
+
+  // Curated "best for this device" ladders — exact catalog keys, strongest-first
+  // per tier. recommendModel walks the tier's ladder and returns the first key
+  // actually present in the catalog, so trimming a model from data.jsx degrades
+  // gracefully (it falls to the next) instead of recommending one that's gone.
+  // The GPU ladder tops out at the 3B sweet spot on a FRESH pick — strong quality
+  // at a ~2.3 GB one-time download — rather than the 7-8B tier (a ~5 GB download
+  // a user should opt into from the picker). A 7-8B that's ALREADY on disk still
+  // wins via the cached-upgrade pass, so a power user's earlier choice is kept.
+  const GPU_LADDER = {
+    high: ['Llama-3.2-3B-Instruct-q4f16_1-MLC', 'Qwen3-1.7B-q4f16_1-MLC', 'Llama-3.2-1B-Instruct-q4f16_1-MLC', 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC'],
+    mid:  ['Llama-3.2-1B-Instruct-q4f16_1-MLC', 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC'],
+    low:  ['Qwen2.5-0.5B-Instruct-q4f16_1-MLC', 'Llama-3.2-1B-Instruct-q4f16_1-MLC'],
+  };
+  const CPU_LADDER = {
+    high: ['wllama:llama32-1b', 'wllama:qwen25-05b', 'wllama:smollm2-360m', 'wllama:smollm2-135m'],
+    mid:  ['wllama:qwen25-05b', 'wllama:smollm2-360m', 'wllama:smollm2-135m'],
+    low:  ['wllama:smollm2-360m', 'wllama:smollm2-135m'],
+    tiny: ['wllama:smollm2-135m', 'wllama:smollm2-360m'],
+  };
+  // GPU capacity bucket. Signals are weak (the WebGPU limits are driver-reported
+  // maxima, not free VRAM; adapter identity is often redacted; deviceMemory is
+  // capped at 8 and absent on Safari/Firefox), so we combine them conservatively
+  // and lean on whichever is actually present. A storage-binding limit stuck at
+  // the ~128 MB spec floor is a genuinely constrained adapter → step down.
+  function gpuTier(p) {
+    if (p.mobile) return 'low';
+    const ram = p.deviceMemoryGB;
+    const budget = Math.max(p.maxBufferMB || 0, p.maxStorageMB || 0);
+    const constrained = !!(p.maxStorageMB && p.maxStorageMB <= 160);
+    if (ram != null) {
+      if (ram >= 8 && !constrained) return 'high';
+      if (ram >= 4) return constrained ? 'low' : 'mid';
+      return 'low';
+    }
+    // RAM unknown (Safari/Firefox/older Chrome): lean on the GPU budget. A
+    // healthy maxBuffer (≥1 GB) on a real adapter is a capable GPU → high.
+    if (budget >= 1024 && !constrained) return 'high';
+    if (budget >= 512) return 'mid';
+    return 'low';
+  }
+  // CPU bucket (no usable GPU): scaled by cores and RAM. Mobile CPUs get the
+  // tiniest model — small download, runs on a phone without melting it.
+  function cpuTier(p) {
+    if (p.mobile) return 'tiny';
+    const cores = p.cores || 0;
+    const ram = p.deviceMemoryGB;
+    if (cores >= 8 && (ram == null || ram >= 8)) return 'high';
+    if (cores >= 4 && (ram == null || ram >= 4)) return 'mid';
+    return 'low';
+  }
+  // Two keys share a backend "class" (GPU / CPU / cloud) when both predicates
+  // agree — used so the cached-upgrade pass only ever swaps within one path.
+  const sameModelClass = (a, b) => (isAnthropic(a) === isAnthropic(b)) && (isWllama(a) === isWllama(b));
+  // Rough quality score (≈ billions of params) so the cached-upgrade pass can
+  // compare models on one axis. GPU keys carry the param count in their name;
+  // wllama keys size from their registry bytes (~1.5 params per GB at Q4/Q8).
+  // Ranking only — never displayed.
+  function modelScore(key) {
+    if (isAnthropic(key)) return 100;
+    if (isWllama(key)) {
+      const src = wllamaSource(key);
+      const b = (src && typeof src.bytes === 'number') ? src.bytes : 0;
+      return b ? (b / (1024 * 1024 * 1024)) * 1.5 : 1;
+    }
+    return modelParamsB(key) || 1;
+  }
+  // The catalog as a plain list. Defaults to the app's window.MODELS; takes an
+  // explicit list for tests / alternate hosting.
+  function catalogList(models) {
+    if (Array.isArray(models)) return models;
+    return (typeof window !== 'undefined' && Array.isArray(window.MODELS)) ? window.MODELS : [];
+  }
+  // Cheap "is it already on disk", used only by the recommender — it must never
+  // import a runtime. wllama: an OPFS lookup (free). WebLLM: only when its module
+  // is ALREADY loaded this session (mod set), so a recommendation never pays the
+  // CDN import just to check; unknown ⇒ false (no upgrade, no harm).
+  async function cacheStatusCheap(mlcKey) {
+    if (isAnthropic(mlcKey)) return false;
+    if (isWllama(mlcKey)) { try { return await wllamaCachedAny(wllamaSource(mlcKey)); } catch (_) { return false; } }
+    try {
+      if (mod && typeof mod.hasModelInCache === 'function') return !!(await mod.hasModelInCache(mlcKey, webllmAppConfig()));
+    } catch (_) {}
+    return false;
+  }
+
+  // Recommend the model that runs best HERE, and that gets to a working state
+  // fastest. Returns { key, reason, tier, path, probe } — path is
+  // 'gpu' | 'cpu' | 'cloud'; key is null only when the catalog is empty.
+  //
+  // preferCached (default true) is the "as quickly as possible" half: if a model
+  // that's at least as good is ALREADY downloaded and runs on this path, it wins
+  // — instant and better. It only ever UPGRADES (a score gate blocks downgrades),
+  // so the tiny pre-warmed fallback can't displace a stronger fresh pick, and it
+  // uses only the cheap cache probes above (no runtime import).
+  async function recommendModel(opts) {
+    const o = opts || {};
+    const models = catalogList(o.models);
+    const has = (key) => models.some(m => m && m.mlc === key);
+    const firstAvailable = (ladder) => { for (const k of (ladder || [])) if (has(k)) return k; return null; };
+    const probe = o.probe || await probeDevice(o);
+
+    let path, key, tier = null, reason;
+    if (probe.gpu) {
+      path = 'gpu'; tier = gpuTier(probe);
+      key = firstAvailable(GPU_LADDER[tier]) || firstAvailable(GPU_LADDER.low) || firstAvailable(GPU_LADDER.high);
+      reason = tier === 'high'
+        ? 'Your GPU looks capable, so Cleo picked a strong 3B model. Larger 7–8B models are in the picker if you want them.'
+        : tier === 'mid'
+        ? 'Picked a model sized to your GPU — quick to download and fast to run here.'
+        : 'Picked a light model so it loads fast and stays smooth on this GPU.';
+    } else if (probe.wasm) {
+      path = 'cpu'; tier = cpuTier(probe);
+      key = firstAvailable(CPU_LADDER[tier]) || firstAvailable(CPU_LADDER.low) || firstAvailable(CPU_LADDER.tiny);
+      reason = (probe.webgpu && probe.fallbackAdapter)
+        ? 'No hardware GPU acceleration here, so Cleo picked an on-device CPU model.'
+        : tier === 'high'
+        ? 'No WebGPU here — picked the strongest on-device CPU model this machine handles comfortably.'
+        : 'No WebGPU in this browser, so Cleo picked an on-device CPU model that runs anywhere.';
+    } else if (probe.anthropicKey) {
+      path = 'cloud';
+      key = has('anthropic:claude-haiku-4-5') ? 'anthropic:claude-haiku-4-5'
+          : firstAvailable(['anthropic:claude-sonnet-4-6', 'anthropic:claude-opus-4-8']);
+      reason = 'This browser can’t run a local model, so Cleo used your connected Claude (fast and low-cost).';
+    } else {
+      // Nothing local can actually run (no GPU, no WASM, no key). Hand back the
+      // CPU fallback so the app stays consistent; the loader surfaces the why.
+      path = 'cpu';
+      key = (fallbackKey && fallbackKey()) || firstAvailable(CPU_LADDER.tiny);
+      reason = 'This browser can’t run a local model — add an Anthropic key for Claude, or try Chrome/Edge.';
+    }
+
+    if (key && o.preferCached !== false) {
+      try {
+        const floor = modelScore(key);
+        let best = null, bestScore = floor;
+        for (const m of models) {
+          if (!m || !m.mlc || m.mlc === key || !sameModelClass(m.mlc, key)) continue;
+          const sc = modelScore(m.mlc);
+          if (sc < bestScore) continue;                 // never downgrade
+          let cached = false;
+          try { cached = await cacheStatusCheap(m.mlc); } catch (_) {}
+          if (cached && (sc > bestScore || !best)) { best = m.mlc; bestScore = sc; }
+        }
+        if (best && best !== key) { key = best; reason = 'A model you’ve already downloaded fits this device, so it’s ready instantly.'; }
+      } catch (_) {}
+    }
+    return { key, reason, tier, path, probe };
+  }
+
   // Quiet logger: wllama is chatty on stdout otherwise. Errors still surface.
   const WLLAMA_LOGGER = { debug() {}, log() {}, warn() {}, error(...a) { try { console.error(...a); } catch (_) {} } };
 
@@ -1444,5 +1694,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();

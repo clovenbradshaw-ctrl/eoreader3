@@ -27,6 +27,18 @@ without WebGPU the app falls back to an on-device **CPU model** (llama.cpp via
 WebAssembly) so answers are still phrased — and grounded answers and pivots work
 mechanically regardless of any model.
 
+You don't have to choose, though: on a fresh load the model selector sits on
+**Auto**, which probes the device — WebGPU adapter and its limits, device RAM,
+CPU cores, mobile — and loads the model that runs best *here*, downloading it
+immediately rather than guessing and re-fetching. A capable GPU gets the 3B
+sweet spot; a modest one a 1B; a phone a 0.5B; no WebGPU drops to a CPU model
+sized to your cores and RAM; and if a strong model is **already cached**, Auto
+prefers it so you're ready instantly. Picking a specific model from the selector
+turns Auto off (an explicit choice wins); the **Auto** row in the picker, or
+*Settings → Model → Auto*, turns it back on. The probe imports no runtime, so it
+costs nothing at load (`window.EOLLM.recommendModel()` / `probeDevice()` expose
+it; `window.EO_PROBE_OVERRIDE` forces a profile for testing).
+
 The CPU model runs single-threaded out of the box. To unlock multi-threaded CPU
 inference (faster), serve the app cross-origin-isolated — with
 `Cross-Origin-Opener-Policy: same-origin` and
@@ -133,8 +145,14 @@ The intelligence is **mechanical**; the language model only phrases things.
   turn's pipeline step by step and exports it as JSONL. In-memory; deterministic;
   no model involved.
 - **UI** (`app.jsx`, `chat.jsx`, `docview.jsx`, `sidebar.jsx`, `rulesets.jsx`,
-  `auditview.jsx`, `icons.jsx`) — React via in-browser Babel; `styles.css` for
-  the look.
+  `auditview.jsx`, `eomri.jsx`, `icons.jsx`) — React via in-browser Babel;
+  `styles.css` for the look.
+- **`eomri.jsx`** — **EO-MRI**, the cognition instrument beside the Glass box.
+  Where the Glass box is the audit *log*, EO-MRI is the *scan*: a live
+  cross-section of a turn as it runs, drawn as the EO cube's three faces — the
+  operator helix + order-check (EO reader compliance), the Site face, the
+  Resolution face — and the `operator(Site, Resolution)` 3-fold address. See
+  `docs/eo-mri.md`.
 - **`data.jsx`** — example documents, model list, and the reading rulesets.
 - **`store.js`** — local persistence (IndexedDB for docs/chat, localStorage for
   prefs/rules and the learned rules-ledger delta).
@@ -442,6 +460,62 @@ and written into a prompt. The shape is tacit — a distance, not a spec. The
 moment a fetched corpus becomes a feature list in the talker's prompt, it is a
 checklist again.
 
+### The composition layer (long-form, grounded documents)
+
+The grounded turn-scale loop, lifted to the scale of a whole composition. The
+**Compose** button (topbar) spins up a long-form document as an *artifact*: a
+revisable **plan** on the left and the drafted **output** on the right, every
+claim bound to evidence, the entire production reviewable as an event log. It is
+not a generator with a longer context window and not a planner-then-drafter
+pipeline with a fixed outline — the model stays one component inside the loop,
+and this is the long-form version of that loop.
+
+Everything is a **log event** on the doc, and the document you see is a **fold**
+of the log (`composition.js` → `window.EOComposition`). State is never stored; it
+is derived by replay — the same Given-Log rule as the turn-scale system. The
+objects are a **Doc**, a **Frame** (the rhetorical problem as an object: thesis,
+reader, goal, constraints, genre — revisable), a tree of **Units** each carrying
+a *job* (direction, not content), **Drafts** (the prose, with the spans it drew
+from), **Stamps** (the computed confidence), **Holes** (an owed unit with a
+*grain*: Figure → a citation, Ground → a context, Pattern → corroborating
+instances), and **Routes** (the monitor's decision). Editing is appending;
+**undo is supersession** (a `REC` that drops its target from the fold).
+
+Every gate is a predicate over a **Confidence vector** with named components —
+`witness`, `form`, `coherence`, `retrieval`, `temporal`, `frame` — never a
+scalar. A component that wasn't measured is `null` (shown as `null`, never zero)
+and never blocks a gate. The **witness** is grain-relative, measured on the
+talker's own prose against the spans it was given (Figure = citation coverage,
+Ground = honest-absence-if-warranted, Pattern = corroboration count, with a
+`grain-mismatch` flag); the **form** is the cosine to the genre centroid
+(`form-genres.jsonl`), null until that library is populated. The talker only
+**phrases** the chunk — it never sees the whole document, the genre prototype as
+words, or any operator vocabulary; the grounding and the stamp are mechanical.
+
+The **monitor** reads each stamp and emits a Route naming the predicate that
+fired (`witness >= 0.4 AND form >= 0.5 …` → `advance`; `witness < 0.4 AND
+retrieval >= 0.5` → `revise`; `witness < 0.4 AND retrieval < 0.5` → `fetch`; …),
+shown in the draft pane and projected to the unit's colour band in the plan tree.
+
+The document side is a **directly-editable canvas**. You can write into it
+yourself; **authorship is tracked per sentence by diff** (not per keystroke —
+the *changes* carry the new author), so the canvas shades every sentence by who
+wrote it, you or the talker, and "who actually wrote this" stays traceable. The
+document is also **queryable by the chat whenever it's open**: a projection
+(`EOComposition.project`) turns the fold into a prose shape the retriever reads
+like any source — the model queries your document at significance level, the
+authorship rides in the projection for the audit, and the talker sees it all as
+just text.
+
+This build lands **phases one and two** (the plan-as-log and the artifact; the
+witness and form stamps at unit scale with the live monitor). The **standing
+operator** and its `coherence` component (phase three), the monitor emitting
+`plan-edit-by-draft` on its own (phase four), and the full bidirectional /
+free-order UX (phase five) are staged, with the architecture set up to receive
+them. With no composition open, eoreader behaves identically to today —
+`tests/composition.test.js` and `tests/compose.smoke.js` pin the layer, and the
+golden parity stays byte-exact. See `docs/composition-layer.md`.
+
 ### Checking a claim (CONFIRM/DENY)
 
 Not every turn is a question. "Is Amos Dresser the white minister…?", "but it
@@ -466,6 +540,39 @@ And when a check fails a claim **the assistant itself made earlier**, the old
 reply is **retracted**: flagged in the chat, re-tagged in the model's history
 ("…RETRACTED — do not repeat or defend it"), and the retraction said out loud
 in the new answer — a correction the user deposits actually lands somewhere.
+
+### Conflation across sources (the cross-source veto)
+
+Load two sources and a question that hands the model both at once and a third
+failure appears, invisible to every check that reads one document at a time. Ask
+for an essay on *Oracle's ethics* with a Larry Ellison article **and** a Nashville
+police-surveillance article in scope, and the model writes "Oracle's partnership
+with the Metropolitan Nashville Police Department to deploy 15 fixed cameras" —
+each sentence binding cleanly (the camera words really do live on the page it
+cites) while the *bridge between the two documents* is the model's own. It was
+never Oracle that deployed the cameras; the subject lives only in the Ellison
+article, the cameras only in the police one, and **no page joins them**. The
+within-source vetoes (assertion, kin, relation) each read a single graph and
+structurally cannot see it.
+
+The fix is to read the **draft's own graph** — each claim resolved to the source
+it binds to — against the sources' entity membership. A claim whose governing
+subject is an entity *absent* from the source it cites but *present* in another
+in-scope source is a cross-source attribution: held and flagged, the
+misattribution named in the trace ("ties Oracle, from the Ellison article, to
+something that appears only in the surveillance doc, where Oracle is never
+mentioned"). The topic is **carried across sentences** the way a reader carries
+one, so an anaphor inherits it — "*The company's* partnership…" is read as
+Oracle's, and flags, even though the sentence never says the name. Conservative
+by construction: it needs two or more sources, a named topic, and a clean bind;
+an entity shared across sources is not foreign and never flags, and a definite
+reference local to the cited doc ("the cameras", whose head noun lives there) is
+read as that page's own, not the topic's — the failure direction of every
+heuristic is a missed flag, never a false one. Behind the *Cross-Source
+Attribution* rule (off by default — the parity floor); on, it keeps the model's
+answer and downgrades the badge to an honest caveat, exactly like the vetoes
+beside it. `tests/cross-source.test.js` pins the catch, the topic carry, and the
+zero-false-flag bar.
 
 ### De-chroming (the page, minus its chrome)
 

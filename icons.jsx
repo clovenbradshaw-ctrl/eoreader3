@@ -17,6 +17,7 @@ const ICON_PATHS = {
   settings:  '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
   chevron:   '<path d="M6 9l6 6 6-6"/>',
   'chevron-down':  '<path d="M6 9l6 6 6-6"/>',
+  'chevron-up':    '<path d="M18 15l-6-6-6 6"/>',
   'chevron-right': '<path d="M9 6l6 6-6 6"/>',
   alert:     '<path d="M12 3l9 16H3z"/><line x1="12" y1="10" x2="12" y2="14.5"/><line x1="12" y1="17.5" x2="12" y2="17.5"/>',
   info:      '<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12" y2="8"/>',
@@ -37,6 +38,8 @@ const ICON_PATHS = {
   stop:      '<rect x="6" y="6" width="12" height="12" rx="2.5"/>',
   calculator:'<rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="8" y2="11"/><line x1="12" y1="11" x2="12" y2="11"/><line x1="16" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="8" y2="15"/><line x1="12" y1="15" x2="12" y2="15"/><line x1="16" y1="15" x2="16" y2="15"/>',
   fork:      '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  // The EO cube — three faces meeting at a vertex (Act · Site · Resolution).
+  cube:      '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
 };
 function Icon({ name, size = 18, style, className, strokeWidth = 1.7 }) {
   const p = ICON_PATHS[name];
