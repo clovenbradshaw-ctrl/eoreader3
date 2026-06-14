@@ -309,6 +309,53 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     ok(!X.acquireIntent('tell me more'), 'a vague follow-up is not acquisition');
   });
 
+  group('isSpecificQuery() — can the term stand on its own?', () => {
+    ok(X.isSpecificQuery('Skydio'), 'a Capitalized proper-noun-like token is specific');
+    ok(X.isSpecificQuery('French Revolution'), 'a multi-word topic is specific');
+    ok(!X.isSpecificQuery('research'), 'a bare lowercase common noun is not');
+    ok(!X.isSpecificQuery('DFR'), 'a lone ALL-CAPS acronym is not');
+    ok(!X.isSpecificQuery(''), 'empty is not');
+  });
+
+  group('seedQuery() — anchor a contextless forced query to the reader’s subject', () => {
+    const ctx = { subject: 'Skydio', entities: ['Skydio', 'MNPD', 'surveillance'] };
+    // the reported gap: a forced bare common noun ("research") searched its own
+    // token → disambiguation soup. Anchor it to the active subject instead.
+    eq(X.seedQuery('research', ctx), 'Skydio research', 'a bare common noun is anchored to the active subject');
+    eq(X.seedQuery('DFR', ctx), 'Skydio DFR', 'a lone acronym is anchored too');
+    // an EXPLICIT acquisition names its own target — pass it through untouched
+    eq(X.seedQuery('search wikipedia for dolphins', ctx), 'dolphins', 'an explicit lookup is not seeded');
+    eq(X.seedQuery('look up Howard Shore', ctx), 'Howard Shore', 'an explicit name lookup is not seeded');
+    // an already-specific extraction (a proper noun in the message) needs no anchor
+    eq(X.seedQuery('Skydio drones are everywhere', ctx), 'Skydio', 'a proper noun in the message wins, no seed');
+    // the anchor skips an entity the bare term already names (no "surveillance surveillance")
+    eq(X.seedQuery('surveillance', ctx), 'Skydio surveillance', 'the first DISTINCT anchor wins');
+    // no context → the bare term, unchanged (never worse than before the seed)
+    eq(X.seedQuery('research', {}), 'research', 'no subject → unchanged');
+    eq(X.seedQuery('research', null), 'research', 'no context → unchanged');
+    eq(X.seedQuery('', ctx), null, 'empty → null');
+  });
+
+  await group('searchEntities() — offer the hottest subjects at once, hottest on top', async () => {
+    const r = await X.searchEntities(['socialism', 'metro council'], { subjects: 3, perSubject: 2 });
+    eq(r.status, 'hit', 'a hit when any subject matches');
+    ok(r.options.length >= 2, 'options merged across subjects');
+    eq(r.options[0].title, 'Socialism', 'the hottest subject leads');
+    eq(r.options[0].via, 'socialism', 'each option carries the subject it came from');
+    ok(r.options.some(o => o.title === 'Metropolitan Council'), 'a later subject contributes too');
+    eq(r.options.filter(o => o.title === 'Other Thing').length, 1, 'a title two subjects share is merged, not duplicated');
+    // a subject is searched at most once even if it repeats in the heat list
+    const log2 = [];
+    const X2 = loadExternal(log2);
+    await X2.searchEntities(['socialism', 'Socialism', 'metro council'], { subjects: 3, perSubject: 2 });
+    eq(log2.filter(e => e.kind === 'wiki-search').length, 2, 'duplicate subjects collapse to one search each');
+    // graceful edges
+    const miss = await X.searchEntities(['no such subject here'], {});
+    ok(miss.status === 'miss' || miss.status === 'no-options', 'all-miss → miss/no-options, not a throw');
+    eq((await X.searchEntities([], {})).status, 'miss', 'no subjects → miss');
+    eq((await X.searchEntities(['socialism'], { subjects: 9 })).status, 'hit', 'subjects clamps high, still a hit');
+  });
+
   await group('rate limiter — calls are spaced by the interval', async () => {
     X.setConfig({ intervalMs: 25 });
     const log2 = [];

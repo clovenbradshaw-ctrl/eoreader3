@@ -3092,6 +3092,30 @@ function App() {
     return bw.length > 1 && bw.includes(aw[0]);
   };
 
+  // The context that anchors a forced, contextless Wikipedia query (a bare
+  // common noun like "research", which searches to a disambiguation page) to
+  // what the reader is actually reading: the conversation's hottest entities
+  // first (the active subject), then — when the field is still cold — the
+  // primary in-scope document's most-salient names. Best-effort and defensive;
+  // an empty context just means the bare term searches as it did before. Read by
+  // EOExternal.seedQuery, which only consults it for a non-acquisition message.
+  const wikiSeedContext = () => {
+    const E = window.EOEngine;
+    const entities = [];
+    try {
+      const snap = E && E.conversationField && E.conversationField.snapshot();
+      for (const e of ((snap && snap.entities) || [])) { const l = e && (e.label || e.key); if (l) entities.push(l); }
+    } catch (e) {}
+    if (!entities.length) {
+      try {
+        const primary = scopeList()[0];
+        const proj = primary && E && E.projectEntities && E.projectEntities(primary);
+        for (const e of ((proj && proj.entities) || []).slice(0, 6)) { if (e && e.name) entities.push(e.name); }
+      } catch (e) {}
+    }
+    return { subject: entities[0] || null, entities };
+  };
+
   // Decide whether THIS turn should take a stab at Wikipedia. The acquisition
   // gate (intent + identity + corpus-resolution + active-subject follow-up) is
   // unchanged and still FAILS CLOSED — a missing or throwing decider SUPPRESSES
@@ -3108,7 +3132,17 @@ function App() {
     if (!X || !X.enabled || !X.enabled()) return null;
     const E = window.EOEngine;
     const force = !!(opts && opts.force);
-    const term = (X.pickQuery && X.pickQuery(q)) || q;
+    // A HARD force is the per-message button — a deliberate "consult the desk on
+    // THIS now"; a soft force is 'on' mode's standing lean. Only a hard force
+    // overrides the corpus bind below (so the button reaches Wikipedia even for a
+    // subject already in the document).
+    const hard = !!(opts && opts.hard);
+    // Seed a contextless query with the reader's subject so a forced bare token
+    // ("research") doesn't search to a disambiguation page; an explicit or
+    // already-specific term passes through untouched. Only the force path can
+    // carry a non-acquisition message this far, so only it builds the context.
+    const ctx = force ? wikiSeedContext() : null;
+    const term = (X.seedQuery && X.seedQuery(q, ctx)) || (X.pickQuery && X.pickQuery(q)) || q;
     // A vague follow-up ("tell me more", "why?") names no new subject — keep
     // chatting against whatever Wikipedia articles are already in scope rather
     // than pulling a spurious one. The substantive turn did the ingest.
@@ -3140,13 +3174,19 @@ function App() {
         if (b && b.hold) return null;
       }
     }
-    //   (2) corpus resolution FIRST (even when forced): a subject already
-    //       ingested (resolved by entity, not surface) binds to the existing
-    //       document — no re-fetch, no duplicate. FIX 2 fail-closed: if we can't
-    //       check the corpus, we can't prove a fetch is warranted, so we don't.
-    if (!E || typeof E.resolveSubjectDoc !== 'function') return null;
-    let have; try { have = E.resolveSubjectDoc(docsRef.current, term); } catch (e) { eoWarn('resolveSubjectDoc', e); return null; }
-    if (have) { addSource(have.id); return { doc: have }; }
+    //   (2) corpus resolution: an AUTO or soft-force ('on' mode) turn binds to a
+    //       subject already ingested (resolved by entity, not surface) — no
+    //       re-fetch, no duplicate. A HARD force (the per-message button) is the
+    //       reader overriding that — "consult the desk now" even for an in-corpus
+    //       subject — so skip the bind and let the offer run (the article ingest
+    //       still dedupes the "Wikipedia · Title" doc by name). FIX 2 fail-closed
+    //       still holds off the hard path: if we can't check the corpus, we can't
+    //       prove an auto/soft fetch is warranted, so we don't.
+    if (!hard) {
+      if (!E || typeof E.resolveSubjectDoc !== 'function') return null;
+      let have; try { have = E.resolveSubjectDoc(docsRef.current, term); } catch (e) { eoWarn('resolveSubjectDoc', e); return null; }
+      if (have) { addSource(have.id); return { doc: have }; }
+    }
     // Ambiguous acquisition (a bare token that collides with the active subject —
     // "look up Shore" while a different Shore is active) must not silently
     // fetch-and-swap; hold (gate only — a force overrides).
@@ -3161,7 +3201,18 @@ function App() {
     // force ('on' mode / the button on a chatty message) shows the card alongside
     // the model's reply. This turn injects no doc: it answers from what's already
     // in scope, and the chosen article grounds later turns.
-    return { offered: true, term, explicit };
+    //
+    // For a NON-EXPLICIT offer the bare token is the wrong thing to look up — the
+    // reader's hottest conversation subjects (ctx, force-only) are. Hand the
+    // caller that heat-ranked pool so it can search them at once and surface the
+    // hottest's articles on top; lead with a specific subject the message itself
+    // named ("look at Tesla" still leads with Tesla), even if it isn't hot yet.
+    let pool = (ctx && Array.isArray(ctx.entities)) ? ctx.entities.slice() : [];
+    if (!explicit) {
+      const raw = (X.pickQuery && X.pickQuery(q)) || '';
+      if (raw && X.isSpecificQuery && X.isSpecificQuery(raw)) pool = [raw, ...pool];
+    }
+    return { offered: true, term, explicit, entities: pool };
   };
 
   // The "initial search → offer options" step (the AUTOMATIC path). A cheap
@@ -3188,6 +3239,32 @@ function App() {
     if (res.status === 'error') { tag({ status: 'error', term, error: res.error }); return { status: 'error', term, error: res.error }; }
     if (res.status === 'hit' && res.options && res.options.length) { const options = res.options.slice(0, 6); tag({ status: 'options', term, options }); return { status: 'options', term, options }; }
     tag({ status: 'no-options', term }); return { status: 'no-options', term };
+  };
+
+  // The hottest-subjects offer (the non-explicit / forced path). Instead of one
+  // search on a bare token, search the conversation's hottest subjects at once
+  // and merge their top articles into ONE ranked card — hottest on top
+  // (EOExternal.searchEntities). Degrades to the single-term offer on an older
+  // external.js; settles an honest miss/error card when the multi-search comes
+  // back empty. Drives the live message's card by turnId like offerWikiOptions.
+  const offerWikiHot = async (turnId, entities) => {
+    const X = window.EOExternal;
+    const list = (entities || []).filter(Boolean);
+    if (!list.length) return { status: 'no-options' };
+    if (!X || typeof X.searchEntities !== 'function') return offerWikiOptions(turnId, list[0]);   // older build → single
+    const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
+    try { X.grantConsent && X.grantConsent(); } catch (e) {}
+    tag({ status: 'searching', term: list[0] });
+    let res;
+    try { res = await X.searchEntities(list, { subjects: 3, perSubject: 2 }); }
+    catch (e) { res = { status: 'error', error: String((e && e.message) || e) }; }
+    if (!res || res.status === 'disabled') { tag(null); return { status: 'disabled' }; }
+    if (res.status === 'hit' && res.options && res.options.length) {
+      const options = res.options.slice(0, 6);
+      tag({ status: 'options', term: list[0], options }); return { status: 'options', term: list[0], options };
+    }
+    if (res.status === 'error') { tag({ status: 'error', term: list[0], error: res.error }); return { status: 'error', term: list[0] }; }
+    tag({ status: 'no-options', term: list[0] }); return { status: 'no-options', term: list[0] };
   };
 
   // The coordinated reply for an EXPLICIT Wikipedia lookup ("search wikipedia for
@@ -3472,7 +3549,7 @@ function App() {
     const forceWiki = wikiMode === 'on' || forcedThisMessage;
     if (wikiMode !== 'off' && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {
       let wr = null;
-      try { wr = await chatWikipedia(q, turnId, { force: forceWiki }); } catch (e) { eoWarn('wiki-chat', e); }
+      try { wr = await chatWikipedia(q, turnId, { force: forceWiki, hard: forcedThisMessage }); } catch (e) { eoWarn('wiki-chat', e); }
       if (wr && wr.doc) injectedDoc = wr.doc;             // an already-ingested corpus match, threaded into scope
       else if (wr && wr.offered) {
         wikiOffer = wr;
@@ -3481,7 +3558,12 @@ function App() {
         // EXPLICIT lookup ("search wikipedia for X") is decided once scope is known
         // (below): a turn-taking card when there's nothing to ground on, else a
         // side-offer beside the grounded answer.
-        if (!wr.explicit) offerWikiOptions(turnId, wr.term).catch((e) => eoWarn('wiki-options', e));
+        if (!wr.explicit) {
+          // hottest-subjects offer when the conversation has a subject to anchor
+          // on; the single-term offer only as the cold-field fallback.
+          if (wr.entities && wr.entities.length) offerWikiHot(turnId, wr.entities).catch((e) => eoWarn('wiki-hot', e));
+          else offerWikiOptions(turnId, wr.term).catch((e) => eoWarn('wiki-options', e));
+        }
       }
     }
 
