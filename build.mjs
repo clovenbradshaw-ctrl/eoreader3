@@ -71,6 +71,8 @@ const HTML = `<!doctype html>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<!-- Quill (the composition rich-text editor) — before styles.css so the theme overrides snow. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" />
 <link rel="stylesheet" href="styles.css" />
 <!-- Theme before first paint (mirrors index.html); kept in sync by settings.jsx. -->
 <script>
@@ -146,6 +148,10 @@ const HTML = `<!doctype html>
 <!-- math.js (window.math) — the deterministic evaluator behind the chat's
      calculator; compute.js (bundled below) resolves it from here. -->
 <script src="https://cdn.jsdelivr.net/npm/mathjs@13.2.3/lib/browser/math.js"></script>
+<!-- Quill (window.Quill) + markdown shortcuts (window.QuillMarkdown) — the
+     composition surface uses them when present, falls back to a textarea otherwise. -->
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/quilljs-markdown@1.2.0/dist/quilljs-markdown.js"></script>
 <!-- everything else: React (production) + compromise + engine + UI, prebuilt -->
 <script src="app.bundle.js"></script>
 </body>

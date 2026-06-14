@@ -479,7 +479,26 @@
     } catch (e) { prose = ''; }
     prose = prose.trim();
 
-    // 3. stamp — witness (grain-relative), form (genre centroid), retrieval
+    // 3 + 4. stamp (the grain-relative witness, form, retrieval, frame, and the
+    // mechanical re-citation rescue) and emit the Draft + Stamp + Route. Factored
+    // into finalizeUnit so the surface's recursive long-form loop can run many
+    // phrasing passes and then finalize the SETTLED prose through exactly the same
+    // grounding + monitor path a single call uses.
+    return finalizeUnit(d, prose, spans);
+  }
+
+  // The stamp-and-emit tail of a unit: given the settled prose and the spans it
+  // drew on, measure the grain-relative witness, the form, the frame alignment
+  // and (only when the lexical witness reads low) the mechanical re-citation
+  // rescue, then emit the Draft, its Stamp, and the monitor's Route. Pure but for
+  // the injected embed / ground / formLib — the same deps generateUnit receives.
+  async function finalizeUnit(deps, prose, spans) {
+    const d = deps || {};
+    const unit = d.unit || {};
+    const frame = d.frame || {};
+    prose = String(prose == null ? '' : prose).trim();
+    spans = spans || [];
+
     let draftVec = null;
     try { if (d.embed && prose) draftVec = await d.embed(prose); } catch (e) { draftVec = null; }
     const grain = (unit.hole && unit.hole.owed_grain) || unit.owed_grain || 'Figure';
@@ -504,7 +523,7 @@
     if (d.embed && frame && frame.goal) {
       try {
         const gv = await d.embed(String(frame.goal || frame.thesis_or_question || ''));
-        const jv = await d.embed(job);
+        const jv = await d.embed(String(unit.job || ''));
         if (gv && jv) frameDeg = cosineSafe(gv, jv);
       } catch (e) { frameDeg = null; }
     }
@@ -514,8 +533,7 @@
       retrieval, frame: frameDeg, grounded,
     });
 
-    // 4. emit the events: a Draft, its Stamp, and the monitor's Route. The
-    // talker authored every sentence here, so the provenance is uniformly
+    // The talker authored every sentence here, so the provenance is uniformly
     // 'talker' — a later user edit re-attributes the sentences it changes. When
     // the rescue bound sentences to real lines, those per-sentence cites are
     // stronger evidence than the job-level spans (and exist where the job
@@ -568,6 +586,62 @@
     if (frame.reader) u.push('Written for: ' + frame.reader);
     u.push('');
     u.push('Write this passage: ' + (o.job || ''));
+    return { system, user: u.join('\n') };
+  }
+
+  // Long-form drafting config — how the surface's recursive loop writes a section:
+  // draft once, then CONTINUE the same passage call after call until it reaches a
+  // length target ("write longer within a section"), capped so it always settles,
+  // then a single REVISE pass to rework it into clean prose. Tunable in one place.
+  const LONGFORM = { targetWords: 320, maxExpandPasses: 5, maxTokens: 384 };
+  function wordCount(s) { return String(s == null ? '' : s).trim().split(/\s+/).filter(Boolean).length; }
+
+  // CONTINUE prompt — write the NEXT part of a passage already in progress, from
+  // its tail, with no repetition. Same membrane discipline as buildTalkerPrompt:
+  // spans + frame text only, never the whole document or the genre prototype.
+  function buildContinuePrompt(o) {
+    const spans = o.spans || [];
+    const frame = o.frame || {};
+    const tail = String(o.existing || '').slice(-700);
+    const system = 'You are CONTINUING one passage of a longer document that is already in progress. Write only the NEXT part of this same passage — flowing prose that picks up naturally from where it stops and develops the point further with new detail, examples, or consequences. Do NOT repeat, summarize, or restate anything already written, and do not start over. No headings. Use the material below; do not invent facts it does not contain.';
+    const u = [];
+    if (spans.length) {
+      u.push('Material (verbatim, to use and stay within):');
+      spans.forEach((s, i) => u.push('[' + (i + 1) + '] ' + ((typeof s === 'string') ? s : (s.text || s.t || ''))));
+      u.push('');
+    }
+    if (frame.thesis_or_question) u.push('The document overall: ' + frame.thesis_or_question);
+    u.push('');
+    u.push('The passage so far (continue from its end — do not repeat any of it):');
+    u.push(tail);
+    u.push('');
+    u.push('Continue this passage — its job is: ' + (o.job || ''));
+    return { system, user: u.join('\n') };
+  }
+
+  // REVISE prompt — rewrite a settled passage into one clean, coherent passage,
+  // keeping all substance and every fact; the "recursively rework the output."
+  function buildRevisePrompt(o) {
+    const spans = o.spans || [];
+    const frame = o.frame || {};
+    const system = 'You are REVISING one passage of a longer document. Rewrite the draft below into a single clean, coherent, well-organized passage: keep all of its substance and every fact, smooth the flow, remove repetition and filler, and fix any rough seams. Do not add facts the material does not contain, and do not make it substantially shorter. Return only the rewritten passage — no preamble, no headings, no commentary.';
+    const u = [];
+    if (spans.length) {
+      u.push('Material (verbatim, to stay within):');
+      spans.forEach((s, i) => u.push('[' + (i + 1) + '] ' + ((typeof s === 'string') ? s : (s.text || s.t || ''))));
+      u.push('');
+    }
+    if (o.neighbors && o.neighbors.length) {
+      u.push('The passages just before / after (for a smooth seam — do not repeat them):');
+      for (const n of o.neighbors) if (n && n.prose) u.push('… ' + String(n.prose).slice(-200));
+      u.push('');
+    }
+    if (frame.thesis_or_question) u.push('The document overall: ' + frame.thesis_or_question);
+    u.push('');
+    u.push('Draft to revise — its job is: ' + (o.job || ''));
+    u.push(String(o.draft || ''));
+    u.push('');
+    u.push('Rewrite it as one polished passage:');
     return { system, user: u.join('\n') };
   }
 
@@ -809,7 +883,8 @@
     make, ev,
     fold, buildTree, bandFor,
     witnessGrain, stampDraft, decide,
-    generateUnit, buildTalkerPrompt, retrievalDegree, parseOutline,
+    generateUnit, finalizeUnit, buildTalkerPrompt, buildContinuePrompt, buildRevisePrompt,
+    wordCount, LONGFORM, retrievalDegree, parseOutline,
     newDoc, assemble,
     diffProvenance, authorship, project, projectFold,
     seedFromProse, splitIntoUnits, deMarkdown, parseCites,
