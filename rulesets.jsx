@@ -321,7 +321,7 @@ function RulesDrawer({ rules, langModes, learnedByLang, onToggle, onInstall, onS
 }
 
 /* ============================================================ Model popover */
-function ModelPopover({ models, current, onPick, onClose, anchor, status, progress, loadText, onReset, onCancel, webgpu, anthropicKeySet, onSetAnthropicKey, onUploadModel }) {
+function ModelPopover({ models, current, onPick, onClose, anchor, status, progress, loadText, onReset, onCancel, webgpu, autoModel, autoPick, onAuto, anthropicKeySet, onSetAnthropicKey, onUploadModel }) {
   const ref = window.useDialog(onClose);
   const uploadRef = React.useRef(null);
   React.useEffect(() => {
@@ -417,6 +417,32 @@ function ModelPopover({ models, current, onPick, onClose, anchor, status, progre
       <div className="popover" role="dialog" aria-modal="true" aria-label="Choose a model"
            tabIndex={-1} ref={ref} style={style}>
         <div className="pop-grab" aria-hidden="true" />
+        {onAuto && (() => {
+          // The "let Cleo decide" row. When auto is on it shows the resolved pick
+          // and the one-line reason; either way, clicking it re-probes the device
+          // and loads the best model for it. A specific pick below turns auto off.
+          const picked = autoModel && autoPick ? models.find(m => m.id === autoPick.id) : null;
+          return (
+            <React.Fragment>
+              <div className="ph">Automatic</div>
+              <div role="button" tabIndex={0} aria-pressed={!!autoModel}
+                className={'pop-item' + (autoModel ? ' sel' : '')} onClick={() => onAuto()}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAuto(); } }}>
+                <div className="pi-main">
+                  <div className="pi-n">
+                    Auto — best for this device
+                    {picked && <span className="pi-cached" title="The model Cleo picked for this device">{picked.name}</span>}
+                  </div>
+                  <div className="pi-d">
+                    {autoModel && autoPick && autoPick.reason ? autoPick.reason
+                      : 'Let Cleo probe your device and load the model that runs best here.'}
+                  </div>
+                </div>
+                <span className="pi-state">{autoModel ? '' : 'Use'}</span>
+              </div>
+            </React.Fragment>
+          );
+        })()}
         <div className="ph">On your GPU · WebLLM</div>
         {!webgpu && <div className="pop-status wrap">WebGPU isn’t available in this browser, so the GPU models can’t load here. Use the on-device CPU models below (no GPU needed) — or Claude, or Chrome/Edge 113+.</div>}
         {gpu.map(row)}
