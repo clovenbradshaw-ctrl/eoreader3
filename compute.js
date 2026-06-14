@@ -89,6 +89,15 @@
     let t = String(s).replace(/[$£€]/g, '');
     let prev;
     do { prev = t; t = t.replace(/(\d),(\d{3})(?!\d)/g, '$1$2'); } while (t !== prev);
+    // Informal operators. The multiplication/division SIGNS (×, ÷, ·) and "x"
+    // used as "times" between two numbers ("123009 x 39") are how people actually
+    // write arithmetic in chat. Without this the prose gate sees a stray "x" alpha
+    // token, abstains, and the turn drops to the model — which then does the
+    // arithmetic itself and gets it wrong. Normalize them so math.js owns the sum.
+    // (The prose gate and evaluator still reject anything that isn't real math, so
+    // converting a stray "x" never turns prose into a bogus calculation.)
+    t = t.replace(/[×✕✖]/g, '*').replace(/÷/g, '/').replace(/·/g, '*');
+    t = t.replace(/(\d)\s*[xX]\s*(?=\d)/g, '$1*');
     t = t.replace(/(\d+(?:\.\d+)?)\s*%\s*of\s+/gi, '($1/100)*');
     t = t.replace(/(\d+(?:\.\d+)?)\s*%/g, '($1/100)');
     return t.trim();

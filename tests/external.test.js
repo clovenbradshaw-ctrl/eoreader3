@@ -282,6 +282,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     eq(X.pickQuery('look up Howard Shore'), 'Howard Shore', 'strips "look up" before the name');
     eq(X.pickQuery('find the article on socialism'), 'socialism', 'strips "find the article on"');
     eq(X.pickQuery('google quantum computing'), 'quantum computing', 'strips "google"');
+    // a bare "wikipedia for/on/about X" frame reduces to the subject (the search
+    // term used to keep the word "wikipedia" and search "wikipedia for dolphins")
+    eq(X.pickQuery('search wikipedia for dolphins'), 'dolphins', 'strips "search wikipedia for" → the subject');
+    eq(X.pickQuery('pull up wikipedia on the French Revolution'), 'French Revolution', 'strips "wikipedia on" before the subject');
+    // a residual conversational frame the question-word run leaves behind
+    eq(X.pickQuery('what do you know about dolphins?'), 'dolphins', 'strips "what do you know about" → the subject');
     eq(X.pickQuery(''), null, 'empty → null');
   });
 
