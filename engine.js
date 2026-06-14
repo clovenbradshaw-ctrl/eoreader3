@@ -3037,6 +3037,73 @@ function eoAddress(site, type) {
   return (site === eoSiteGrid().Existence.Figure && type) ? site + ' / ' + type : site;
 }
 
+/* ============================================================
+   The other two faces of the cube — read-time projections.
+
+   The Act face fixes Mode×Domain in the operator itself. The Site face (above)
+   is Domain×Object. The Stance/Resolution face is Mode×Object. Together the
+   three faces recover the full phenomenological address ⟨Mode, Domain, Object⟩
+   of what an operator touched, encoded compactly as operator(Site, Resolution).
+   Nothing here is stamped on the event or stored — the append-only log stays
+   the one source of truth; these re-derive the address on demand. (The reader
+   was act-face biased: it recorded only the operator, never the rest.)
+   ============================================================ */
+// Mode (the Identity column) is INTRINSIC to the operator — a lookup, never
+// scored: the first of each Domain triad Differentiates, the second Relates,
+// the third Generates. NUL/SEG/DEF · SIG/CON/EVA · INS/SYN/REC.
+const EO_MODE_OF_OP = {
+  NUL: 'Differentiate', SEG: 'Differentiate', DEF: 'Differentiate',
+  SIG: 'Relate',        CON: 'Relate',        EVA: 'Relate',
+  INS: 'Generate',      SYN: 'Generate',      REC: 'Generate',
+};
+// Mode × Object → the grain of engagement (the Stance/Resolution face). Like
+// the Site grid, these nine cells are GENERATED products of two coordinates,
+// never points on an axis.
+const EO_RESOLUTION_GRID = {
+  Differentiate: { Ground: 'Clearing',    Figure: 'Dissecting', Pattern: 'Unraveling' },
+  Relate:        { Ground: 'Tending',     Figure: 'Binding',    Pattern: 'Tracing' },
+  Generate:      { Ground: 'Cultivating', Figure: 'Making',     Pattern: 'Composing' },
+};
+// The Object (Ground/Figure/Pattern) coordinate an EVENT touched — the SAME
+// selection eoSiteOfEvent makes for the Site, factored out so the Site and the
+// Resolution read one coordinate and can never drift (including the NUL /
+// unattributed-SIG → Ground correction under site_entity_cell).
+function eoObjectOfEvent(ev) {
+  if (!ev || !ev.op) return null;
+  const domain = EO_DOMAIN_OF_OP[ev.op];
+  if (!domain) return null;
+  if (siteEntityCellEnabled()) {
+    if (ev.op === 'NUL') return 'Ground';
+    if (ev.op === 'SIG' && (!ev.speaker || ev.speaker === '?')) return 'Ground';
+  }
+  const target = ev.op === 'SIG' ? ev.speaker
+    : (ev.op === 'CON' || ev.op === 'SYN') ? (ev.o != null ? ev.o : ev.targetName)
+    : (ev.target != null ? ev.target : ev.targetName);
+  return objectOf(target, ev.entityType || null);
+}
+// The full three-fold address of what an event touched: ⟨Mode, Domain, Object⟩
+// plus the two generated cells (Site = Domain×Object, Resolution = Mode×Object)
+// and the holon it was read at. A pure read-time projection.
+function eoAddressOfEvent(ev, holon) {
+  if (!ev || !ev.op) return null;
+  const domain = EO_DOMAIN_OF_OP[ev.op];
+  if (!domain) return null;
+  const mode = EO_MODE_OF_OP[ev.op] || null;
+  const object = eoObjectOfEvent(ev);
+  const site = eoSiteOfEvent(ev);
+  const resolution = (mode && object) ? (EO_RESOLUTION_GRID[mode] || {})[object] : null;
+  return { op: ev.op, mode, domain, object, site, resolution,
+    holon: holon || ev.holon || (ev.sentence_idx != null ? 'sentence' : null) };
+}
+// The compact cube notation operator(Site, Resolution) — e.g. INS(Entity, Making).
+// One line that proves all three faces agree: the operator names the Act, the
+// Site names the address, the Resolution names the grain.
+function eoNotation(ev, holon) {
+  const a = eoAddressOfEvent(ev, holon);
+  if (!a || !a.site || !a.resolution) return null;
+  return a.op + '(' + a.site + ', ' + a.resolution + ')';
+}
+
 function aliasRelation(aTok, bTok) {
   if (!aTok.size || !bTok.size) return 'disjoint';
   let shared = 0;
@@ -12285,6 +12352,9 @@ function projectGraph(events, frame = {}) {
     get EO_SITE_GRID() { return eoSiteGrid(); },
     get EO_SITES() { return eoSites(); },
     EO_DOMAIN_OF_OP, eoSite, eoSiteOfEvent, objectOf, eoAddress, siteEntityCellEnabled,
+    // the other two faces of the cube (read-time projections of the full
+    // ⟨Mode, Domain, Object⟩ address) — de-biasing the reader off the Act face
+    EO_MODE_OF_OP, EO_RESOLUTION_GRID, eoObjectOfEvent, eoAddressOfEvent, eoNotation,
     // EVA failures hydrate the conventions: the session's REC records,
     // JSONL-shaped and append-ready for memory/conventions.jsonl. A host may
     // set EOEngine.onConventionsRec = (rec) => … to ship each one out.
