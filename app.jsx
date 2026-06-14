@@ -157,6 +157,13 @@ function App() {
   const [activeProject, setActiveProject] = useState(null);
   const [input, setInput] = useState('');
   const [mode, setMode] = useState('auto');
+  // The answer-mode control (Auto / Grounded / Creative) in the composer is
+  // hidden by default — every chat just runs on Auto, which reads each question
+  // and grounds or composes on its own. A reader who wants the explicit toggle
+  // back turns it on in Settings; the choice persists with prefs. While it's
+  // hidden the mode is held at 'auto' (the effect below), so a value left over
+  // from when it was shown can't keep steering turns from behind a hidden control.
+  const [showModeToggle, setShowModeToggle] = useState(false);
   // Thinking depth is pinned at the deepest stop — every turn runs the full
   // budget. thinkingBudget() clamps to its DEPTH_LEVELS ceiling, so any value
   // ≥ that works; the literal here is the contract. The turn's resolved budget
@@ -377,6 +384,7 @@ function App() {
         if (Array.isArray(prefs.projects)) { setProjects(prefs.projects); bumpUid(prefs.projects.map(p => p.id)); }
         if (prefs.activeProject) setActiveProject(prefs.activeProject);
         if (prefs.mode) setMode(prefs.mode);
+        if (typeof prefs.showModeToggle === 'boolean') setShowModeToggle(prefs.showModeToggle);
         if (typeof prefs.splitRatio === 'number') setSplitRatio(prefs.splitRatio);
         if (typeof prefs.explore === 'boolean') setExplore(prefs.explore);
         if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
@@ -452,8 +460,13 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, fallbackModelIds, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
-  }, [rules, langModes, model, fallbackModelIds, mode, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
+  }, [rules, langModes, model, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews]);
+  // Hiding the answer-mode control means every turn runs on Auto: hold `mode`
+  // there whenever the toggle is off, so a 'grounded'/'creative' left in prefs
+  // (or any stray set) can't keep steering turns from behind a hidden control.
+  // Re-enabling the toggle simply leaves the reader on Auto to start from.
+  useEffect(() => { if (!showModeToggle && mode !== 'auto') setMode('auto'); }, [showModeToggle, mode]);
   // Persist the audit trace (debounced) on every change, so the glass box
   // survives reloads. EOAudit.clear() fires a notify too, so an intentional
   // wipe persists as empty automatically — "persist unless wiped". The
@@ -3420,7 +3433,7 @@ function App() {
     && (lastMsg.typing || lastMsg.loading || lastMsg.streaming);
 
   const composerProps = {
-    value: input, onChange: setInput, onSend: () => send(), onStop: stopTurn, generating, mode, onMode: setMode,
+    value: input, onChange: setInput, onSend: () => send(), onStop: stopTurn, generating, mode, onMode: setMode, showModeToggle,
     onAttach: () => fileRef.current.click(), busy,
     sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
@@ -3515,6 +3528,7 @@ function App() {
         theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
         pythonEnabled={pythonEnabled} onPythonEnabled={setPython} pythonAvailable={!!window.EOPython}
         groundingInfo={groundingInfo} onGroundingInfo={setGroundingInfo}
+        showModeToggle={showModeToggle} onShowModeToggle={setShowModeToggle}
         wikiMode={wikiMode} onWikiMode={changeWikiMode}
         models={window.MODELS.concat(uploadedModels)} defaultModelId={model.id} onDefaultModel={(id) => { const m = window.MODELS.concat(uploadedModels).find(x => x.id === id); if (m) pickModel(m); }}
         fallbackModelIds={fallbackModelIds} onFallbackModelIds={setFallbackModelIds}

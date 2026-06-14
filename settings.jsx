@@ -24,7 +24,8 @@ window.EOTheme = { apply: applyTheme };
 
 function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                          pythonEnabled, onPythonEnabled, pythonAvailable,
-                         groundingInfo, onGroundingInfo, wikiMode, onWikiMode,
+                         groundingInfo, onGroundingInfo,
+                         showModeToggle, onShowModeToggle, wikiMode, onWikiMode,
                          models, defaultModelId, onDefaultModel,
                          fallbackModelIds, onFallbackModelIds,
                          onClearData, storageOK }) {
@@ -185,6 +186,16 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
 
           <section className="set-section">
             <h3 className="set-h">Answers</h3>
+
+            <div className="set-row">
+              <div className="set-row-main">
+                <div className="set-label">Answer mode control</div>
+                <div className="set-sub">Show the Auto · Grounded · Creative buttons in the message box. Off keeps every chat on Auto — it reads each question and grounds or composes on its own. On lets you pin <b>Grounded</b> (answer only from the document) or <b>Creative</b> (compose freely, not fact-checked) for a chat.</div>
+              </div>
+              <button className={'switch' + (showModeToggle ? ' on' : '')} role="switch"
+                      aria-checked={!!showModeToggle} aria-label="Answer mode control"
+                      onClick={() => onShowModeToggle(!showModeToggle)} />
+            </div>
 
             <div className="set-row">
               <div className="set-row-main">
