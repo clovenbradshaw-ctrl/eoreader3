@@ -202,6 +202,8 @@ button { font-family: inherit; cursor: pointer; }
 .sb-item .sb-x:hover { color: #c0392b; background: var(--bg-sunken); }
 .sb-item .sb-src.on { display: inline-flex; color: var(--accent); }
 .sb-item .sb-src:hover { background: var(--accent-tint); color: var(--accent); }
+/* a forked thread sits one notch in from its source, marked with a branch glyph */
+.sb-item.forked { padding-left: 18px; }
 .sb-link { background: none; border: 0; cursor: pointer; color: var(--accent); font-size: 12px; padding: 4px 8px; text-align: left; }
 .sb-link:hover { text-decoration: underline; }
 
@@ -487,6 +489,10 @@ ol.md-list { list-style: decimal; }
 
 .msg-actions { display: flex; gap: 4px; margin-top: 8px; opacity: 0; transition: opacity .15s; }
 .msg-row.asst:hover .msg-actions { opacity: 1; }
+/* the user bubble carries a single fork action, tucked at its lower edge */
+.msg-row.user { align-items: flex-end; }
+.msg-actions.user-actions { margin-top: 0; margin-bottom: 2px; }
+.msg-row.user:hover .user-actions { opacity: 1; }
 .msg-actions button {
   width: 28px; height: 28px; border-radius: 7px; border: 0; background: transparent; color: var(--text-3);
   display: grid; place-items: center;
