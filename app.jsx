@@ -1146,6 +1146,12 @@ function App() {
   // mitigation against the "I just had to reinstall on refresh" failure mode.
   const [storagePersisted, setStoragePersisted] = useState(null);
   useEffect(() => {
+    // Prime the pump as early as possible: warm DNS+TLS to the model CDNs / HF
+    // on mount so a slow or VPN'd connection has an open pipe by the time the
+    // boot auto-load imports the runtime and fetches weights. Keyless here (the
+    // pick isn't resolved yet) warms the full local set; load() re-primes for
+    // the specific backend once a model is chosen.
+    try { if (window.EOLLM && window.EOLLM.primePump) window.EOLLM.primePump(); } catch (e) {}
     if (!window.EOLLM || !window.EOLLM.persistStorage) return;
     (async () => {
       try {

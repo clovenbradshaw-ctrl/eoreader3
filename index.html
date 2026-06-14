@@ -19,6 +19,10 @@
      model weights (Hugging Face). Pre-connecting shaves the first-load handshake. -->
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
 <link rel="preconnect" href="https://huggingface.co" crossorigin />
+<!-- esm.run serves the WebLLM runtime (llm.js imports it on first GPU load).
+     Preconnecting it warms the DNS+TLS handshake so a slow/VPN'd first load
+     doesn't pay it serially when the import begins (see EOLLM.primePump). -->
+<link rel="preconnect" href="https://esm.run" crossorigin />
 <!-- NOTE: the on-device CPU model (wllama / llama.cpp in WebAssembly) runs
      single-threaded out of the box. To unlock multi-threaded CPU inference it
      needs SharedArrayBuffer, which requires cross-origin isolation — serve the

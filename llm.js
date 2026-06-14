@@ -461,16 +461,20 @@
     const ram = p.deviceMemoryGB;
     const budget = Math.max(p.maxBufferMB || 0, p.maxStorageMB || 0);
     const constrained = !!(p.maxStorageMB && p.maxStorageMB <= 160);
-    if (ram != null) {
-      if (ram >= 8 && !constrained) return 'high';
-      if (ram >= 4) return constrained ? 'low' : 'mid';
-      return 'low';
-    }
-    // RAM unknown (Safari/Firefox/older Chrome): lean on the GPU budget. A
-    // healthy maxBuffer (≥1 GB) on a real adapter is a capable GPU → high.
-    if (budget >= 1024 && !constrained) return 'high';
-    if (budget >= 512) return 'mid';
-    return 'low';
+    // Tier on the GPU buffer budget — the only signal here that actually
+    // reflects GPU capacity. deviceMemory is SYSTEM RAM (and Chrome caps it at
+    // 8), so a weak integrated GPU sitting beside 8 GB of RAM reads as "8 GB"
+    // too. Gating the top tier on RAM alone (the earlier behaviour) therefore
+    // handed nearly every Chrome desktop the 3B/~2.3 GB model — and a modest GPU
+    // spent first load stalling on a multi-GB download it couldn't compile, the
+    // "way slower, never ready" regression. So size from the GPU budget, and let
+    // RAM only pull the tier DOWN (too little to feed a big model), never up.
+    let tier = (budget >= 1024 && !constrained) ? 'high'
+             : (budget >= 512 && !constrained) ? 'mid'
+             : 'low';
+    if (ram != null && ram < 4) tier = 'low';
+    else if (ram != null && ram < 8 && tier === 'high') tier = 'mid';
+    return tier;
   }
   // CPU bucket (no usable GPU): scaled by cores and RAM. Mobile CPUs get the
   // tiniest model — small download, runs on a phone without melting it.
@@ -1055,10 +1059,53 @@
     });
   }
 
+  // ---- prime the pump ----------------------------------------------------
+  // The moment a load starts, warm DNS + TLS to the origins it will pull from,
+  // so a slow or VPN'd connection isn't paying a COLD handshake serially when
+  // each fetch begins: the runtime import (esm.run / jsDelivr) and the first
+  // weight shard (Hugging Face) then start on a connection that's already open.
+  // Pure connection warm-up — it fetches no bytes and changes no load behavior;
+  // a no-op off-DOM (the Node test harness) and where <link rel=preconnect>
+  // isn't supported. Re-priming refreshes the hint (browsers drop an idle
+  // preconnect after a few seconds), keeping at most one link per origin so the
+  // head never accumulates. Extendable via EO_PRIME_ORIGINS (extra origins).
+  const _primeLinks = (typeof Map === 'function') ? new Map() : null;
+  function preconnectOrigin(origin) {
+    if (!origin) return;
+    try {
+      if (typeof document === 'undefined' || !document.head) return;
+      for (const rel of ['preconnect', 'dns-prefetch']) {
+        const k = rel + ' ' + origin;
+        if (_primeLinks && _primeLinks.has(k)) {
+          const old = _primeLinks.get(k);
+          try { if (old && old.parentNode) old.parentNode.removeChild(old); } catch (_) {}
+        }
+        const link = document.createElement('link');
+        link.rel = rel; link.href = origin; link.crossOrigin = 'anonymous';
+        document.head.appendChild(link);
+        if (_primeLinks) _primeLinks.set(k, link);
+      }
+    } catch (_) {}
+  }
+  // Warm the origins this backend pulls from. Cloud needs only the API host;
+  // the local backends need their runtime CDN plus Hugging Face (the weights).
+  // An unknown/absent key warms the full local set — the boot case, before the
+  // device probe has resolved a pick.
+  function primePump(mlcKey) {
+    try {
+      if (isAnthropic(mlcKey)) { preconnectOrigin('https://api.anthropic.com'); }
+      else if (isWllama(mlcKey)) { preconnectOrigin('https://cdn.jsdelivr.net'); preconnectOrigin('https://huggingface.co'); }
+      else { preconnectOrigin('https://esm.run'); preconnectOrigin('https://cdn.jsdelivr.net'); preconnectOrigin('https://huggingface.co'); }
+      const extra = (typeof window !== 'undefined' && window.EO_PRIME_ORIGINS) || null;
+      if (Array.isArray(extra)) for (const o of extra) preconnectOrigin(o);
+    } catch (_) {}
+  }
+
   // Load (and cache) a model. onProgress(0..1, text). A stalled download is
   // retried once — resuming from the shards already cached, so only the missing
   // bytes refetch — before the error surfaces.
   async function load(mlcKey, onProgress) {
+    primePump(mlcKey);   // warm the download path before the import/fetch begins
     // Claude needs no download — "loading" is just confirming a key is present.
     // Release any resident WebGPU engine first so switching backends frees the
     // GPU, then mark this the resident model with a sentinel engine so
@@ -1694,5 +1741,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, primePump, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
