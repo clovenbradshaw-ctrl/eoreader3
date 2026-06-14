@@ -14,5 +14,10 @@ evo/proposals/*.md
 # + provenance live in form-genres.jsonl, the version of record)
 tools/form-genres/cache/*.txt
 
+# WebLLM self-hosting mirror — downloaded artifacts staged for upload (multi-GB,
+# regenerable via tools/mirror/webllm-to-r2.mjs)
+tools/mirror/out/
+tools/mirror/models.json
+
 # Claude Code local session state (settings, agent worktrees)
 .claude/

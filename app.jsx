@@ -157,6 +157,54 @@ const TOOLBAR_TOOLS = [
   { id: 'sandbox',    label: 'Sandbox',         sub: 'Evolve the reading laws in an isolated in-browser engine. Shows when the evolution bundle is loaded.' },
 ];
 
+// ── First-download size gate ───────────────────────────────────────────────
+// The on-device models download once, and the bigger ones are multi-GB. Before
+// kicking off that first fetch we confirm it, so a few GB never leaves the wire
+// silently (and a metered/mobile connection isn't surprised). Only the genuinely
+// large ones gate — small models and instant fallbacks load without a prompt.
+const GATE_MIN_MB = 600;
+// Pull the "~2.3 GB" / "~350 MB" figure out of a model's `detail` string (the
+// single source of truth for sizes, in data.jsx). Returns megabytes, or 0 when
+// there's nothing to parse (uploaded models, odd entries) — i.e. don't gate.
+function parseSizeMB(detail) {
+  const m = /([\d.]+)\s*(GB|MB)/i.exec(String(detail || ''));
+  if (!m) return 0;
+  const n = parseFloat(m[1]); if (!isFinite(n)) return 0;
+  return /gb/i.test(m[2]) ? n * 1024 : n;
+}
+function gateSizeText(detail) {
+  const m = /([\d.]+)\s*(GB|MB)/i.exec(String(detail || ''));
+  return m ? (m[1] + ' ' + m[2].toUpperCase()) : '';
+}
+
+// The confirm dialog itself. Modal so the choice is deliberate; the backdrop
+// click and Esc both read as "not now" (the safe default — nothing downloads).
+// Rendered only when a gate is active (parent guards with `dlGate && …`), so the
+// shared dialog hook can run unconditionally. useDialog focuses the safe action
+// first, traps Tab, and restores focus on close.
+function DownloadGate({ gate, onConfirm, onCancel }) {
+  const ref = useDialog(onCancel);
+  const m = gate.model || {};
+  const cpu = m.provider === 'wllama';
+  return (
+    <div className="dl-gate-backdrop" onClick={onCancel}>
+      <div ref={ref} tabIndex={-1} className="dl-gate" role="dialog" aria-modal="true" aria-labelledby="dlg-title" onClick={(e) => e.stopPropagation()}>
+        <div className="dlg-icon" aria-hidden="true"><Icon name="download" size={22} /></div>
+        <h3 id="dlg-title" className="dlg-title">Download {m.name || 'this model'}?</h3>
+        <p className="dlg-body">
+          {m.name || 'This model'} is about <b>{gate.sizeText || 'a few hundred MB'}</b> and downloads once to your device,
+          then it’s cached and loads instantly. It runs entirely {cpu ? 'on your CPU' : 'on your device'} — nothing you read or ask leaves the browser.
+        </p>
+        <p className="dlg-hint"><Icon name="wifi" size={13} aria-hidden="true" /> Best on Wi-Fi — it’s a one-time download.</p>
+        <div className="dlg-actions">
+          <button type="button" className="dlg-btn" onClick={onCancel}>Not now</button>
+          <button type="button" className="dlg-btn primary" onClick={onConfirm}>Download{gate.sizeText ? ' ' + gate.sizeText : ''}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [docs, setDocs] = useState([]);
@@ -959,13 +1007,38 @@ function App() {
   // wasn't silent. STALL gets its own phrasing because the page used to mention it.
   const failReason = (e) => (e && e.code === 'STALL') ? 'stalled' : 'wouldn’t load';
 
+  // ---- first-download size gate ----
+  // ok/no remember, for this session, which models the user has approved or
+  // declined — so a fallen-back turn doesn't re-prompt on every message, and a
+  // confirmed-but-still-downloading model isn't asked about twice.
+  const gateState = useRef({ ok: new Set(), no: new Set() });
+  const [dlGate, setDlGate] = useState(null);            // { model, sizeText } while the dialog is open
+  const dlResolve = useRef(null);
+  const askDownload = (model, sizeText) => new Promise((resolve) => { dlResolve.current = resolve; setDlGate({ model, sizeText }); });
+  const resolveGate = (proceed) => { const r = dlResolve.current; dlResolve.current = null; setDlGate(null); if (r) r(proceed); };
+  // Returns true to proceed with the download, false to abort. Skips the prompt
+  // for: an explicit pick / system fallback (consent is implied), a small or
+  // unknown-size model, or one already cached on disk. Otherwise it opens the
+  // dialog and waits for the user's choice.
+  const maybeGate = async (m, opts) => {
+    if ((opts && opts.consented) || gateState.current.ok.has(m.mlc)) return true;
+    const mb = parseSizeMB(m.detail);
+    if (mb < GATE_MIN_MB) return true;
+    if (gateState.current.no.has(m.mlc)) return false;
+    try { const cs = await window.EOLLM.cacheStatus(m.mlc); if (cs && cs.cached) return true; } catch (e) {}
+    const ok = await askDownload(m, gateSizeText(m.detail));
+    if (ok) { gateState.current.ok.add(m.mlc); return true; }
+    gateState.current.no.add(m.mlc); return false;
+  };
+
   // ---- model: load the real local model for the demo ----
   // `_tried` accumulates the model ids attempted during a single fallback walk,
   // so a chain that exhausts every configured backup can't loop back onto a
   // model that already failed this run. External callers (pickModel, the
   // auto-load effect, the Claude key setter) start with no `_tried` — every
-  // user-driven load is a fresh attempt.
-  const loadModel = async (m, _tried) => {
+  // user-driven load is a fresh attempt. `opts.consented` skips the size gate
+  // (explicit picks, uploads, and system fallbacks already carry consent).
+  const loadModel = async (m, _tried, opts) => {
     if (!window.EOLLM) { showToast('Local model module unavailable.'); return false; }
     const tried = _tried instanceof Set ? _tried : new Set();
     if (m && m.id) tried.add(m.id);
@@ -1002,6 +1075,7 @@ function App() {
         showToast('This browser can’t run the on-device CPU model (no WebAssembly).');
         return false;
       }
+      if (!(await maybeGate(m, opts))) { setModelStatus('idle'); return false; }
       setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
       try {
         await window.EOLLM.load(m.mlc, (p, text) => { setModelProgress(p); if (text) setModelLoadText(text); });
@@ -1028,6 +1102,7 @@ function App() {
       }
       return false;
     }
+    if (!(await maybeGate(m, opts))) { setModelStatus('idle'); return false; }
     setModelStatus('loading'); setModelProgress(0); setModelLoadText('');
     try {
       await window.EOLLM.load(m.mlc, (p, text) => { setModelProgress(p); if (text) setModelLoadText(text); });
@@ -1054,7 +1129,9 @@ function App() {
   const loadAsFallback = async (m, tried) => {
     if (!m) return false;
     setModel(m); setModelStatus('idle');
-    return loadModel(m, tried);
+    // A fallback is system-driven recovery (keep chat working when the picked
+    // model failed), so it carries consent — it must never stall on a dialog.
+    return loadModel(m, tried, { consented: true });
   };
   // Kept for the auto-load path below (cpuFallbackModel is the auto default
   // when the user hasn't configured a backup that fits). Walks the chain too,
@@ -1074,7 +1151,9 @@ function App() {
     else if (!saved && model && model.provider === 'anthropic') setModelStatus('idle');
   };
   // An explicit pick: pin this model and turn auto off (a chosen model wins).
-  const pickModel = (m) => { setAutoModel(false); setAutoPick(null); setModel(m); setModelStatus('idle'); loadModel(m); };
+  // The picker shows each model's size, so a deliberate pick is informed consent
+  // — skip the size gate (it's for the silent boot / first-use downloads).
+  const pickModel = (m) => { setAutoModel(false); setAutoPick(null); setModel(m); setModelStatus('idle'); loadModel(m, null, { consented: true }); };
   // Re-enable auto and (re)pick the model that runs best on this device, then
   // load it. The "Auto" affordance in the model picker / Settings. Keeps the
   // single-resident-engine flow: switch the active model, then load it.
@@ -4354,6 +4433,7 @@ function App() {
           </div>
         );
       })()}
+      {dlGate && <DownloadGate gate={dlGate} onConfirm={() => resolveGate(true)} onCancel={() => resolveGate(false)} />}
       {toast && <div className="toast"><span className="tk"><Icon name="check" size={15} /></span>{toast}</div>}
     </div>
   );
