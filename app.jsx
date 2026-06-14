@@ -1846,37 +1846,14 @@ function App() {
     return stuck();
   };
 
-  // Run the shape pass for a grounded turn: question + recent turns + doc
-  // title + a hint that header metadata exists. Returns the director's note,
-  // or '' on any failure (the answer pass then runs unchanged). A note that
-  // arrives as leaked reasoning is dropped rather than passed along.
-  const shapeFor = async (scope, q, history, primaryDoc) => {
-    try {
-      if (!window.EOLLM || !window.EOLLM.shapePass || !window.EOLLM.isLoaded(model.mlc)) return '';
-      const meta = (window.EOEngine.docMetadata && primaryDoc) ? window.EOEngine.docMetadata(primaryDoc) : null;
-      const fieldsOn = meta && meta.fields ? Object.keys(meta.fields) : [];
-      const t0 = performance.now();
-      let note = await window.EOLLM.shapePass({
-        mlcKey: model.mlc, question: q, history,
-        docTitle: (primaryDoc && primaryDoc.name) || '',
-        metaHint: fieldsOn.length ? fieldsOn.join(', ') : '',
-      });
-      note = String(note || '').trim();
-      // A shape note SPEAKS about the user ("They're asking for…"), so the
-      // reasoning-preamble heuristics don't apply here — only raw think tags
-      // disqualify a note.
-      if (/<\/?think/i.test(note)) note = '';
-      // The note must never carry document content, but a small editor model
-      // leaks it as quoted "example answers" — and the answering model then
-      // copies the example verbatim (the observed trace: the note's own
-      // "bad answer would be…" sample became the reply's opening line).
-      // Strip quoted spans of 4+ words; short quoted register words survive.
-      note = note.replace(/["“](?:[^"“”]{0,80}?\s){3,}[^"“”]*?["”]/g, '')
-        .replace(/\s{2,}/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
-      AUD('step', 'shape', { note: note || null, ms: Math.round(performance.now() - t0) });
-      return note;
-    } catch (e) { eoWarn('shape', e); return ''; }
-  };
+  // Brief 2 (+ the form-as-stamp patch): the shape pass is dissolved and the
+  // talker writes VOICE-ONLY. The form is NOT handed to the talker as a cue —
+  // that would be steering. It is measured on the OUTPUT afterward, as a cosine
+  // against the genre centroid (see runGroundedScope's form pass), and rides as a
+  // stamp beside the witness degree. So this returns '' always: no how-to-answer
+  // text ever enters the prompt. (`shapeNote === ''` is the long-standing
+  // answer-pass-with-no-note path, so every downstream veto already handles it.)
+  const shapeFor = () => '';
 
   // The shape layer's best-fit token budget for this turn (shape.js §9): match
   // the prompt against the archetype PROMPTS and size the answer's max_tokens
@@ -1905,6 +1882,30 @@ function App() {
       AUD('step', 'shape-tokens', { maxTokens: tb.maxTokens, basis: tb.basis, intent: target.intent || null, prompt_match: target.prompt_match || null });
       return tb.maxTokens;
     } catch (e) { eoWarn('shape-tokens', e); return undefined; }
+  };
+
+  // FORM as a STAMP, measured on the OUTPUT (Brief 2 patch). The talker writes
+  // voice-only; afterward its prose is embedded and cosined against the per-genre
+  // CENTROID (shape.js · formDegree) — "how much does this look like the KIND of
+  // answer it should be". A second stamp, the same shape as the witness degree,
+  // read after the evidence is in, never an input to the talker; the centroid
+  // stays a vector and is never unfolded into prompt words. Embedder + library
+  // gated (no-op, null, when either is cold — so it never triggers a download or
+  // blocks a turn). Returns { degree, floor, vec, move } or null.
+  const measureForm = async (move, text) => {
+    try {
+      if (!(window.EOShape && window.EOEmbed && window.EOEmbed.ready())) return null;
+      const lib = shapeLibRef.current;
+      if (!lib || !lib.formDegree || !(lib.ready && lib.ready())) return null;
+      const plain = String(text == null ? '' : text).replace(/\{\{[^}]*\}\}/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      if (plain.length < 3) return null;
+      const vecs = await window.EOEmbed.embedSentences([plain]);
+      const vec = vecs && vecs[0];
+      if (!vec) return null;
+      const degree = lib.formDegree(move, vec);
+      if (degree == null) return null;
+      return { degree, floor: lib.formFloor(move), vec, move: move || null };
+    } catch (e) { eoWarn('form-measure', e); return null; }
   };
 
   // Did the model decline (or leak) instead of answering? A grounded draft
@@ -2244,6 +2245,11 @@ function App() {
     const myGen = genRef.current;
     const intent = window.EOEngine.classifyIntent(q);
     AUD('step', 'intent', { intent });
+    // The FORM stamp (Brief 2 patch), filled by the form pass once the draft is
+    // settled and measured against the genre centroid. settle() closes over these
+    // and rides the stamp into the turn's `final` (beside the witness degree);
+    // formVec is the embedded output, kept for the REC deposit.
+    let formStamp = null, formVec = null;
     // CONFIRM/DENY: a proposition is checked against the graph, never phrased
     // by the model — the grounded-QA prompt presents an assertion as a
     // question, and a small model resolves the confusion by quoting the user
@@ -2505,11 +2511,22 @@ function App() {
         const showMech = mechOverride !== undefined ? mechOverride
           : (mech && mech.text && /^model/.test(String(decision || '')) && mech.text !== res.text
             ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null);
-        replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded', mechanical: showMech });
+        replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded', mechanical: showMech, form: formStamp });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
         depositSettled(scope, q, res.cites);
         noteOpaque(res, decision);                        // edge-of-trace marker (Phase 6)
-        AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
+        // REC — the prototype learns. A clean, grounded output is a GOOD answer of
+        // its genre; deposit its embedding so the centroid moves toward the actual
+        // distribution of good answers (bounded per genre in shape.js). Vector
+        // only — never read back into a prompt.
+        try {
+          if (formVec && res.audit && res.audit.grounded && res.audit.status === 'clean'
+              && shapeLibRef.current && shapeLibRef.current.depositForm) {
+            shapeLibRef.current.depositForm(intent, formVec, '', 1);
+          }
+        } catch (e) { eoWarn('form-deposit', e); }
+        // The form degree rides the turn's `final` (beside the witness degree).
+        AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [], form: formStamp });
       };
       // The mechanical reading is kept ONLY for the EVIDENCE panel (the glass
       // box, click-to-view) — never to be served as the reply text.
@@ -2679,6 +2696,60 @@ function App() {
             if (round === MAX_CONVERGE_ROUNDS - 1) convergeStop = 'iteration-cap';
           }
           AUD('step', 'converge-stop', { stop: convergeStop, residual: residualGap });
+        }
+        // FORM PASS (Brief 2 patch): the talker wrote voice-only; now measure
+        // "does this look like the KIND of answer it should be?" as a cosine of
+        // the draft against the genre centroid. When the draft sits more than a
+        // genre-σ below the prototype (formFloor — data-derived, never a magic
+        // number) AND the embedder + library are warm, drive ONE correction: a
+        // structural drift instruction (named axes — length, commitment, prose vs
+        // list, warmth — NOT the centroid) re-phrases, and the more-in-shape
+        // non-empty draft wins. The centroid never becomes prompt words; the
+        // facts are held fixed. The stamp records the final degree, beside the
+        // witness degree. No-op (no stamp) when the embedder/library are cold.
+        const r4 = (x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
+        const fm = await measureForm(intent, full);
+        if (genStale(myGen)) return;
+        if (fm) {
+          formStamp = { degree: fm.degree, floor: fm.floor, move: fm.move, revised: false };
+          formVec = fm.vec;
+          if (fm.floor != null && fm.degree < fm.floor && shapeLibRef.current && shapeLibRef.current.formDrift) {
+            let drift = null;
+            try { drift = shapeLibRef.current.formDrift(intent, full.replace(/\{\{[^}]*\}\}/g, ' ')); } catch (e) {}
+            const instr = drift && drift.instruction;
+            if (instr) {
+              AUD('step', 'form', { move: intent, degree: r4(fm.degree), floor: r4(fm.floor), tooFar: true, instruction: instr });
+              const formSys = window.EOLLM.systemFor('grounded', task, true, (budget && budget.level) || 1, gateOn ? { provenanceKeys: true } : undefined)
+                + '\n\nKeep the substance and every fact exactly as they are — change only the shape: ' + instr;
+              let revised = '';
+              try {
+                replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
+                revised = await window.EOLLM.phrase({
+                  mlcKey: model.mlc, question: q, contextText: ctx, history, mode: 'grounded', task,
+                  spans: parts ? parts.spans : null, notes: parts ? parts.notes.join('\n') : '',
+                  docTitle: (primaryDoc && primaryDoc.name) || '', shapeNote, sysOverride: formSys, maxTokens: shapeMax,
+                  grounded: true, onToken: streamInto({ mode: 'grounded' }), workingMemory: wm,
+                  depth: budget && budget.level, provenanceKeys: gateOn,
+                });
+                if (genStale(myGen)) return;
+                revised = window.EOEngine.dedupeSentences(revised);
+              } catch (e) { if (window.EOLLM.isAbort(e) || genStale(myGen)) return; revised = ''; }
+              const rm = revised && revised.trim().length >= 3 ? await measureForm(intent, revised) : null;
+              if (genStale(myGen)) return;
+              // Keep the revision ONLY if it is more in-shape (the correction is
+              // toward the prototype, never away). Otherwise the original stands.
+              if (rm && rm.degree > fm.degree) {
+                full = revised;
+                formStamp = { degree: rm.degree, floor: rm.floor, move: rm.move, revised: true };
+                formVec = rm.vec;
+                AUD('step', 'form', { move: intent, degree: r4(rm.degree), kept: true, reason: 'revision is more in-shape' });
+              } else {
+                AUD('step', 'form', { move: intent, degree: rm ? r4(rm.degree) : null, kept: false, reason: 'revision was not more in-shape — original kept' });
+              }
+            }
+          } else {
+            AUD('step', 'form', { move: intent, degree: r4(fm.degree), floor: r4(fm.floor), tooFar: false });
+          }
         }
         // WI-2 — peel any leading meta head off the converged draft, ahead of the
         // term/claim checks, so an unbound head never reaches binding or history.

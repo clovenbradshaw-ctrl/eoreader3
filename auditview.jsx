@@ -232,25 +232,29 @@ function AuditStep({ s }) {
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }
 
-// WI-7 — the per-turn truthfulness chip: bound / void / unbound and the witness
-// DEGREE. Unbound must be 0 (WI-2/WI-3/WI-4); a non-zero value is the dominant
-// term and is shown in alarm. The degree is the fraction of the talker's own
-// content that a span witnesses — the graded stamp, not a binary verdict —
-// approaching 1 from below, never reaching it while a void stands. Reads
-// turn.final.truth (attached by EOAudit.end).
-function TruthChip({ truth }) {
+// WI-7 — the per-turn truthfulness chip: bound / void / unbound and TWO degrees.
+// Unbound must be 0 (WI-2/WI-3/WI-4); a non-zero value is the dominant term and
+// is shown in alarm. The two graded stamps sit side by side, same shape: the
+// WITNESS degree (truth.degree) — how much of the talker's content a span backs
+// — and the FORM degree (form.degree, Brief 2) — how much the output looks like
+// the KIND of answer it should be (cosine vs the genre centroid). Both approach
+// 1 from below and never reach it. Reads turn.final.truth and turn.final.form.
+function TruthChip({ truth, form }) {
   if (!truth) return null;
   // The witness degree is the headline measure; coverage (a count ratio) is the
   // fallback for an older turn recorded before the degree existed.
   const deg = truth.degree != null ? Math.round(truth.degree * 100) + '%'
     : (truth.coverage != null ? Math.round(truth.coverage * 100) + '%' : (truth.covers || '—'));
+  const fdeg = form && form.degree != null ? Math.round(form.degree * 100) + '%' : null;
   return (
     <span className="aud-truth" title={'truthfulness: bound claims / explicit voids / unbound assertions (unbound must be 0); witness degree = '
-      + (truth.degree != null ? Math.round(truth.degree * 100) + '% of the answer’s content is witnessed by a span' : 'n/a')}>
+      + (truth.degree != null ? Math.round(truth.degree * 100) + '% of the answer’s content is witnessed by a span' : 'n/a')
+      + (fdeg ? '; form degree = ' + fdeg + ' (cosine to the ' + (form.move || 'genre') + ' centroid — how much it looks like the right kind of answer)' : '')}>
       <span className="aud-truth-b">{truth.bound}✓</span>
       {truth.voids ? <span className="aud-truth-v"> {truth.voids}⟨⟩</span> : null}
       <span className={truth.unbound ? 'aud-truth-u bad' : 'aud-truth-u'}> {truth.unbound}⊥</span>
       <span className="aud-truth-c"> · {deg} witnessed</span>
+      {fdeg && <span className="aud-truth-c"> · {fdeg} form{form.revised ? ' ↻' : ''}</span>}
     </span>
   );
 }
@@ -282,6 +286,13 @@ function TruthSummary({ turns }) {
   // ALL the talker's content this session that a span witnesses. This is the
   // value that climbs toward the asymptote and must never silently regress.
   const sessionDeg = contentTot ? wit / contentTot : null;
+  // The session FORM degree (Brief 2): the mean of the per-turn form stamps that
+  // were actually measured (embedder-gated, so many turns carry none). Same shape
+  // as the witness degree — a value approached from below, never reaching 1
+  // (matching the centroid exactly would be the average, the death of a particular
+  // answer).
+  const formDegs = done.map(t => t.final.form && t.final.form.degree).filter(d => d != null);
+  const sessionForm = formDegs.length ? formDegs.reduce((a, b) => a + b, 0) / formDegs.length : null;
   const honest = unbound === 0 && l1 === 0;
   return (
     <div className={'aud-truth-sum' + (honest ? '' : ' bad')}>
@@ -296,6 +307,7 @@ function TruthSummary({ turns }) {
         <span><b className={l1 ? 'aud-void' : ''}>{l1}</b> L1 carry-forward <span className="aud-dim">(must be 0)</span></span>
         <span><b>{bound}</b> bound · <b>{voids}</b> voids</span>
         {sessionDeg != null && <span>witness <b>{Math.round(sessionDeg * 100)}%</b> <span className="aud-dim">of content this session</span></span>}
+        {sessionForm != null && <span>form <b>{Math.round(sessionForm * 100)}%</b> <span className="aud-dim">looks-like-the-kind ({formDegs.length})</span></span>}
       </div>
       {done.length > 1 && (
         <div className="aud-truth-trace" title="per-turn witness degree — the approximation rising toward the asymptote, never reaching 1">
@@ -338,7 +350,7 @@ function AuditTurn({ turn }) {
         {(turn.l1Violations && turn.l1Violations.length)
           ? <span className="aud-badge error" title="a prior non-clean turn carried its unverified tokens into this turn's model history (L1 violation)">⚠ L1</span>
           : null}
-        {turn.final && turn.final.truth && <TruthChip truth={turn.final.truth} />}
+        {turn.final && turn.final.truth && <TruthChip truth={turn.final.truth} form={turn.final.form} />}
         {badge}
         {turn.ms != null && <span className="aud-ms">{turn.ms}ms</span>}
       </button>
