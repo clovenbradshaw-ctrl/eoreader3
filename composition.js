@@ -479,9 +479,13 @@
       retrieval, frame: frameDeg,
     });
 
-    // 4. emit the events: a Draft, its Stamp, and the monitor's Route
+    // 4. emit the events: a Draft, its Stamp, and the monitor's Route. The
+    // talker authored every sentence here, so the provenance is uniformly
+    // 'talker' — a later user edit re-attributes the sentences it changes.
     const draft = make.draft({
       unit_id: unit.id, prose,
+      author: 'talker',
+      provenance: splitSentences(prose).map(t => ({ text: t, author: 'talker' })),
       source_events: spans.map(s => ({ docId: s.docId, idx: s.idx })).filter(s => s.docId != null),
       confidence: st.confidence, doc_id: d.doc_id,
     });
@@ -570,6 +574,91 @@
     return out.join('\n\n');
   }
 
+  // ============================================================ provenance
+  // Authorship is tracked per SENTENCE, derived by diff — NOT token by token,
+  // and never per keystroke. When a user edits a unit's prose, each sentence
+  // that survives (normalized) from the prior draft keeps its prior author; a
+  // sentence that is new or changed is attributed to the editor. So a talker
+  // draft the user lightly edits ends up mostly 'talker' with the touched
+  // sentences 'user' — the CHANGES are what carry a new author, at a sane grain.
+  function normSent(s) { return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim(); }
+  function diffProvenance(prevProse, prevProv, newProse, author) {
+    const prevSents = splitSentences(prevProse || '');
+    const newSents = splitSentences(newProse || '');
+    const priorAuthor = new Map();
+    for (let k = 0; k < prevSents.length; k++) {
+      const a = (prevProv && prevProv[k] && prevProv[k].author) || 'talker';
+      const key = normSent(prevSents[k]);
+      if (!priorAuthor.has(key)) priorAuthor.set(key, a);   // first occurrence wins
+    }
+    return newSents.map(s => {
+      const carried = priorAuthor.get(normSent(s));
+      return { text: s, author: carried || (author || 'user') };
+    });
+  }
+  // A count of who wrote the live document, sentence by sentence — the
+  // surface-level "you wrote N of M" the canvas shows. Derived, never stored.
+  function authorship(folded) {
+    let user = 0, talker = 0, total = 0;
+    const walk = (nodes) => { for (const n of nodes) {
+      const dr = n.draft; if (dr && dr.prose) {
+        const sents = splitSentences(dr.prose);
+        const prov = (dr.provenance && dr.provenance.length === sents.length) ? dr.provenance : null;
+        for (let k = 0; k < sents.length; k++) {
+          const a = prov ? prov[k].author : (dr.author || 'talker');
+          total++; if (a === 'user') user++; else talker++;
+        }
+      }
+      walk(n.children || []);
+    } };
+    walk((folded && folded.tree) || []);
+    return { user, talker, total };
+  }
+
+  // ============================================================ the projection
+  // Make the composition QUERYABLE: project the fold into a prose-doc-shaped
+  // object (id / kind:'prose' / sentences / sentenceTexts / blocks) the engine's
+  // retrieveScope can read directly — so the chat model can query the document
+  // "at significance level" the same way it reads any source. Each sentence
+  // carries its authorship + owning unit in `_provenance`, so who wrote what
+  // stays traceable in the audit/UI — but the talker only ever sees the text:
+  // the spans handed to the model are plain sentences, no author labels, the
+  // membrane discipline intact. Carries no _events, so the graph/working-memory
+  // path that keys on the composition log never runs over a projection.
+  function project(doc) { return projectFold(fold((doc && doc._events) || []), doc); }
+  function projectFold(folded, doc) {
+    const docId = (doc && doc.id) || (folded.doc && folded.doc.id) || 'comp';
+    const sentences = [], provenance = [], blocks = [];
+    let i = 0;
+    const walk = (nodes) => { for (const n of nodes) {
+      const dr = n.draft;
+      if (dr && dr.prose) {
+        const sents = splitSentences(dr.prose);
+        const prov = (dr.provenance && dr.provenance.length === sents.length) ? dr.provenance : null;
+        const blk = [];
+        for (let k = 0; k < sents.length; k++) {
+          sentences.push({ i, t: sents[k] });
+          provenance.push({ i, author: prov ? prov[k].author : (dr.author || 'talker'), unit_id: n.id });
+          blk.push({ i, t: sents[k] });
+          i++;
+        }
+        if (blk.length) blocks.push({ type: 'p', sentences: blk });
+      }
+      walk(n.children || []);
+    } };
+    walk(folded.tree || []);
+    const name = (doc && doc.name) || (folded.frame && folded.frame.thesis_or_question) || 'composition';
+    return {
+      id: docId, name, kind: 'prose',
+      sentences, sentenceTexts: sentences.map(s => s.t), blocks,
+      // an EMPTY event log: the projection flows through every graph/working-memory
+      // path (projectGraph([]) yields nothing), so the composition's REAL event
+      // log is never graph-projected — only its prose is retrievable.
+      _events: [],
+      _projection: true, _provenance: provenance, _empty: sentences.length === 0,
+    };
+  }
+
   window.EOComposition = {
     SCHEMA, COMPONENTS, FLOOR, BIND_FLOOR, PATTERN_TARGET,
     newId, reseat,
@@ -579,6 +668,7 @@
     witnessGrain, stampDraft, decide,
     generateUnit, buildTalkerPrompt, retrievalDegree,
     newDoc, assemble,
+    diffProvenance, authorship, project, projectFold,
     contentTokens, splitSentences, cosineSafe,
   };
 })();

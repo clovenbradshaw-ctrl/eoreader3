@@ -134,6 +134,35 @@ change behaviour; no other generation parameters are exposed — the bet is that
 the model is a small, replaceable component and tuning it per doc is the wrong
 layer.
 
+## Editing, provenance, and querying
+
+The draft pane is a **directly-editable document canvas**. Unselected, each unit
+reads as clean prose — the canvas; selecting one reveals its full audit (the
+confidence vector, the tag, the spans it drew from, the route). Double-click a
+paragraph to edit it.
+
+**Authorship is tracked per sentence, by diff — not token by token, never per
+keystroke.** Each edit emits one Draft event (coalesced on blur); the new prose
+is diffed against the prior draft at the sentence level, and a sentence that is
+new or changed is attributed to `user` while the rest carry their prior author.
+So a talker draft you lightly edit ends up mostly `talker` with your touched
+sentences `user` — the *changes* are what carry a new author, at a sane grain.
+The fold surfaces this provenance; the canvas shades every sentence by who wrote
+it (`EOComposition.diffProvenance` / `authorship`).
+
+**The document is queryable by the chat, as significance-level content.**
+`EOComposition.project(doc)` folds the log into a prose-shaped object — `id`,
+`kind: 'prose'`, `sentences`, `sentenceTexts`, `blocks`, an empty `_events` —
+that the engine's `retrieveScope` reads like any source. `scopeList` in `app.jsx`
+maps any composition in scope to this projection and **auto-includes every open
+composition with drafted content**, so "what does my document say about X" works
+whenever one is open. The talker sees only the **text** — the spans handed to the
+model are plain sentences with no author labels — while the per-sentence
+authorship rides in the projection's `_provenance`, traceable in the audit and on
+the canvas. The composition's raw event log is never graph-projected (the
+projection carries an empty `_events`, so `projectGraph([])` yields nothing); a
+composition is never put into chat scope as its raw self, only as its projection.
+
 ## What ships here, and what is staged
 
 This build lands **phases one and two** of the spec, plus the Confidence vector
@@ -143,6 +172,10 @@ and the monitor:
   generate-unit, edit-plan, edit-unit-prose, undo, all as events.
 - **Phase two** — the witness stamp and the form stamp at unit scale, with the
   monitor's witness/form/retrieval predicates live.
+- **The editable document canvas** — direct editing with per-sentence authorship
+  provenance (diff-based), and the composition made queryable by the chat
+  through its projection (talker sees only text; authorship traceable in the
+  audit). Auto-queryable whenever the document is open.
 
 Staged, with the architecture set up to receive them:
 

@@ -236,6 +236,47 @@ group('Phase two — the monitor: predicates over the vector, null never blocks'
   eq(restructure.decision, 'restructure', 'persistent low coherence across a branch → restructure');
 });
 
+group('provenance — authorship per SENTENCE, by diff (changes carry the new author, not keystrokes)', () => {
+  // a talker draft of two sentences; the user edits the second, keeps the first
+  const talkerProse = 'The city logged twelve thousand filings. Most were downtown.';
+  const talkerProv = C.splitSentences(talkerProse).map(t => ({ text: t, author: 'talker' }));
+  const edited = 'The city logged twelve thousand filings. I think the cause was the rent freeze ending.';
+  const prov = C.diffProvenance(talkerProse, talkerProv, edited, 'user');
+  eq(prov.length, 2, 'one provenance entry per sentence');
+  eq(prov[0].author, 'talker', 'an unchanged sentence keeps the talker as its author');
+  eq(prov[1].author, 'user', 'a changed/new sentence is attributed to the user (the CHANGE carries the author)');
+
+  // authorship summary over a fold
+  const [doc, frame] = C.newDoc({});
+  const u = at(C.make.unit({ doc_id: doc.id, id: 'u1', job: 'x', order: 0 }));
+  const d = at(C.make.draft({ doc_id: doc.id, unit_id: 'u1', prose: edited, provenance: prov }));
+  const a = C.authorship(C.fold([doc, frame, u, d]));
+  eq(a.total, 2, 'two sentences total'); eq(a.user, 1, 'one is the user’s'); eq(a.talker, 1, 'one is the talker’s');
+});
+
+group('the projection — a queryable prose shape, provenance traceable, talker sees only text', () => {
+  const [doc, frame] = C.newDoc({ thesis_or_question: 'Evictions', genre: 'plain-report' });
+  const u1 = at(C.make.unit({ doc_id: doc.id, id: 'u1', job: 'count', order: 0 }));
+  const u2 = at(C.make.unit({ doc_id: doc.id, id: 'u2', job: 'cause', order: 1 }));
+  const d1 = at(C.make.draft({ doc_id: doc.id, unit_id: 'u1', prose: 'Filings rose to twelve thousand.', author: 'talker', provenance: [{ text: 'Filings rose to twelve thousand.', author: 'talker' }] }));
+  const d2 = at(C.make.draft({ doc_id: doc.id, unit_id: 'u2', prose: 'I attribute it to the rent freeze ending.', author: 'user', provenance: [{ text: 'I attribute it to the rent freeze ending.', author: 'user' }] }));
+  const fdoc = { id: doc.id, name: 'Evictions', kind: 'composition', _events: [doc, frame, u1, u2, d1, d2] };
+  const proj = C.project(fdoc);
+  eq(proj.kind, 'prose', 'the projection is a prose-shaped doc the retriever can read');
+  eq(proj.sentences.length, 2, 'one indexed sentence per draft sentence, in tree order');
+  eq(proj.sentenceTexts[0], 'Filings rose to twelve thousand.', 'sentence 0 is the first unit, verbatim — just text');
+  ok(Array.isArray(proj.blocks) && proj.blocks.length === 2, 'blocks mirror the units');
+  ok(Array.isArray(proj._events) && proj._events.length === 0, 'the projection carries an EMPTY event log — the composition’s real events are never graph-projected');
+  // provenance rides alongside (traceable) but is OUT of the sentence text the talker sees
+  eq(proj._provenance[0].author, 'talker', 'sentence 0 traces to the talker');
+  eq(proj._provenance[1].author, 'user', 'sentence 1 traces to the user');
+  eq(proj._provenance[1].unit_id, 'u2', 'and to its owning unit');
+  ok(!/talker|user|author/.test(proj.sentenceTexts.join(' ')), 'no authorship vocabulary leaks into the text the talker would read');
+  // an empty composition projects cleanly (no drafts yet)
+  const empty = C.project({ id: 'e', _events: C.newDoc({}) });
+  ok(empty._empty && empty.sentences.length === 0, 'an undrafted composition projects to an empty (but valid) prose shape');
+});
+
 // The remaining groups include an async one (generateUnit); run them inside an
 // async IIFE so every assertion settles before the summary prints — a group
 // whose promise the runner didn't await could otherwise fail silently after it.

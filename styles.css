@@ -2045,21 +2045,38 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .band-held     .cmp-node-band { background: var(--text-3); }
 .band-drafted  .cmp-node-band { background: var(--evidence); }
 
-/* the draft pane */
+/* the draft pane — a continuous document canvas. Unselected paragraphs read as
+   clean prose (the canvas); selecting one reveals its audit (confidence/route). */
 .cmp-draft-scroll { flex: 1; overflow: auto; padding: 16px 20px; }
-.cmp-card { border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--r-sm);
-  background: var(--bg); padding: 12px 14px; margin-bottom: 14px; cursor: pointer; }
-.cmp-card:hover { border-color: var(--border-strong); }
-.cmp-card.sel { box-shadow: 0 0 0 2px var(--accent-tint); border-left-color: var(--accent); }
-.cmp-card.band-advance { border-left-color: var(--good-fg); }
-.cmp-card.band-revise { border-left-color: var(--warn-fg); }
-.cmp-card.band-fetch { border-left-color: var(--accent); }
-.cmp-card.band-contested { border-left-color: var(--bad-fg); }
-.cmp-card.band-held { border-left-color: var(--text-3); }
-.cmp-card.band-drafted { border-left-color: var(--evidence); }
-.cmp-card-job { font-size: 11px; color: var(--text-3); font-weight: 600; display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+.cmp-doc { max-width: 760px; }
+.cmp-card { border: 1px solid transparent; border-left: 3px solid transparent; border-radius: var(--r-sm);
+  background: transparent; padding: 6px 12px; margin-bottom: 6px; cursor: text; }
+.cmp-card:hover { background: var(--bg-sunken); border-left-color: var(--border-strong); }
+.cmp-card.sel { background: var(--bg-sunken); border-color: var(--border); box-shadow: 0 0 0 2px var(--accent-tint); border-left-color: var(--accent); cursor: pointer; }
+.cmp-card.band-advance.sel { border-left-color: var(--good-fg); }
+.cmp-card.band-revise.sel { border-left-color: var(--warn-fg); }
+.cmp-card.band-fetch.sel { border-left-color: var(--accent); }
+.cmp-card.band-contested.sel { border-left-color: var(--bad-fg); }
+.cmp-card.band-held.sel { border-left-color: var(--text-3); }
+.cmp-card.band-drafted.sel { border-left-color: var(--evidence); }
+/* the job/byline line above a paragraph — quiet until hover/selection */
+.cmp-byline { float: right; font-family: var(--mono); font-size: 9.5px; letter-spacing: .03em; padding: 0 6px; border-radius: var(--r-pill); }
+.cmp-byline.cmp-by-user { color: var(--accent); background: var(--accent-tint); }
+.cmp-byline.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); }
+/* per-sentence provenance shading — who wrote each sentence */
+.cmp-sent { transition: background .15s; }
+.cmp-by-user { background: var(--accent-tint); box-shadow: inset 0 -1px 0 var(--accent); border-radius: 2px; }
+:root[data-theme="dark"] .cmp-by-user { background: var(--accent-tint-2); }
+.cmp-by-talker { }
+/* the legend in the pane header */
+.cmp-legend { margin-left: auto; display: inline-flex; gap: 6px; text-transform: none; letter-spacing: 0; }
+.cmp-leg { font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: var(--r-pill); }
+.cmp-leg.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); box-shadow: none; }
+.cmp-leg.cmp-by-user { color: var(--accent); }
+.cmp-card-job { font-size: 10.5px; color: var(--text-3); font-weight: 600; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; opacity: 0; transition: opacity .12s; }
+.cmp-card:hover .cmp-card-job, .cmp-card.sel .cmp-card-job { opacity: 1; }
 .cmp-card-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
-.cmp-prose { font-family: var(--serif); font-size: 15px; line-height: 1.62; color: var(--paper-ink); white-space: pre-wrap; }
+.cmp-prose { font-family: var(--serif); font-size: 15px; line-height: 1.7; color: var(--paper-ink); white-space: pre-wrap; }
 .cmp-prose.streaming { color: var(--text-2); }
 .cmp-prose-edit { font-family: var(--serif); font-size: 15px; line-height: 1.6; width: 100%; min-height: 90px;
   border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 8px; background: var(--bg); color: var(--text); resize: vertical; }

@@ -497,6 +497,16 @@ fired (`witness >= 0.4 AND form >= 0.5 …` → `advance`; `witness < 0.4 AND
 retrieval >= 0.5` → `revise`; `witness < 0.4 AND retrieval < 0.5` → `fetch`; …),
 shown in the draft pane and projected to the unit's colour band in the plan tree.
 
+The document side is a **directly-editable canvas**. You can write into it
+yourself; **authorship is tracked per sentence by diff** (not per keystroke —
+the *changes* carry the new author), so the canvas shades every sentence by who
+wrote it, you or the talker, and "who actually wrote this" stays traceable. The
+document is also **queryable by the chat whenever it's open**: a projection
+(`EOComposition.project`) turns the fold into a prose shape the retriever reads
+like any source — the model queries your document at significance level, the
+authorship rides in the projection for the audit, and the talker sees it all as
+just text.
+
 This build lands **phases one and two** (the plan-as-log and the artifact; the
 witness and form stamps at unit scale with the live monitor). The **standing
 operator** and its `coherence` component (phase three), the monitor emitting

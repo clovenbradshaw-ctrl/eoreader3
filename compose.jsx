@@ -182,10 +182,27 @@ function PlanNode({ node, depth, selectedId, onSelect, onJob, onMove, onCut, onG
   );
 }
 
-/* A unit in the draft pane: the prose (directly editable), its Confidence
-   vector as labelled bars beneath, the tag as a word, and the spans it drew
-   from as links. A unit in flight streams; an owed unit shows its job and a
-   notice. */
+/* The prose of one draft, sentence by sentence, each shaded by WHO wrote it —
+   the talker, or you. Authorship is per-sentence provenance (derived by diff on
+   edit), so a talker draft you lightly edited shows mostly talker prose with
+   your touched sentences marked. The shading is the only thing added; the words
+   are verbatim. */
+function ProvenanceProse({ draft }) {
+  const sents = window.EOComposition.splitSentences(draft.prose || '');
+  const prov = (draft.provenance && draft.provenance.length === sents.length) ? draft.provenance : null;
+  if (!sents.length) return draft.prose || '';
+  return sents.map((s, k) => {
+    const author = prov ? prov[k].author : (draft.author || 'talker');
+    return <span key={k} className={'cmp-sent cmp-by-' + author}
+      title={author === 'user' ? 'you wrote this' : 'the talker wrote this'}>{s}{' '}</span>;
+  });
+}
+
+/* A unit as a paragraph of the document canvas: provenance-shaded prose,
+   directly editable (double-click). Unselected it reads as clean prose — the
+   canvas feel; selected, it reveals the full audit (the Confidence vector, the
+   tag, the spans it drew from, the monitor's route, and who last wrote it). A
+   unit in flight streams; an owed unit shows its job as a bracketed placeholder. */
 function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
   const [editing, setEditing] = React.useState(false);
   const [text, setText] = React.useState((node.draft && node.draft.prose) || '');
@@ -193,20 +210,20 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
   const flight = streaming && streaming.unitId === node.id;
   return (
     <div className={'cmp-card band-' + node.band + (selected ? ' sel' : '')} id={'cmp-card-' + node.id} onClick={() => onSelect(node.id)}>
-      <div className="cmp-card-job"><span className="cmp-card-dot" /> {node.job || '(no job)'}</div>
+      <div className="cmp-card-job"><span className="cmp-card-dot" /> {node.job || '(no job)'}{node.draft && <span className={'cmp-byline cmp-by-' + (node.draft.author || 'talker')}>{node.draft.author === 'user' ? 'edited by you' : 'talker'}</span>}</div>
       {flight ? (
         <div className="cmp-prose streaming">{streaming.text || '…'}<span className="cmp-caret" /></div>
       ) : node.draft ? (
         editing
           ? <textarea className="cmp-prose-edit" autoFocus value={text} onChange={e => setText(e.target.value)}
               onBlur={() => { setEditing(false); if (text !== node.draft.prose) onProse(node.id, text); }} />
-          : <div className="cmp-prose" onDoubleClick={() => setEditing(true)} title="double-click to edit the prose directly">{node.draft.prose}</div>
+          : <div className="cmp-prose" onDoubleClick={() => setEditing(true)} title="double-click to edit — your changes are attributed to you"><ProvenanceProse draft={node.draft} /></div>
       ) : node.hole ? (
         <div className="cmp-owe">This unit is a <b>hole</b> — it owes a <b>{node.hole.owed_grain}</b>. {grainOwe(node.hole.owed_grain)}</div>
       ) : (
         <div className="cmp-owe">Owed — not drafted yet. <span className="cmp-muted">{node.job}</span></div>
       )}
-      {node.draft && !flight && (
+      {node.draft && !flight && selected && (
         <React.Fragment>
           <ConfBars confidence={node.confidence} tag={node.stamp && node.stamp.tag} />
           {node.draft.source_events && node.draft.source_events.length > 0 && (
@@ -321,6 +338,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   const flat = React.useMemo(() => {
     const out = []; const walk = ns => { for (const n of ns) { out.push(n); walk(n.children || []); } }; walk(folded.tree); return out;
   }, [folded]);
+  const auth = React.useMemo(() => C.authorship(folded), [folded]);
   const neighborsOf = (unitId) => {
     const i = flat.findIndex(n => n.id === unitId);
     const out = [];
@@ -425,12 +443,17 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     finally { if (!o.silent) setBusy(false); }
   };
   // a direct prose edit is a new Draft + a fresh Stamp of THAT prose, one
-  // undoable batch (no stale re-fold in between).
+  // undoable batch (no stale re-fold in between). The diff attributes the
+  // sentences the user actually changed to 'user' and carries the rest — the
+  // provenance tracks the CHANGES, sentence by sentence, never per keystroke.
   const editProse = async (id, prose) => {
     const u = folded.unitsById[id]; if (!u) return;
     setBusy(true);
     try {
-      const draft = C.make.draft({ doc_id: doc.id, unit_id: id, prose, revisable: true, source_events: (u.draft && u.draft.source_events) || [] });
+      const prevProse = (u.draft && u.draft.prose) || '';
+      const prevProv = (u.draft && u.draft.provenance) || null;
+      const provenance = C.diffProvenance(prevProse, prevProv, prose, 'user');
+      const draft = C.make.draft({ doc_id: doc.id, unit_id: id, prose, author: 'user', provenance, revisable: true, source_events: (u.draft && u.draft.source_events) || [] });
       const sr = await stampProse(u, prose, draft.id);
       appendBatch([draft, ...sr]);
     } catch (e) { if (window.eoWarn) window.eoWarn('editProse', e); }
@@ -518,8 +541,13 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
           )}
         </div>
         <div className="cmp-draftpane">
-          <div className="cmp-pane-h">Draft <span className="cmp-counts">{folded.counts.drafted} drafted · {folded.counts.holes} holes</span></div>
-          <div className="cmp-draft-scroll">
+          <div className="cmp-pane-h">Document
+            <span className="cmp-counts">{folded.counts.drafted} drafted · {folded.counts.holes} holes{auth.total ? ' · ' + auth.user + '/' + auth.total + ' sentences yours' : ''}</span>
+            <span className="cmp-legend" title="every sentence is shaded by who wrote it">
+              <span className="cmp-leg cmp-by-talker">talker</span><span className="cmp-leg cmp-by-user">you</span>
+            </span>
+          </div>
+          <div className="cmp-draft-scroll cmp-doc">
             {flat.length ? flat.map(n => (
               <UnitCard key={n.id} node={n} selected={selectedId === n.id} onSelect={setSelectedId}
                 onProse={editProse} streaming={streaming} onCite={onCite} />

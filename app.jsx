@@ -633,10 +633,28 @@ function App() {
   // The documents the turn grounds against: the explicit source set if any,
   // otherwise the focused doc (preserves the single-doc experience).
   const scopeList = () => {
-    const ds = sources.map(id => docsById[id]).filter(Boolean);
-    if (ds.length) return ds;
-    const b = backingDoc();
-    return b ? [b] : [];
+    let ds = sources.map(id => docsById[id]).filter(Boolean);
+    if (!ds.length) { const b = backingDoc(); ds = b ? [b] : []; }
+    return withCompositionProjections(ds);
+  };
+
+  // A composition is queryable by the chat through its PROJECTION — a prose
+  // shape (sentences + per-sentence provenance) the retriever reads like any
+  // source — never its raw event log. The talker sees only the text; the
+  // authorship rides in the projection's _provenance for the audit/UI. Any
+  // composition that lands in scope is mapped to its projection, and every OPEN
+  // composition with drafted content is auto-included, so "what does my document
+  // say…" works whenever one is open (the user's "auto when open" choice).
+  const withCompositionProjections = (ds) => {
+    if (!window.EOComposition) return ds.filter(d => d.kind !== 'composition');
+    const out = [], seen = new Set();
+    const addProj = (d) => {
+      if (seen.has(d.id)) return;
+      try { const p = window.EOComposition.project(d); if (p && !p._empty) { out.push(p); seen.add(d.id); } } catch (e) {}
+    };
+    for (const d of ds) { if (d.kind === 'composition') addProj(d); else out.push(d); }
+    for (const id of openTabs) { const d = docsById[id]; if (d && d.kind === 'composition') addProj(d); }
+    return out;
   };
 
   const openTab = useCallback((id) => {
