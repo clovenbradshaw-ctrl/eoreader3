@@ -1466,6 +1466,28 @@ group('extraction — headline promotion & the modifier-merge guard', () => {
     'a person\'s surname short form still merges — one Corman referent, never two');
 });
 
+// An apostrophe inside a name (O'Connell, D'Arcy) is part of the name, not a
+// quote boundary. The greedy-span cleaner used to clip there, beheading the
+// surface to its first letter ("O"), which was then dropped — so a central
+// apostrophe-named figure vanished from the graph entirely.
+const aposDoc = await E.parseDocument('apos.txt',
+  "City Hall Notes\n\nMayor O'Connell opened the session. O'Connell defended the budget. " +
+  "The clerk said O'Connell would return. Reporters asked whether O'Connell agreed. " +
+  "Detective D'Arcy took the report. D'Arcy filed it the next morning.",
+  'apos');
+group('extraction — apostrophe names survive, not beheaded at the apostrophe', () => {
+  const ents = E.projectEntities(aposDoc).entities;
+  const names = ents.map(e => e.name);
+  ok(names.some(n => /O'Connell/.test(n)),
+    "an apostrophe-named figure is admitted, never clipped at the apostrophe");
+  ok(!names.includes('O') && !names.includes('Mayor'),
+    'the name is never reduced to the letter or title before the apostrophe');
+  const oc = ents.find(e => /O'Connell/.test(e.name));
+  ok(oc && oc.type === 'person', "O'Connell is typed a person");
+  ok(oc && oc.raw >= 3, 'every O\'Connell mention counts toward the one referent');
+  ok(names.some(n => /D'Arcy/.test(n)), 'a second apostrophe name (D\'Arcy) also survives');
+});
+
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }
