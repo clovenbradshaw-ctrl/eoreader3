@@ -13,6 +13,8 @@
   let activeCancel = null;   // call to reject the in-flight build promptly (user cancel)
   let loadingActive = false; // a load is genuinely in flight (gates cancelLoad)
   let workerBroken = false;  // the worker path failed to establish once — stop retrying it
+  let swBroken = false;      // the Service Worker engine failed to establish once — stop retrying it
+  let swRegPromise = null;   // memoized registration of the WebLLM service worker
   let activeGen = null;      // the currently-streaming generation: { abort() } — set by interrupt()
 
   // The sentinel a stopped stream throws so callers can tell a user interrupt
@@ -960,17 +962,105 @@
   // these alive. Combined with persistStorage(), this is what locks the
   // multi-GB download to a one-time cost. The prebuiltAppConfig (the model
   // registry WebLLM ships) is spread first so we don't drop any entries.
+  // Optional self-hosting (the highest-leverage speed/reliability fix for the
+  // GPU path): point WebLLM at a mirror of the MLC weights + wasm libs instead
+  // of the default Hugging Face / jsDelivr CDN, which is where the rate-limiting,
+  // occasional 5xx, and region-variable edge performance come from. Set
+  // window.EO_WEBLLM_CDN to the base URL of a bucket laid out by
+  // tools/mirror/webllm-to-r2.mjs:
+  //   <base>/models/<model_id>/   ← the MLC artifacts (ndarray shards, tokenizer,
+  //                                  mlc-chat-config.json) — i.e. the `model` dir
+  //   <base>/libs/<file>.wasm     ← the `model_lib` wasm, addressed by basename
+  // Cloudflare R2 (free egress, behind the edge, HTTP/3) is the usual pick; the
+  // mirror tool sets the immutable cache + CORS headers WebLLM needs. Any entry
+  // we can't fully derive (missing model_id/model_lib) is left pointing at its
+  // original URL, so a partial mirror degrades to the default rather than 404s.
+  function mirrorBase() {
+    const u = (typeof window !== 'undefined' && window.EO_WEBLLM_CDN) || null;
+    return u ? String(u).replace(/\/+$/, '') : null;   // tolerate a trailing slash
+  }
+  function mirrorModelList(list, base) {
+    if (!Array.isArray(list)) return list;
+    return list.map((rec) => {
+      if (!rec || !rec.model_id) return rec;            // can't map without an id
+      const out = Object.assign({}, rec);               // never mutate the lib's config
+      out.model = base + '/models/' + rec.model_id + '/';
+      if (rec.model_lib) {
+        const file = String(rec.model_lib).split('?')[0].split('/').pop();
+        if (file) out.model_lib = base + '/libs/' + file;
+      }
+      return out;
+    });
+  }
   function webllmAppConfig() {
     try {
       const m = mod; if (!m) return undefined;
       const base = m.prebuiltAppConfig || {};
-      return Object.assign({}, base, { useIndexedDBCache: true });
+      const cfg = Object.assign({}, base, { useIndexedDBCache: true });
+      const cdn = mirrorBase();
+      if (cdn) cfg.model_list = mirrorModelList(base.model_list, cdn);
+      return cfg;
     } catch (_) { return undefined; }
+  }
+  // Opt-in Service Worker engine. With it, the model lives in the service worker
+  // rather than the page, so a page reload re-attaches to the already-resident
+  // engine instead of re-instantiating the weights into the GPU. It is OFF by
+  // default (set window.EO_WEBLLM_SW = true to enable) for two reasons: a service
+  // worker is verified by-fallback only — any registration/handshake failure
+  // drops straight through to the Web Worker engine below — and introducing one
+  // to a site is worth a deliberate switch the maintainer flips after testing in
+  // a real browser. webllm-sw.js carries ONLY WebLLM's message handler (no fetch
+  // listener), so it never intercepts or caches the app's own requests.
+  const swEnabled = () => typeof window !== 'undefined' && window.EO_WEBLLM_SW === true
+    && typeof navigator !== 'undefined' && navigator.serviceWorker && window.isSecureContext !== false;
+  function registerWebLLMSW() {
+    if (swRegPromise) return swRegPromise;
+    swRegPromise = (async () => {
+      // Relative URL + scope so it works under both the repo-root dev server and
+      // a GitHub Pages project subpath. A module worker matches the ESM import.
+      const url = (typeof window !== 'undefined' && window.EO_WEBLLM_SW_URL) || 'webllm-sw.js';
+      await navigator.serviceWorker.register(url, { type: 'module', scope: './' });
+      await navigator.serviceWorker.ready;               // wait for an active, controlling worker
+    })();
+    swRegPromise.catch(() => { swRegPromise = null; });  // a failed registration may be retried
+    return swRegPromise;
+  }
+  async function createSWEngine(webllm, mlcKey, opts) {
+    await registerWebLLMSW();
+    let sawProgress = false;
+    const userCb = opts && opts.initProgressCallback;
+    const wrapped = Object.assign({}, opts, {
+      initProgressCallback: (r) => { sawProgress = true; if (userCb) userCb(r); },
+    });
+    // A worker that never activates would hang the create call; bound it the same
+    // way the Web Worker path is bounded, and tag a timeout as an establish-fail.
+    let hsTimer = null;
+    const handshake = new Promise((_, rej) => {
+      hsTimer = setTimeout(() => {
+        if (!sawProgress) rej(Object.assign(new Error('service worker handshake timeout'), { _establish: true }));
+      }, WORKER_HANDSHAKE_MS);
+      if (hsTimer && hsTimer.unref) hsTimer.unref();
+    });
+    try {
+      return await Promise.race([webllm.CreateServiceWorkerMLCEngine(mlcKey, wrapped), handshake]);
+    } finally { clearTimeout(hsTimer); }
   }
   async function createEngine(mlcKey, opts) {
     const webllm = await importWebLLM();
     const appConfig = webllmAppConfig();
     const optsWithConfig = appConfig ? Object.assign({}, opts, { appConfig }) : opts;
+    // Service Worker engine first when enabled; any failure to establish disables
+    // it for the session and falls through to the Web Worker engine.
+    if (swEnabled() && !swBroken && typeof webllm.CreateServiceWorkerMLCEngine === 'function') {
+      try {
+        return await createSWEngine(webllm, mlcKey, optsWithConfig);
+      } catch (e) {
+        if (e && e.code === 'CANCEL') throw e;            // a user cancel is not a SW failure
+        swBroken = true;
+        if (typeof console !== 'undefined') console.warn('Service Worker engine unavailable; using the Web Worker engine instead.', e);
+        // fall through to the Web Worker engine below
+      }
+    }
     if (!workerBroken && typeof Worker !== 'undefined' && typeof webllm.CreateWebWorkerMLCEngine === 'function') {
       let worker = null, sawProgress = false;
       try {

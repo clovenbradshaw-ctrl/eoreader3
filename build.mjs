@@ -48,6 +48,9 @@ const result = await esbuild.build({
 // llm.js stays a separate plain script (dynamic CDN import of WebLLM); styles
 // are copied verbatim.
 copyFileSync(join(ROOT, 'llm.js'), join(DIST, 'llm.js'));
+// the opt-in WebLLM Service Worker host (a module worker that dynamic-imports
+// WebLLM); copied verbatim, registered at runtime only when EO_WEBLLM_SW is on.
+copyFileSync(join(ROOT, 'webllm-sw.js'), join(DIST, 'webllm-sw.js'));
 copyFileSync(join(ROOT, 'embed.js'), join(DIST, 'embed.js'));
 // shape.js is a plain script too (it imports nothing — generation and embedding
 // are injected); the exemplar library it scores against rides alongside.
