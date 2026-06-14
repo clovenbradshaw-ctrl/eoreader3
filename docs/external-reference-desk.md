@@ -96,6 +96,21 @@ the tool's knowledge grows as you chat. It is wired in `app.jsx`
 surfaced by the composer toggle (`chat.jsx`) — off by default, persisted in
 prefs, and inert when the proxy is cleared.
 
+**Disambiguate first, then read — never respond before the article is in.** An
+explicit lookup ("search wikipedia for dolphins") with nothing already in scope
+doesn't guess which "dolphin" you mean: it runs a cheap search and offers the
+candidate articles, settling an honest line beside them ("pick one and I'll read
+the full article and answer with citations") — the local model is never woken to
+summarize an article it hasn't read. Picking a match is **not** a dead end that
+makes you re-ask: the click pulls that article in and, in the **same reply**
+(`answerFromWikiPick`), settles a grounded answer with the article card pinned
+above it — the card showing its reading → added lifecycle while the answer comes
+up below. So the contract holds in both directions: either the Wikipedia text is
+ingested and the answer is bound to it, or the reply plainly says it is reading
+and will answer once it has — it never speaks past the page it hasn't read yet.
+A real content question ("who is …") is answered as asked; a bare acquisition
+frame becomes a grounded overview of the chosen article.
+
 ## The API (`EOExternal`)
 
 ```js
