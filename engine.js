@@ -10214,29 +10214,54 @@ function projectGraph(events, frame = {}) {
     return ds.find(d => referencesDoc(d, query, ctx)) || ds.find(d => !d.provisional) || ds[0];
   }
 
-  // Anti-matter across the whole scope: a named referent is matter if present in
-  // ANY source, anti-matter only if absent from EVERY one. "What did Voss say?"
-  // over two sources surfaces a void only when Voss is in neither.
-  function referentsScope(docs, query) {
-    const bodies = scopeDocs(docs).map(d => docBodyLC(d));
-    const names = String(query).match(/\p{Lu}[\p{L}’'\-]+(?:\s+\p{Lu}[\p{L}’'\-]+)*/gu) || [];
-    const nonRef = nonReferentialCaps(query);     // DEF: the type gate, ahead of presence
-    const matter = [], antimatter = [];
+  // The named referents in a piece of free text: every capitalized name span,
+  // stop-trimmed and run through the DEF type gate (a sentence-initial
+  // "Give"/"Based"/"Sure"/"What's" is structural grammar, never a referent).
+  // Yields each surviving name with the significant tokens that cleared the gate
+  // — referentsScope needs them for its scope-presence test; namedReferents
+  // discards them. One extractor, so "what counts as a named referent" can never
+  // drift between the page reader and the conversation reader.
+  function* _referentSpans(text) {
+    const names = String(text).match(/\p{Lu}[\p{L}’'\-]+(?:\s+\p{Lu}[\p{L}’'\-]+)*/gu) || [];
+    const nonRef = nonReferentialCaps(text);      // DEF: the type gate, ahead of presence
     for (const raw of names) {
       const parts = raw.split(/\s+/);
       while (parts.length && QA_STOP.has(parts[0].toLowerCase())) parts.shift();
       while (parts.length && QA_STOP.has(parts[parts.length - 1].toLowerCase())) parts.pop();
       const sig = parts.filter(t => t.length > 2 && !QA_STOP.has(t.toLowerCase()));
       if (!sig.length) continue;
-      // The fourth NUL state (mirrors referents): drop structural/pragmatic
-      // tokens — a sentence-initial "Give"/"Based"/"Sure"/"What's" — before the
-      // presence test, so they can never reach antimatter across the scope.
       const refSig = sig.filter(t => !nonRef.has(NRM_CAP(t)));
       if (!refSig.length) continue;
+      yield { name: parts.join(' '), refSig };
+    }
+  }
+
+  // Anti-matter across the whole scope: a named referent is matter if present in
+  // ANY source, anti-matter only if absent from EVERY one. "What did Voss say?"
+  // over two sources surfaces a void only when Voss is in neither.
+  function referentsScope(docs, query) {
+    const bodies = scopeDocs(docs).map(d => docBodyLC(d));
+    const matter = [], antimatter = [];
+    for (const { name, refSig } of _referentSpans(query)) {
       const present = bodies.some(b => refSig.some(t => b.includes(t.toLowerCase())));
-      (present ? matter : antimatter).push(parts.join(' '));
+      (present ? matter : antimatter).push(name);
     }
     return { matter, antimatter };
+  }
+
+  // The conversation as a source of activation deposit, beside the page. A chat
+  // turn cites no document, so it carries no sentence pointers; what it DOES carry
+  // is who/what it named — and that is the anchor an anaphoric follow-up ("what's
+  // his role") needs. No scope-presence split: in plain chat the conversation IS
+  // the text, so every named referent counts. Same extraction + type gate the
+  // page reader uses, so chat and reading run one activation law. Deduped.
+  function namedReferents(text) {
+    const seen = new Set(), out = [];
+    for (const { name } of _referentSpans(text)) {
+      const k = name.toLowerCase();
+      if (!seen.has(k)) { seen.add(k); out.push(name); }
+    }
+    return out;
   }
 
   // Mechanical answer over the scope. One source → the single-doc path verbatim.
@@ -12035,7 +12060,7 @@ function projectGraph(events, frame = {}) {
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
     ingestionReport, classifyTokens, evaAcrossDocs, textGraph,
     // multi-doc scope: ground a conversation against an explicit set of sources
-    referencesScope, retrieveScope, routePrimary, discourseBinding, referentsScope, answerScope,
+    referencesScope, retrieveScope, routePrimary, discourseBinding, referentsScope, namedReferents, answerScope,
     resolveSubjectDoc: activeSubjectDoc,
     contextScope, bindCitationsScope, supportProbeTerms,
     // tiered context for the notes-and-spans grounded prompt
