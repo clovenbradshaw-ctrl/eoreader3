@@ -361,6 +361,12 @@ function narrateTurn(turn) {
         } else if (s.round && s.round > 1) {
           const sub = (s.subquery || '').trim();
           push('Still hadn’t covered ' + (sub ? '“' + sub + '”' : 'part of the question') + ', so I sought again' + (s.newHits ? ' and found ' + s.newHits + ' more passage' + (s.newHits === 1 ? '' : 's') : '') + '.');
+        } else if (s.blob) {
+          // A summary / "who" turn doesn't rank passages against a query — it
+          // reads a structural sample — so don't call them "most relevant".
+          push(s.task === 'summary'
+            ? 'Sampled ' + n + ' passage' + (n === 1 ? '' : 's') + ' from across the document to summarize from.'
+            : 'Gathered ' + n + ' passage' + (n === 1 ? '' : 's') + ' — the cast’s mentions across the document.');
         } else {
           push('Pulled the ' + n + ' most relevant passage' + (n === 1 ? '' : 's') + (s.viaSemantic ? ' (by meaning).' : '.'));
         }
