@@ -309,6 +309,33 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     ok(!X.acquireIntent('tell me more'), 'a vague follow-up is not acquisition');
   });
 
+  group('isSpecificQuery() — can the term stand on its own?', () => {
+    ok(X.isSpecificQuery('Skydio'), 'a Capitalized proper-noun-like token is specific');
+    ok(X.isSpecificQuery('French Revolution'), 'a multi-word topic is specific');
+    ok(!X.isSpecificQuery('research'), 'a bare lowercase common noun is not');
+    ok(!X.isSpecificQuery('DFR'), 'a lone ALL-CAPS acronym is not');
+    ok(!X.isSpecificQuery(''), 'empty is not');
+  });
+
+  group('seedQuery() — anchor a contextless forced query to the reader’s subject', () => {
+    const ctx = { subject: 'Skydio', entities: ['Skydio', 'MNPD', 'surveillance'] };
+    // the reported gap: a forced bare common noun ("research") searched its own
+    // token → disambiguation soup. Anchor it to the active subject instead.
+    eq(X.seedQuery('research', ctx), 'Skydio research', 'a bare common noun is anchored to the active subject');
+    eq(X.seedQuery('DFR', ctx), 'Skydio DFR', 'a lone acronym is anchored too');
+    // an EXPLICIT acquisition names its own target — pass it through untouched
+    eq(X.seedQuery('search wikipedia for dolphins', ctx), 'dolphins', 'an explicit lookup is not seeded');
+    eq(X.seedQuery('look up Howard Shore', ctx), 'Howard Shore', 'an explicit name lookup is not seeded');
+    // an already-specific extraction (a proper noun in the message) needs no anchor
+    eq(X.seedQuery('Skydio drones are everywhere', ctx), 'Skydio', 'a proper noun in the message wins, no seed');
+    // the anchor skips an entity the bare term already names (no "surveillance surveillance")
+    eq(X.seedQuery('surveillance', ctx), 'Skydio surveillance', 'the first DISTINCT anchor wins');
+    // no context → the bare term, unchanged (never worse than before the seed)
+    eq(X.seedQuery('research', {}), 'research', 'no subject → unchanged');
+    eq(X.seedQuery('research', null), 'research', 'no context → unchanged');
+    eq(X.seedQuery('', ctx), null, 'empty → null');
+  });
+
   await group('rate limiter — calls are spaced by the interval', async () => {
     X.setConfig({ intervalMs: 25 });
     const log2 = [];

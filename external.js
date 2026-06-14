@@ -669,6 +669,42 @@
     return false;
   }
 
+  // Is this extracted term specific enough to search ON ITS OWN — a multi-word
+  // topic ("French Revolution"), or a proper-noun-like Capitalized token
+  // ("Skydio")? A bare single common noun ("research") or a lone acronym ("DFR")
+  // is NOT: it searches to a disambiguation page, so it wants an anchor. Pure.
+  function isSpecificQuery(s) {
+    s = String(s == null ? '' : s).trim();
+    if (!s) return false;
+    if (/\s/.test(s)) return true;          // a multi-word run carries its own signal
+    return /[A-Z][a-z]/.test(s);            // a Capitalized proper-noun-like token (not ALL-CAPS)
+  }
+
+  // Seed the lookup term with the reader's context when the message names no
+  // subject of its own. pickQuery() reads ONLY the message string, so the desk
+  // forced onto ordinary chatter ("research") yields the bare token, which
+  // Wikipedia answers with a disambiguation page (the gap the reader hit). Two
+  // cases keep the term untouched: an EXPLICIT acquisition ("search wikipedia
+  // for dolphins" — the reader named the target) and an already-specific
+  // extraction (a proper noun / multi-word topic). Otherwise anchor the generic
+  // token to the conversation's active subject (ctx.subject) or the open
+  // document's salient names (ctx.entities), so the candidates resolve against
+  // what the reader is actually reading. ctx = { subject?, entities?[] }. Pure.
+  function seedQuery(text, ctx) {
+    const base = pickQuery(text);
+    if (!base) return base;
+    if (acquireIntent(text) || isSpecificQuery(base)) return base;
+    ctx = ctx || {};
+    const nrm = (s) => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
+    const b = nrm(base);
+    for (const cand of [ctx.subject, ...((ctx.entities) || [])]) {
+      const s = String(cand == null ? '' : cand).trim();
+      // a distinct anchor that the bare token doesn't already carry
+      if (s && nrm(s) !== b && !b.includes(nrm(s)) && !nrm(s).includes(b)) return s + ' ' + base;
+    }
+    return base;
+  }
+
   /* ============================================================
      Wikipedia article → ingestible document text.
 
@@ -753,7 +789,7 @@
     SCHEMA,
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
-    enrichTerm, article, searchOptions, pickQuery, acquireIntent,
+    enrichTerm, article, searchOptions, pickQuery, acquireIntent, seedQuery, isSpecificQuery,
     stripWikiSections, articleDocText,
     hasConsent, grantConsent, revokeConsent,
     clearCache,
