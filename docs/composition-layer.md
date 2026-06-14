@@ -47,7 +47,7 @@ supersession by REC.**
 | **Unit** | `DEF · unit` | a node of the plan tree carrying a *job* (direction, not content), an order, a parent. A re-DEF of the same id is a plan edit (rewrite-job / reorder / reparent) |
 | **Draft** | `INS · draft` | the prose attached to a unit, with `source_events` (what the talker drew from) and a Confidence |
 | **Stamp** | `EVA · stamp` | the computed Confidence on a draft + a tag. Produced by the audit, not the talker; re-stamping is frequent |
-| **Hole** | `NUL · hole` | an explicit owed unit with an `owed_grain` (Figure → a citation, Ground → a context, Pattern → corroborating instances). Not an error — a legitimate epistemic position |
+| **Hole** | `NUL · hole` | an explicit owed unit with an `owed_grain` (Figure → a citation, Ground → a context, Pattern → corroborating instances). Not an error — a legitimate epistemic position. *Engine-level only now: no longer surfaced as a per-section UI affordance, so sections carry no evidential grain* |
 | **Route** | `DEF · route` | the monitor's decision (advance/revise/fetch/escalate/restructure) carrying the named predicate that fired |
 | **Plan-Edit-By-Draft** | `REC · plan-edit-by-draft` | a record of *why* the plan moved, driven by a draft. User-driven for now; the monitor will emit it once the standing operator ships |
 | **(supersede)** | `REC · supersede` | the undo primitive — drops its target from the fold; itself supersedable (redo) |
@@ -117,10 +117,11 @@ changing the draft; if the stamps drift the next route may demand a revise.
 A single artifact surface, two panes over the same fold:
 
 - **The plan pane** — the frame at the top (editable), then the unit tree. Each
-  node shows its job, state, grain (if a hole), and a confidence sparkline. The
-  colour **band** (owed / advance / revise / fetch / contested / held) is the
-  one place a scalar projection appears; the predicate that produced it shows on
-  hover. Reorder, rewrite-job, set-grain, cut.
+  node shows its job, state, and a confidence sparkline — **no epistemic "grain"
+  label rides on a section**, so the tree reads the same for a recipe's steps as
+  for a report's argument. The colour **band** (owed / advance / revise / fetch /
+  contested / held) is the one place a scalar projection appears; the predicate
+  that produced it shows on hover. Reorder, rewrite-job, cut.
 - **The draft pane** — the assembled doc in tree order. Each unit shows its prose
   (directly editable), its full Confidence vector as labelled bars, its tag as a
   word, the spans it drew from as links, and the monitor's route. Units in flight
@@ -129,10 +130,16 @@ A single artifact surface, two panes over the same fold:
   contested on a unit; Plan from frame / + Unit / Restamp all / Undo on the doc.
   Every action is an event, so every action is undoable.
 
-Three settings are surfaced (Genre, Source corpus, Talker model) because they
-change behaviour; no other generation parameters are exposed — the bet is that
-the model is a small, replaceable component and tuning it per doc is the wrong
-layer.
+Three settings are surfaced (Kind of document, Source corpus, Talker model)
+because they change behaviour; no other generation parameters are exposed — the
+bet is that the model is a small, replaceable component and tuning it per doc is
+the wrong layer. **Kind of document is free text** (with suggestions — recipe,
+technical-manual, how-to-guide, report, letter …), and it is the single lever
+that lets the layer structure *any* content: it is named into the outline prompt
+(so the plan takes the shape that kind of document naturally has) and into the
+draft prompt (so a section comes out as prose, a list, or numbered steps as the
+content calls for). An unknown kind simply scores `form` null — the honest "not
+measured" — never an error, so the field is genuinely open.
 
 ## Starting to write
 

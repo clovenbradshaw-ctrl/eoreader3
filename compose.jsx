@@ -16,8 +16,15 @@
    the non-breaking floor holds.
    ============================================================ */
 
-const CMP_GENRES = ['plain-report', 'news-article', 'encyclopedic-summary', 'obituary', 'letter', 'recipe'];
-const CMP_GRAINS = ['Figure', 'Ground', 'Pattern'];
+// Genre suggestions only — the field is free text, so any kind of document can be
+// declared (a recipe, a technical manual, a how-to, a report, a letter). The genre
+// is what tells the planner and the talker how to structure the content; an
+// unknown genre simply scores form null (honest "not measured"), never an error.
+const CMP_GENRES = [
+  'plain-report', 'news-article', 'encyclopedic-summary', 'essay',
+  'recipe', 'technical-manual', 'how-to-guide', 'tutorial', 'reference', 'product-spec',
+  'FAQ', 'checklist', 'letter', 'obituary', 'story',
+];
 // Confidence components, in display order, with one-word glosses for the hover.
 const CMP_COMPONENTS = [
   ['witness', 'how much of the prose a span backs'],
@@ -125,18 +132,18 @@ function FrameEditor({ frame, onChange, corpus, allProse, onCorpus, modelName })
     <div className="cmp-frame">
       <button className="cmp-frame-head" onClick={() => setOpen(o => !o)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={14} />
-        <span className="cmp-frame-thesis">{f.thesis_or_question || 'Set the thesis or question…'}</span>
+        <span className="cmp-frame-thesis">{f.thesis_or_question || 'Set the topic…'}</span>
       </button>
       {open && (
         <div className="cmp-frame-body">
-          {fld('thesis_or_question', 'Thesis / question', 'What is this document arguing or asking?')}
-          {fld('reader', 'Implied reader', 'Who is this for?')}
-          {fld('goal', 'Rhetorical goal', 'persuade · inform · narrate · …')}
+          {fld('thesis_or_question', 'Topic / title', 'What is this document about?')}
+          {fld('reader', 'Reader', 'Who is this for?')}
+          {fld('goal', 'Purpose', 'inform · instruct · persuade · narrate · …')}
           <label className="cmp-field">
-            <span className="cmp-field-l">Genre</span>
-            <select className="cmp-input" value={f.genre || 'plain-report'} onChange={e => onChange({ genre: e.target.value })}>
-              {CMP_GENRES.map(g => <option key={g} value={g}>{g}</option>)}
-            </select>
+            <span className="cmp-field-l">Kind of document</span>
+            <input className="cmp-input" list="cmp-genres" value={f.genre || ''} placeholder="recipe · technical-manual · report · letter · …"
+              onChange={e => onChange({ genre: e.target.value })} />
+            <datalist id="cmp-genres">{CMP_GENRES.map(g => <option key={g} value={g} />)}</datalist>
           </label>
           <label className="cmp-field">
             <span className="cmp-field-l">Constraints</span>
@@ -165,9 +172,10 @@ function FrameEditor({ frame, onChange, corpus, allProse, onCorpus, modelName })
 }
 
 /* One node in the plan tree. The colour band is the single scalar projection;
-   the predicate that produced it shows on the band's hover. A hole is visibly
-   distinct (a marked node with its owed-grain and no draft). */
-function PlanNode({ node, depth, selectedId, onSelect, onJob, onMove, onCut, onGrain }) {
+   the predicate that produced it shows on the band's hover. A section carries its
+   job, its state and a confidence sparkline — no epistemic "grain" label, so the
+   tree reads for any kind of document, a recipe's steps as readily as a report. */
+function PlanNode({ node, depth, selectedId, onSelect, onJob, onMove, onCut }) {
   const [editing, setEditing] = React.useState(false);
   const [job, setJob] = React.useState(node.job || '');
   React.useEffect(() => { setJob(node.job || ''); }, [node.job]);
@@ -188,25 +196,19 @@ function PlanNode({ node, depth, selectedId, onSelect, onJob, onMove, onCut, onG
                 {node.job || <span className="cmp-muted">(empty job — double-click to write it)</span>}
               </span>}
           <span className="cmp-node-meta">
-            <span className={'cmp-state cmp-state-' + node.state}>{node.hole ? 'hole' : node.state}</span>
-            {node.hole && <span className="cmp-grain" title="the kind of evidence this hole awaits">⟨{node.hole.owed_grain}⟩</span>}
+            <span className={'cmp-state cmp-state-' + node.state}>{node.state}</span>
             <ConfSpark confidence={node.confidence} />
           </span>
         </span>
         <span className="cmp-node-tools" onClick={e => e.stopPropagation()}>
           <button className="cmp-mini" title="move up" onClick={() => onMove(node.id, -1)}><Icon name="chevron-up" size={12} /></button>
           <button className="cmp-mini" title="move down" onClick={() => onMove(node.id, 1)}><Icon name="chevron-down" size={12} /></button>
-          <select className="cmp-mini-sel" title="owe a grain (make this a hole)" value={node.hole ? node.hole.owed_grain : ''}
-            onChange={e => onGrain(node.id, e.target.value)}>
-            <option value="">grain…</option>
-            {CMP_GRAINS.map(g => <option key={g} value={g}>{g}</option>)}
-          </select>
-          <button className="cmp-mini danger" title="cut this unit" onClick={() => onCut(node.id)}><Icon name="x" size={12} /></button>
+          <button className="cmp-mini danger" title="cut this section" onClick={() => onCut(node.id)}><Icon name="x" size={12} /></button>
         </span>
       </div>
       {(node.children || []).map(ch => (
         <PlanNode key={ch.id} node={ch} depth={depth + 1} selectedId={selectedId}
-          onSelect={onSelect} onJob={onJob} onMove={onMove} onCut={onCut} onGrain={onGrain} />
+          onSelect={onSelect} onJob={onJob} onMove={onMove} onCut={onCut} />
       ))}
     </div>
   );
@@ -263,8 +265,6 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
               onClick={e => e.stopPropagation()}
               onBlur={() => { setEditing(false); if (text !== node.draft.prose) onProse(node.id, text); }} />
           : <div className="cmp-prose" onClick={e => { e.stopPropagation(); onSelect(node.id); setEditing(true); }} title="click to edit — your changes are attributed to you"><ProvenanceProse draft={node.draft} /></div>
-      ) : node.hole ? (
-        <div className="cmp-owe">This unit is a <b>hole</b> — it owes a <b>{node.hole.owed_grain}</b>. {grainOwe(node.hole.owed_grain)}</div>
       ) : (
         <div className="cmp-owe">Owed — not drafted yet. <span className="cmp-muted">{node.job}</span></div>
       )}
@@ -284,9 +284,6 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
       )}
     </div>
   );
-}
-function grainOwe(g) {
-  return g === 'Figure' ? 'It expects a citation.' : g === 'Ground' ? 'It expects a context.' : 'It expects corroborating instances.';
 }
 
 /* The action surface — contextual to what is selected. Every action is an event,
@@ -606,13 +603,6 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     appendBatch([C.make.edit({ doc_id: doc.id, edit_kind: 'cut', affected_unit_ids: [id], reason: 'cut by hand' })]);
     if (selectedId === id) setSelectedId(null);
   };
-  const setGrain = (id, grain) => {
-    if (!grain) return;
-    appendBatch([
-      C.make.unit({ doc_id: doc.id, id, owed_grain: grain }),
-      C.make.hole({ doc_id: doc.id, unit_id: id, owed_grain: grain }),
-    ]);
-  };
   const holdUnit = (id) => {
     const u = folded.unitsById[id];
     appendBatch([C.make.hold({ doc_id: doc.id, unit_id: id, held: u.state !== 'held' })]);
@@ -701,12 +691,15 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     finally { setBusy(false); setProgress(null); }
   };
   // stamp a GIVEN prose for a unit: retrieve fresh material against the job,
-  // measure the grain-relative witness on THAT prose, decide a route. Returns
-  // [stamp, route]. Stamping the prose passed in (not the fold's) keeps it
-  // correct for a just-edited draft the fold hasn't re-derived yet.
+  // measure the witness on THAT prose, decide a route. Returns [stamp, route].
+  // Stamping the prose passed in (not the fold's) keeps it correct for a
+  // just-edited draft the fold hasn't re-derived yet.
   const stampProse = async (unit, prose, draftId) => {
     const spans = await retrieve(unit.job);
-    const grain = (unit.hole && unit.hole.owed_grain) || unit.owed_grain || 'Figure';
+    // The witness measure is citation-coverage by default ('Figure'); it grounds
+    // the prose against its sources and is internal to the stamp — not the
+    // user-facing "grain" label, which no longer rides on a section.
+    const grain = 'Figure';
     let draftVec = null; try { draftVec = await embed(prose); } catch (e) {}
     const spanTexts = spans.map(s => s.text);
     // Same mechanical re-citation rescue as the draft path: only when the lexical
@@ -769,16 +762,10 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     if (!o.keepBusy) { if (busy || !modelReady) return []; setBusy(true); }
     setPlanning('');
     try {
-      const system = 'You are planning the STRUCTURE of a document, not writing it. Propose between four and seven sections. Each section is ONE line: a short job describing what that section must DO (its direction), never its content. No numbering, no prose, no blank lines — one job per line.';
-      const u = [];
-      if (frame.thesis_or_question) u.push('Document: ' + frame.thesis_or_question);
-      if (frame.reader) u.push('For: ' + frame.reader);
-      if (frame.goal) u.push('Goal: ' + frame.goal);
-      if ((frame.constraints || []).length) u.push('Constraints: ' + frame.constraints.join('; '));
-      u.push('Genre: ' + (frame.genre || 'plain-report'));
-      u.push('');
-      u.push('Propose the sections, one job per line:');
-      const text = await phrase({ system, user: u.join('\n'), max_tokens: 260 }, (delta) => setPlanning(t => (t || '') + delta));
+      // genre-aware outline prompt — the sections fit the KIND of document (a
+      // recipe, a manual, a report), built and tested in the pure module.
+      const { system, user } = C.buildOutlinePrompt({ frame });
+      const text = await phrase({ system, user, max_tokens: 260 }, (delta) => setPlanning(t => (t || '') + delta));
       // Parse mechanically: drop a model lead-in ("Here are the sections:") and
       // strip list markers (1. / I. / (a) / •) so a preamble never drafts as a
       // unit and "I. Introduction" becomes the job "Introduction".
@@ -857,8 +844,8 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
               </div>
             ) : folded.tree.length ? folded.tree.map(n => (
               <PlanNode key={n.id} node={n} depth={0} selectedId={selectedId} onSelect={setSelectedId}
-                onJob={editJob} onMove={moveUnit} onCut={cutUnit} onGrain={setGrain} />
-            )) : <div className="cmp-empty">No plan yet. Set a thesis above, then press <b>✍ Write it</b> — it outlines, then drafts every unit, live. (Or <b>Outline only</b>, or add a unit by hand.)</div>}
+                onJob={editJob} onMove={moveUnit} onCut={cutUnit} />
+            )) : <div className="cmp-empty">No plan yet. Set a topic above, then press <b>✍ Write it</b> — it outlines the sections this kind of document needs, then drafts every one, live. (Or <b>Outline only</b>, or add a section by hand.)</div>}
           </div>
           {folded.planEdits.length > 0 && (
             <div className="cmp-planlog">

@@ -124,6 +124,14 @@ click(container.querySelector('.cmp-clean-frame-toggle'));
 html = container.innerHTML;
 ok(/report the count/.test(html), 'the unit job renders in the plan tree');
 ok(/The city recorded twelve thousand filings/.test(html), 'the drafted prose renders in the document pane');
+// the epistemic "grain" (Figure/Ground/Pattern) is gone from the section elements
+ok(!container.querySelector('.cmp-grain') && !container.querySelector('.cmp-mini-sel') && !/grain/i.test(html),
+  'no "grain" badge or selector rides on a section — sections are content-type-neutral');
+// the document KIND is free text (a datalist of suggestions), so any content —
+// a recipe, a technical manual — can be declared, not just a fixed genre list
+ok(!!container.querySelector('input[list="cmp-genres"]') && !!container.querySelector('datalist#cmp-genres'),
+  'the document-kind field is a free-text input with suggestions (structure any kind of content)');
+ok(/technical-manual/.test(html) && /recipe/.test(html), 'the kind suggestions span structured genres (recipe … technical-manual)');
 // authorship runs are shaded; only the user's run carries a chip now — the
 // model's grounded prose reads clean (no "talker" chip)
 ok(/cmp-by-talker/.test(html) && /cmp-by-user/.test(html), 'authorship runs are shaded (your edits vs the grounded draft)');
