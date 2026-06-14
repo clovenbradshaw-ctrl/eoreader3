@@ -21,19 +21,21 @@
    answer sentence as the turn streams.
 
    Ported from the standalone dc-runtime instrument to a native React
-   drawer so it lives in the app like every other mode and can read the
-   app's own data. The four scenario traces (grounded / fluent·thin /
-   repair / cold-miss→fetch) are illustrative.
+   drawer so it lives in the app like every other mode and reads the app's
+   own data.
 
-   FORTHCOMING — when the engine emits per-event operator(Site, Resolution)
-   addresses and per-turn conformance bits onto the audit log
-   (docs/reading-conformance.md: "When logs carry site and stance
-   addresses, the instrument gains those columns"), real turns from
-   window.EOAudit replace the canned traces. The seam is
-   window.EOMRI.traceFromTurn(turn) (a documented stub today) plus the
-   `traces` prop on EOMRIInstrument. Nothing here hardcodes the canned
-   data in a way that blocks that: the component renders whatever trace
-   map it is handed.
+   REAL DATA — the rail is a fold over window.EOAudit: every settled chat
+   turn is converted to a trace by window.EOMRI.traceFromTurn(turn) (below),
+   and the instrument plays the most recent one, replays any from the rail,
+   and refreshes live as new turns settle. The per-sentence 3-fold address
+   is the engine's OWN encoder (window.EOEngine.eoAddressOfEvent / eoNotation
+   — operator(Site, Resolution) of docs/reading-conformance.md), witness is
+   the audit's WI-7 degree, and grounds are the turn's own citations resolved
+   to their retrieved span text. The four scenario traces (grounded /
+   fluent·thin / repair / cold-miss→fetch) remain as the demo / fallback,
+   shown only when nothing is recorded yet (or via the ● live ⇄ illustrative
+   toggle). Nothing is hardcoded in a way that blocks live data: the
+   component renders whatever trace map it is handed.
    ============================================================ */
 
 /* Inline CSS string → React style object. The ported instrument logic
@@ -76,24 +78,113 @@ class EOMRIInstrument extends React.Component {
     };
     this.OPCOL = { NUL: '#9d6bff', SIG: '#6e8bff', INS: '#3ddc84', SEG: '#2dd4bf', CON: '#22a7c2', SYN: '#4d9be0', DEF: '#00ccdd', EVA: '#ffb800', REC: '#ff3b52' };
     this.HELIX_CLIMB = ['NUL', 'SIG', 'INS', 'SEG', 'CON', 'SYN', 'DEF', 'EVA', 'REC'];
-    // The trace map is injected (forthcoming: real turns) or built from the
-    // illustrative scenarios.
-    this.TRACES = (props && props.traces) || this.buildTraces();
     this.typed = Infinity; this.typingKey = -1; this.replaying = false;
-    this.timer = null; this.typeTimer = null;
-    this.state = {
-      current: 'clean', frameIdx: 0, playing: false, turnNo: 3,
+    this.timer = null; this.typeTimer = null; this._unsub = null; this._scen = null;
+    // The four illustrative scenarios are the demo / fallback; REAL turns from
+    // window.EOAudit (converted by window.EOMRI.traceFromTurn) are layered over
+    // them and become the rail whenever any exist. The seeded history below only
+    // ever shows in scenario mode (no live turns recorded yet).
+    this.scenarioSeed = {
+      turnNo: 3,
       history: [
-        { n: 1, scenario: 'clean', label: 'grounded turn', question: 'when was it published, and by whom?', witness: 0.92, form: 0.84, tone: '#3ddc84', asy: 0.66, verdict: 'grounded' },
-        { n: 2, scenario: 'repair', label: 'repair pair', question: 'what is it really about, underneath the plot?', witness: 0.70, form: 0.88, tone: '#00ccdd', asy: 0.71, verdict: 'repaired' }
+        { key: 'clean', n: 1, scenario: 'clean', label: 'grounded turn', question: 'when was it published, and by whom?', witness: 0.92, form: 0.84, tone: '#3ddc84', asy: 0.66, verdict: 'grounded' },
+        { key: 'repair', n: 2, scenario: 'repair', label: 'repair pair', question: 'what is it really about, underneath the plot?', witness: 0.70, form: 0.88, tone: '#00ccdd', asy: 0.71, verdict: 'repaired' }
       ],
       asympPoints: [0.66, 0.71]
     };
+    const init = this.initData();
+    this.TRACES = init.traces;
+    this.hasReal = init.hasReal;
+    this.state = Object.assign({ frameIdx: 0, playing: false, realCount: init.realCount }, init.state);
   }
 
-  componentDidMount() { this.play(); }
-  componentWillUnmount() { clearTimeout(this.timer); clearInterval(this.typeTimer); }
+  componentDidMount() {
+    const A = (typeof window !== 'undefined') ? window.EOAudit : null;
+    if (A && A.subscribe) { try { this._unsub = A.subscribe(() => this.onAuditChange()); } catch (e) {} }
+    this.play();
+  }
+  componentWillUnmount() { clearTimeout(this.timer); clearInterval(this.typeTimer); if (this._unsub) { try { this._unsub(); } catch (e) {} } }
   componentDidUpdate() { ['cleo-answer', 'cleo-log'].forEach(id => { const e = document.getElementById(id); if (e) e.scrollTop = e.scrollHeight; }); }
+
+  // The scenario trace map, built once and reused (so live refreshes never
+  // rebuild the illustrative set).
+  scenarioTraces() { if (!this._scen) this._scen = this.buildTraces(); return this._scen; }
+
+  // The initial data: an explicit `traces` prop (tests) → scenario-shaped;
+  // otherwise real turns from the audit log → live; otherwise the scenarios.
+  initData() {
+    const scen = this.scenarioTraces();
+    if (this.props && this.props.traces) {
+      const keys = Object.keys(this.props.traces);
+      return { traces: Object.assign({}, scen, this.props.traces), hasReal: false, realCount: 0,
+        state: { current: keys[0], scenarioMode: true, history: this.scenarioSeed.history.slice(),
+          asympPoints: this.scenarioSeed.asympPoints.slice(), turnNo: this.scenarioSeed.turnNo } };
+    }
+    const real = this.buildFromAudit();
+    if (real) {
+      return { traces: Object.assign({}, scen, real.traces), hasReal: true, realCount: real.history.length,
+        state: { current: real.current, scenarioMode: false, history: real.history,
+          asympPoints: real.asympPoints, turnNo: real.turnNo } };
+    }
+    return { traces: scen, hasReal: false, realCount: 0,
+      state: { current: 'clean', scenarioMode: true, history: this.scenarioSeed.history.slice(),
+        asympPoints: this.scenarioSeed.asympPoints.slice(), turnNo: this.scenarioSeed.turnNo } };
+  }
+
+  // Read window.EOAudit, convert each settled turn to a trace, and summarize the
+  // last few for the rail. Returns null when nothing is recorded (→ scenarios).
+  buildFromAudit() {
+    const A = (typeof window !== 'undefined') ? window.EOAudit : null;
+    const TF = (typeof window !== 'undefined' && window.EOMRI) ? window.EOMRI.traceFromTurn : null;
+    if (!A || !A.all || typeof TF !== 'function') return null;
+    let turns;
+    try { turns = A.all().filter(t => t && t.done && t.final && String(t.final.text || '').trim()); }
+    catch (e) { return null; }
+    if (!turns.length) return null;
+    const traces = {}, history = [], asympPoints = [];
+    turns.slice(-7).forEach((t, i) => {
+      let tr = null; try { tr = TF(t); } catch (e) { tr = null; }
+      if (!tr || !tr.frames || !tr.frames.length) return;
+      const key = t.id || ('turn-' + i);
+      traces[key] = tr;
+      const af = tr.frames.find(f => f.op === 'asymptote');
+      const sents = tr.frames.filter(f => f.op === 'sentence');
+      const last = sents[sents.length - 1] || {};
+      const m = /(\d+)\s*$/.exec(t.id || '');
+      if (af && af.value != null) asympPoints.push(af.value);
+      history.push({ key, n: m ? +m[1] : (i + 1), scenario: key, label: tr.label, question: t.input || '…',
+        witness: last.witness != null ? last.witness : (af ? af.value : null),
+        form: last.form != null ? last.form : null, tone: tr.tone, asy: af ? af.value : null, verdict: tr.verdictWord });
+    });
+    if (!history.length) return null;
+    return { traces, history, asympPoints, current: history[history.length - 1].key, turnNo: history[history.length - 1].n };
+  }
+
+  // The audit log changed (a new turn settled, or a clear). Refresh the real
+  // traces without yanking a turn the user is currently watching.
+  onAuditChange() { try { this.refreshReal(false); } catch (e) {} }
+  refreshReal(autoplay) {
+    const real = this.buildFromAudit();
+    this.hasReal = !!real;
+    if (!real) { if (this.state.realCount) this.setState({ realCount: 0 }); return; }
+    this.TRACES = Object.assign({}, this.scenarioTraces(), real.traces);
+    if (this.state.scenarioMode) { this.setState({ realCount: real.history.length }); return; }
+    const has = real.history.some(h => h.key === this.state.current);
+    const patch = { history: real.history, asympPoints: real.asympPoints, realCount: real.history.length, turnNo: real.turnNo };
+    if (!has) { patch.current = real.current; patch.frameIdx = 0; }
+    this.setState(patch, () => { if (!has || autoplay) { this.replaying = false; this.play(); } });
+  }
+
+  // Return to the live rail from scenario (demo) mode.
+  goLive() {
+    const real = this.buildFromAudit();
+    if (!real) return;
+    this.TRACES = Object.assign({}, this.scenarioTraces(), real.traces);
+    this.hasReal = true; this.replaying = false; this.typed = Infinity;
+    clearTimeout(this.timer); clearInterval(this.typeTimer);
+    this.setState({ scenarioMode: false, history: real.history, asympPoints: real.asympPoints,
+      realCount: real.history.length, turnNo: real.turnNo, current: real.current, frameIdx: 0 }, () => this.play());
+  }
 
   // operator firing is DERIVED from these events, never scripted.
   buildTraces() {
@@ -271,17 +362,36 @@ class EOMRIInstrument extends React.Component {
 
   finishTurn() {
     clearTimeout(this.timer); clearInterval(this.typeTimer);
-    if (this.replaying) { this.setState({ playing: false }); return; }
+    // Real turns are a fold over window.EOAudit — the rail never grows from a
+    // playthrough; only the illustrative scenarios "generate" a new turn card.
+    if (this.replaying || !this.state.scenarioMode) { this.setState({ playing: false }); return; }
     const tr = this.TRACES[this.state.current], s = this.applyTo(tr.frames.length - 1);
     const af = tr.frames.find(f => f.op === 'asymptote');
     const q = (tr.frames.find(f => f.op === 'log' && f.kind === 'question') || {}).text || '';
-    const entry = { n: this.state.turnNo, scenario: this.state.current, label: tr.label, question: q, witness: s.witness, form: s.form, tone: tr.tone, asy: af ? af.value : null, verdict: tr.verdictWord };
+    const entry = { key: this.state.current, n: this.state.turnNo, scenario: this.state.current, label: tr.label, question: q, witness: s.witness, form: s.form, tone: tr.tone, asy: af ? af.value : null, verdict: tr.verdictWord };
     this.setState(st => ({ playing: false, history: [...st.history, entry].slice(-7),
       asympPoints: (af ? [...st.asympPoints, af.value] : st.asympPoints).slice(-7), turnNo: st.turnNo + 1 }));
   }
 
-  inject(name) { if (!this.TRACES[name]) return; this.replaying = false; this.typed = Infinity; clearTimeout(this.timer); clearInterval(this.typeTimer); this.setState({ current: name, frameIdx: 0 }, () => this.play()); }
-  replayPast(t) { if (!t || !this.TRACES[t.scenario]) return; this.replaying = true; this.typed = Infinity; clearTimeout(this.timer); clearInterval(this.typeTimer); this.setState({ current: t.scenario, frameIdx: 0 }, () => this.play()); }
+  // Inject an illustrative scenario — switches into demo mode (rail = scenarios).
+  inject(name) {
+    if (!this.TRACES[name]) return;
+    this.replaying = false; this.typed = Infinity; clearTimeout(this.timer); clearInterval(this.typeTimer);
+    const patch = { current: name, frameIdx: 0, scenarioMode: true };
+    if (!this.state.scenarioMode) {   // coming from live → restore the demo seed
+      patch.history = this.scenarioSeed.history.slice();
+      patch.asympPoints = this.scenarioSeed.asympPoints.slice();
+      patch.turnNo = this.scenarioSeed.turnNo;
+    }
+    this.setState(patch, () => this.play());
+  }
+  // Replay any rail card (real turn or scenario) by its key.
+  replayKey(key) {
+    if (!this.TRACES[key]) return;
+    const h = (this.state.history || []).find(x => x.key === key);
+    this.replaying = true; this.typed = Infinity; clearTimeout(this.timer); clearInterval(this.typeTimer);
+    this.setState({ current: key, frameIdx: 0, turnNo: h ? h.n : this.state.turnNo }, () => this.play());
+  }
   step(d) { clearTimeout(this.timer); clearInterval(this.typeTimer); this.typed = Infinity; const tr = this.TRACES[this.state.current]; this.setState(st => ({ playing: false, frameIdx: Math.max(0, Math.min(tr.frames.length - 1, st.frameIdx + d)) })); }
   scrub(v) { clearTimeout(this.timer); clearInterval(this.typeTimer); this.typed = Infinity; this.setState({ playing: false, frameIdx: Math.max(0, +v) }); }
   togglePlay() { if (this.state.playing) { this.pause(); return; } const tr = this.TRACES[this.state.current]; if (this.state.frameIdx >= tr.frames.length - 1) { this.replaying = false; this.setState({ frameIdx: 0 }, () => this.play()); } else this.play(); }
@@ -331,7 +441,8 @@ class EOMRIInstrument extends React.Component {
       const isLast = idx === arr.length - 1;
       let shown = se.text, caret = false;
       if (isLast && this.typingKey === se._fi && this.typed < se.text.length) { shown = se.text.slice(0, this.typed); caret = true; }
-      const wc = this.gaugeColor(se.witness);
+      const wv = se.witness == null ? null : se.witness, fv = se.form == null ? null : se.form;
+      const wc = this.gaugeColor(wv == null ? 0 : wv);
       let textColor = '#e8f4f1', deco = '';
       if (se.rejected) { textColor = '#9fb4b0'; deco = 'text-decoration:line-through;'; }
       else if (se.alarm) { textColor = '#ffd9a0'; }
@@ -358,10 +469,10 @@ class EOMRIInstrument extends React.Component {
         rowStyle: `border:1px solid #15211f;border-left:3px solid ${accent};border-radius:7px;background:#0a1314;padding:13px 15px;margin-bottom:13px;animation:cleoAppear .3s ease;${se.rejected ? 'opacity:.66;' : ''}`,
         textStyle: `font-size:15px;line-height:1.55;color:${textColor};${deco}`,
         caretStyle: caret ? 'color:#ffb800;animation:cleoBlink 1s steps(1) infinite;margin-left:1px;' : 'display:none;',
-        wbar: `height:100%;width:${Math.round(se.witness * 100)}%;background:${wc};transition:width .5s ease;`,
-        fbar: `height:100%;width:${Math.round(se.form * 100)}%;background:#00ccdd;transition:width .5s ease;`,
-        wnum: se.witness.toFixed(2), fnum: se.form.toFixed(2),
-        wnumStyle: `font-size:16px;font-weight:700;color:${wc};min-width:34px;`
+        wbar: `height:100%;width:${wv == null ? 0 : Math.round(wv * 100)}%;background:${wc};transition:width .5s ease;`,
+        fbar: `height:100%;width:${fv == null ? 0 : Math.round(fv * 100)}%;background:#00ccdd;transition:width .5s ease;`,
+        wnum: wv == null ? '—' : wv.toFixed(2), fnum: fv == null ? '—' : fv.toFixed(2),
+        wnumStyle: `font-size:16px;font-weight:700;color:${wv == null ? '#48605c' : wc};min-width:34px;`
       };
     });
 
@@ -379,10 +490,17 @@ class EOMRIInstrument extends React.Component {
     const learnPillStyle = `font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:3px 9px;border-radius:3px;background:${pm.bg};color:${pm.fg};${pm.bd ? 'border:1px solid ' + pm.bd + ';' : ''}`;
     const learnNameStyle = `font-size:10px;color:${lm === 'lit' ? this.C.green : (lm === 'idle' ? '#7f9a96' : this.C.red)};letter-spacing:.03em;`;
 
-    // turns rail
-    const curQ = (tr.frames.find(f => f.op === 'log' && f.kind === 'question') || {}).text || '…';
-    const current = { n: st.turnNo, question: curQ, witness: s.witness, form: s.form, tone: tr.tone, verdict: s.verdict === 'verdict pending' ? 'live' : tr.verdictWord, current: true, scenario: st.current };
-    const turns = [current, ...st.history.slice().reverse()].map(t => {
+    // turns rail. In scenario (demo) mode a synthetic "current" card sits atop
+    // the seeded/generated history; in live mode the rail IS the real audit
+    // turns (newest first), with the one being scanned highlighted.
+    let turnsSource;
+    if (st.scenarioMode) {
+      const curQ = (tr.frames.find(f => f.op === 'log' && f.kind === 'question') || {}).text || '…';
+      turnsSource = [{ key: st.current, n: st.turnNo, question: curQ, witness: s.witness, form: s.form, tone: tr.tone, verdict: s.verdict === 'verdict pending' ? 'live' : tr.verdictWord, current: true }, ...st.history.slice().reverse()];
+    } else {
+      turnsSource = st.history.slice().reverse().map(h => Object.assign({}, h, { current: h.key === st.current }));
+    }
+    const turns = turnsSource.map(t => {
       const w = t.witness == null ? 0 : t.witness, fo = t.form == null ? 0 : t.form, isCur = !!t.current;
       return {
         n: t.n, question: t.question || '…', verdict: t.verdict || '…',
@@ -390,7 +508,7 @@ class EOMRIInstrument extends React.Component {
         tagStyle: `font-size:8px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:${t.tone};`,
         wbar: `height:100%;width:${Math.round(w * 100)}%;background:${this.gaugeColor(w)};`,
         fbar: `height:100%;width:${Math.round(fo * 100)}%;background:#00ccdd;`,
-        onClick: isCur ? (() => this.inject(t.scenario)) : (() => this.replayPast(t))
+        onClick: (st.scenarioMode && isCur) ? (() => this.inject(t.key)) : (() => this.replayKey(t.key))
       };
     });
 
@@ -450,9 +568,16 @@ class EOMRIInstrument extends React.Component {
 
     // scenario buttons
     const sBase = (on, col) => `cursor:pointer;padding:4px 9px;font-size:9px;border-radius:3px;border:1px solid ${on ? col : '#1d2e2b'};color:${on ? '#05090a' : '#7f9a96'};background:${on ? col : '#0c1517'};font-weight:${on ? '700' : '400'};transition:all .15s;`;
+    const live = !st.scenarioMode;
+    const subtitle = (live && this.hasReal)
+      ? `${st.realCount} real turn${st.realCount !== 1 ? 's' : ''} from the audit log · a fold over window.EOAudit`
+      : (this.hasReal ? 'illustrative scenarios · ● live returns to the real turns'
+                      : 'illustrative scenarios · run a chat turn to scan real cognition');
 
     return {
       turnNo: st.turnNo, wmu, wmuStyle, asyStat,
+      hasReal: this.hasReal, live, realCount: st.realCount, subtitle,
+      goLive: () => this.goLive(), liveStyle: sBase(live && this.hasReal, this.C.green),
       modeLabel, modeStyle,
       onPrev: () => this.step(-1), onNext: () => this.step(1), onPlay: () => this.togglePlay(),
       playLabel: st.playing ? '❚❚ pause' : '▶ play',
@@ -484,7 +609,7 @@ class EOMRIInstrument extends React.Component {
         {/* TOP BAR */}
         <div style={S("flex-shrink:0;background:#000;border-bottom:1px solid #1d2e2b;display:flex;align-items:center;gap:16px;padding:9px 14px;")}>
           <div style={S("font-weight:700;letter-spacing:.14em;font-size:12px;color:#00ccdd;")}>EO-MRI<span style={S("color:#48605c;font-weight:400;")}> · cognition instrument</span></div>
-          <div style={S("font-size:9px;color:#48605c;letter-spacing:.05em;")}>eoreader3 · the EO cube, scanned live · state is a fold over the turn log</div>
+          <div style={S("font-size:9px;color:#48605c;letter-spacing:.05em;")}>eoreader3 · {v.subtitle}</div>
           <div style={S("flex:1;")}></div>
           <div style={S("display:flex;flex-direction:column;align-items:flex-end;gap:1px;")}><span style={S("font-size:8px;color:#48605c;letter-spacing:.1em;text-transform:uppercase;")}>turn</span><span style={S("font-size:14px;font-weight:700;color:#00ccdd;line-height:1;")}>{v.turnNo}</span></div>
           <div style={S("display:flex;flex-direction:column;align-items:flex-end;gap:1px;")}><span style={S("font-size:8px;color:#48605c;letter-spacing:.1em;text-transform:uppercase;")}>witness</span><span style={S(v.wmuStyle)}>{v.wmu}</span></div>
@@ -500,7 +625,8 @@ class EOMRIInstrument extends React.Component {
           <div onClick={v.onPlay} style={S(v.playStyle)}>{v.playLabel}</div>
           <div onClick={v.onNext} style={S("cursor:pointer;background:#0c1517;color:#7f9a96;border:1px solid #1d2e2b;padding:4px 9px;font-size:9px;letter-spacing:.06em;text-transform:uppercase;border-radius:3px;")}>step ▶</div>
           <div style={S("width:1px;height:18px;background:#1d2e2b;margin:0 3px;")}></div>
-          <span style={S("font-size:8px;color:#48605c;letter-spacing:.1em;text-transform:uppercase;")}>inject turn</span>
+          {v.hasReal && <div onClick={v.goLive} style={S(v.liveStyle)} title="play the most recent real turn from the audit log">● live{v.realCount ? ' · ' + v.realCount : ''}</div>}
+          <span style={S("font-size:8px;color:#48605c;letter-spacing:.1em;text-transform:uppercase;")}>{v.hasReal ? 'illustrative' : 'inject turn'}</span>
           <div onClick={v.injClean} style={S(v.scenClean)}>grounded</div>
           <div onClick={v.injThin} style={S(v.scenThin)}>fluent · thin</div>
           <div onClick={v.injRepair} style={S(v.scenRepair)}>repair</div>
@@ -684,9 +810,264 @@ function EOMRIDrawer({ onClose }) {
   );
 }
 
-/* The seam for the forthcoming real-data wiring. The vocabularies are the EO
-   cube's three faces, exposed so the engine's coming 3-fold address encoder and
-   conformance scorer can align names with what the instrument draws. */
+/* ============================================================
+   The real-data seam — a window.EOAudit turn → an instrument trace.
+
+   The instrument renders whatever trace map it is handed; this adapter turns a
+   recorded turn (audit.js: route → ground → retrieve → phrase → veto → cite)
+   into the { label, genre, decision, reason, tone, verdictWord, targetSite,
+   frames:[…] } shape buildTraces() emits, so the three faces, the helix
+   order-check, the witness/form gauges and the asymptote all read the REAL turn.
+
+   Nothing here is invented where the engine already measures it:
+     • the per-sentence 3-fold address is the engine's own encoder
+       (window.EOEngine.eoAddressOfEvent / eoNotation — the operator(Site,
+       Resolution) of docs/reading-conformance.md), not a hand-rolled guess;
+     • witness is the audit's WI-7 degree (the marker-degree per sentence,
+       falling back to the turn's coverage), the same number the asymptote tracks;
+     • grounds are the turn's own {{cite}}s resolved to their retrieved span text;
+     • the verdict / learn asymmetry is read off the audit (grounded · unbound ·
+       absent · refused), never scripted.
+   Pure and defensive: a malformed turn yields null and the instrument falls back
+   to the illustrative scenarios.
+   ============================================================ */
+const EOMRI_STOP = new Set(('a an the and or but if then else of to in on at by with from into over under is are was were '
+  + 'be been being am do does did have has had will would can could may might must not no so than too very just only also '
+  + 'this that these those it its he she they them his her their there here who what when where why how as up out off down about').split(/\s+/));
+
+function eomriTrunc(s, n) { s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function eomriFrac(s) { const m = /^\s*(\d+)\s*\/\s*(\d+)\s*$/.exec(String(s == null ? '' : s)); if (!m) return null; const d = +m[2]; return d ? +m[1] / d : null; }
+function eomriClamp(x) { return x == null ? null : Math.max(0, Math.min(1, x)); }
+
+// idx → retrieved span text, gathered from every retrieve step's hits — what a
+// {{cite:doc:idx:label}} actually stood on.
+function eomriHitsIndex(turn) {
+  const m = {};
+  for (const s of (turn.steps || [])) {
+    if (s && s.t === 'retrieve' && Array.isArray(s.hits)) {
+      for (const h of s.hits) { if (h && h.idx != null && m[h.idx] == null) m[h.idx] = eomriTrunc(h.text, 80); }
+    }
+  }
+  return m;
+}
+
+// The retrieval frames (the Given-Log spans): the top deduped hits, or an honest
+// "no span cleared threshold" line (which deriveOps reads as a cold retrieval, so
+// INS/SEG never light for it).
+function eomriRetrievalFrames(turn) {
+  const seen = new Set(), hits = [];
+  for (const s of (turn.steps || [])) {
+    if (s && s.t === 'retrieve' && Array.isArray(s.hits)) {
+      for (const h of s.hits) { const k = 's' + (h && h.idx); if (h && h.idx != null && !seen.has(k)) { seen.add(k); hits.push(h); } }
+    }
+  }
+  if (!hits.length) {
+    const tried = (turn.steps || []).some(s => s && s.t === 'retrieve');
+    return [{ op: 'log', kind: 'retrieval', prov: 'retriever', mono: true,
+      text: tried ? 'retriever: no span cleared threshold' : 'no source in scope covers the subject' }];
+  }
+  return hits.slice(0, 4).map(h => ({ op: 'log', kind: 'retrieval', prov: 'retriever', mono: true,
+    text: '[s' + h.idx + '] ' + eomriTrunc(h.text, 76) }));
+}
+
+// The Generate Domain the question points at — Existence lookups · Structure
+// relations · Interpretation sense — which fixes the produced operator (INS/SYN/
+// REC) and the dashed target Site.
+function eomriDomain(q) {
+  const s = String(q || '').toLowerCase();
+  if (/\bwhy\b|about|mean|theme|underneath|really about|significan|interpret|implic|symbol|point of|message/.test(s)) return 'Interpretation';
+  if (/relationship|between|compare|compared|connect|relate|related|versus|\bvs\b|linked|\btie/.test(s)) return 'Structure';
+  return 'Existence';
+}
+function eomriTargetSite(domain) { return ({ Existence: 'Thing', Structure: 'Network', Interpretation: 'Paradigm' })[domain] || 'Thing'; }
+
+// The 3-fold address of one answer sentence, from the engine's own encoder. The
+// operator is the Generate op of the question's Domain (or NUL for a cold/absent
+// claim); the Site, Object and Resolution come from window.EOEngine, with a
+// name-aligned fallback when the engine isn't present.
+function eomriAddress(sentence, domain) {
+  // A registered ABSENCE is the preserved non-resolution: NUL reads Object Ground
+  // and generates Void (Differentiate × Ground = Clearing). It is fixed here, not
+  // routed through the engine, because an empty NUL target falls back to the
+  // legacy Figure cell unless site_entity_cell is on (off by default for golden
+  // parity) — and we never want the instrument to mutate engine rules.
+  if (sentence.absent) return { op: 'NUL', site: 'Void', object: 'Ground', resolution: 'Clearing', notation: 'NUL(Void, Clearing)' };
+  // An assertion (grounded or confabulated) is a Generate of the question's
+  // Domain; the Site, Object and Resolution come from the engine's own encoder.
+  const E = (typeof window !== 'undefined') ? window.EOEngine : null;
+  const op = ({ Existence: 'INS', Structure: 'SYN', Interpretation: 'REC' })[domain] || 'INS';
+  const target = (sentence.grounds && sentence.grounds[0] && sentence.grounds[0].text) || sentence.text || '';
+  if (E && typeof E.eoAddressOfEvent === 'function') {
+    try {
+      const a = E.eoAddressOfEvent({ op: op, target: target });
+      if (a && a.site && a.resolution) {
+        const site = a.site === 'Entity' ? 'Thing' : a.site;   // the instrument's grid spells the (Existence,Figure) cell 'Thing'
+        return { op: op, site: site, object: a.object || 'Figure', resolution: a.resolution, notation: op + '(' + site + ', ' + a.resolution + ')' };
+      }
+    } catch (e) {}
+  }
+  const site = ({ Existence: 'Thing', Structure: 'Link', Interpretation: 'Lens' })[domain] || 'Thing';
+  const resolution = ({ Existence: 'Making', Structure: 'Binding', Interpretation: 'Composing' })[domain] || 'Making';
+  return { op: op, site: site, object: 'Figure', resolution: resolution, notation: op + '(' + site + ', ' + resolution + ')' };
+}
+
+// Split the settled answer into sentences, recovering per-sentence witness (the
+// WI-7 marker degree, falling back to the turn's coverage for grounded readings
+// that cite via cites[] rather than inline markers), grounds (cites resolved to
+// span text), and registered absence. Mirrors audit.js's marker-neutralized
+// split so the numbers line up with the turn's recorded truthfulness.
+function eomriSentences(turn, hitsByIdx) {
+  const final = turn.final || {};
+  const T = String(final.text || '');
+  if (!T.trim()) return [];
+  const OPEN = '', CLOSE = '', markers = [];
+  const neutral = T.replace(/\{\{(cite|infer|void|absent):([^}]*)\}\}/g, (m, kind, payload) => {
+    const i = markers.length; markers.push({ kind: kind, payload: payload }); return ' ' + OPEN + i + CLOSE + ' ';
+  });
+  const hasMarkers = markers.some(k => k.kind === 'cite' || k.kind === 'infer');
+  const grounded = !!(final.audit && final.audit.grounded);
+  const cover = eomriFrac(final.audit && final.audit.covers);
+  const unit = new RegExp(OPEN + '(\\d+)' + CLOSE, 'g');
+  const groundOf = (k) => { const p = String(k.payload).split(':'); const idx = p[1], label = p[2] || '';
+    return { id: (idx != null && idx !== '') ? ('s' + idx) : (label || 'span'), text: (idx != null && hitsByIdx[idx]) ? hitsByIdx[idx] : (label || '') }; };
+  // Protect the periods that don't end a sentence — initials ("H. G. Wells"),
+  // common abbreviations, lettered abbreviations ("e.g.") — behind a one-dot
+  // leader so the split doesn't orphan a citation onto a fragment of its own.
+  const DOT = '․';
+  const protectedText = neutral
+    .replace(/\b([A-Z])\.(?=[\s ])/g, '$1' + DOT)
+    .replace(/\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Rev|Gen|Sen|Rep|vs|etc|No|Inc|Ltd|Co|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)\./g, '$1' + DOT)
+    .replace(/\b([a-z])\.([a-z])\.(?=\s|$)/gi, '$1' + DOT + '$2' + DOT);
+  const out = [];
+  for (let frag of protectedText.split(/(?<=[.!?])\s+|\n+/)) {
+    frag = frag.trim(); if (!frag) continue;
+    const ids = []; let mm; unit.lastIndex = 0; while ((mm = unit.exec(frag))) ids.push(+mm[1]);
+    const mks = ids.map(i => markers[i]).filter(Boolean);
+    const cites = mks.filter(k => k.kind === 'cite' || k.kind === 'infer');
+    const voids = mks.filter(k => k.kind === 'void' || k.kind === 'absent');
+    const display = frag.replace(unit, (m, i) => { const k = markers[+i]; return (k && (k.kind === 'void' || k.kind === 'absent')) ? k.payload : ''; })
+      .replace(/․/g, '.').replace(/\s+([.,;:!?])/g, '$1').replace(/\s{2,}/g, ' ').trim();
+    const content = (display.toLowerCase().match(/[a-z0-9][a-z0-9'’-]*/g) || []).map(w => w.replace(/['’]s$/, '')).filter(w => w.length > 2 && !EOMRI_STOP.has(w));
+    if (!content.length) {   // a marker-only fragment trails the previous sentence — attach backward
+      if (out.length) { const pr = out[out.length - 1]; if (cites.length) { pr.bound = true; cites.forEach(c => pr.grounds.push(groundOf(c))); } pr.voidc += voids.length; }
+      continue;
+    }
+    const boundInline = cites.length > 0;
+    const absent = voids.some(k => k.kind === 'absent') && !boundInline;
+    let bound = boundInline, witness;
+    if (boundInline) { const denom = content.length + voids.length; witness = denom ? content.length / denom : 1; }
+    else if (absent) { witness = 0.2; }
+    else if (grounded) { bound = true; witness = cover != null ? cover : 0.8; }
+    else { witness = 0.12; }
+    out.push({ text: display, witness: eomriClamp(witness), bound: bound, grounds: cites.map(groundOf), voidc: voids.length, absent: absent });
+  }
+  // grounded mechanical readings cite via the cites[] array, not inline markers —
+  // show what the last sentence stood on so the grounds panel isn't bare.
+  if (grounded && !hasMarkers && Array.isArray(final.cites) && final.cites.length && out.length && !out.some(s => s.grounds.length)) {
+    out[out.length - 1].grounds = final.cites.slice(0, 4).map(c => ({ id: 's' + c.idx, text: hitsByIdx[c.idx] || '' }));
+    out[out.length - 1].bound = true;
+  }
+  return out.slice(0, 12);
+}
+
+function eomriTraceFromTurn(turn) {
+  if (!turn || !turn.final || !String(turn.final.text || '').trim()) return null;
+  try {
+    const final = turn.final, audit = final.audit || null, truth = final.truth || {}, steps = turn.steps || [];
+    const engine = String(final.engine || ''), q = turn.input || '';
+    const domain = eomriDomain(q);
+    const hitsByIdx = eomriHitsIndex(turn);
+    const sents = eomriSentences(turn, hitsByIdx);
+    if (!sents.length) return null;
+
+    // The turn's shape, read off the recorded audit — never scripted. The engine
+    // and reason fields are a controlled vocabulary, so matching them is safe;
+    // the answer text is never pattern-matched.
+    const reasonTxt = String(final.reason || '');
+    const refused = !String(final.text || '').trim()
+      || /refus|stuck|repair-stuck|stopped|^none$|compute-(none|error)/.test(engine)
+      || /not-ready|unavailable|no-webgpu|needs|-error|error|failed|interrupt|no-article|no-scope/.test(reasonTxt);
+    const unbound = (truth.unbound || 0) > 0 || !!(audit && audit.grounded === false && audit.covers != null);
+    const absent = !refused && (!!(audit && audit.absent) || (!!audit && audit.grounded === true && eomriFrac(audit.covers) === 0) || (sents.length === 1 && sents[0].absent));
+    const grounded = !refused && !!(audit && audit.grounded === true) && !unbound && !absent;
+    const repaired = !!(final.form && final.form.revised) || steps.some(s => s.t === 'repair') || steps.some(s => s.t === 'converge')
+      || steps.some(s => s.t === 'veto' && /reject|residual|restructure|retry/i.test((s.decision || '') + ' ' + (s.reason || '')));
+
+    // If the turn is an absence, every uncited sentence is the honest "the page
+    // does not establish X" move, not a bound figure.
+    if (absent) sents.forEach(se => { if (!se.grounds.length) { se.absent = true; se.bound = false; se.witness = 0.2; } });
+
+    const formDeg = (final.form && final.form.degree != null) ? eomriClamp(final.form.degree) : null;
+    const hasMarkers = /\{\{(cite|infer):/.test(String(final.text || ''));
+    const asymptote = eomriClamp(
+      (truth.degree != null && hasMarkers) ? truth.degree
+      : (eomriFrac(audit && audit.covers) != null ? eomriFrac(audit && audit.covers)
+      : (truth.degree != null ? truth.degree : (grounded ? 0.8 : 0.12))));
+
+    let label, tone, verdictWord, learnMode, learnName, learnTrig, verdictText, stampTail;
+    if (refused) {
+      label = 'honest refusal'; tone = '#ff3b52'; verdictWord = 'refused'; learnMode = 'blocked'; learnName = 'refusal';
+      learnTrig = 'Nothing on the page would carry the answer, so the turn refuses rather than invent. Refusing is honest — there is nothing to learn from it.';
+      verdictText = 'refused honestly · the page would not carry it'; stampTail = 'refused';
+    } else if (absent) {
+      label = 'cold miss → ingestion'; tone = '#ffb800'; verdictWord = 'held'; learnMode = 'fetch'; learnName = 'cold-repair';
+      learnTrig = 'A cold miss: nothing in scope covers the subject. Nothing to learn yet — broaden ingestion and pull a source into scope.';
+      verdictText = 'absence shown as a low-witness stamp, not asserted'; stampTail = 'cold miss';
+    } else if (repaired && grounded) {
+      label = 'repair pair'; tone = '#00ccdd'; verdictWord = 'repaired'; learnMode = 'lit'; learnName = 'repair-pair';
+      learnTrig = 'Rejected then accepted is a direction. The sense drifts along that vector — away from the shape that failed, toward the one that held.';
+      verdictText = 'repaired · revised draft accepted'; stampTail = 'bound after repair';
+    } else if (grounded) {
+      label = 'grounded turn'; tone = '#3ddc84'; verdictWord = 'grounded'; learnMode = 'lit'; learnName = 'grounded-accept';
+      learnTrig = 'Accepted AND grounded. The witness is really there, so the sense drifts toward this answer — the only state the loop is allowed to learn from.';
+      verdictText = 'grounded · spoken with confidence'; stampTail = 'bound';
+    } else {
+      // Not grounded, not an honest absence: an assertion (or plain chat) drafted
+      // from the model's prior with no retrieved span — the state the instrument
+      // exists to make visible.
+      label = 'fluent on thin air'; tone = '#ff8a3d'; verdictWord = 'flagged'; learnMode = 'blocked'; learnName = 'witness-deficit';
+      learnTrig = 'Fluent and well-formed on no retrieved span — drafted from the prior, not the page. Learning is REFUSED here, and the turn is routed to fetch instead.';
+      verdictText = 'flag raised · fluent, well-formed, ungrounded'; stampTail = 'FLUENT ON THIN AIR';
+    }
+
+    const genre = ({ Existence: 'lookup', Structure: 'relation', Interpretation: 'synthesis' })[domain] || 'lookup';
+    const decision = /^refused/.test(engine) ? 'refuse'
+      : /compute/.test(engine) ? 'compute'
+      : (engine === 'mechanical' || engine === 'verbatim') ? 'mechanical'
+      : /repair/.test(engine) ? 'repair'
+      : /reference/.test(engine) ? 'fetch'
+      : engine === 'none' ? 'chat' : 'model';
+    const route = steps.filter(s => s.t === 'route').slice(-1)[0];
+    const reason = (route && route.reason) || (audit && audit.note ? eomriTrunc(audit.note, 60) : '') || (grounded ? 'grounded on the page' : 'no ground');
+    const usedModel = /model|grounded|creative|compute|repair|verbatim/.test(engine) || steps.some(s => s.t === 'llm');
+
+    const frames = [{ op: 'router' }, { op: 'log', kind: 'question', prov: 'reader', text: q || '…' }];
+    eomriRetrievalFrames(turn).forEach(f => frames.push(f));
+    if (usedModel) frames.push({ op: 'log', kind: 'draft', prov: 'talker', text: 'talker drafts over the retrieved spans' });
+    sents.forEach(se => {
+      const addr = eomriAddress(se, domain);
+      frames.push({ op: 'sentence', text: se.text, witness: se.witness, form: formDeg, grounds: se.grounds,
+        site: addr.site, object: se.absent ? 'Ground' : addr.object, notation: addr.notation, resolution: addr.resolution,
+        alarm: !se.bound && !se.absent, absence: !!se.absent,
+        groundNote: se.absent
+          ? ((audit && audit.note) ? eomriTrunc(audit.note, 120) : 'nothing in scope covers the subject — shown as absence, not asserted')
+          : 'no retrieved span supports this — the talker drafted from its prior, not the page' });
+    });
+    const wpct = asymptote == null ? '—' : Math.round(asymptote * 100) + '%';
+    frames.push({ op: 'log', kind: 'stamp', prov: 'monitor', text: 'witness ' + wpct + (formDeg != null ? ' · form ' + Math.round(formDeg * 100) + '%' : '') + ' · ' + stampTail });
+    frames.push({ op: 'verdict', text: verdictText });
+    frames.push({ op: 'log', kind: 'accept', prov: 'reader', text: 'turn closed · recorded to the audit log' });
+    frames.push({ op: 'learn', mode: learnMode, name: learnName, trig: learnTrig });
+    if (learnMode === 'fetch' || learnMode === 'blocked') frames.push({ op: 'log', kind: 'fetch', prov: 'system',
+      text: learnMode === 'fetch' ? 'cold miss → fetch a source · fold into the Given-Log' : 'witness-deficit → fetch a source on the subject' });
+    frames.push({ op: 'asymptote', value: asymptote == null ? 0 : asymptote });
+
+    return { label: label, genre: genre, decision: decision, reason: reason, tone: tone, verdictWord: verdictWord, targetSite: eomriTargetSite(domain), frames: frames };
+  } catch (e) { return null; }
+}
+
+/* window.EOMRI — the three face vocabularies (kept name-aligned with the engine's
+   encoder and the conformance scorer) plus the real-data seam, now live. */
 window.EOMRI = Object.assign(window.EOMRI || {}, {
   // ACT face — the operator algebra, in dependency (climb) order.
   OPERATORS: ['NUL', 'SIG', 'INS', 'SEG', 'CON', 'SYN', 'DEF', 'EVA', 'REC'],
@@ -694,15 +1075,12 @@ window.EOMRI = Object.assign(window.EOMRI || {}, {
   SITES: [['Void', 'Thing', 'Kind'], ['Field', 'Link', 'Network'], ['Atmosphere', 'Lens', 'Paradigm']],
   // RESOLUTION / Stance face (Identity ⤫ Time) — how the target is held.
   RESOLUTIONS: [['Clearing', 'Dissecting', 'Unraveling'], ['Tending', 'Binding', 'Tracing'], ['Cultivating', 'Making', 'Composing']],
-  /* FORTHCOMING (/EO reader compliance + 3-fold address encoding): turn a real
-     window.EOAudit turn into an instrument trace (a { label, genre, decision,
-     reason, tone, verdictWord, targetSite, frames:[…] } object, the same shape
-     buildTraces() emits). Today audit turns do not yet carry per-event
-     operator(Site, Resolution) addresses or per-turn conformance bits, so this
-     returns null and the instrument runs its illustrative scenarios. When the
-     engine emits them (docs/reading-conformance.md), fill this in and pass the
-     result through the `traces` prop. */
-  traceFromTurn(turn) { return null; },
+  /* Turn a real window.EOAudit turn into an instrument trace ({ label, genre,
+     decision, reason, tone, verdictWord, targetSite, frames:[…] } — the shape
+     buildTraces() emits). The instrument calls this for every settled turn and
+     renders the result; it falls back to the illustrative scenarios only when
+     nothing is recorded. Returns null for a turn it can't read. */
+  traceFromTurn: eomriTraceFromTurn,
 });
 
 Object.assign(window, { EOMRIDrawer, EOMRIInstrument });

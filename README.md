@@ -80,6 +80,18 @@ remembered consent), rate-limited, prioritised, and gated against resolving
 private individuals. Clear `window.EO_REFERENCE_PROXY` to disable it and keep
 the reader strictly local. See `docs/external-reference-desk.md`.
 
+A wider, governed exception is **web sources** (`websource.js`,
+`window.EOWebSource`): a deep-read action — never a chat side effect — that
+brings a page found on the web into the session as a first-class, citable source,
+admitted through the same pipeline an uploaded document travels. The local model
+can only *propose* a query; a human confirms (with a one-line cost notice stating
+the query reaches public search engines) before anything leaves the browser. The
+search and fetch run server-side through a self-hosted SearXNG behind the stateless
+`cleon-search-proxy` (which hides the origin IP but not the query text), and every
+touch is logged as a `cleo-fetch/1` audit record — `triggered_by` is never `chat`.
+It is off unless `window.EO_SEARCH_PROXY` resolves; clear it to keep the reader
+strictly local. See `docs/web-source-admission.md`.
+
 A second, separate opt-in is **computational grounding** (`pyodide.js`,
 `window.EOPython`): turned on in Settings, it lets Cleo run Python locally over
 a loaded CSV to answer questions a prose reader structurally can't — sum a

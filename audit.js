@@ -19,9 +19,12 @@
 (function () {
   'use strict';
   const SCHEMA = 'cleo-audit/1';
+  const FETCH_SCHEMA = 'cleo-fetch/1';   // external web touches (search / fetch); see websource.js
   const MAX_TURNS = 300;          // ring buffer; oldest turns drop first
+  const MAX_FETCHES = 200;        // the web-fetch trace; same ring discipline
 
   let turns = [];
+  let fetches = [];               // cleo-fetch/1 records — every search/fetch the app made
   let current = null;             // the in-flight turn (single-threaded: one at a time)
   let enabled = true;
   let seq = 0;
@@ -202,7 +205,29 @@
 
   function all() { return turns; }
   function count() { return turns.length; }
-  function clear() { turns = []; current = null; notify(); }
+  function clear() { turns = []; fetches = []; current = null; notify(); }
+
+  /* ---- cleo-fetch/1 — the external-web touch log (spec §10) ----
+     Every search and fetch the app makes is recorded here as a self-contained
+     record, so a reader can see exactly which turns touched the network and what
+     they pulled. `triggered_by` is NEVER 'chat': a chat-triggered fetch would
+     break the chat-isolation invariant, so the recorder refuses it outright
+     rather than logging a broken state. Stamps schema + ts when missing; total
+     and defensive like the rest of the recorder. */
+  function recordFetch(rec) {
+    if (!enabled) return null;
+    const r = clone(rec || {});
+    if (r.triggered_by === 'chat') return null;   // refuse; the invariant is enforced, not logged
+    if (!r.schema) r.schema = FETCH_SCHEMA;
+    if (!r.ts) r.ts = new Date().toISOString();
+    fetches.push(r);
+    if (fetches.length > MAX_FETCHES) fetches = fetches.slice(-MAX_FETCHES);
+    notify();
+    return r;
+  }
+  function fetchLog() { return fetches; }
+  function fetchCount() { return fetches.length; }
+  function clearFetches() { fetches = []; notify(); }
 
   /* Seed the ring buffer from a persisted snapshot (host storage restores it on
      load). Dedupes by id, caps to MAX_TURNS keeping the newest, and bumps the
@@ -275,9 +300,11 @@
   }
 
   window.EOAudit = {
-    SCHEMA, isEnabled, setEnabled, begin, step, set, end,
+    SCHEMA, FETCH_SCHEMA, isEnabled, setEnabled, begin, step, set, end,
     all, count, clear, restore, subscribe, toJSONL, toJSON, download, downloadJSON, publicTurn,
     truthfulness, countVoids,
+    // the external-web touch log (cleo-fetch/1) — written by websource.js
+    recordFetch, fetchLog, fetchCount, clearFetches,
     // convenience for llm.js — records the model call as an 'llm' step
     llm: (data) => step('llm', data),
   };

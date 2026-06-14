@@ -134,12 +134,34 @@ change behaviour; no other generation parameters are exposed — the bet is that
 the model is a small, replaceable component and tuning it per doc is the wrong
 layer.
 
+## Starting to write
+
+There are two on-ramps, because "set a thesis, outline, then draft each unit"
+is too many steps before anything appears:
+
+- **✍ Write it (autopilot).** One action: it outlines from the frame — *streamed
+  into the plan pane so you watch the sections arrive* — then drafts every unit
+  in order, each streaming its tokens, with a live status (`Outlining…`,
+  `Drafting 3/6 — …`) in place of a dead "working…". After a plan exists the
+  same button reads **Write the rest** and only fills the undrafted units.
+  `Outline only` still plans without drafting; per-unit `Draft`/`Revise` remain.
+- **Open as a document (promote a chat answer).** Every assistant reply in the
+  chat carries an *Open as document* action. It seeds a composition from that
+  answer with no model wait: each paragraph becomes a talker-authored unit,
+  citation markers become the draft's evidence links, Markup is flattened, and
+  the question that prompted the reply becomes the thesis. You land in the canvas
+  with real prose already there — edit it (your changes are marked yours), ask
+  the talker to keep writing, or query it (`EOComposition.seedFromProse`).
+
 ## Editing, provenance, and querying
 
-The draft pane is a **directly-editable document canvas**. Unselected, each unit
-reads as clean prose — the canvas; selecting one reveals its full audit (the
-confidence vector, the tag, the spans it drew from, the route). Double-click a
-paragraph to edit it.
+The draft pane is a **directly-editable document canvas** — click anywhere in
+the prose and type. Clicking a paragraph's prose opens a seamless inline editor
+(same type, a faint focus ring, cursor at the click); clicking elsewhere on the
+paragraph selects it and reveals its full audit (the confidence vector, the tag,
+the spans it drew from, the route). Every contiguous stretch of prose carries an
+inline author chip (`[you]` / `talker`) and your runs a subtle underline, so
+authorship reads right in the flow.
 
 **Authorship is tracked per sentence, by diff — not token by token, never per
 keystroke.** Each edit emits one Draft event (coalesced on blur); the new prose
@@ -147,8 +169,9 @@ is diffed against the prior draft at the sentence level, and a sentence that is
 new or changed is attributed to `user` while the rest carry their prior author.
 So a talker draft you lightly edit ends up mostly `talker` with your touched
 sentences `user` — the *changes* are what carry a new author, at a sane grain.
-The fold surfaces this provenance; the canvas shades every sentence by who wrote
-it (`EOComposition.diffProvenance` / `authorship`).
+The fold surfaces this provenance; the canvas groups consecutive same-author
+sentences into runs, underlines yours, and chips each run with its author
+(`EOComposition.diffProvenance` / `authorship`).
 
 **The document is queryable by the chat, as significance-level content.**
 `EOComposition.project(doc)` folds the log into a prose-shaped object — `id`,

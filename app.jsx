@@ -141,6 +141,22 @@ const INGEST_PHASES = [
   { id: 'significance', label: 'Weigh' },
 ];
 
+// The workspace toolbar's tools — one source of truth for the topbar (each pill
+// is gated on its visibility) and for Settings → Tools (which lists them all
+// with a show/hide switch). Hiding a tool only drops its pill; the tool and
+// anything it has recorded are untouched. Ids here MUST match the gates in the
+// topbar. A couple carry a functional gate on top of visibility: Ingestion needs
+// a prose document open, Sandbox needs the evolution bundle loaded.
+const TOOLBAR_TOOLS = [
+  { id: 'compose',    label: 'Compose',         sub: 'Spin up a long-form, grounded document — a revisable plan and a drafted output, every claim bound to evidence.' },
+  { id: 'glassbox',   label: 'Glass box',       sub: 'The extracted graph and every step a chat takes, exportable as JSONL.' },
+  { id: 'eomri',      label: 'EO-MRI',          sub: 'A live cross-section of a turn — the EO cube’s three faces (operators · site · resolution).' },
+  { id: 'ingestion',  label: 'Ingestion audit', sub: 'The graph as it is built, word by word, in reading order, with full provenance. Shows when a prose document is open.' },
+  { id: 'promptflow', label: 'Prompt flow',     sub: 'How a turn becomes a model call and the live prompt it sees.' },
+  { id: 'rules',      label: 'Rules',           sub: 'The reading rulesets in force, with per-language modes.' },
+  { id: 'sandbox',    label: 'Sandbox',         sub: 'Evolve the reading laws in an isolated in-browser engine. Shows when the evolution bundle is loaded.' },
+];
+
 function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [docs, setDocs] = useState([]);
@@ -196,6 +212,10 @@ function App() {
   // Prompt-flow dashboard: how a turn becomes a model call and the live prompt
   // it sees (window.EOPromptFlow → PromptFlowDrawer).
   const [promptFlowOpen, setPromptFlowOpen] = useState(false);
+  // Which toolbar tools the reader has hidden — an array of TOOLBAR_TOOLS ids.
+  // Empty by default, so every tool shows. Settings → Tools toggles membership
+  // and the topbar gates each pill on it. Persisted with prefs.
+  const [hiddenTools, setHiddenTools] = useState([]);
   // Device-local preferences, gathered in the Settings drawer. Theme is
   // 'system' | 'light' | 'dark' (system follows the OS); reduce-motion mutes
   // animation. Both persist with prefs and apply to <html> via the effects below.
@@ -215,6 +235,13 @@ function App() {
   // Show the per-answer grounding badge (grounded · covers · stable + its note).
   // Some readers want the answer without the audit chrome; persisted with prefs.
   const [groundingInfo, setGroundingInfo] = useState(true);
+  // Show the inline footnote chips (the {{cite}}/{{infer}}/{{absent}} markers
+  // that render to little reference chips) in answers. On by default; a reader
+  // who wants cleaner prose hides them in Settings → Answers. Hiding is purely
+  // visual — a class on <html> the CSS keys on — and never touches the marker
+  // text or the glass-box trace, whose disclosures keep their citations.
+  // Persisted with prefs.
+  const [showCitations, setShowCitations] = useState(true);
   const [auditCount, setAuditCount] = useState(0);
   // Glass-box export toggles: include the extraction half (graph + processing)
   // and/or the chat half (audit turns). Persisted with prefs. Both on by default.
@@ -427,6 +454,8 @@ function App() {
         if (prefs.theme === 'system' || prefs.theme === 'light' || prefs.theme === 'dark') setTheme(prefs.theme);
         if (typeof prefs.reduceMotion === 'boolean') setReduceMotion(prefs.reduceMotion);
         if (typeof prefs.groundingInfo === 'boolean') setGroundingInfo(prefs.groundingInfo);
+        if (typeof prefs.showCitations === 'boolean') setShowCitations(prefs.showCitations);
+        if (Array.isArray(prefs.hiddenTools)) setHiddenTools(prefs.hiddenTools.filter(x => typeof x === 'string'));
         if (typeof prefs.pythonEnabled === 'boolean') { setPythonEnabled(prefs.pythonEnabled); if (window.EOPython) window.EOPython.setEnabled(prefs.pythonEnabled); }
         else if (window.EOPython) window.EOPython.setEnabled(true);   // computational grounding on by default for new users
         if (typeof prefs.smartParse === 'boolean') setSmartParse(prefs.smartParse);
@@ -508,8 +537,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, autoModel, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
-  }, [rules, langModes, model, autoModel, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, autoModel, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews });
+  }, [rules, langModes, model, autoModel, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews]);
   // Hiding the answer-mode control means every turn runs on Auto: hold `mode`
   // there whenever the toggle is off, so a 'grounded'/'creative' left in prefs
   // (or any stray set) can't keep steering turns from behind a hidden control.
@@ -542,6 +571,12 @@ function App() {
   useEffect(() => {
     try { document.documentElement.classList.toggle('reduce-motion', !!reduceMotion); } catch (e) {}
   }, [reduceMotion]);
+  // Hiding the footnote chips is a class on <html> the CSS keys on (scoped so the
+  // glass-box disclosures keep their citations). showCitations defaults on, so an
+  // unset pref reads as shown.
+  useEffect(() => {
+    try { document.documentElement.classList.toggle('hide-citations', showCitations === false); } catch (e) {}
+  }, [showCitations]);
   // Wire the computational-grounding pref through to EOPython on change (and on
   // load, above). EOPython.setEnabled only flips a flag — it never loads the
   // runtime, which stays lazy until the first actual run.
@@ -693,6 +728,28 @@ function App() {
     setActiveTab(doc.id);
     if (mobileRef.current) { setLayout('doc'); setCollapsed(true); } else setLayout('split');
   }, []);
+
+  // Turn a chat answer into a composition — the instant on-ramp: no plan-then-
+  // draft, no model wait. The answer's paragraphs seed talker-authored units
+  // (citations preserved as evidence links, markup flattened); the question that
+  // prompted it becomes the thesis. From there it's an editable, queryable doc.
+  const promoteToComposition = useCallback((index) => {
+    if (!window.EOComposition) { showToast('Composition layer unavailable.'); return; }
+    const msg = messages[index];
+    const text = msg && msg.text ? String(msg.text) : '';
+    if (!text.trim()) { showToast('Nothing to turn into a document yet.'); return; }
+    let thesis = '';
+    for (let i = index - 1; i >= 0; i--) { const m = messages[i]; if (m && m.role === 'user' && m.text) { thesis = String(m.text); break; } }
+    const evts = window.EOComposition.seedFromProse({ text, thesis, genre: 'plain-report' });
+    const docEv = evts[0], frameEv = evts[1];
+    const name = ((thesis || 'Composition').replace(/\s+/g, ' ').trim().slice(0, 60)) || 'Composition';
+    const doc = { id: docEv.id, name, kind: 'composition', _events: evts, frame_id: frameEv.id, meta: 'composition' };
+    setDocs(ds => [...ds, doc]);
+    setOpenTabs(t => [...t, doc.id]);
+    setActiveTab(doc.id);
+    if (mobileRef.current) { setLayout('doc'); setCollapsed(true); } else setLayout('split');
+    showToast('Opened as a document — every line starts as the talker’s; your edits are marked yours.');
+  }, [messages]);
 
   // Append events to a composition doc's log and re-derive its tab name from the
   // (possibly new) frame thesis. Pure append — the fold does the rest.
@@ -4218,26 +4275,36 @@ function App() {
               <button className={layout === 'doc' ? 'on' : ''} onClick={() => setLayout('doc')} title="Fullscreen document"><Icon name="expand" size={14} /></button>
             </div>
           )}
-          <button className="tb-pill" onClick={newComposition} title="Compose — spin up a long-form, grounded document: a revisable plan and a drafted output, every claim bound to evidence, the whole production a reviewable event log">
-            <Icon name="edit" size={15} /> <span className="tb-pill-lbl">Compose</span>
-          </button>
-          <button className="tb-pill" onClick={() => setAuditOpen(true)} title="Glass box — the extracted graph and every step the chat takes, exportable as JSONL">
-            <Icon name="activity" size={15} /> <span className="tb-pill-lbl">Glass box{auditCount ? ' · ' + auditCount : ''}</span>
-            {auditEnabled && <span className="dot rec" title="Recording" />}
-          </button>
-          <button className="tb-pill" onClick={() => setEomriOpen(true)} title="EO-MRI — a live cross-section of the reader's turn: the EO cube's three faces (operators · site · resolution) and the operator(site, resolution) address">
-            <Icon name="cube" size={15} /> <span className="tb-pill-lbl">EO-MRI</span>
-          </button>
-          {docs.some(d => d.kind === 'prose') && (
+          {!hiddenTools.includes('compose') && (
+            <button className="tb-pill" onClick={newComposition} title="Compose — spin up a long-form, grounded document: a revisable plan and a drafted output, every claim bound to evidence, the whole production a reviewable event log">
+              <Icon name="edit" size={15} /> <span className="tb-pill-lbl">Compose</span>
+            </button>
+          )}
+          {!hiddenTools.includes('glassbox') && (
+            <button className="tb-pill" onClick={() => setAuditOpen(true)} title="Glass box — the extracted graph and every step the chat takes, exportable as JSONL">
+              <Icon name="activity" size={15} /> <span className="tb-pill-lbl">Glass box{auditCount ? ' · ' + auditCount : ''}</span>
+              {auditEnabled && <span className="dot rec" title="Recording" />}
+            </button>
+          )}
+          {!hiddenTools.includes('eomri') && (
+            <button className="tb-pill" onClick={() => setEomriOpen(true)} title="EO-MRI — a live cross-section of the reader's turn: the EO cube's three faces (operators · site · resolution) and the operator(site, resolution) address">
+              <Icon name="cube" size={15} /> <span className="tb-pill-lbl">EO-MRI</span>
+            </button>
+          )}
+          {!hiddenTools.includes('ingestion') && docs.some(d => d.kind === 'prose') && (
             <button className="tb-pill tb-pill-adv" onClick={() => setGraphAuditOpen(true)} title="Ingestion audit — the graph as it is built, word by word, in reading order, with full provenance">
               <Icon name="book" size={15} /> <span className="tb-pill-lbl">Ingestion</span>
             </button>
           )}
-          <button className="tb-pill tb-pill-adv" onClick={() => setPromptFlowOpen(true)} title="Prompt flow — how a turn becomes a model call and the live prompt it sees; shows whether the shape/editor prompt is fed to this model">
-            <Icon name="send" size={15} /> <span className="tb-pill-lbl">Prompt flow</span>
-          </button>
-          <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> <span className="tb-pill-lbl">{enabledRules} rules on</span></button>
-          {window.EVO_SANDBOX && <button className="tb-pill tb-pill-adv" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> <span className="tb-pill-lbl">Sandbox</span></button>}
+          {!hiddenTools.includes('promptflow') && (
+            <button className="tb-pill tb-pill-adv" onClick={() => setPromptFlowOpen(true)} title="Prompt flow — how a turn becomes a model call and the live prompt it sees; shows whether the shape/editor prompt is fed to this model">
+              <Icon name="send" size={15} /> <span className="tb-pill-lbl">Prompt flow</span>
+            </button>
+          )}
+          {!hiddenTools.includes('rules') && (
+            <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> <span className="tb-pill-lbl">{enabledRules} rules on</span></button>
+          )}
+          {!hiddenTools.includes('sandbox') && window.EVO_SANDBOX && <button className="tb-pill tb-pill-adv" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> <span className="tb-pill-lbl">Sandbox</span></button>}
         </header>
 
         <div className="body" ref={bodyRef}>
@@ -4250,7 +4317,7 @@ function App() {
               {showChat && (
                 <div style={{ flexBasis: showDocPane ? (splitRatio * 100) + '%' : '100%', flexGrow: showDocPane ? 0 : 1, flexShrink: 0, display: 'flex', minWidth: 0 }}>
                   <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} onConfirmWiki={runWikiSearch} onDismissWiki={dismissWikiSearch} onOpenDoc={openTab}
-                    onApplyTableView={applyTableView} onSaveTableView={saveTableView} onQuickReply={send} onFork={forkChat} />
+                    onApplyTableView={applyTableView} onSaveTableView={saveTableView} onQuickReply={send} onFork={forkChat} onPromote={promoteToComposition} />
                 </div>
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}
@@ -4275,6 +4342,9 @@ function App() {
         theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
         pythonEnabled={pythonEnabled} onPythonEnabled={setPython} pythonAvailable={!!window.EOPython}
         groundingInfo={groundingInfo} onGroundingInfo={setGroundingInfo}
+        showCitations={showCitations} onShowCitations={setShowCitations}
+        tools={TOOLBAR_TOOLS} hiddenTools={hiddenTools}
+        onToggleTool={(id) => setHiddenTools(h => h.indexOf(id) === -1 ? h.concat(id) : h.filter(x => x !== id))}
         showModeToggle={showModeToggle} onShowModeToggle={setShowModeToggle}
         wikiMode={wikiMode} onWikiMode={changeWikiMode}
         models={window.MODELS.concat(uploadedModels)} autoModel={autoModel} defaultModelId={autoModel ? 'auto' : model.id} onDefaultModel={(id) => { if (id === 'auto') { chooseAuto(); return; } const m = window.MODELS.concat(uploadedModels).find(x => x.id === id); if (m) pickModel(m); }}

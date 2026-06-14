@@ -1,0 +1,18 @@
+{
+  "name": "cleon-search-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stateless server-side proxy for Cleo web sources: SearXNG discovery + readability fetch with key custody, CORS allowlist, robots and rate limits. The only networked component of the web-source function.",
+  "main": "cleon-search-proxy.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node cleon-search-proxy.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "jsdom": "^25.0.1"
+  }
+}

@@ -9510,16 +9510,16 @@ function projectGraph(events, frame = {}) {
     const sentenceTexts = doc.sentenceTexts || [];
     const spanIdx = new Set((spans || []).map(s => s.sentenceIndex).filter(i => i != null));
     const bodyJoined = sentenceTexts.join(' ');
-    const parts = splitDraft(String(talkerProse == null ? '' : talkerProse)
-      .replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim());
+    const clean = String(talkerProse == null ? '' : talkerProse)
+      .replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim();
 
     const cites = [];
     const seenCite = new Set();
     let citedCount = 0, inferCount = 0, absentCount = 0, integrationCount = 0;
 
-    const out = parts.map(sentRaw => {
+    const { text: out, parts } = groundByLine(clean, sentRaw => {
       const sent = sentRaw.trim();
-      if (!sent) return sent;
+      if (!sent) return null;
       // Rank every doc sentence by the same scoring bindCitations uses, then
       // prefer a hit inside the span set before the doc-wide backstop.
       const ranked = retrieve(doc, sent, sentenceTexts.length || 6);
@@ -9562,9 +9562,9 @@ function projectGraph(events, frame = {}) {
       // Otherwise an unbound integration from the reading.
       integrationCount++;
       return sent;
-    }).join(' ');
+    });
 
-    const totalSentences = parts.filter(s => s.trim()).length;
+    const totalSentences = parts.length;
     const bound = citedCount + inferCount;
     const status = absentCount ? 'warn' : (integrationCount ? 'notes' : 'clean');
     const grounded = absentCount === 0 && citedCount > 0;
@@ -10192,6 +10192,41 @@ function projectGraph(events, frame = {}) {
     return out.length ? out : [s];
   }
 
+  /* ---------- grounding a draft while KEEPING its block structure ----------
+     The binders below split a draft into claim-sentences, ground each, and
+     stitch them back together. Done naively — splitDraft → map → join(' ') —
+     that stitch reflows the whole reply onto a single line, collapsing every
+     newline the model wrote: a numbered list, headings and paragraph breaks all
+     fuse, and the Markdown renderer then shows items 2..n swallowed into item 1.
+     This keeps the line scaffold: blank lines and each line's leading
+     indentation survive verbatim, every non-blank line is split into sentences
+     and grounded on its own, sentences within a line rejoin with a space, and
+     the lines rejoin with '\n'. `perSentence(sent)` returns the grounded
+     sentence (with any citation marker appended) — recording cites/counts via
+     closure exactly as the inline map did — or null to drop a fragment (a bare
+     tag the keyed binder used to filter out). Returns the rebuilt text and the
+     flat list of kept claim-sentences (the coverage / grounded-ratio
+     denominator). For a single-line draft it is byte-identical to the old
+     reflow, so existing bindings are unchanged; only multi-line drafts gain
+     back their structure. */
+  function groundByLine(text, perSentence) {
+    const lines = String(text == null ? '' : text).split('\n');
+    const parts = [];
+    const out = lines.map(line => {
+      if (!/\S/.test(line)) return line;                  // blank line preserved verbatim
+      const indent = line.match(/^\s*/)[0];               // keep list / quote indentation
+      const grounded = [];
+      for (const s of splitDraft(line.slice(indent.length))) {
+        const g = perSentence(s);
+        if (g == null) continue;                          // perSentence dropped this fragment
+        parts.push(s);
+        grounded.push(g);
+      }
+      return indent + grounded.join(' ');
+    });
+    return { text: out.join('\n'), parts };
+  }
+
   /* ---------- does a retrieved line actually SUPPORT a claim? ----------
      The retrieval score normalizes by the CANDIDATE's substantive length only,
      so a two-token line ("Thank you.") scores 1/√2 ≈ 0.71 on a single shared
@@ -10288,10 +10323,9 @@ function projectGraph(events, frame = {}) {
   function bindCitations(doc, answerText, query, intent, opts) {
     const floor = CITE_FLOOR;
     const clean = answerText.replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim();
-    const parts = splitDraft(clean);
     const cited = [];
     let attested = 0;
-    const out = parts.map(sent => {
+    const { text: out, parts } = groundByLine(clean, sent => {
       // a negative existential can never be supported by one line — attest it
       // against the events instead of lashing it to whatever shared a token
       const receipt = absenceClaim(doc, sent, opts && opts.hotEntity);
@@ -10299,7 +10333,7 @@ function projectGraph(events, frame = {}) {
       const cands = retrieve(doc, sent, 1);
       if (cands.length && supportsClaim(cands[0], sent, floor)) { cited.push({ docId: doc.id, idx: cands[0].i }); return `${sent.trim()} {{cite:${doc.id}:${cands[0].i}:s${cands[0].i}}}`; }
       return sent.trim();
-    }).join(' ');
+    });
     const supported = cited.length + attested;
     const grounded = supported > 0 && supported >= parts.length * 0.5;
     const cov = (intent && intent !== 'factual') ? { n: 1, d: 1 } : coverage(query, parts.join(' '));
@@ -10722,10 +10756,9 @@ function projectGraph(events, frame = {}) {
     if (ds.length <= 1) return bindCitations(ds[0] || scopeDocs(docs)[0], answerText, query, intent, opts);
     const floor = 0.34;
     const clean = answerText.replace(/\[s?\d+\]/gi, '').replace(/\s+([.,;:])/g, '$1').trim();
-    const parts = splitDraft(clean);
     const cited = [];
     let attested = 0;
-    const out = parts.map(sent => {
+    const { text: out, parts } = groundByLine(clean, sent => {
       // an absence claim over a scope must verify in EVERY source to attest
       const receipts = ds.map(d => absenceClaim(d, sent, opts && opts.hotEntity));
       if (receipts.length && receipts.every(r => r)) {
@@ -10735,7 +10768,7 @@ function projectGraph(events, frame = {}) {
       const cand = retrieveScope(ds, sent, 1)[0];
       if (cand && supportsClaim(cand, sent, floor)) { cited.push({ docId: cand.docId, idx: cand.i }); return `${sent.trim()} {{cite:${cand.docId}:${cand.i}:s${cand.i}}}`; }
       return sent.trim();
-    }).join(' ');
+    });
     const supported = cited.length + attested;
     const grounded = supported > 0 && supported >= parts.length * 0.5;
     const cov = (intent && intent !== 'factual') ? { n: 1, d: 1 } : coverage(query, parts.join(' '));
@@ -11865,10 +11898,10 @@ function projectGraph(events, frame = {}) {
     // s123) is dropped from the citable pool — the claim holds uncited rather
     // than laundering chrome into a citation.
     const chromeSet = (doc._chrome && doc._chrome.length) ? new Set(doc._chrome) : null;
-    const parts = splitDraft(raw).filter(p => p.replace(/\[s(?:\d+|\?)\]/g, '').trim());
     const cited = [], held = [];
     let attested = 0, keyed = 0;
-    const out = parts.map(sent => {
+    const { text: out, parts } = groundByLine(raw, sent => {
+      if (!sent.replace(/\[s(?:\d+|\?)\]/g, '').trim()) return null;   // a bare-tag fragment — drop, as the old filter did
       const tags = [...String(sent).matchAll(/\[s(\d+|\?)\]/g)].map(m => m[1]);
       const clean = sent.replace(/\[s(?:\d+|\?)\]/g, '').replace(/\s+([.,;:])/g, '$1').replace(/\s{2,}/g, ' ').trim();
       const keys = tags.filter(t => t !== '?').map(Number).filter(n => n >= 0 && n < texts.length && !(chromeSet && chromeSet.has(n)));
@@ -11888,7 +11921,7 @@ function projectGraph(events, frame = {}) {
       const cands = retrieve(doc, clean, 1);
       if (cands.length && supportsClaim(cands[0], clean, floor)) { cited.push({ docId: doc.id, idx: cands[0].i }); return `${clean} {{cite:${doc.id}:${cands[0].i}:s${cands[0].i}}}`; }
       return clean;
-    }).join(' ');
+    });
     const supported = cited.length + attested;
     const grounded = supported > 0 && supported >= parts.length * 0.5;
     const cov = (intent && intent !== 'factual') ? { n: 1, d: 1 } : coverage(query, parts.join(' '));

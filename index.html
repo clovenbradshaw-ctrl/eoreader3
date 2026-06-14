@@ -219,6 +219,13 @@
      Wiktionary) through the proxy, rate-limited and prioritised. Inert unless
      window.EO_REFERENCE_PROXY resolves; clear it to keep the reader local. -->
 <script src="external.js"></script>
+<!-- web sources (window.EOWebSource): external web documents admitted as
+     first-class groundable sources through the same pipeline an uploaded doc
+     travels. A deep-read action, never a chat affordance; the local model can
+     only PROPOSE a query, never fetch. Inert unless window.EO_SEARCH_PROXY
+     resolves (a self-hosted SearXNG behind the cleon-search-proxy); clear it to
+     keep the reader strictly local. See docs/web-source-admission.md. -->
+<script src="websource.js"></script>
 <!-- prompt-flow registry: the machine-readable map of how a turn becomes a model
      call, with every prompt string read LIVE from llm.js (window.EOPromptFlow).
      Pure data + live reads; loads no model. Backs the Prompt-flow dashboard. -->
