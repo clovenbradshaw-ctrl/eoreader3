@@ -207,6 +207,90 @@ button { font-family: inherit; cursor: pointer; }
 .sb-link { background: none; border: 0; cursor: pointer; color: var(--accent); font-size: 12px; padding: 4px 8px; text-align: left; }
 .sb-link:hover { text-decoration: underline; }
 
+/* ---- projects: drag a document onto a project, expand to manage members ---- */
+.sb-proj { position: relative; }
+/* the disclosure caret stays visible (it isn't a hover-only sb-x) */
+.sb-caret {
+  border: 0; background: none; cursor: pointer; color: var(--text-3); padding: 0;
+  margin: -2px 0 -2px -4px; border-radius: 4px; display: inline-flex; align-items: center; flex-shrink: 0;
+}
+.sb-caret:hover { color: var(--text); }
+.sb-item.active .sb-caret { color: var(--accent); }
+/* a project lit up as the target of a document being dragged in */
+.sb-item.droptarget { background: var(--accent-tint); box-shadow: inset 0 0 0 1.5px var(--accent); color: var(--text); }
+.sb-item.dragging { opacity: .45; }
+.sb-item .sb-x.rn:hover { color: var(--accent); background: var(--accent-tint); }
+.sb-rename {
+  flex: 1; min-width: 0; font: inherit; font-size: 13.5px; color: var(--text);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 1px 5px; background: var(--bg);
+}
+.sb-rename:focus { outline: none; }
+/* a project's member documents, indented under it */
+.sb-members { margin: 1px 0 2px 14px; padding-left: 10px; border-left: 1px solid var(--border); }
+.sb-item.member { padding: 5px 8px; font-size: 12.5px; gap: 7px; }
+.sb-item.member .tl { color: var(--text-2); }
+.sb-empty.sub { padding: 4px 8px; font-size: 11.5px; }
+
+/* the per-document folder button tints when the doc is filed in any project */
+.sb-item .sb-src.proj.on { display: inline-flex; color: var(--accent); }
+.sb-item .sb-src.proj.open { display: inline-flex; color: var(--accent); background: var(--accent-tint); }
+
+/* the "file this document into a project" menu, opened from a document row */
+.sb-addmenu {
+  margin: 2px 6px 6px 28px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--bg); box-shadow: var(--sh); padding: 4px;
+}
+.sb-addmenu-h {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase;
+  color: var(--text-3); padding: 3px 6px 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sb-addmenu-row {
+  width: 100%; display: flex; align-items: center; gap: 7px; padding: 5px 6px; border: 0; border-radius: 5px;
+  background: none; cursor: pointer; font: inherit; font-size: 12.5px; color: var(--text-2); text-align: left;
+}
+.sb-addmenu-row:hover { background: var(--bg-subtle); color: var(--text); }
+.sb-addmenu-row .mk { color: var(--text-3); display: inline-flex; flex-shrink: 0; }
+.sb-addmenu-row.on { color: var(--text); }
+.sb-addmenu-row.on .mk { color: var(--accent); }
+.sb-addmenu-row .tl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-addmenu-row .count { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
+.sb-addmenu-row.new { color: var(--accent); margin-top: 3px; padding-top: 7px; border-top: 1px solid var(--border); border-radius: 0; }
+.sb-addmenu-row.new .mk { color: var(--accent); }
+
+/* ---- new-project modal (replaces the bare window.prompt) ---- */
+.proj-modal {
+  width: min(460px, 92vw); background: var(--bg); border: 1px solid var(--border-strong);
+  border-radius: var(--r); box-shadow: var(--sh-lg); display: flex; flex-direction: column;
+  overflow: hidden; animation: pop .16s ease;
+}
+.proj-modal-head { display: flex; align-items: center; gap: 9px; padding: 15px 16px 13px; border-bottom: 1px solid var(--border); }
+.proj-modal-head .ti { color: var(--accent); display: inline-flex; }
+.proj-modal-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.proj-modal-head .x { width: 30px; height: 30px; border-radius: 8px; border: 0; background: transparent; color: var(--text-2); display: grid; place-items: center; cursor: pointer; }
+.proj-modal-head .x:hover { background: var(--bg-subtle); color: var(--text); }
+.proj-modal-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.proj-field { display: flex; flex-direction: column; gap: 6px; }
+.pf-label { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+.proj-input {
+  font: inherit; font-size: 14px; color: var(--text); padding: 9px 11px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--bg);
+}
+.proj-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.proj-seed { display: flex; flex-direction: column; gap: 7px; }
+.proj-seed.empty { font-size: 12.5px; color: var(--text-3); line-height: 1.45; }
+.ps-h { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+.ps-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.ps-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-2);
+  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: var(--r-pill);
+  padding: 3px 9px 3px 7px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ps-chip svg { color: var(--text-3); flex-shrink: 0; }
+.ps-more { font-size: 12px; color: var(--text-3); align-self: center; }
+.proj-modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 16px; border-top: 1px solid var(--border); background: var(--bg-sunken); }
+.proj-modal-foot .btn-primary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.proj-modal-foot .btn-ghost { cursor: pointer; }
+
 .sb-foot { border-top: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .sb-foot-row {
   display: flex; align-items: center; gap: 9px; padding: 8px; border-radius: var(--r-sm);
