@@ -1211,6 +1211,33 @@ function App() {
     catch (e) { eoWarn('field deposit', e); }
   };
 
+  // Deposit a settled CHAT turn into the same conversation field a grounded turn
+  // warms (depositSettled) — the field's second source of activation: the page is
+  // one, the chat is the other (docs/conversation-walk.md). A chat turn cites
+  // nothing, so it carries no sentence pointers; what it carries is who/what it
+  // named, which is exactly the anchor an anaphoric follow-up ("what's his role")
+  // rides on via hotEntity(). Both the user's question AND the assistant's answer
+  // are deposited: when the user stops naming a subject and refers to it only by
+  // pronoun, the answer's mentions are what keep it warm across the turns —
+  // without that, the subject decayed away and the next turn forgot who "he" was.
+  // Same named-referent extraction (DEF type gate) the page reader runs, so chat
+  // and reading share one activation law. Legible-THAT: records THAT the
+  // conversation carried these names, with how much heat — never why.
+  const depositConversation = (q, answer) => {
+    const E = window.EOEngine;
+    if (!E || !E.conversationField || !E.namedReferents) return;
+    let names;
+    try {
+      const seen = new Set(); names = [];
+      for (const n of E.namedReferents(String(q || '')).concat(E.namedReferents(String(answer || '')))) {
+        const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); names.push(n); }
+      }
+    } catch (e) { eoWarn('conversation referents', e); return; }
+    if (!names.length) return;
+    try { E.conversationField.deposit({ entities: names }, 1); } catch (e) { eoWarn('chat field deposit', e); return; }
+    try { AUD('step', 'field-deposit', { source: 'chat', entities: names }); } catch (e) {}
+  };
+
   // FIX 3c — provisional-source sweep. Enrichment-ingested docs are tagged
   // provisional at ingest (ingestExternalSource) and cleared when an answer
   // cites them (depositSettled). One that never grounds is junk that keeps
@@ -1676,6 +1703,10 @@ function App() {
       if (genStale(myGen)) return;                  // stopped while streaming — stopTurn owns the message
       replaceLast({ role: 'assistant', text: full, audit: ungroundedAudit, mode: modeTag, mechanical: mechPanel });
       AUD('end', { engine: 'model', text: full, audit: ungroundedAudit, cites: [] });
+      // Unify activation: warm the field with who this chat turn named, so the
+      // next turn's pronoun still resolves to them (the chat is the field's
+      // second source of deposit, beside grounded reading's depositSettled).
+      depositConversation(q, full);
     } catch (e) {
       if (window.EOLLM.isAbort(e) || genStale(myGen)) return;   // stopped — settled by stopTurn, show no error
       const msg = 'I couldn’t finish that one locally — the model likely ran out of memory or context. Try a shorter message, pick a smaller model from the switcher, or ask about an open document and I’ll answer it mechanically.';

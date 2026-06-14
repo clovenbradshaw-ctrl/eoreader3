@@ -174,6 +174,15 @@ function AuditStep({ s }) {
       <span className="aud-dim">{(s.from || []).join('+')} ⇝ {s.to} · coupling {s.coupling}{s.sim != null ? ' · sim ' + s.sim : ''} · {s.clearedDelta ? <b>cleared δ</b> : 'inert'}</span>
     </Line>
   );
+  if (s.t === 'field-deposit') {
+    const ents = s.entities || [];
+    return (
+      <Line label="field" kind="ground">
+        <span className="aud-dim">{s.source === 'chat' ? 'the chat turn' : 'the turn'} warmed <b>{ents.length}</b> name{ents.length !== 1 ? 's' : ''} in the conversation field — the anchor the next turn’s pronoun resolves to</span>
+        {ents.length ? <div className="aud-dim" style={{ marginTop: 2 }}>{ents.join(' · ')}</div> : null}
+      </Line>
+    );
+  }
   if (s.t === 'infer') return (
     <Line label="infer" kind="referents">
       <span className="aud-dim">floor {s.floor} · reader-added connection:</span> {(s.pairs || []).map((p, i) => <span key={i}>{i ? ', ' : ' '}<span className="aud-cite">s{p.a}</span>+<span className="aud-cite">s{p.b}</span></span>)}

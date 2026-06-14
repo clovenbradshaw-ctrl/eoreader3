@@ -689,6 +689,64 @@ group('conversation field — deposit / decay / snapshot / restore / reset', () 
   F.reset();
 });
 
+// A chat turn is the field's SECOND source of deposit (the page is the other):
+// namedReferents extracts who/what a turn named — the page reader's extraction
+// and DEF type gate, with no scope-presence split — so chat and reading warm one
+// activation field. Depositing the ANSWER's names too is what keeps a subject
+// hot across a pronoun-led stretch, when the user stops naming it.
+group('conversation field — a chat turn deposits its named referents (one activation law)', () => {
+  // namedReferents: the page reader's name extraction + type gate, scope-free.
+  eq(JSON.stringify(E.namedReferents('Tell me about Amos Dresser and his work.')), JSON.stringify(['Amos Dresser']),
+     'a sentence-initial verb is type-gated out; the real name survives');
+  eq(E.namedReferents('What did he do at the meeting?').length, 0, 'a pronoun-only turn names no referent');
+  eq(E.namedReferents('the of a to').length, 0, 'an all-lowercase turn names nothing');
+  eq(E.namedReferents('Napoleon met Wellington, and Napoleon spoke.').filter(n => n === 'Napoleon').length, 1,
+     'a name repeated within a turn is deposited once (deduped)');
+
+  const F = E.conversationField, FLOOR = 0.25;
+  const heatOf = (label) => { const e = F.snapshot().entities.find(x => x.label === label); return e ? e.heat : 0; };
+  // The user names the subject once, then refers to it only by pronoun while the
+  // assistant keeps naming it — the shape that used to forget who "he" was.
+  const turns = [
+    ['Tell me about Amos Dresser.', 'Amos Dresser was a white minister at the meeting.'],
+    ['What did he do there?',       'He spoke; Amos Dresser was seized afterward.'],
+    ['And then?',                   'Amos Dresser was carried out.'],
+    ['Anything else about him?',    'Amos Dresser left town.'],
+    ['What happened next?',         'Amos Dresser was never heard from again.'],
+  ];
+
+  // The fix: each turn decays at its start (runTurn), then deposits the question
+  // AND the answer's named referents (runChat → depositConversation), deduped,
+  // weight 1. The assistant's mentions keep the subject hot through the stretch.
+  F.reset();
+  for (const [q, answer] of turns) {
+    F.decayTurn();
+    const seen = new Set(), names = [];
+    for (const n of E.namedReferents(q).concat(E.namedReferents(answer))) {
+      const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); names.push(n); }
+    }
+    if (names.length) F.deposit({ entities: names }, 1);
+  }
+  eq(F.snapshot().entities[0].label, 'Amos Dresser', 'the subject stays the hottest entity through a pronoun-led stretch');
+  const fixHeat = heatOf('Amos Dresser');
+  ok(fixHeat >= FLOOR, 'and stays hot at the dial floor — the next turn can still anchor "he" to it');
+
+  // The bug, isolated: deposit ONLY the question (the old chat path deposited
+  // nothing; question-only is already the generous version). Once the user
+  // switches to pronouns the subject is never re-named, cools below the floor,
+  // and a later turn forgets who "he" is — exactly what the answer deposit fixes.
+  F.reset();
+  for (const [q] of turns) {
+    F.decayTurn();
+    const ns = E.namedReferents(q);
+    if (ns.length) F.deposit({ entities: ns }, 1);
+  }
+  const qHeat = heatOf('Amos Dresser');
+  ok(qHeat < FLOOR, 'question-only deposits let the subject cool below the floor across pronoun turns (the bug)');
+  ok(qHeat < fixHeat, 'depositing the answer keeps the subject far warmer than the question alone');
+  F.reset();
+});
+
 // Working memory reads the field through the budget into a hot/warm/cold
 // subgraph. It needs NO embedder (graph-hop only), so it works in the Node
 // harness exactly as it degrades in the browser — and it is empty at the floor.
