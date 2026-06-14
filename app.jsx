@@ -11,6 +11,26 @@ if (typeof window !== 'undefined' && window.EO_DEBUG === undefined) window.EO_DE
 const eoWarn = (...a) => { if (typeof window !== 'undefined' && window.EO_DEBUG) console.warn('[Cleo]', ...a); };
 if (typeof window !== 'undefined') window.eoWarn = eoWarn;
 
+// Global safety nets (§5). A stray rejected promise — an aborted fetch, a model
+// load that failed after the UI moved on, a worker that went away — must never
+// surface as a tab-level crash. Swallow it (logged under EO_DEBUG so it stays
+// diagnosable) instead of letting it bubble to the browser's default handling.
+// Render-time throws are caught separately by the React ErrorBoundary below.
+if (typeof window !== 'undefined' && !window.__eoGlobalGuards) {
+  window.__eoGlobalGuards = true;
+  window.addEventListener('unhandledrejection', (e) => {
+    eoWarn('unhandledrejection', e && e.reason);
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+  });
+  window.addEventListener('error', (e) => { eoWarn('window error', e && (e.error || e.message)); });
+}
+
+// Document-size ceilings (see ingest / handleFiles). Generous: even long books
+// sit far below these. They exist only to stop a pathologically huge input from
+// OOM-ing the tab before the staged parser's memory shaping can help.
+const MAX_DOC_CHARS = 25 * 1024 * 1024;   // ~25M characters (~50 MB in memory)
+const MAX_FILE_BYTES = 40 * 1024 * 1024;  // ~40 MB on disk
+
 // Audit log shim — records the chat pipeline when window.EOAudit is present,
 // and no-ops cleanly when it isn't. Keeps the call sites in the chat path terse.
 const AUD = (m, ...a) => { try { const A = window.EOAudit; return A && A[m] ? A[m](...a) : undefined; } catch (e) { eoWarn('audit', m, e); } };
@@ -181,7 +201,8 @@ function App() {
   // the scope; editing the scope while a project is active updates the project.
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
-  const [input, setInput] = useState('');
+  // The composer draft is NOT App state — it lives inside the Composer so typing
+  // doesn't re-render the whole app. App only receives the text on send.
   const [mode, setMode] = useState('auto');
   // The answer-mode control (Auto / Grounded / Creative) in the composer is
   // hidden by default — every chat just runs on Auto, which reads each question
@@ -840,6 +861,15 @@ function App() {
       showToast('“' + name + '” is already loaded.');
       return dup;
     }
+    // Hard ceiling on a single document. The staged parser keeps memory from
+    // spiking, but a truly enormous input (a multi-hundred-MB paste or drop) can
+    // still exhaust a low-RAM device before staging helps — reject it with a
+    // clear message instead of letting the tab run out of memory. Generous on
+    // purpose: real documents, even long books, sit far below this.
+    if (text && text.length > MAX_DOC_CHARS) {
+      showToast('“' + name + '” is too large to read here (over ' + Math.round(MAX_DOC_CHARS / (1024 * 1024)) + ' M characters).');
+      return null;
+    }
     const id = uid('doc');
     const tok = ++ingestTok.current;
     // A big paste is read deliberately — staged and breathed so the tab stays
@@ -884,6 +914,10 @@ function App() {
   const handleFiles = async (fileList) => {
     const files = [...fileList];
     for (const f of files) {
+      if (f && f.size > MAX_FILE_BYTES) {
+        showToast('“' + f.name + '” is too large to read here (over ' + Math.round(MAX_FILE_BYTES / (1024 * 1024)) + ' MB).');
+        continue;
+      }
       let text;
       try {
         text = await new Promise((res, rej) => {
@@ -1385,13 +1419,40 @@ function App() {
     .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.typing && !m.loading && m.text)
     .map(m => ({ role: m.role, content: epistemicTag(m) + stripMarkup(histTextFor(m)) }));
 
-  const streamInto = (patch) => (d) => setMessages(m => {
-    const c = m.slice(); const prev = c[c.length - 1];
-    // Spread `prev` first so streaming a token never drops fields already on the
-    // message (auditId, mode, audit); the explicit keys and caller patch win.
-    c[c.length - 1] = { ...prev, role: 'assistant', text: (prev.text || '') + d, streaming: true, ...patch };
-    return c;
-  });
+  // Coalesce streamed tokens to animation frames. A fast model can emit tokens
+  // faster than the screen refreshes; calling setMessages per token meant a full
+  // App re-render per token. Buffering the deltas and flushing once per frame
+  // caps re-renders at the display's rate while the text still streams smoothly.
+  //
+  // The flush is self-guarding: if the turn finalized between a delta and the
+  // frame — replaceLast (on completion) and stopTurn (on interrupt) both clear
+  // `streaming` — the buffered tail is dropped instead of being appended onto
+  // settled text. That's correct: completion replaces the message with the
+  // model's authoritative full string, which already contains those tokens.
+  const streamBufRef = useRef({ pending: '', patch: null, raf: 0 });
+  const flushStream = () => {
+    const b = streamBufRef.current;
+    b.raf = 0;
+    const pending = b.pending; b.pending = '';
+    if (!pending) return;
+    setMessages(m => {
+      const c = m.slice(); const prev = c[c.length - 1];
+      if (!prev || !prev.streaming) return m;   // turn finalized — drop the tail
+      // Spread `prev` first so streaming never drops fields already on the
+      // message (auditId, mode, audit); the explicit keys and caller patch win.
+      c[c.length - 1] = { ...prev, role: 'assistant', text: (prev.text || '') + pending, streaming: true, ...(b.patch || {}) };
+      return c;
+    });
+  };
+  const streamInto = (patch) => (d) => {
+    const b = streamBufRef.current;
+    b.pending += d; b.patch = patch;
+    if (!b.raf) {
+      b.raf = (typeof requestAnimationFrame === 'function')
+        ? requestAnimationFrame(flushStream)
+        : setTimeout(flushStream, 16);
+    }
+  };
 
   // Deposit a settled, document-grounded turn into the conversation field
   // (working memory): warm the entities it named and the sentences it cited, so
@@ -3785,9 +3846,8 @@ function App() {
   };
 
   const runTurn = async (text) => {
-    const q = (text != null ? text : input).trim();
+    const q = (typeof text === 'string' ? text : '').trim();
     if (!q || busy) return;
-    setInput('');
     // Open a fresh generation. Stop (and any later turn) bumps this; the awaits
     // below and the detached streaming paths all stand down once superseded.
     const myGen = ++genRef.current;
@@ -4240,19 +4300,32 @@ function App() {
   const generating = busy && !!lastMsg && lastMsg.role === 'assistant'
     && (lastMsg.typing || lastMsg.loading || lastMsg.streaming);
 
+  // The source/addable chip lists are derived from docs+sources. Memoize them so
+  // they aren't rebuilt (and the addable filter isn't run as an O(n²)
+  // sources.includes) on every unrelated App render — and use a Set for the
+  // membership test.
+  const sourceChips = useMemo(
+    () => sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
+    [sources, docsById]);
+  const addableChips = useMemo(() => {
+    const inScope = new Set(sources);
+    return docs.filter(d => !inScope.has(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind }));
+  }, [sources, docs]);
+  const hasTableDoc = useMemo(() => docs.some(d => d.kind === 'table'), [docs]);
+
   const composerProps = {
-    value: input, onChange: setInput, onSend: () => send(), onStop: stopTurn, generating, mode, onMode: setMode, showModeToggle,
+    onSend: (text) => send(text), onStop: stopTurn, generating, mode, onMode: setMode, showModeToggle,
     onAttach: () => fileRef.current.click(), busy,
-    sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
-    addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
+    sources: sourceChips,
+    addable: addableChips,
     onAddSource: addSource, onRemoveSource: removeSource,
     wikiMode, forceEnrich, onForceEnrich: toggleForceEnrich,
-    smartParse, onSmartParse: () => setSmartParse(v => !v), hasTable: docs.some(d => d.kind === 'table'),
+    smartParse, onSmartParse: () => setSmartParse(v => !v), hasTable: hasTableDoc,
   };
 
   const hasTabs = openTabs.length > 0;
   const showHero = !hasTabs && messages.length === 0;
-  const enabledRules = rules.filter(r => r.installed && r.enabled).length;
+  const enabledRules = useMemo(() => rules.filter(r => r.installed && r.enabled).length, [rules]);
   const chatTitle = activeChat === 'new' ? 'New chat' : (chats.find(c => c.id === activeChat)?.title || 'Chat');
   const showChat = layout !== 'doc';
   const showDocPane = hasTabs && layout !== 'chat';
@@ -4336,23 +4409,25 @@ function App() {
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}
               {showDocPane && (
-                <DocPane openTabs={openTabs} activeTab={activeTab} docsById={docsById}
-                  onActivate={setActiveTab} onClose={closeTab} layout={layout} onLayout={setLayout}
-                  explore={explore} onToggleExplore={() => setExplore(x => !x)}
-                  onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={flashCitation} tableSpec={tableSpec}
-                  savedViews={savedViews} onApplyView={applyTableView} onSaveView={saveTableView} onDeleteView={deleteTableView}
-                  allDocs={docs} model={model} modelReady={modelStatus === 'ready'} onCompositionEvent={appendCompositionEvents} />
+                <Guard label="document">
+                  <DocPane openTabs={openTabs} activeTab={activeTab} docsById={docsById}
+                    onActivate={setActiveTab} onClose={closeTab} layout={layout} onLayout={setLayout}
+                    explore={explore} onToggleExplore={() => setExplore(x => !x)}
+                    onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={flashCitation} tableSpec={tableSpec}
+                    savedViews={savedViews} onApplyView={applyTableView} onSaveView={saveTableView} onDeleteView={deleteTableView}
+                    allDocs={docs} model={model} modelReady={modelStatus === 'ready'} onCompositionEvent={appendCompositionEvents} />
+                </Guard>
               )}
             </React.Fragment>
           )}
         </div>
       </main>
 
-      {rulesOpen && <RulesDrawer rules={rules} langModes={langModes}
+      {rulesOpen && <Guard label="rules"><RulesDrawer rules={rules} langModes={langModes}
         learnedByLang={window.EOEngine && window.EOEngine.learnedVerbsByLang ? window.EOEngine.learnedVerbsByLang() : {}}
-        onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
-      {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
-      {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)}
+        onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} /></Guard>}
+      {sandboxOpen && <Guard label="sandbox"><SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} /></Guard>}
+      {settingsOpen && <Guard label="settings"><SettingsDrawer onClose={() => setSettingsOpen(false)}
         theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
         pythonEnabled={pythonEnabled} onPythonEnabled={setPython} pythonAvailable={!!window.EOPython}
         groundingInfo={groundingInfo} onGroundingInfo={setGroundingInfo}
@@ -4363,13 +4438,13 @@ function App() {
         wikiMode={wikiMode} onWikiMode={changeWikiMode}
         models={window.MODELS.concat(uploadedModels)} autoModel={autoModel} defaultModelId={autoModel ? 'auto' : model.id} onDefaultModel={(id) => { if (id === 'auto') { chooseAuto(); return; } const m = window.MODELS.concat(uploadedModels).find(x => x.id === id); if (m) pickModel(m); }}
         fallbackModelIds={fallbackModelIds} onFallbackModelIds={setFallbackModelIds}
-        onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
-      {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
+        onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} /></Guard>}
+      {auditOpen && <Guard label="glass box"><AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
-                      onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
-      {eomriOpen && <EOMRIDrawer onClose={() => setEomriOpen(false)} />}
-      {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
-      {promptFlowOpen && <PromptFlowDrawer onClose={() => setPromptFlowOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
+                      onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} /></Guard>}
+      {eomriOpen && <Guard label="EO-MRI"><EOMRIDrawer onClose={() => setEomriOpen(false)} /></Guard>}
+      {graphAuditOpen && <Guard label="ingestion audit"><GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} /></Guard>}
+      {promptFlowOpen && <Guard label="prompt flow"><PromptFlowDrawer onClose={() => setPromptFlowOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} /></Guard>}
       {modelOpen && <ModelPopover models={window.MODELS.concat(uploadedModels)} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
                      status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel}
                      webgpu={!!(window.EOLLM && window.EOLLM.hasWebGPU && window.EOLLM.hasWebGPU())}
@@ -4377,8 +4452,10 @@ function App() {
                      anthropicKeySet={anthropicKeySet} onSetAnthropicKey={setAnthropicKey}
                      onUploadModel={uploadModel} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (
-        <EntityModal doc={d} name={entityModal.name} onCite={flashCitation} onEntity={(n) => setEntityModal({ docId: d.id, name: n })}
-          onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />
+        <Guard label="entity">
+          <EntityModal doc={d} name={entityModal.name} onCite={flashCitation} onEntity={(n) => setEntityModal({ docId: d.id, name: n })}
+            onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />
+        </Guard>
       ) : null; })()}
       {dragOver && <div className="drop-veil"><div className="drop-card"><Icon name="upload" size={26} /> Drop to read</div></div>}
       {ingestStatus && (() => {
@@ -4420,12 +4497,18 @@ function App() {
 
 // A single render throw used to blank #root with no recovery; this catches it
 // and offers a reload instead of a white screen. (§5)
+//
+// With a `fallback` prop it instead renders that fallback in place — used by the
+// per-panel <Guard>s below so a bug in one optional surface (a drawer, the doc
+// pane, a modal) shows a small inline notice and leaves the rest of the app —
+// the chat especially — fully usable, rather than taking down the whole tree.
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { err: null }; }
   static getDerivedStateFromError(err) { return { err }; }
-  componentDidCatch(err, info) { if (typeof console !== 'undefined') console.error('[Cleo] render error', err, info); }
+  componentDidCatch(err, info) { if (typeof console !== 'undefined') console.error('[Cleo] render error', this.props.label || '', err, info); }
   render() {
     if (this.state.err) {
+      if (this.props.fallback !== undefined) return this.props.fallback;
       return (
         <div className="crash" role="alert">
           <h1>Something went wrong.</h1>
@@ -4436,6 +4519,18 @@ class ErrorBoundary extends React.Component {
     }
     return this.props.children;
   }
+}
+
+// Contain a single optional panel. A throw inside shows an inline notice instead
+// of white-screening the app; closing and reopening the panel remounts it fresh.
+function Guard({ label, children }) {
+  return (
+    <ErrorBoundary label={label} fallback={
+      <div className="panel-error" role="alert" style={{ padding: '16px', font: 'inherit', opacity: 0.8 }}>
+        This panel hit an error{label ? ' (' + label + ')' : ''}. Close and reopen it to retry — your documents and chat are unaffected.
+      </div>
+    }>{children}</ErrorBoundary>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);

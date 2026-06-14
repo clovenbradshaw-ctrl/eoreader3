@@ -858,14 +858,19 @@ class MessageBoundary extends React.Component {
   }
 }
 
-function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork, onPromote }) {
+// Memoized: during streaming, setMessages replaces only the last message, so
+// every other message keeps the same `msg` reference. With stable handler props
+// (see ChatPane's latest-ref handlers) React.memo lets those unchanged messages
+// skip re-rendering entirely — the difference between re-rendering one message
+// per streamed token and re-rendering the whole transcript every token.
+const Message = React.memo(function Message({ msg, index, onCite, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork, onPromote }) {
   if (msg.role === 'user') {
     return (
       <div className="msg-row user">
         <div className="bubble-user">{msg.text}</div>
         {onFork && (
           <div className="msg-actions user-actions">
-            <button title="Fork from here — copy this conversation up to this message into a new chat" onClick={onFork}><Icon name="fork" size={15} /></button>
+            <button title="Fork from here — copy this conversation up to this message into a new chat" onClick={() => onFork(index)}><Icon name="fork" size={15} /></button>
           </div>
         )}
       </div>
@@ -927,15 +932,15 @@ function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onO
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
             <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer|absent):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
-            {onFork && <button title="Fork from here — copy this conversation up to this reply into a new chat" onClick={onFork}><Icon name="fork" size={15} /></button>}
-            {onPromote && msg.text && <button title="Open as a document — turn this answer into an editable, grounded composition you can revise and query" onClick={onPromote}><Icon name="edit" size={15} /></button>}
+            {onFork && <button title="Fork from here — copy this conversation up to this reply into a new chat" onClick={() => onFork(index)}><Icon name="fork" size={15} /></button>}
+            {onPromote && msg.text && <button title="Open as a document — turn this answer into an editable, grounded composition you can revise and query" onClick={() => onPromote(index)}><Icon name="edit" size={15} /></button>}
             <button title="Good answer"><Icon name="thumbsup" size={15} /></button>
           </div>
         )}
       </div>
     </div>
   );
-}
+});
 
 const MODES = [{ id: 'auto', label: 'Auto' }, { id: 'verbatim', label: 'Verbatim' }, { id: 'grounded', label: 'Grounded' }, { id: 'creative', label: 'Creative' }];
 function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
@@ -970,10 +975,15 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, showModeToggle, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich, smartParse, onSmartParse, hasTable }) {
+function Composer({ onSend, onStop, generating, mode, onMode, showModeToggle, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich, smartParse, onSmartParse, hasTable }) {
   const ref = React.useRef(null);
-  React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
-  const submit = () => { if (value.trim() && !busy) onSend(); };
+  // The draft lives HERE, not in App. Keeping every keystroke local means typing
+  // re-renders only the composer — not the 60-plus-state App tree, the message
+  // list, the sidebar, or the open document. The text is lifted to App only on
+  // send (onSend receives it); App holds no per-keystroke input state at all.
+  const [draft, setDraft] = React.useState('');
+  React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [draft]);
+  const submit = () => { const t = draft.trim(); if (t && !busy) { onSend(t); setDraft(''); } };
   // The reference desk needs a configured proxy; in 'off' mode (or with no proxy)
   // the composer shows no Wikipedia control and the chat stays local. In 'auto'/
   // 'on' the button is a per-message FORCE — take a stab on Wikipedia now (offer
@@ -983,8 +993,8 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, s
   return (
     <div className="composer-box">
       <SourceChips sources={sources} addable={addable} onAddSource={onAddSource} onRemoveSource={onRemoveSource} />
-      <textarea ref={ref} value={value} rows={1} placeholder={placeholder || 'Message Cleo…'}
-        onChange={e => onChange(e.target.value)}
+      <textarea ref={ref} value={draft} rows={1} placeholder={placeholder || 'Message Cleo…'}
+        onChange={e => setDraft(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }} />
       <div className="composer-bar">
         <button className="comp-btn icon" title="Attach a file" onClick={onAttach}><Icon name="paperclip" size={16} /></button>
@@ -1019,7 +1029,7 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, s
         <div className="comp-spacer" />
         {generating
           ? <button className="send-btn stop" aria-label="Stop generating" title="Stop generating" onClick={onStop}><Icon name="stop" size={15} /></button>
-          : <button className="send-btn" aria-label="Send message" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>}
+          : <button className="send-btn" aria-label="Send message" disabled={!draft.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>}
       </div>
     </div>
   );
@@ -1054,6 +1064,23 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
   React.useEffect(() => { const el = streamRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages]);
   // Only offer the export once a turn has actually been recorded.
   const hasTurns = !!(window.EOAudit && window.EOAudit.count && window.EOAudit.count() > 0);
+  // Stable handler identities via a latest-ref. App passes fresh callback
+  // identities on every render; routing them through a ref that always holds the
+  // current ones gives the <Message>s props that never change identity (so
+  // React.memo can skip unchanged messages) without ever calling stale logic.
+  const cbRef = React.useRef({});
+  cbRef.current = { onCite, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork, onPromote };
+  const H = React.useMemo(() => ({
+    onCite: (...a) => cbRef.current.onCite && cbRef.current.onCite(...a),
+    onConfirmWiki: (...a) => cbRef.current.onConfirmWiki && cbRef.current.onConfirmWiki(...a),
+    onDismissWiki: (...a) => cbRef.current.onDismissWiki && cbRef.current.onDismissWiki(...a),
+    onOpenDoc: (...a) => cbRef.current.onOpenDoc && cbRef.current.onOpenDoc(...a),
+    onApplyTableView: (...a) => cbRef.current.onApplyTableView && cbRef.current.onApplyTableView(...a),
+    onSaveTableView: (...a) => cbRef.current.onSaveTableView && cbRef.current.onSaveTableView(...a),
+    onQuickReply: (...a) => cbRef.current.onQuickReply && cbRef.current.onQuickReply(...a),
+    onForkAt: (i) => cbRef.current.onFork && cbRef.current.onFork(i),
+    onPromoteAt: (i) => cbRef.current.onPromote && cbRef.current.onPromote(i),
+  }), []);
   return (
     <div className={'pane-chat' + (narrow ? ' narrow' : '') + (wide ? ' wide' : '')} style={{ flex: 1, minHeight: 0 }}>
       <div className="chat-stream" ref={streamRef}>
@@ -1061,10 +1088,10 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
           <MessageBoundary key={i}
             resetKey={(m.text ? m.text.length : 0) + ':' + (m.streaming ? 1 : 0) + ':' + (m.typing ? 1 : 0) + ':' + (m.loading ? 1 : 0) + ':' + (m.audit ? 1 : 0)}
             raw={m.role === 'assistant' ? m.text : null}>
-            <Message msg={m} onCite={onCite} showGrounding={showGrounding} onConfirmWiki={onConfirmWiki} onDismissWiki={onDismissWiki} onOpenDoc={onOpenDoc}
-              onApplyTableView={onApplyTableView} onSaveTableView={onSaveTableView} onQuickReply={onQuickReply}
-              onFork={onFork ? () => onFork(i) : null}
-              onPromote={onPromote && m.role === 'assistant' ? () => onPromote(i) : null} />
+            <Message msg={m} index={i} onCite={H.onCite} showGrounding={showGrounding} onConfirmWiki={H.onConfirmWiki} onDismissWiki={H.onDismissWiki} onOpenDoc={H.onOpenDoc}
+              onApplyTableView={H.onApplyTableView} onSaveTableView={H.onSaveTableView} onQuickReply={H.onQuickReply}
+              onFork={onFork ? H.onForkAt : null}
+              onPromote={onPromote && m.role === 'assistant' ? H.onPromoteAt : null} />
           </MessageBoundary>
         ))}</div>
       </div>
