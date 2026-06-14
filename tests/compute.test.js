@@ -69,6 +69,56 @@ group('informal operators — "x"/"×"/"÷" are arithmetic, never the model', ()
   eq(C.detect('the 3 x 4 grid layout'), null, 'a measured "3 x 4 grid" in prose is not hijacked as a calc');
 });
 
+group('word operators — natural-language math computes, never the model', () => {
+  // The regression from the screenshot: "17 multiplied by 24" used to drop to
+  // the model (the prose gate rejected "multiplied"/"by"), which then did the
+  // arithmetic in its head. Now the words normalize to operators and math.js owns it.
+  const r = C.detect('What is 17 multiplied by 24?');
+  ok(r != null, '"17 multiplied by 24" is a calculation, not a prose turn');
+  eq(r && r.display, '408', 'multiplied-by is computed exactly');
+  eq(r && r.eval, '17 * 24', '"multiplied by" normalizes to * in the worked expression');
+  eq(C.detect('17 times 24').display, '408', '"times" multiplies');
+  eq(C.detect('100 minus 7').display, '93', '"minus" subtracts');
+  eq(C.detect('100 plus 250').display, '350', '"plus" adds');
+  eq(C.detect('200 divided by 4').display, '50', '"divided by" divides');
+  eq(C.detect('2 to the power of 10').display, '1,024', '"to the power of" exponentiates');
+  eq(C.detect('2 to the 10th power').display, '1,024', '"to the Nth power" exponentiates');
+  eq(C.detect('9 squared').display, '81', '"squared" is ^2');
+  eq(C.detect('3 cubed').display, '27', '"cubed" is ^3');
+  eq(C.detect('15 percent of 240').display, '36', '"percent of" is a fraction of');
+  // imperative phrasings (verb first); subtract/divide are order-sensitive
+  eq(C.detect('multiply 17 by 24').display, '408', '"multiply X by Y"');
+  eq(C.detect('divide 100 by 4').display, '25', '"divide X by Y"');
+  eq(C.detect('add 5 and 3').display, '8', '"add X and Y"');
+  eq(C.detect('subtract 3 from 10').display, '7', '"subtract X from Y" keeps operand order (10-3)');
+  // but a stray operator word in prose is still not a calculation (gate holds)
+  eq(C.detect('I told you 5 times already'), null, 'a counted "5 times" in prose is not hijacked');
+  eq(C.detect('we cut costs by 5 percent last year'), null, 'a "5 percent" aside in prose is not hijacked');
+  eq(C.detect('2 squared meters of floor space'), null, 'a measured "2 squared meters" is not hijacked');
+});
+
+group('a trailing instruction does not knock the turn off the calculator', () => {
+  // The exact screenshot turn: a sum followed by "Show your reasoning step by
+  // step." The "?" ends the sum; the worked-math panel is the shown reasoning.
+  const r = C.detect('What is 17 multiplied by 24? Show your reasoning step by step.');
+  ok(r != null, 'a math question with a trailing instruction still computes');
+  eq(r && r.display, '408', 'the answer is the deterministic 408');
+  eq(C.detect('17 times 24, show your work').display, '408', 'trailing "show your work" (no "?") is stripped');
+  eq(C.detect('what is 100/4 please').display, '25', 'a trailing "please" is stripped');
+  eq(C.detect('5 + 5 =').display, '10', 'a trailing "=" is the prompt for the answer, not part of the sum');
+  eq(C.detect('5 + 5 = ?').display, '10', 'a trailing "= ?" computes');
+  eq(C.detect('17 multiplied by 24 equals what?').display, '408', '"equals what?" is stripped');
+  eq(C.detect('show your reasoning'), null, 'a bare instruction with no math is still not a calculation');
+});
+
+group('explicit triggers match as whole words (calc ≠ prefix of calculate)', () => {
+  // "calculate ..." used to strip only "calc", leaving "ulate ..." which failed
+  // to evaluate and dropped the turn to the model.
+  eq(C.detect('calculate 5 times 5').display, '25', '"calculate" is a whole-word trigger');
+  eq(C.detect('compute 7 + 8').display, '15', '"compute" triggers');
+  eq(C.detect('evaluate 3^3').display, '27', '"evaluate" triggers');
+});
+
 group('money runs in BigNumber precision', () => {
   eq(C.detect('0.1 + 0.2').exact, '0.3', '0.1 + 0.2 is exactly 0.3 — no float drift');
   const r = C.detect('15% of $240,000');
