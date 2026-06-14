@@ -25,6 +25,11 @@
      app with `Cross-Origin-Opener-Policy: same-origin` and
      `Cross-Origin-Embedder-Policy: require-corp`. Absent those headers it simply
      falls back to single-thread; nothing breaks. -->
+<!-- Quill — the rich-text editor behind the composition surface (Google-Docs
+     feel: a toolbar + markdown shortcuts). Pinned to an exact version; loaded
+     before styles.css so the app's theme can override the snow stylesheet. The
+     editor degrades to a plain textarea wherever window.Quill is absent. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" />
 <link rel="stylesheet" href="styles.css" />
 <!-- Theme, before first paint. Reads the persisted UI prefs (the same
      localStorage key store.js writes) and pins <html data-theme> so the
@@ -64,6 +69,13 @@
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- Quill (window.Quill) + its markdown-shortcuts module (window.QuillMarkdown),
+     the rich-text editor for the composition surface. Pinned to exact versions;
+     library code only, no document data leaves the browser. compose.jsx uses it
+     when present and falls back to a textarea when it isn't. -->
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/quilljs-markdown@1.2.0/dist/quilljs-markdown.js"></script>
 
 <!-- engine (plain scripts; expose window.EOEngine / window.EOLLM / window.EOStore / window.EOAudit / window.EOPython / window.EOCompute) -->
 <script src="engine.js"></script>

@@ -29,6 +29,36 @@ const CMP_COMPONENTS = [
 ];
 const BAND_LABEL = { owed: 'owed', advance: 'advance', revise: 'revise', fetch: 'fetch', contested: 'contested', held: 'held', drafted: 'drafted' };
 
+/* ---- markdown → html for the Google-Docs surface -------------------------
+   A small, safe Markdown→HTML for the reading/streaming view and for seeding
+   the rich editor: escape first, then headings / lists / blockquote as blocks
+   and bold / italic / code / links inline. The talker writes flowing prose, so
+   this stays deliberately small — Quill's toolbar and markdown shortcuts do the
+   live formatting; this only has to render what the model emits. */
+function cmpEscHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function cmpMdInline(s) {
+  return cmpEscHtml(s)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function cmpMdToHtml(text) {
+  const blocks = String(text == null ? '' : text).split(/\n{2,}/).map(b => b.trim()).filter(Boolean);
+  if (!blocks.length) return '<p><br></p>';
+  return blocks.map(b => {
+    const h = /^(#{1,6})\s+(.+)$/.exec(b);
+    if (h && b.indexOf('\n') === -1) { const lvl = Math.min(3, h[1].length); return '<h' + lvl + '>' + cmpMdInline(h[2]) + '</h' + lvl + '>'; }
+    const lines = b.split('\n');
+    if (lines.every(l => /^\s*[-*]\s+/.test(l))) return '<ul>' + lines.map(l => '<li>' + cmpMdInline(l.replace(/^\s*[-*]\s+/, '')) + '</li>').join('') + '</ul>';
+    if (lines.every(l => /^\s*\d+[.)]\s+/.test(l))) return '<ol>' + lines.map(l => '<li>' + cmpMdInline(l.replace(/^\s*\d+[.)]\s+/, '')) + '</li>').join('') + '</ol>';
+    if (lines.every(l => /^\s*>\s?/.test(l))) return '<blockquote>' + lines.map(l => cmpMdInline(l.replace(/^\s*>\s?/, ''))).join('<br>') + '</blockquote>';
+    return '<p>' + lines.map(cmpMdInline).join('<br>') + '</p>';
+  }).join('');
+}
+
 /* A single Confidence vector, as a row of labelled bars. A component that was
    not measured is shown as `null` — never a zero-height bar, which would read as
    "measured, and zero". The one place a scalar appears is the colour band; the
@@ -196,10 +226,13 @@ function ProvenanceProse({ draft }) {
     const last = runs[runs.length - 1];
     if (last && last.author === a) last.text += ' ' + s; else runs.push({ author: a, text: s });
   });
+  // The prose is grounded in the source documents — so the model's own runs read
+  // as clean prose, no chip. Only YOUR edits carry a marker, so you can see what
+  // you changed; everything unmarked is the grounded draft.
   return runs.map((r, i) => (
-    <span key={i} className={'cmp-run cmp-by-' + r.author}>{r.text}<sup
-      className={'cmp-chip cmp-by-' + r.author}
-      title={r.author === 'user' ? 'you wrote this' : 'the talker wrote this'}>{r.author === 'user' ? 'you' : 'talker'}</sup>{' '}</span>
+    <span key={i} className={'cmp-run cmp-by-' + r.author}>{r.text}{r.author === 'user'
+      ? <sup className="cmp-chip cmp-by-user" title="you edited this">you</sup>
+      : null}{' '}</span>
   ));
 }
 
@@ -221,7 +254,7 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
   const flight = streaming && streaming.unitId === node.id;
   return (
     <div className={'cmp-card band-' + node.band + (selected ? ' sel' : '')} id={'cmp-card-' + node.id} onClick={() => onSelect(node.id)}>
-      <div className="cmp-card-job"><span className="cmp-card-dot" /> {node.job || '(no job)'}{node.draft && <span className={'cmp-byline cmp-by-' + (node.draft.author || 'talker')}>{node.draft.author === 'user' ? 'edited by you' : 'talker'}</span>}</div>
+      <div className="cmp-card-job"><span className="cmp-card-dot" /> {node.job || '(no job)'}{node.draft && node.draft.author === 'user' && <span className="cmp-byline cmp-by-user">edited by you</span>}</div>
       {flight ? (
         <div className="cmp-prose streaming">{streaming.text || '…'}<span className="cmp-caret" /></div>
       ) : node.draft ? (
@@ -258,7 +291,7 @@ function grainOwe(g) {
 
 /* The action surface — contextual to what is selected. Every action is an event,
    so every action is undoable. */
-function ActionSurface({ folded, selectedId, busy, modelReady, onAct, progress }) {
+function ActionSurface({ folded, selectedId, busy, modelReady, onAct, progress, onToggleFramework }) {
   const u = selectedId ? folded.unitsById[selectedId] : null;
   const Btn = ({ act, label, primary, disabled, title }) => (
     <button className={'cmp-act' + (primary ? ' primary' : '')} disabled={busy || disabled} title={title}
@@ -279,6 +312,7 @@ function ActionSurface({ folded, selectedId, busy, modelReady, onAct, progress }
         <Btn act="addUnit" label="+ Unit" />
         <Btn act="restampAll" label="Restamp all" />
         <Btn act="undo" label="Undo" title="undo the last action (supersession by REC)" />
+        <button className="cmp-act cmp-readview" onClick={onToggleFramework} title="hide the framework — back to the document">↩ Read view</button>
       </div>
       {u && (
         <div className="cmp-actions-grp">
@@ -295,6 +329,121 @@ function ActionSurface({ folded, selectedId, busy, modelReady, onAct, progress }
   );
 }
 
+/* ---- the Google-Docs surface --------------------------------------------
+   The simplified editing surface: the whole document as ONE flowing rich-text
+   body. While the model writes, it renders and reworks itself live (a read-only
+   stream); at rest it is a Quill editor — Google-Docs feel, a toolbar and
+   markdown shortcuts — or a plain textarea wherever Quill isn't loaded (tests,
+   file://), so the surface degrades, never breaks. The plan, the sources, the
+   grounding and the confidence vector all live behind the ⚙ Framework toggle. */
+
+// A read-only render of the document as it streams in, section by section — the
+// "watch it render and rework itself" view while the model is working.
+function CleanStream({ body, streaming, planning }) {
+  return (
+    <div className="cmp-stream">
+      {body ? <div className="cmp-stream-body" dangerouslySetInnerHTML={{ __html: cmpMdToHtml(body) }} /> : null}
+      {planning != null
+        ? <p className="cmp-stream-plan"><span className="cmp-muted">Planning the sections… </span>{planning || '…'}<span className="cmp-caret" /></p>
+        : streaming
+          ? <div className="cmp-stream-live">{streaming.text
+              ? <span dangerouslySetInnerHTML={{ __html: cmpMdToHtml(streaming.text) }} />
+              : <span className="cmp-muted">…</span>}<span className="cmp-caret" /></div>
+          : null}
+      {!body && planning == null && !streaming ? <p className="cmp-muted">…</p> : null}
+    </div>
+  );
+}
+
+// The rich-text editor. Quill when present; a textarea fallback otherwise. The
+// canonical content is always PLAIN prose (what the model grounds against);
+// Quill's HTML rides alongside as `rich` so formatting round-trips on reload.
+// Saves on blur and on unmount — never per keystroke.
+function DocEditor({ value, rich, onSave, placeholder }) {
+  const hostRef = React.useRef(null);
+  const taRef = React.useRef(null);
+  const quillRef = React.useRef(null);
+  const savedRef = React.useRef(String(value == null ? '' : value).replace(/\s+$/, ''));
+  const onSaveRef = React.useRef(onSave);
+  React.useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
+
+  const readText = () => quillRef.current ? quillRef.current.getText() : (taRef.current ? taRef.current.value : '');
+  const readRich = () => quillRef.current ? quillRef.current.root.innerHTML : null;
+  const flush = () => {
+    const text = String(readText() || '').replace(/\s+$/, '');
+    if (text === String(savedRef.current || '').replace(/\s+$/, '')) return;
+    savedRef.current = text;
+    if (onSaveRef.current) onSaveRef.current(text, readRich());
+  };
+
+  // init Quill once (browser only — window.Quill is absent in jsdom/file://)
+  React.useEffect(() => {
+    if (!hostRef.current || quillRef.current || !window.Quill) return;
+    let q = null;
+    try {
+      q = new window.Quill(hostRef.current, {
+        theme: 'snow',
+        placeholder: placeholder || 'Write…',
+        modules: { toolbar: [[{ header: [1, 2, 3, false] }], ['bold', 'italic', 'underline'], ['blockquote', 'code-block'], [{ list: 'ordered' }, { list: 'bullet' }], ['link'], ['clean']] },
+      });
+      try { if (window.QuillMarkdown) new window.QuillMarkdown(q, {}); } catch (e) {}
+      q.clipboard.dangerouslyPasteHTML(rich || cmpMdToHtml(value || ''));
+      q.root.addEventListener('blur', flush);
+      quillRef.current = q;
+    } catch (e) { quillRef.current = null; }
+    return () => { try { if (q) q.root.removeEventListener('blur', flush); } catch (e) {} };
+  }, []);
+
+  // external updates (the model wrote more): refresh only when not being typed in
+  React.useEffect(() => {
+    savedRef.current = String(value == null ? '' : value).replace(/\s+$/, '');
+    const q = quillRef.current;
+    if (q) { if (!q.hasFocus()) q.clipboard.dangerouslyPasteHTML(rich || cmpMdToHtml(value || '')); }
+    else if (taRef.current && document.activeElement !== taRef.current) { taRef.current.value = value || ''; }
+  }, [value, rich]);
+
+  React.useEffect(() => () => flush(), []);   // flush on unmount (doc switch / toggle)
+
+  if (window.Quill) return <div className="cmp-quill-host" ref={hostRef} />;
+  return <textarea className="cmp-doc-ta" ref={taRef} defaultValue={value || ''} placeholder={placeholder || 'Write…'} onBlur={flush} />;
+}
+
+// The clean surface: a slim bar (topic · Write · Undo · ⚙ Framework) over the
+// body — streaming while it writes, an editor at rest.
+function CleanComposition({ doc, frame, body, bodyRich, hasContent, busy, streaming, planning, progress, modelReady, onWrite, onUndo, onSaveBody, onSetThesis, onToggleFramework }) {
+  const status = progress && progress.phase === 'outline' ? 'Planning the sections…'
+    : progress && progress.phase === 'draft' ? 'Writing section ' + progress.i + ' of ' + progress.n + '…'
+    : 'Working…';
+  return (
+    <div className="cmp-clean">
+      <div className="cmp-clean-bar">
+        <input className="cmp-clean-thesis" value={frame.thesis_or_question || ''} placeholder="What is this document about?"
+          onChange={e => onSetThesis(e.target.value)} disabled={busy} />
+        <div className="cmp-clean-tools">
+          {busy
+            ? <span className="cmp-busy"><span className="cmp-orb" /> {status}</span>
+            : <button className="cmp-act primary" disabled={!modelReady}
+                title={modelReady ? 'write the document — it drafts each section, expands it to length, and revises it, live' : 'load a model first'}
+                onClick={onWrite}>{hasContent ? '✍ Continue' : '✍ Write'}</button>}
+          <button className="cmp-act" disabled={busy} onClick={onUndo} title="undo the last change">Undo</button>
+          <button className="cmp-clean-frame-toggle" onClick={onToggleFramework}
+            title="show the plan, sources, grounding and confidence behind this draft">⚙ Framework</button>
+        </div>
+      </div>
+      <div className="cmp-clean-scroll">
+        {busy
+          ? <div className="cmp-clean-doc reading"><CleanStream body={body} streaming={streaming} planning={planning} /></div>
+          : hasContent
+            ? <div className="cmp-clean-doc"><DocEditor value={body} rich={bodyRich} onSave={onSaveBody} placeholder="Write…" /></div>
+            : <div className="cmp-clean-empty">
+                <p>Set what this document is about, then press <b>✍ Write</b>.</p>
+                <p className="cmp-muted">It plans the sections, writes each one, expands it to length, and revises it — live. Open <b>⚙ Framework</b> to add sources to ground against, or to see the plan and the confidence behind every passage.</p>
+              </div>}
+      </div>
+    </div>
+  );
+}
+
 /* ---- the orchestrator ---------------------------------------------------- */
 function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) {
   const events = doc._events || [];
@@ -302,6 +451,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   const frame = folded.frame || {};
   const [selectedId, setSelectedId] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  const [showFramework, setShowFramework] = React.useState(false);   // the plan/grounding/confidence, hidden by default
   const [streaming, setStreaming] = React.useState(null);
   const [planning, setPlanning] = React.useState(null);   // partial outline text while it forms
   const [progress, setProgress] = React.useState(null);   // { phase:'outline'|'draft', i, n, job } during autopilot
@@ -388,6 +538,42 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     return out;
   };
 
+  // --- the document body, for the Google-Docs surface --------------------
+  // The whole document as one flowing body (the fold's straight-through read).
+  // `bodyRich` is the user's saved Quill HTML, present only after a manual edit
+  // consolidated the doc into one body unit; for the model's sectioned draft it
+  // is null and the editor seeds from the prose (rendered via cmpMdToHtml).
+  const body = React.useMemo(() => C.assemble(folded), [folded]);
+  const bodyRich = (flat.length === 1 && flat[0].draft && flat[0].draft.rich) ? flat[0].draft.rich : null;
+  const hasContent = body.trim().length > 0;
+  const setThesis = (v) => setFrame({ thesis_or_question: v });
+
+  // Persisting an edit from the one-body surface: attribute the change
+  // sentence-by-sentence (diffProvenance over the whole body) and CONSOLIDATE
+  // into a single body unit — the model's per-section structure was scaffolding;
+  // once you edit by hand it is one document. One undoable batch, so Undo
+  // restores the sectioned draft.
+  const saveBody = (text, rich) => {
+    const next = String(text == null ? '' : text).replace(/\s+$/, '');
+    if (next === body.replace(/\s+$/, '')) return;
+    const prevProv = [];
+    for (const n of flat) {
+      const dr = n.draft; if (!dr || !dr.prose) continue;
+      const sents = C.splitSentences(dr.prose);
+      const pv = (dr.provenance && dr.provenance.length === sents.length) ? dr.provenance : sents.map(t => ({ text: t, author: dr.author || 'talker' }));
+      for (const p of pv) prevProv.push(p);
+    }
+    const provenance = C.diffProvenance(body, prevProv, next, 'user');
+    const srcs = [];
+    for (const n of flat) { const dr = n.draft; if (dr && dr.source_events) for (const s of dr.source_events) if (s && s.docId != null) srcs.push(s); }
+    const bodyUnit = C.make.unit({ doc_id: doc.id, job: frame.thesis_or_question || 'Document', order: 0 });
+    const draft = C.make.draft({ doc_id: doc.id, unit_id: bodyUnit.id, prose: next, author: 'user', provenance, source_events: srcs, rich: rich || null });
+    const evts = [];
+    if (flat.length) evts.push(C.make.edit({ doc_id: doc.id, edit_kind: 'cut', affected_unit_ids: flat.map(n => n.id), reason: 'edited as one document' }));
+    evts.push(bodyUnit, draft);
+    appendBatch(evts);
+  };
+
   // --- frame / plan edits ------------------------------------------------
   const setFrame = (patch) => {
     const next = C.make.frame(Object.assign({
@@ -444,15 +630,50 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     const o = opts || {};
     setSelectedId(unit.id); setStreaming({ unitId: unit.id, text: '' });
     try {
-      const streamPhrase = (p) => phrase(p, (delta) => setStreaming(s => s && s.unitId === unit.id ? { unitId: unit.id, text: (s.text || '') + delta } : s));
-      const out = await C.generateUnit({
-        unit, frame, doc_id: doc.id,
-        retrieve, phrase: streamPhrase, embed, ground, formLib: formLibRef.current,
-        neighbors: o.neighbors || [],
-      });
+      const lf = C.LONGFORM || { targetWords: 320, maxExpandPasses: 5, maxTokens: 384 };
+      const spans = await retrieve(unit.job);
+      const neighbors = o.neighbors || [];
+      // Stream one phrasing call, seeding the visible text with `seed` — so a
+      // continuation shows the passage GROW and a revision shows it REWRITE from
+      // scratch. This is the "render and rework itself" the user watches.
+      const streamFrom = async (p, seed) => {
+        let acc = seed || '';
+        setStreaming({ unitId: unit.id, text: acc });
+        const out = await phrase({ system: p.system, user: p.user, max_tokens: lf.maxTokens }, (delta) => {
+          acc += delta;
+          setStreaming(s => (s && s.unitId === unit.id) ? { unitId: unit.id, text: acc } : s);
+        });
+        return String(out || '');
+      };
+      // pass 1 — the initial draft of this section
+      const p1 = C.buildTalkerPrompt({ job: unit.job, frame, spans, neighbors });
+      let prose = (await streamFrom(p1, '')).trim();
+      // expand toward the length target — indefinitely many calls "as the
+      // framework requires" (here: the length the section owes), capped so a
+      // stubborn model always settles rather than looping forever
+      let passes = 0;
+      while (C.wordCount(prose) < lf.targetWords && passes < lf.maxExpandPasses) {
+        passes++;
+        const pc = C.buildContinuePrompt({ job: unit.job, frame, spans, existing: prose });
+        const more = (await streamFrom(pc, prose + '\n\n')).trim();
+        if (!more) break;
+        const next = (prose + '\n\n' + more).trim();
+        if (C.wordCount(next) <= C.wordCount(prose) + 3) break;   // no real progress → stop
+        prose = next;
+      }
+      // one revision pass — rework the whole section into clean, coherent prose
+      if (prose) {
+        const pr = C.buildRevisePrompt({ job: unit.job, frame, spans, draft: prose, neighbors });
+        const revised = (await streamFrom(pr, '')).trim();
+        // accept the rewrite only if it didn't collapse the section
+        if (C.wordCount(revised) >= Math.min(40, Math.round(C.wordCount(prose) * 0.5))) prose = revised;
+      }
+      // finalize through the SAME grounding + monitor path the single call uses
+      const out = await C.finalizeUnit({ unit, frame, doc_id: doc.id, embed, ground, formLib: formLibRef.current }, prose, spans);
       if (out && out.draft) appendBatch([out.draft, out.stamp, out.route]);
       return out;
-    } finally { setStreaming(null); }
+    } catch (e) { if (window.eoWarn) window.eoWarn('draftOne', e); return null; }
+    finally { setStreaming(null); }
   };
   const draftUnit = async (id) => {
     const u = folded.unitsById[id]; if (!u || busy) return;
@@ -602,6 +823,22 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   };
 
   const modelName = model ? model.name : null;
+
+  // Default: the simplified Google-Docs surface — just the document, rendering
+  // and reworking itself as the model writes. The framework (plan, sources,
+  // grounding, confidence) is one toggle away, never deleted.
+  if (!showFramework) {
+    return (
+      <div className="cmp-root">
+        <CleanComposition
+          doc={doc} frame={frame} body={body} bodyRich={bodyRich} hasContent={hasContent}
+          busy={busy} streaming={streaming} planning={planning} progress={progress} modelReady={modelReady}
+          onWrite={() => write()} onUndo={undo} onSaveBody={saveBody} onSetThesis={setThesis}
+          onToggleFramework={() => setShowFramework(true)} />
+      </div>
+    );
+  }
+
   return (
     <div className="cmp-root">
       <div className="cmp-split">
@@ -635,8 +872,8 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
         <div className="cmp-draftpane">
           <div className="cmp-pane-h">Document
             <span className="cmp-counts">{folded.counts.drafted} drafted · {folded.counts.holes} holes{auth.total ? ' · ' + auth.user + '/' + auth.total + ' sentences yours' : ''}</span>
-            <span className="cmp-legend" title="every sentence is shaded by who wrote it">
-              <span className="cmp-leg cmp-by-talker">talker</span><span className="cmp-leg cmp-by-user">you</span>
+            <span className="cmp-legend" title="your own edits are marked; everything unmarked is the grounded draft">
+              <span className="cmp-leg cmp-by-user">your edits</span>
             </span>
           </div>
           <div className="cmp-draft-scroll cmp-doc">
@@ -647,9 +884,10 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
           </div>
         </div>
       </div>
-      <ActionSurface folded={folded} selectedId={selectedId} busy={busy} modelReady={modelReady} onAct={onAct} progress={progress} />
+      <ActionSurface folded={folded} selectedId={selectedId} busy={busy} modelReady={modelReady} onAct={onAct} progress={progress}
+        onToggleFramework={() => setShowFramework(false)} />
     </div>
   );
 }
 
-Object.assign(window, { CompositionView, ConfBars, PlanNode, UnitCard });
+Object.assign(window, { CompositionView, ConfBars, PlanNode, UnitCard, CleanComposition, DocEditor, CleanStream });
