@@ -306,15 +306,25 @@ register, commitment, structure — and steers the model toward it. The model
 does the linguistic work of joining them.
 
 Form is measured against a library of pre-written **exemplars**
-(`exemplars.jsonl` — 373 exemplars across 22 intents: lookup, synthesis,
+(`exemplars.jsonl` — 430 exemplars across 22 intents: lookup, synthesis,
 connect-passages, clarify-question, pushback-repair, hedge-uncertain,
 disagree-with-source, refusal-without-condescension, out-of-scope-offer,
-name-tension, meta-about-cleo, and the rest). Their *content* is incidental
+name-tension, meta-about-cleo, and the rest, every intent held above a
+stability floor so its centroid is a learned shape and not the memory of a
+handful of answers). Their *content* is incidental
 and their *shape* is the signal — full length range (two-word answers to
 essay-length syntheses, plus a few ASCII diagrams), and **both poles of every
 interpretable axis** anchored via each line's `anchor_axes` (short↔long,
 committed↔hedged, warm↔dry, prose↔structured, …) so the axes survive an
-embedder swap as centroid differences. Each exemplar's response **and its
+embedder swap as centroid differences. Those axes can be read back out of the
+embedded space by **`tools/factor-intents.js`** (`npm run factor-intents`),
+which runs shape.js's `pca()` over the responses and reports the exemplars at
+each pole (to hand-label an axis), the pairwise centroid separation between
+intents (close pairs are merge candidates; the `hedge-uncertain`↔`commit-opinion`
+confidence pair is called out explicitly, since confidence rides the stamp), and
+a per-intent spread read (a cloud that splits in two is a split candidate). It
+embeds at run, writes to no prompt, and abstains rather than invent a factoring
+if the embedder is absent. Each exemplar's response **and its
 prompt** (`user_turn`) are embedded once (the resident MiniLM, borrowed lazily
 so an exemplar vector never triggers a download) and cached — the response
 vectors score drafts, the prompt vectors match incoming questions (§9 below).
