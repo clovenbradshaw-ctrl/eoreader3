@@ -7,7 +7,7 @@
    prose map in docs/prompt-flows.md.
 
    The governing rule: derive, don't duplicate. Every prompt STRING is read
-   live from llm.js — `EOLLM.systemFor(...)`, `EOLLM.SHAPE_SYSTEM`,
+   live from llm.js — `EOLLM.systemFor(...)`,
    `EOLLM.buildUserContent(...)` — at the moment `snapshot()` runs. So when a
    prompt is edited in llm.js, the dashboard shows the new text with no edit
    here, and the visualization tracks the code automatically. The numbers
@@ -98,12 +98,13 @@
       },
       {
         id: 'shape',
-        label: 'Shape pass — system (the editor)',
-        role: 'system',
-        source: 'llm.js · SHAPE_SYSTEM',
-        flowHint: 'grounded-llm (stage 1), repair (retry)',
-        blurb: "The editor beside Cleo. Before the answer pass, it hands a one-breath director's note — what the user is after, what register fits, what a bad answer looks like. It never answers and never states document facts.",
-        read: (L) => (Array.isArray(L.SHAPE_SYSTEM) ? L.SHAPE_SYSTEM.join('\n') : String(L.SHAPE_SYSTEM || '')),
+        label: 'The dissolved shape pass (no prompt — form is a measured stamp)',
+        role: 'data',
+        source: 'shape.js · formDegree',
+        flowHint: 'grounded-llm (output measured, after)',
+        live: false,
+        blurb: "Brief 2 dissolved the blind shape-pass model call, and the form-as-stamp patch put the FORM out of the prompt entirely. There is no shape prompt: the MOVE is the router's intent, the FORM is a per-genre embedding centroid the OUTPUT is cosined against afterward (a stamp beside the witness degree, with a data-derived floor, a single structural-drift correction, and a learning update path), and the CONFIDENCE reads off the witness stamp. The talker writes voice-only; the centroid is never unfolded into prompt words.",
+        text: 'There is no shape/form prompt. Form is measured on the output as a cosine against a per-genre centroid (shape.js · formDegree) and rides as a stamp — never handed to the talker.',
         variants: [],
       },
       // The two addenda below are inline string literals in app.jsx, not llm.js
@@ -180,72 +181,63 @@
     return [
       { id: 'DEFAULT_BUDGET', label: 'Assembled-context budget', value: get('DEFAULT_BUDGET', null), unit: 'tokens', source: 'llm.js', note: 'Leaves room for the reply on a 4096-token window.' },
       { id: 'RECENT_TURNS', label: 'Verbatim recent turns', value: get('RECENT_TURNS', null), unit: 'turns', source: 'llm.js', note: 'Older turns fold into a single index-tagged recap.' },
-      { id: 'shape.maxTokens', label: 'Shape-pass max tokens', value: 90, unit: 'tokens', source: 'llm.js · shapePass', live: false, note: 'Keeps the director\'s note to 2–4 sentences.' },
-      { id: 'shape.temperature', label: 'Shape-pass temperature', value: 0.3, unit: '', source: 'llm.js · shapePass', live: false },
     ];
   }
 
-  // ---- the shape pass: is its prompt actually fed to the model? --------------
-  // The dashboard's headline question. `mlcKey` is the currently-selected model;
-  // its TIER (read live from EOLLM.modelTier) decides whether the shape prompt
-  // is sent at all. The note the shape pass returns is injected into the ANSWER
-  // pass's user message by buildUserContent — we render a live sample of exactly
-  // that so the "is it fed in?" answer is visible, not asserted.
+  // ---- the dissolved shape pass: who holds each of its three jobs? -----------
+  // Brief 2. The dashboard's old headline question — "is the shape prompt fed to
+  // the model?" — no longer applies: there is no shape-pass model call. The note
+  // that once welded three jobs together is dissolved, each going to the thing
+  // that owns it. This reports the three holders, live, and shows the FORM cue
+  // landing in the answer-pass message exactly as before (last block) — proof it
+  // is handed in as STRUCTURE, with no model call generating it.
   function shape(mlcKey) {
-    const sys = live((L) => (Array.isArray(L.SHAPE_SYSTEM) ? L.SHAPE_SYSTEM.join('\n') : String(L.SHAPE_SYSTEM || '')), UNAVAILABLE);
-    const tierRead = live((L) => L.modelTier(mlcKey), null);
-    const tier = tierRead.ok ? tierRead.value : null;
-
-    // A live render of the answer-pass USER message carrying a sample editor's
-    // note — proof that, when active, the note IS handed to the answering model
-    // (last block, just before "Answer the user's question").
-    const sampleNote = "Bibliographic lookup. They want the name — pull it straight from the span; don't restate the question back at them.";
-    const sample = live((L) => L.buildUserContent({
-      question: 'who wrote it?',
+    // The talker writes VOICE-ONLY: a live render of the answer-pass user message
+    // proves there is NO how-to-answer block in it (the form never enters the
+    // prompt — it is measured on the output afterward).
+    const voiceOnly = live((L) => L.buildUserContent({
+      question: 'what is this about?',
       docTitle: 'The Time Machine',
       spans: [{ tag: 's12', text: 'The book was written by H. G. Wells and first published in 1895.' }],
       notesProse: 'A short scientific romance; the narrator is known only as the Time Traveller.',
       contextText: '',
       grounded: true,
-      shapeNote: sampleNote,
     }), '');
-
-    // Active ⇔ tier is capable/api AND a model is loaded. `null` tier means we
-    // can't read it (EOLLM missing) — report indeterminate, not a false "yes".
-    const active = tier == null ? null : tier !== 'small';
+    const hasFormCapability = live((L) => true, false);   // shape.js holds it; reported as available
 
     return {
-      system: { source: 'llm.js · SHAPE_SYSTEM', live: sys.ok, text: sys.value, why: sys.why || null },
-      // Where the note lands in the next prompt (live sample of buildUserContent).
+      // No per-turn model call generates how to answer. The verdict is fixed:
+      // dissolved. (Kept as `gating.active = false` so any consumer that read the
+      // old shape verdict sees an unambiguous "not a model call", never a yes.)
+      dissolved: true,
+      move: {
+        holder: 'router', source: 'engine.js · classifyIntent', live: true,
+        note: 'The MOVE (what kind of answer this is) is the router\'s intent — mechanical, auditable, decided upstream from the question alone.',
+      },
+      form: {
+        holder: 'genre centroid (a stamp)', source: 'shape.js · formDegree / formFloor / depositForm', live: hasFormCapability.ok,
+        note: 'The FORM is NOT handed to the talker — that would be steering. It is a per-genre embedding CENTROID the OUTPUT is measured against, after: a cosine stamp (formDegree) beside the witness degree. When the output sits below the genre\'s own typical fit (formFloor, data-derived) a single structural-drift correction (named axes, never the centroid) runs. The centroid stays a vector and updates from good outputs (depositForm, REC); it is never unfolded into prompt words.',
+      },
+      confidence: {
+        holder: 'witness stamp', source: 'audit.js · truthfulness (WI-7)', live: true,
+        note: 'The CONFIDENCE (how sure to sound) reads off the witness degree after the evidence is in — never assigned ahead by a note.',
+      },
+      // Proof the form does NOT enter the prompt: the answer-pass message is
+      // voice-only (no how-to-answer block).
       lands: {
         source: 'llm.js · buildUserContent',
-        live: sample.ok,
-        sampleNote,
-        sampleUserMessage: sample.value,
-        // The marker the dashboard highlights inside the sample.
-        noteMarker: "Editor's note on HOW to handle this turn",
+        live: voiceOnly.ok,
+        voiceOnly: true,
+        sampleUserMessage: voiceOnly.value,
+        // There is no in-prompt form marker anymore.
+        noteMarker: null,
       },
       gating: {
         model: mlcKey || null,
-        tier,
-        active,
-        // The two-call shape of an ACTIVE turn.
-        calls: [
-          { n: 1, label: 'Shape pass', system: 'shape', produces: "an editor's note (2–4 sentences)", conditional: true },
-          { n: 2, label: 'Answer pass', system: 'grounded', consumes: "the note, injected last in the user message", conditional: false },
-        ],
-        usedBy: ['grounded-llm (always, when active)', 'repair (model-phrased retry only)'],
-        skippedBy: [
-          "plain-chat, mechanical, creative, creative-compose, computation, confirm, dechrome, no-ground-fallback",
-        ],
-        // The live reasons the shape prompt is NOT fed to the model.
-        skipReasons: [
-          { id: 'small-tier', when: "modelTier(model) === 'small' (sub-2B local)", source: 'app.jsx:2366', meaning: "The small tier never free-composes. It runs runGroundedSmall instead: join-and-rephrase the already-bound mechanical reading over a cite set fixed before it speaks. No director's note — it is net-negative on a 0.5B and costs a second serial call. The audit records `shape · skipped`." },
-          { id: 'no-model', when: 'no model loaded (isLoaded(model) false)', source: 'app.jsx:1852 · shapeFor', meaning: 'shapeFor returns an empty note; the answer pass runs with no editor\'s note.' },
-          { id: 'failed', when: 'shapePass throws, or the note contains <think>, or strips to empty', source: 'app.jsx:1856–1875', meaning: 'Degrades to an empty note; the answer pass runs exactly as it would with no shape pass (parity).' },
-        ],
-        // What it MEANS when the note is empty on an otherwise-active path.
-        whenInactive: "The grounded answer pass still runs — buildUserContent simply omits the editor's-note block — so the model composes the answer directly from the spans and notes, with no guidance about register or move. Nothing about grounding or citation binding changes; only the director's note is absent.",
+        // There is no shape-pass model call on any tier — `active:false` always.
+        active: false,
+        modelCall: false,
+        note: 'Dissolved: no shape-pass model call on any tier. The talker writes voice-only from the witnessed spans; form is measured on the output as a stamp.',
       },
     };
   }
@@ -298,13 +290,12 @@
       {
         id: 'grounded-llm', label: 'Grounded LLM', kind: 'llm',
         runner: 'runGroundedScope', reachedWhen: "route = mechanical AND primary is prose AND model ready",
-        blurb: 'The largest flow: two stages, the full veto stack, the mechanical reading riding along.',
+        blurb: 'The largest flow: one model call (the shape pass is dissolved), the full veto stack, the mechanical reading riding along as evidence.',
         calls: [
-          { id: 'shape', label: 'Shape pass', prompt: 'shape', conditional: 'capable/api tier + model loaded', note: "produces the editor's note" },
-          { id: 'answer', label: 'Answer pass', prompt: 'grounded', conditional: null, note: "editor's note injected last in the user message" },
+          { id: 'answer', label: 'Answer pass', prompt: 'grounded', conditional: null, note: "the move's FORM cue (looked up, not generated) lands last in the user message" },
         ],
-        usesShapePass: true,
-        vetoes: ['degeneracy', 'model-declined', 'shape-echo', 'meta-head', 'unbound', 'assertion', 'relation-gate', 'kin-subject', 'invented', 'envelope', 'small-join-only'],
+        usesShapePass: false,
+        vetoes: ['degeneracy', 'model-declined', 'form-echo', 'meta-head', 'unbound', 'assertion', 'relation-gate', 'kin-subject', 'invented', 'envelope', 'small-flagged'],
         auditPath: 'grounded-llm',
       },
       {
@@ -330,11 +321,10 @@
         runner: 'runRepairScope', reachedWhen: 'repairSignal matched (frustration / contradiction / refinement / support)',
         blurb: "Marks the prior reply objected, re-reads mechanically, and — if that is not clean — re-answers with the repair addendum on a tagged history.",
         calls: [
-          { id: 'shape', label: 'Shape pass', prompt: 'shape', conditional: 'model-phrased retry path only', note: 'on tagged history' },
-          { id: 'answer', label: 'Answer pass', prompt: 'grounded', conditional: 'model-phrased retry path only', note: '+ repair addendum' },
+          { id: 'answer', label: 'Answer pass', prompt: 'grounded', conditional: 'model-phrased retry path only', note: '+ repair addendum; the move\'s FORM cue lands last' },
         ],
-        usesShapePass: true,
-        vetoes: ['echoes-prior', 'model-declined', 'shape-echo', 'binding-stack'],
+        usesShapePass: false,
+        vetoes: ['echoes-prior', 'model-declined', 'form-echo', 'binding-stack'],
         auditPath: 'repair',
       },
       {
@@ -402,16 +392,16 @@
     return [
       { id: 'degeneracy', label: 'Degeneracy (single-span echo)', where: 'echoesASpan(scope, q, full)', onMatch: 'Retry once with the degeneracy addendum; refuse if the retry also echoes.' },
       { id: 'model-declined', label: 'Model declined', where: 'modelDeclined(full)', onMatch: 'Fall back to mechanical if usable, else refuse honestly.' },
-      { id: 'shape-echo', label: 'Shape-note echo', where: 'echoesShapeNote(full, shapeNote) / looksLikeNote', onMatch: 'Fall back to mechanical or refuse.' },
-      { id: 'meta-head', label: 'Meta-head (WI-2)', where: 'peelMetaHead(full, shapeNote)', onMatch: 'Peel the leading meta clause, bind the tail; nothing left → residual / mechanical.' },
+      { id: 'form-echo', label: 'Form-cue echo', where: 'echoesShapeNote(full, formCue) / looksLikeNote', onMatch: 'Refuse / serve the stamped talker sentence — never the mechanical reading as the reply.' },
+      { id: 'meta-head', label: 'Meta-head (WI-2)', where: 'peelMetaHead(full, formCue)', onMatch: 'Peel the leading meta clause, bind the tail; nothing left → residual on the talker sentence.' },
       { id: 'echoes-prior', label: 'Echo across turns', where: 'echoesPriorReply(text, prior)', onMatch: 'Flag "same answer as before" and keep.' },
-      { id: 'unbound', label: 'Unbound (no passage matched)', where: 'binding audit grounded === false', onMatch: 'WI-4: residual (void target + bound subject material), else mechanical, else refuse — never the kept-unbound overclaim.', dominant: true },
+      { id: 'unbound', label: 'Unbound (no passage matched)', where: 'binding audit grounded === false', onMatch: "WI-4 (Brief 1): serve the talker's OWN sentence as the residual — unsupported terms struck, absent target flagged, witness degree low — never the mechanical reading swapped in. status 'residual', so the unbound count stays 0.", dominant: true },
       { id: 'assertion', label: 'Assertion contradiction', where: 'checkAssertionsScope', onMatch: 'Keep with caveat.' },
       { id: 'relation-gate', label: 'Relation-gate mismatch', where: 'checkRelationsScope (gate ON)', onMatch: 'Keep with caveat.' },
       { id: 'kin-subject', label: 'Kin-subject mismatch', where: 'checkKinSubjectsScope', onMatch: 'Keep with caveat.' },
       { id: 'invented', label: 'Invented terms', where: 'inventedTerms(full)', onMatch: 'Keep, strike with voidInvented, mark warn.' },
       { id: 'envelope', label: 'Grounding envelope drift', where: 'groundingEnvelope (embedder + gate)', onMatch: 'Mark binding warn.' },
-      { id: 'small-join-only', label: 'Small-tier join-only (WI-6)', where: "tier === 'small' rephrase adds a token / invents / binds outside the fixed cite set", onMatch: 'Discard the rephrase, serve the mechanical reading.' },
+      { id: 'small-flagged', label: 'Small-tier join-only (WI-6)', where: "tier === 'small' rephrase adds a token / invents / binds outside the fixed cite set", onMatch: "Brief 1: serve the talker's rephrase with the additions struck (witness degree marks the gap); the mechanical reading rides as evidence, never as the reply." },
       { id: 'plain-chat-failure', label: 'Plain-chat failure', where: 'LLM call throws non-abort error', onMatch: 'Retry once with last 2 turns + tighter budget; honest error if it fails again.' },
     ];
   }
@@ -453,7 +443,7 @@
         path: (t.audit && t.audit.path) || t.path || null,
         reason: (t.audit && t.audit.reason) || t.reason || null,
         llmCalls,
-        shape: shapeStep ? { skipped: !!shapeStep.skipped, tier: shapeStep.tier || null, hasNote: !!shapeStep.note } : null,
+        shape: shapeStep ? { generated: !!shapeStep.generated, move: shapeStep.move || null, form: shapeStep.form || null } : null,
       };
     });
     return { available: true, turns: out };

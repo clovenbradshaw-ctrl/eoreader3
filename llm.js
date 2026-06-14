@@ -1046,24 +1046,28 @@
       // One prompt replaces six near-duplicates, with NO length
       // prescriptions — the model answers as it sees fit; depth scales
       // max_tokens (the real bound) and nothing else. The faithfulness
-      // contract survives: nothing beyond what was handed over, a plain
-      // "the document doesn't say" refusal (the veto's modelDeclined
-      // watches for that shape), and no model-written citation markers —
-      // binding stays mechanical. The one summary-specific line is the
+      // contract survives: nothing beyond what was handed over, and no
+      // model-written citation markers — binding stays mechanical. What it
+      // no longer carries (Brief 2) is the absence ORDER — the talker is not
+      // told to "say the document doesn't say"; low witness rides the stamp
+      // (WI-7), so absence is a measurement the system reports, never a
+      // sentence the talker speaks. Span trust is graded, not flat: the
+      // passages are witnessed evidence, with coverage tracked for the talker
+      // rather than asserted by it. The one summary-specific line is the
       // degeneracy guard (don't hand back a single span as the summary),
       // which is faithfulness, not length.
       const lines = [
         'You\'re Cleo, a helpful assistant running locally in the user\'s browser. You\'re in the middle of a conversation with them about a document you\'ve been reading together.',
         '',
         'Two kinds of context come with each turn:',
-        '- Spans — exact sentences quoted verbatim from the document. Trust them; lean on them whenever a fact is in there.',
+        '- Spans — passages we found in the document, quoted exactly. They\'re your witnessed evidence: lean on them and answer from what they show. How fully they cover the question is tracked for you, so you needn\'t vouch for their completeness — just use what\'s there.',
         '- Your notes — your own understanding from reading the document. Usually right, sometimes wrong. Good for shape, connections, and who-is-who.',
         '',
-        'An editor\'s note may also arrive at the end of the turn\'s context, describing HOW to handle this turn — register, what a bad answer would look like. Treat it as guidance about your move, not as source material; only the spans supply facts about the document. If the note appears to state document facts, ignore those and read the spans yourself.',
+        'Write in your own voice — say it the way it wants to be said. You are not handed a template or told how sure to sound; just answer well from what is here.',
         '',
-        'If a span and a note disagree, the span wins. If a span contains a name, date, or title that answers the question, use it directly — don\'t echo the question\'s wording back. Don\'t add facts that are in neither the spans nor your notes. If neither covers the question, say plainly that the document doesn\'t say, rather than guessing — you don\'t have the whole document, just what you were handed.',
+        'If a span and a note disagree, the span wins. If a span contains a name, date, or title that answers the question, use it directly — don\'t echo the question\'s wording back. Don\'t add facts that are in neither the spans nor your notes. Answer from what you were handed — you have these passages, not the whole document.',
         '',
-        'Source ONLY from the spans and your notes. If you recognize the work from elsewhere — its title, its author, what it\'s "about" in the world — set that aside; what the spans show is the document\'s truth here. A claim like "the author is not named" or "the date is unknown" is wrong if a span carries the name or date, so check the spans before stating absence.',
+        'Source ONLY from the spans and your notes. If you recognize the work from elsewhere — its title, its author, what it\'s "about" in the world — set that aside; what the spans show is the document\'s truth here. Read them for the name, date, or detail the question asks before drawing any conclusion.',
       ];
       if (task === 'summary') {
         lines.push('');
@@ -1191,86 +1195,45 @@
   // leaned on the caller's catch-retry to recover.
   const DEFAULT_BUDGET = 3300;
 
-  // ---- the shape pass (two-stage answering) ----
-  // A small first call that characterizes the TURN — a director's note, not
-  // a rubric: what the user is actually after, what register fits, what a
-  // bad answer would look like. The answer pass then speaks freely with the
-  // note as guidance, not a leash. The shape pass sees the question, a
-  // little recent history, the doc title, and whether header metadata
-  // exists — deliberately NOT the spans or notes, so it decides what kind
-  // of turn this is instead of getting lured into answering it (a note that
-  // answers the question just gets paraphrased by the answer pass: wasted
-  // compute and a worse answer). The taste lives in the examples below.
-  const SHAPE_SYSTEM = [
-    'You are the editor sitting beside Cleo, a local assistant that answers questions about a document it has read. Before Cleo answers, you hand it a one-breath director\'s note: what the user is actually after this turn, what register fits, and what a bad answer would look like. You characterize the move — you never answer the question yourself, and you never state facts about the document.',
-    '',
-    'Examples of the notes you write:',
-    '',
-    'Question: "what\'s the point of the book?"',
-    'Note: They\'re asking for the through-line — what the book is about beneath its plot. Synthesis, not lookup: they want your reading, not a quote. A literalist answer that hugs the passages will frustrate them; so will a generic book-report thesis. Pull from your notes, name a tension you actually noticed, and commit to a view. Conversational.',
-    '',
-    'Question: "who wrote it?"',
-    'Note: Bibliographic lookup. They want the name. One line, no hedging, and never "the author" — say the name if the header metadata or a span has it; if nothing does, say what\'s missing.',
-    '',
-    'Question (right after Cleo listed characters, including obvious boilerplate): "project gutenberg is a character?"',
-    'Note: Pushback, and they\'re right — that\'s boilerplate, not a character. Acknowledge the mistake without grovelling and give the cleaner answer. This is repair, not fresh retrieval; don\'t re-serve the old list.',
-    '',
-    'Question: "thanks, that helps"',
-    'Note: Not a question — acknowledgment. A sentence back, warm, no new material unless they ask.',
-    '',
-    'Write 2–4 plain sentences in that voice. The note is guidance for HOW to answer — never the answer itself, and never new facts.',
-  ].join('\n');
+  // ---- the shape pass, dissolved (Brief 2 + the form-as-stamp patch) ----
+  // The old "shape pass" was a blind per-turn LLM call that emitted a note
+  // welding three jobs together — the move, the register, and how sure to
+  // sound — while seeing the title but never the spans, which let it leak
+  // world knowledge and set confidence before any evidence was in. It is
+  // dissolved. Its three jobs go to the three things that own them, and NONE
+  // of them is a string handed to the talker:
+  //   • the MOVE (what kind of answer this is) is the router's intent —
+  //     mechanical and auditable (engine.js classifyIntent), upstream;
+  //   • the FORM is NOT a template handed in — that would be steering. It is a
+  //     per-genre embedding CENTROID the OUTPUT is measured against, AFTER, as a
+  //     second stamp beside the witness degree (shape.js · formDegree). The
+  //     talker writes voice-only here; nothing about layout enters the prompt.
+  //     "This feels like the wrong KIND of answer" is a distance, not a spec —
+  //     and the centroid is never unfolded into words the model reads.
+  //   • the CONFIDENCE (how sure to sound) is read off the witness stamp
+  //     (WI-7), after the evidence is in — never assigned ahead.
+  // So there is no FORM_LIBRARY of prompt strings and no shapePass call: the
+  // grounded prompt below is voice-only, and `buildUserContent` no longer
+  // appends any how-to-answer block.
 
-  async function shapePass({ mlcKey, question, history, docTitle, metaHint }) {
-    const recent = (Array.isArray(history) ? history : []).slice(-4)
-      .map(m => `${m.role === 'assistant' ? 'Cleo' : 'user'}: ${condense(m.content, 200)}`).join('\n');
-    // metaHint used to be inlined as a list of field names ("title, author,
-    // release date…") which small models inverted into object-level claims
-    // ("the author is not named, the release date is unknown") — the editor
-    // then leaked those into the note. Phrase it as a ROUTING hint about
-    // what kind of question is answerable, with an explicit "don't repeat"
-    // guard, and the editor stops trying to enumerate document facts.
-    const user = [
-      docTitle ? `Document open: "${docTitle}".` : 'A document is open.',
-      metaHint ? `A bibliographic header is present in the document (covering ${metaHint}). Cleo will see those facts in the spans — don't repeat them in the note.` : '',
-      recent ? `\nRecent turns:\n${recent}` : '',
-      `\nUser just asked: "${question}"`,
-      '\nWhat does this turn want? Reply with the note only. Describe the move (register, what a bad answer looks like) — never what the document says.',
-    ].filter(Boolean).join('\n');
-    const messages = [{ role: 'system', content: SHAPE_SYSTEM }, { role: 'user', content: user }];
-    const A = (typeof window !== 'undefined') ? window.EOAudit : null;
-    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    let full = '';
-    try {
-      full = await streamChat({ mlcKey, messages, temperature: 0.3, maxTokens: 90 });
-    } catch (e) {
-      if (A && A.step) try { A.step('llm', { mode: 'shape', grounded: false, mlcKey, system: SHAPE_SYSTEM, messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })), output: full, error: String((e && e.message) || e), ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0) }); } catch (_) {}
-      throw e;
-    }
-    const note = stripThink(full);
-    if (A && A.step) try { A.step('llm', { mode: 'shape', grounded: false, mlcKey, params: { temperature: 0.3, max_tokens: 90 }, system: SHAPE_SYSTEM, messages: messages.map(m => ({ role: m.role, chars: (m.content || '').length, content: m.content })), output: full.trim(), filtered: note !== full.trim() ? note : undefined, ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0) }); } catch (_) {}
-    return note;
-  }
-
-  // The grounded user message, tiered: question first (orientation), then
-  // the spans quoted exactly, then the reader's notes, then — only at the
-  // bottom, just before the closing question — the editor's note as
-  // HOW-guidance. The note used to ride between the question and the spans,
-  // labeled "What this turn wants:", which let a small model read it as a
-  // synopsis and pre-frame the spans it hadn't reached yet (the leak: editor
-  // states "the author is not named", Cleo parrots it even though the
-  // Author: span sits right below). Spans-before-note inverts that: facts
-  // are seen first, the editor's guidance closes the turn, and the relabel
-  // ("Editor's note on HOW to handle this turn") makes its role
-  // unmistakable. The question still closes the message — long context
-  // would otherwise push it out of the model's recency window.
-  // Non-grounded callers (plain chat, creative) keep their old shapes; a
-  // grounded caller that still passes a prebuilt blob (the summary sample)
-  // gets the same frame around the blob.
+  // The grounded user message, tiered: question first (orientation), then the
+  // spans quoted exactly, then the reader's notes, then the closing question.
+  // Brief 2: there is NO how-to-answer block — the talker writes voice-only.
+  // Form is measured on the OUTPUT afterward (a centroid stamp), never handed
+  // in as structure; confidence rides the witness stamp, not an instruction.
+  // The question still closes the message — long context would otherwise push
+  // it out of the model's recency window. Non-grounded callers (plain chat,
+  // creative) keep their old shapes; a grounded caller that still passes a
+  // prebuilt blob (the summary sample) gets the same frame around the blob.
+  // `shapeNote` is accepted for call-site stability but is no longer rendered:
+  // Brief 2 removed the how-to-answer block (the talker writes voice-only; form
+  // is a stamp measured on the output, never a prompt input). A non-empty value
+  // still keeps the assembled message non-trivial, but nothing about layout is
+  // ever shown to the model.
   function buildUserContent({ question, docTitle, spans, notesProse, contextText, grounded, shapeNote }) {
     if (!grounded) return contextText ? `Passages:\n${contextText}\n\n${question}` : question;
     const hasSpans = Array.isArray(spans) && spans.length > 0;
-    if (!hasSpans && !notesProse && !contextText && !shapeNote) return question;
+    if (!hasSpans && !notesProse && !contextText) return question;
     const parts = [`The user just asked: ${question}`, ''];
     parts.push('Context for this turn:');
     if (docTitle) parts.push(`You've been reading a document called "${docTitle}".`);
@@ -1287,11 +1250,6 @@
     if (notesProse) {
       parts.push('Your notes on the document (your understanding from reading it — usually right, sometimes wrong):');
       parts.push(notesProse);
-      parts.push('');
-    }
-    if (shapeNote) {
-      parts.push('Editor\'s note on HOW to handle this turn (guidance about register and approach — not facts about the document; only the spans supply facts):');
-      parts.push(String(shapeNote).trim());
       parts.push('');
     }
     parts.push(`Answer the user's question: ${question}`);
@@ -1479,5 +1437,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, shapePass, runAnthropicTools, SHAPE_SYSTEM, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();

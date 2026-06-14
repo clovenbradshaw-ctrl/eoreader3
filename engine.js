@@ -7702,16 +7702,57 @@ function projectGraph(events, frame = {}) {
     for (const t of qt) (st.has(t) ? covered : uncovered).push(t);
     return { n: covered.length, d: qt.length || 1, covered, uncovered };
   }
+  // ── The type gate (DEF): the fourth NUL state ────────────────────────────
+  // Before the existence layer may ask whether a capitalized token is PRESENT
+  // on the page, the significance layer asks what KIND of token it is. A
+  // REFERENT is a nominal the page should carry — a name, a thing (Noun /
+  // ProperNoun). A STRUCTURAL token (a connective, a discourse adverb) or a
+  // PRAGMATIC one (an imperative verb, an interrogative, an interjection, a
+  // contraction) is the user's own grammar or the draft's own connective
+  // tissue. It is not truth-apt, so it can never be an absent referent — it was
+  // never a referent at all. That is the fourth NUL state (present / absent /
+  // never-set are the other three): not a missing name, but no name to miss.
+  //
+  // Returns the set of lowercased, letters-only tokens in `text` that are NOT
+  // nominals, classified by SHAPE via compromise's POS in context — never by
+  // membership in a word list. "Based" (a verb), "Give" (an imperative), "Sure"
+  // (an interjection), "What's" (an interrogative contraction) are caught for
+  // what they are DOING in the sentence, with no one having typed them anywhere;
+  // enumerating the complement of an infinite set is the pattern this replaces.
+  // Empty on any failure (the gate opens — the existence-layer floor holds).
+  const NRM_CAP = (s) => String(s == null ? '' : s).toLowerCase().replace(/[^\p{L}]+/gu, '');
+  function nonReferentialCaps(text) {
+    const out = new Set();
+    let sents;
+    try { sents = nlp(String(text == null ? '' : text)).json(); } catch (e) { return out; }
+    for (const s of (sents || [])) {
+      for (const t of (s.terms || [])) {
+        const tags = t.tags || [];
+        // A nominal — Noun or ProperNoun, but NOT a Pronoun (pronouns tag
+        // Noun,Pronoun) — is the only truth-apt shape, the one candidate
+        // referent. Everything else is structure or pragmatics: it cannot be a
+        // missing name because it is not a name.
+        if ((tags.includes('Noun') || tags.includes('ProperNoun')) && !tags.includes('Pronoun')) continue;
+        const w = NRM_CAP(t.text);
+        if (w) out.add(w);
+      }
+    }
+    return out;
+  }
+
   // ── Anti-matter referents ───────────────────────────────────────────────
   // A REFERENT is a name the query points at. It has MATTER when the page
   // carries it, and ANTI-MATTER when it doesn't: referenced, but with no
   // presence to bind to. Contact with an anti-matter referent annihilates
   // grounding — it is the ⊥ the void holds on. Consecutive capitals read as one
   // referent ("Amos Dresser"); interrogatives/stopwords (in QA_STOP) are not
-  // names. Returns { matter, antimatter } so a hold can say what it CAN see.
+  // names; and the type gate (above) drops structural/pragmatic tokens ahead of
+  // the presence test, so they never reach antimatter. Returns { matter,
+  // antimatter } so a hold can say what it CAN see.
   function referents(doc, query) {
     const body = docBodyLC(doc);
     const names = String(query).match(/\p{Lu}[\p{L}’'\-]+(?:\s+\p{Lu}[\p{L}’'\-]+)*/gu) || [];
+    const nonRef = nonReferentialCaps(query);     // DEF: classify before testing presence
     const matter = [], antimatter = [];
     for (const raw of names) {
       // a sentence-initial interrogative ("Did Caesar…") is capitalised but is
@@ -7721,7 +7762,13 @@ function projectGraph(events, frame = {}) {
       while (parts.length && QA_STOP.has(parts[parts.length - 1].toLowerCase())) parts.pop();
       const sig = parts.filter(t => t.length > 2 && !QA_STOP.has(t.toLowerCase()));
       if (!sig.length) continue;
-      (sig.some(t => body.includes(t.toLowerCase())) ? matter : antimatter).push(parts.join(' '));
+      // The fourth NUL state: keep only the truth-apt (referential) tokens. A
+      // sentence-initial "Give" / "Based" / "Sure" / "What's" is dropped here,
+      // so it can never become antimatter and annihilate the turn. By shape,
+      // not by a stop-list — the gate generalizes where enumeration cannot.
+      const refSig = sig.filter(t => !nonRef.has(NRM_CAP(t)));
+      if (!refSig.length) continue;
+      (refSig.some(t => body.includes(t.toLowerCase())) ? matter : antimatter).push(parts.join(' '));
     }
     return { matter, antimatter };
   }
@@ -7730,6 +7777,7 @@ function projectGraph(events, frame = {}) {
   function inventedTerms(doc, text) {
     const body = docBodyLC(doc);
     const caps = String(text).match(/\b\p{Lu}[\p{L}’'-]+/gu) || [];
+    const nonRef = nonReferentialCaps(text);      // DEF: the type gate (shape, not a list)
     const out = [];
     for (const c of caps) {
       // "I", "I'm", "I'd", "I'll", "I've" are the capitalized first-person
@@ -7743,10 +7791,14 @@ function projectGraph(events, frame = {}) {
       // mirrors the same strip in namesEntity. (1a)
       const bare = c.replace(/['’]s\b/g, '');
       const lc = bare.toLowerCase();
-      // A capitalized discourse adverb at sentence start ("Therefore", "However")
-      // is the draft's own connective tissue, never an entity the page must
-      // contain — without this guard the veto strikes "Therefore" as invented.
-      if (DISCOURSE_JUNK.has(lc) || ANSWER_DISCOURSE.has(lc)) continue;
+      // The fourth NUL state: a capitalized token the parser reads as a verb,
+      // adverb, conjunction, interrogative or interjection (not a nominal) is the
+      // draft's own connective tissue or the user's grammar — never a name the
+      // page must contain, so never struck as invented. Caught by shape, so a
+      // sentence-initial "Based" / "Therefore" / "Sure" needs no list entry.
+      // (DISCOURSE_JUNK / ANSWER_DISCOURSE remain as a back-compat floor; the
+      // gate subsumes them.)
+      if (DISCOURSE_JUNK.has(lc) || ANSWER_DISCOURSE.has(lc) || nonRef.has(NRM_CAP(bare))) continue;
       if (bare.length > 2 && !QA_STOP.has(lc) && !body.includes(lc) && !out.includes(bare)) out.push(bare);
     }
     return out;
@@ -10161,6 +10213,7 @@ function projectGraph(events, frame = {}) {
   function referentsScope(docs, query) {
     const bodies = scopeDocs(docs).map(d => docBodyLC(d));
     const names = String(query).match(/\p{Lu}[\p{L}’'\-]+(?:\s+\p{Lu}[\p{L}’'\-]+)*/gu) || [];
+    const nonRef = nonReferentialCaps(query);     // DEF: the type gate, ahead of presence
     const matter = [], antimatter = [];
     for (const raw of names) {
       const parts = raw.split(/\s+/);
@@ -10168,7 +10221,12 @@ function projectGraph(events, frame = {}) {
       while (parts.length && QA_STOP.has(parts[parts.length - 1].toLowerCase())) parts.pop();
       const sig = parts.filter(t => t.length > 2 && !QA_STOP.has(t.toLowerCase()));
       if (!sig.length) continue;
-      const present = bodies.some(b => sig.some(t => b.includes(t.toLowerCase())));
+      // The fourth NUL state (mirrors referents): drop structural/pragmatic
+      // tokens — a sentence-initial "Give"/"Based"/"Sure"/"What's" — before the
+      // presence test, so they can never reach antimatter across the scope.
+      const refSig = sig.filter(t => !nonRef.has(NRM_CAP(t)));
+      if (!refSig.length) continue;
+      const present = bodies.some(b => refSig.some(t => b.includes(t.toLowerCase())));
       (present ? matter : antimatter).push(parts.join(' '));
     }
     return { matter, antimatter };
@@ -11947,6 +12005,9 @@ function projectGraph(events, frame = {}) {
     ingestMemoryInfo, setIngestMemoryCap,
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
     applyRules, voidInvented, isCreativeCompose, dedupeSentences,
+    // DEF — the type gate (the fourth NUL state): which capitalized tokens are
+    // truth-apt referents vs. structural/pragmatic grammar, by shape not by list.
+    nonReferentialCaps, referents,
     // the extracted graph: a portrait, and a portable per-doc snapshot (explorer + export)
     // graphPortrait / graphSnapshot / projectEntities now surface NUL log,
     // signal substrate, frame, full DEF set, and long-tail entities.

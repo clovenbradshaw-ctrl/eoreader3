@@ -253,10 +253,12 @@ group('no working memory ⇒ byte-identical to before (parity floor)', () => {
 // win conflicts; notes are the reader's own understanding; names/dates in a
 // span are USED, not echoed back. No hardcoded length prescriptions — the
 // model answers as it sees fit (depth scales max_tokens, nothing else, so
-// the prompt is identical at every depth). The faithfulness contract
-// survives the reframe: a plain "the document doesn't say" refusal (the
-// veto's modelDeclined watches that shape), no model-written citations, and
-// the summary keeps its degeneracy guard (never a single span as the answer).
+// the prompt is identical at every depth). Brief 2 took two arithmetic-floor
+// orders OUT: the absence-order ("say the document doesn't say") is gone —
+// low witness rides the WI-7 stamp, not the talker's voice — and flat span
+// trust ("Trust them; lean on them") is now graded witness language. The
+// faithfulness contract survives: no model-written citations, and the summary
+// keeps its degeneracy guard (never a single span as the answer).
 group('the grounded prompt: notes-and-spans framing, no length prescriptions', () => {
   const ans1 = LLM.systemFor('grounded', 'answer', true, 1);
   const ans2 = LLM.systemFor('grounded', 'answer', true, 2);
@@ -275,7 +277,15 @@ group('the grounded prompt: notes-and-spans framing, no length prescriptions', (
   for (const [name, s] of [['answer', ans1], ['summary', sum1]]) {
     ok(/the span wins/.test(s), `${name}: spans win over notes`);
     ok(/use it directly — don't echo the question's wording back/.test(s), `${name}: substitution over literalism (the "who wrote it?" fix)`);
-    ok(/say plainly that the document doesn't say/.test(s), `${name}: keeps a plain, detectable refusal`);
+    // Brief 2: the absence-ORDER is removed (not softened). Low witness rides
+    // the stamp (WI-7); absence is a measurement the system reports, never a
+    // sentence the talker is told to speak.
+    ok(!/say plainly that the document doesn't say/i.test(s), `${name}: the absence-order is GONE (Brief 2)`);
+    ok(!/before stating absence/i.test(s), `${name}: no instruction about stating absence at all`);
+    // Brief 2: span trust is graded, not flat — witnessed evidence with coverage
+    // tracked for the talker, not a flat command to "trust".
+    ok(!/Trust them; lean on them/i.test(s), `${name}: flat "trust them" is gone`);
+    ok(/witnessed evidence/i.test(s), `${name}: spans are framed as witnessed evidence (graded)`);
     ok(/citation markers/.test(s), `${name}: still forbids model-written citations`);
     ok(/in neither the spans nor your notes/i.test(s), `${name}: nothing beyond spans + notes`);
   }
@@ -328,44 +338,38 @@ group('buildUserContent — tiered spans/notes, question first and last', () => 
   eq(LLM.buildUserContent({ question: 'q', grounded: true }), 'q', 'grounded with no material at all: bare question');
 });
 
-// The shape pass: a director's note, not a rubric. The system prompt is the
-// taste surface — it characterizes the move and never answers; the note
-// rides the user message AFTER the spans, as closing guidance about HOW to
-// answer. The old order (note before spans, labeled "What this turn wants:")
-// let a small model read the note as a synopsis and pre-frame the spans it
-// hadn't reached yet — Cleo parroted "the author is not named" even when
-// the Author: span sat right below. Spans-before-note inverts that.
-group('shape pass — a director\'s note AFTER spans, framed as guidance', () => {
-  ok(/never answer the question yourself/.test(LLM.SHAPE_SYSTEM), 'the shape prompt forbids answering');
-  ok(/never state facts about the document/.test(LLM.SHAPE_SYSTEM), '…and forbids inventing document facts');
-  ok(/what's the point of the book\?/.test(LLM.SHAPE_SYSTEM), 'synthesis example present (the taste lives in examples)');
-  ok(/who wrote it\?/.test(LLM.SHAPE_SYSTEM) && /never "the author"/.test(LLM.SHAPE_SYSTEM), 'lookup example demands the name, not "the author"');
-  ok(/project gutenberg is a character\?/.test(LLM.SHAPE_SYSTEM) && /repair, not fresh retrieval/.test(LLM.SHAPE_SYSTEM), 'pushback example routes as repair');
-  ok(typeof LLM.shapePass === 'function', 'shapePass is exposed');
+// Brief 2 (+ the form-as-stamp patch): the shape pass is DISSOLVED and the
+// FORM is out of the prompt entirely. The MOVE is the router's intent; the FORM
+// is a per-genre embedding CENTROID the OUTPUT is measured against, after (a
+// stamp — shape.js · formDegree), never handed to the talker; the CONFIDENCE is
+// the witness stamp. So the talker writes VOICE-ONLY: buildUserContent appends
+// no how-to-answer block at all, even when a shapeNote is passed.
+group('shape pass dissolved + form-as-stamp — the talker prompt is voice-only', () => {
+  ok(LLM.SHAPE_SYSTEM === undefined, 'the blind editor prompt (SHAPE_SYSTEM) is gone');
+  ok(typeof LLM.shapePass !== 'function', 'the shape-pass model call is gone from the hot path');
+  ok(LLM.FORM_LIBRARY === undefined && typeof LLM.formFor !== 'function', 'no form-library / formFor: the form is never a prompt string');
 
+  // The talker writes voice-only: even a passed shapeNote produces NO block.
   const u = LLM.buildUserContent({
-    question: 'who wrote it?', docTitle: 'crime.txt',
+    question: 'what is this about?', docTitle: 'crime.txt',
     spans: [{ idx: 4, text: 'Author: Fyodor Dostoyevsky' }],
     notesProse: '', grounded: true,
-    shapeNote: 'Bibliographic lookup. They want the name — one line.',
+    shapeNote: 'Draw the passages together into a through-line.',
   });
-  ok(/Editor's note on HOW to handle this turn[^\n]*:\nBibliographic lookup/.test(u), 'the note has its own block, labeled as guidance about HOW (not WHAT)');
-  ok(/not facts about the document; only the spans supply facts/.test(u), 'the label spells out that the note is not source material');
-  ok(u.indexOf('The user just asked') < u.indexOf("Editor's note"), 'question orients first');
-  ok(u.indexOf('quoted exactly') < u.indexOf("Editor's note"), 'spans come BEFORE the editor note (facts before guidance, so a leaky note can\'t pre-frame the spans)');
-  ok(u.indexOf("Editor's note") < u.lastIndexOf("Answer the user's question"), 'the editor note closes the context, just above the answer prompt');
-  const bare = LLM.buildUserContent({ question: 'q', spans: [{ idx: 1, text: 'x' }], grounded: true, shapeNote: '' });
-  ok(!/Editor's note/.test(bare), 'no note ⇒ no empty block (answer pass unchanged)');
-  ok(!/What this turn wants/.test(u) && !/What this turn wants/.test(bare), 'the old "What this turn wants:" label is gone (read as a synopsis by small models)');
+  ok(/quoted exactly/.test(u), 'the spans are present');
+  ok(u.indexOf('The user just asked') >= 0 && u.lastIndexOf("Answer the user's question") > 0, 'question orients first and closes the message');
+  ok(!/How to lay this answer out/i.test(u), 'no "how to lay this answer out" block');
+  ok(!/Editor's note/i.test(u) && !/form only/i.test(u) && !/What this turn wants/i.test(u), 'no editor\'s-note / form / synopsis block — the talker is handed no how-to-answer text at all');
+  // The grounded SYSTEM prompt is voice-only too.
+  ok(!/note on the FORM/i.test(u), 'no form-note framing leaks into the user message');
 
-  // The grounded system prompt names the editor's note as a third context
-  // type and tells Cleo it's guidance, not source — the standing guard
-  // that backs the reorder. Without it, a model that still reads the note
-  // as facts has nothing in the system prompt to pull it back.
+  // The grounded SYSTEM prompt is voice-only: it tells the talker to write in
+  // its own voice with no template and no how-sure-to-sound instruction, and it
+  // names no form note (the form is measured on the output, not handed in).
   const sys = LLM.systemFor('grounded', 'answer', true, 1);
-  ok(/editor.s note/i.test(sys), 'grounded system prompt names the editor\'s note');
-  ok(/guidance about your move, not as source material/i.test(sys), '…and frames it as guidance, not source');
-  ok(/only the spans supply facts/i.test(sys), '…and pins facts to the spans');
+  ok(/in your own voice/i.test(sys), 'grounded system prompt tells the talker to write in its own voice');
+  ok(/not handed a template or told how sure to sound/i.test(sys), '…with no template and no confidence instruction');
+  ok(!/note on the FORM/i.test(sys) && !/editor.s note/i.test(sys), '…and names no form/editor note at all');
 });
 
 // Reasoning-model think gating: tagged chain-of-thought never reaches the
