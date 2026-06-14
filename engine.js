@@ -831,6 +831,51 @@ const READING_RULES = {
     value: 0.60, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'Confidence of a binding resolved by document salience alone (the floor, reached only when the chat field is cold). Seated on the read\'s measured document-salience hit-rate (~0.61). Inert unless binding_resolution is ON.',
   },
+  // ── The addressee field — the second person (addressee.js / window.EOAddressee) ──
+  // The reader holds a first person (the witness) and a third (the graph); this
+  // family is the SECOND — a chat-scoped overlay marking, per span/entity/claim,
+  // what the EXCHANGE has established the person has of it (the conversational
+  // common ground), with a false-belief-separated Meant-Graph for what the person
+  // believes (which can be wrong). Every rule a parity floor when off; the masters
+  // ship OFF, the constants are seeds tuned by evo/. Bookkeeping, not mind-reading:
+  // built from the observable interaction only (typed is Given, displayed is an
+  // offer, taken-up is grounded), the model never speculates about a mind.
+  addressee_field: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Master: maintain the addressee field (deposit cited spans as the person\'s OFFERED given, promote on uptake, decay by γ once per turn, snapshot/restore in the chat snapshot, audit it). The document is UNREAD until the exchange grounds it, so every span starts \'new\'; display is an offer, only uptake grounds (Clark). OFF ⇒ the field is never built and the chat field behaves exactly as today (the parity floor) — nothing consumes it, so the golden snapshots are byte-identical.',
+  },
+  addressee_meant_graph: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Maintain the person\'s Meant-Graph with FALSE-BELIEF SEPARATION: a proposition the person holds is its OWN node, distinct from the document graph\'s nodes (Sally\'s marble and the actual marble are different nodes), flagged supported/unsupported/contradicted against the world-model but never merged into it. Seeded from CONFIRM/DENY (the person proposes a proposition) and from settled answers the person TOOK UP, with provenance (from-user-assertion / from-system-answer / from-read-span). OFF ⇒ no Meant nodes; CONFIRM/DENY behaves exactly as today. Surfaced only in the audit until later phases; byte-identical when off.',
+  },
+  addressee_given_new: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Act on the field in contextParts — the given-new contract: mark each part grounded | offered | new (new the resting default for the whole document), so the shape pass leads with new, re-states offered lightly, marks grounded as given ("as we established at [s12]"), and never cites the unseen as shared. The field NEVER skips substance — the strongest move is reference vs. re-introduce, resolving to re-introduce under any doubt. Ships OFF until addressee_calibration shows pUptake is calibrated on real sessions (a confident-wrong "as you know" is the precise rudeness this field exists to remove). OFF ⇒ spans/notes byte-identical.',
+  },
+  addressee_repair_root: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Promote objected/retracted into provenance edges on the person\'s Meant-Graph (from-system-answer ⇒ from-retracted-answer) and chase the planted belief to root: repair changes from "answer afresh" to "I think I led you wrong earlier — here is where, and here is what the page actually shows." A REC on the person\'s Meant node, correcting the planted belief by name. OFF ⇒ maybeRetract behaves exactly as today (flags the system\'s message, tracks nothing about the person\'s belief).',
+  },
+  addressee_calibration: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Run the calibration instrument over the audit — the second instrument beside the witness: the witness measures faithfulness to the DOCUMENT, this measures faithfulness to the PERSON. Reads the audit\'s addressee steps against the next turn\'s outcome (did the person treat a "grounded" thing as new? did they repeat a corrected belief?) and reports a calibration curve — whether a pUptake of 0.7 is right ~70% of the time. Read-only; never gates. Measure calibration BEFORE weighting anything on it.',
+  },
+  addressee_uptake_floor: {
+    value: 0.55, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'pUptake at/above which a span is GROUNDED and may be referenced as shared ("as we established"). Reference-licensing only — NEVER skip-licensing (the field never skips substance; the only genuine "they have this, move on" cases are the fully observable ones: the person typed it, or demonstrably took up a specific span). Seeded below the learn rate so a single uptake grounds; tune by evo/. Inert unless addressee_field is ON.',
+  },
+  addressee_uncertain_margin: {
+    value: 0.20, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'The band below the uptake floor that still reads OFFERED (re-state lightly — "to recap [s12]…", never "as you know"). Doubles as the hysteresis a grounded entry holds its reference license across as it cools, so a value flickering at the floor does not oscillate between given and offered. Inert unless addressee_field is ON.',
+  },
+  addressee_learn_rate: {
+    value: 0.6, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'The BKT learn step on an offered span that was TAKEN UP: pUptake ← pUptake + (1 − pUptake)·learn. Below 1 because one uptake is not standing knowledge — the whole correction over tutoring\'s BKT, which tracks masterable knowledge the tutor can test; this tracks only whether a thing is still live and shared. Inert unless addressee_field is ON.',
+  },
+  addressee_slip: {
+    value: 0.05, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'The slip/guess floor keeping a grounded span\'s pUptake under 1.0 — never certain. Even the person\'s own typed token settles to 1 − slip, not 1: the field holds a best guess at the common ground, never a claim. Inert unless addressee_field is ON.',
+  },
   // ── Site face — the Entity cell named at its level ──────
   site_entity_cell: {
     value: false, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
@@ -7481,6 +7526,15 @@ function projectGraph(events, frame = {}) {
     'binding-conf-chat': 'binding_conf_chat',
     'binding-conf-ambiguous': 'binding_conf_ambiguous',
     'binding-conf-doc': 'binding_conf_doc',
+    'addressee-field': 'addressee_field',
+    'addressee-meant-graph': 'addressee_meant_graph',
+    'addressee-given-new': 'addressee_given_new',
+    'addressee-repair-root': 'addressee_repair_root',
+    'addressee-calibration': 'addressee_calibration',
+    'addressee-uptake-floor': 'addressee_uptake_floor',
+    'addressee-uncertain-margin': 'addressee_uncertain_margin',
+    'addressee-learn-rate': 'addressee_learn_rate',
+    'addressee-slip': 'addressee_slip',
   };
 
   /* ---------- Thinking depth: the effort dial's tunable budget ----------
@@ -11531,6 +11585,28 @@ function projectGraph(events, frame = {}) {
   function crossSourceEnabled() { const v = READING_RULES.cross_source.value; return v === true || v === 1; }
   function bindingResolutionEnabled() { const v = READING_RULES.binding_resolution.value; return v === true || v === 1; }
   function distanceGravityEnabled() { return DISTANCE_GRAVITY(); }
+  /* The addressee field (addressee.js) — the second person. Off-by-default
+     masters and the seeded BKT constants, read for the host's flag-guarded
+     wiring. ruleOn returns the boolean masters; addresseeRules bundles the live
+     numeric seeds to inject into EOAddressee.create() so the field and the
+     reading rules share one source of truth (γ is decay_gamma, the chat field's
+     own). All inert at the parity floor — the masters ship OFF. */
+  function _ruleBool(name) { const r = READING_RULES[name]; const v = r && r.value; return v === true || v === 1; }
+  function addresseeFieldEnabled() { return _ruleBool('addressee_field'); }
+  function addresseeMeantGraphEnabled() { return _ruleBool('addressee_meant_graph'); }
+  function addresseeGivenNewEnabled() { return _ruleBool('addressee_given_new'); }
+  function addresseeRepairRootEnabled() { return _ruleBool('addressee_repair_root'); }
+  function addresseeCalibrationEnabled() { return _ruleBool('addressee_calibration'); }
+  function addresseeRules() {
+    const num = (name, dflt) => { const r = READING_RULES[name]; return r && typeof r.value === 'number' ? r.value : dflt; };
+    return {
+      gamma: (typeof GAMMA === 'number' && GAMMA > 0) ? GAMMA : num('decay_gamma', 0.7),
+      learn: num('addressee_learn_rate', 0.6),
+      slip: num('addressee_slip', 0.05),
+      uptakeFloor: num('addressee_uptake_floor', 0.55),
+      uncertainMargin: num('addressee_uncertain_margin', 0.20),
+    };
+  }
 
   // RG_STOP / RG_PRONOUN_RE / RG_ATTRIB are the relation_gate_* conventions,
   // built in rebuildLangSets (auxiliary verbs reuse AUX_VERBS_RE).
@@ -12653,6 +12729,12 @@ function projectGraph(events, frame = {}) {
     relationGateEnabled, checkRelations, checkRelationsScope,
     bindClaimKeys, bindClaimKeysScope, groundingEnvelope,
     bindingResolutionEnabled,
+    // the addressee field — the second person (addressee.js / window.EOAddressee).
+    // The addressee_* masters (all OFF — the parity floor) + the seeded BKT
+    // constants bundled for EOAddressee.create(), so the field and the reading
+    // rules share one source of truth. Inert until a master is flipped.
+    addresseeFieldEnabled, addresseeMeantGraphEnabled, addresseeGivenNewEnabled,
+    addresseeRepairRootEnabled, addresseeCalibrationEnabled, addresseeRules,
     // the cross-source veto (cross_source rule, OFF by default — parity floor):
     // a claim whose subject is an entity of one source but binds to another,
     // where the subject never appears — the multi-document conflation the
