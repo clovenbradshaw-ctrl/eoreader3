@@ -105,6 +105,30 @@ function group(name, fn) { console.log('• ' + name); return fn(); }
     eq(constrained.key, 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', 'constrained adapter → 0.5B');
   });
 
+  await group('GPU tier — a weak GPU beside lots of RAM is NOT promoted', async () => {
+    // The regression guard. deviceMemory is SYSTEM RAM (Chrome caps it at 8), so
+    // a weak integrated GPU reads as "8 GB" too. The pick must follow the GPU
+    // buffer budget, not the RAM — else nearly every Chrome desktop got handed
+    // the 3B/~2.3 GB model and a modest GPU spent first load stalling on a
+    // multi-GB download it couldn't compile ("way slower, never ready").
+    const weak = await rec({ webgpu: true, gpu: true, deviceMemoryGB: 8, maxBufferMB: 256, maxStorageMB: 128, wasm: true });
+    eq(weak.tier, 'low', '8 GB RAM but a 128 MB storage-binding floor → low (not high)');
+    eq(weak.key, 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', 'weak GPU → the light 0.5B, never the 3B');
+
+    const modest = await rec({ webgpu: true, gpu: true, deviceMemoryGB: 8, maxBufferMB: 768, maxStorageMB: 768, wasm: true });
+    eq(modest.tier, 'mid', '8 GB RAM + a midrange GPU budget → mid (not high)');
+    eq(modest.key, 'Llama-3.2-1B-Instruct-q4f16_1-MLC', 'modest GPU → 1B, not 3B');
+
+    const noLimits = await rec({ webgpu: true, gpu: true, deviceMemoryGB: 8, maxBufferMB: 0, maxStorageMB: 0, wasm: true });
+    eq(noLimits.tier, 'low', 'no GPU budget signal → low (size down, never assume capable)');
+
+    // A genuinely capable GPU is still picked high — the budget earns it, the
+    // RAM reading no longer hands it out for free.
+    const capable = await rec({ webgpu: true, gpu: true, deviceMemoryGB: 8, maxBufferMB: 4096, maxStorageMB: 2048, wasm: true });
+    eq(capable.tier, 'high', 'a healthy GPU budget still earns high');
+    eq(capable.key, 'Llama-3.2-3B-Instruct-q4f16_1-MLC', 'capable GPU → the 3B sweet spot');
+  });
+
   await group('Software (fallback) adapter is treated as no real GPU', async () => {
     const fb = await rec({ webgpu: true, gpu: false, fallbackAdapter: true, wasm: true, cores: 8, deviceMemoryGB: 8 });
     eq(fb.path, 'cpu', 'fallback adapter → CPU path');
@@ -189,6 +213,40 @@ function group(name, fn) { console.log('• ' + name); return fn(); }
   await group('Empty catalog — null key, never a throw', async () => {
     const r = await L.recommendModel({ probe: profile({ webgpu: true, gpu: true, deviceMemoryGB: 8 }), models: [] });
     eq(r.key, null, 'no catalog → null key (caller keeps its default)');
+  });
+
+  await group('primePump — exposed, safe off-DOM, every backend', async () => {
+    ok(typeof L.primePump === 'function', 'primePump is exposed on EOLLM');
+    // This harness runs with no `document`, so priming is a pure no-op here — it
+    // must not throw for any backend key, nor for the keyless boot prime.
+    let threw = false;
+    try {
+      L.primePump('Llama-3.2-3B-Instruct-q4f16_1-MLC');
+      L.primePump('wllama:smollm2-135m');
+      L.primePump('anthropic:claude-haiku-4-5');
+      L.primePump();
+    } catch (_) { threw = true; }
+    ok(!threw, 'primePump never throws (no-op without a document)');
+  });
+
+  await group('self-host (zip) — config, gating, and entry mapping', async () => {
+    const Ls = freshLLM({}, { EO_WEBLLM_SELFHOST: { 'Llama-3.2-3B-Instruct-q4f16_1-MLC': 'https://b/x.zip' } });
+    eq(Ls.selfHostZipUrl('Llama-3.2-3B-Instruct-q4f16_1-MLC'), 'https://b/x.zip', 'reads the configured zip URL');
+    eq(Ls.selfHostZipUrl('Qwen3-1.7B-q4f16_1-MLC'), null, 'an unconfigured model has no self-host URL');
+    // No document/caches/serviceWorker in this harness ⇒ unsupported ⇒ gated OFF
+    // even when configured, so the normal load runs (never a half-built zip path).
+    eq(Ls.isSelfHosted('Llama-3.2-3B-Instruct-q4f16_1-MLC'), false, 'gated off where the browser features are absent');
+    const Lw = freshLLM({}, { EO_WEBLLM_SELFHOST: { 'wllama:llama32-3b': 'https://b/x.zip' } });
+    eq(Lw.isSelfHosted('wllama:llama32-3b'), false, 'CPU/wllama keys are out of scope for the WebLLM zip path');
+
+    // Entry → the flat filename WebLLM requests at the base: basename, wrapper
+    // folder stripped, directory + degenerate names dropped.
+    eq(L.selfHostEntryName('params_shard_0.bin'), 'params_shard_0.bin', 'flat name kept');
+    eq(L.selfHostEntryName('Llama-3.2-3B-Instruct-q4f16_1-MLC/ndarray-cache.json'), 'ndarray-cache.json', 'wrapper folder stripped');
+    eq(L.selfHostEntryName('a/b/tokenizer.json'), 'tokenizer.json', 'nested path → basename');
+    eq(L.selfHostEntryName('model/'), null, 'directory entry dropped');
+    eq(L.selfHostEntryName('weird/..'), null, 'a ".." basename is rejected');
+    eq(L.selfHostEntryName(''), null, 'empty rejected');
   });
 
   console.log(`\nrecommend.test: ${pass} passed, ${fail} failed`);
