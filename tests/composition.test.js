@@ -214,6 +214,46 @@ group('Phase two — stampDraft builds the vector; form is null when no library 
   eq(st2.confidence.form, 0.66, 'with a library, form is the genre-centroid cosine');
 });
 
+group('Phase two — stampDraft mechanical re-citation rescue (the local-model paraphrase)', () => {
+  // a faithful paraphrase that reuses NONE of the span's words — what a small
+  // local model emits — so the token-overlap witness sees nothing.
+  const prose = 'Climbing to roughly three hundred and thirty metres, it long reigned as the loftiest thing built by people.';
+  const spans = ['The tower is 330 m tall and was the tallest man-made edifice in the world for 41 years.'];
+  const bare = C.stampDraft({ grain: 'Figure', prose, spans });
+  eq(bare.tag, 'confabulation', 'without the grounder, a token-distant paraphrase reads as confabulation');
+  ok(bare.confidence.witness < 0.4, 'and its lexical witness is below the floor');
+  eq(bare.rescued, false, 'a stamp with no grounder is not marked rescued');
+
+  // the grounder (engine.groundTalkerOutput, here faked) bound every sentence to
+  // a real source line → the rescue credits it.
+  const rescued = C.stampDraft({ grain: 'Figure', prose, spans, grounded: { degree: 1, grounded: true } });
+  eq(rescued.rescued, true, 'the stamp records that a rescue applied');
+  eq(rescued.tag, 'figure-grounded', 'a bound paraphrase is re-tagged figure-grounded, not confabulation');
+  ok(rescued.confidence.witness >= 0.4, 'the witness is lifted to the grounder coverage');
+  eq(C.decide(rescued.confidence).decision, 'advance', 'so the monitor advances instead of a futile fetch');
+
+  // safety — the rescue NEVER lowers an already-grounded witness (parity).
+  const strong = C.stampDraft({ grain: 'Figure', prose: 'The tower is 330 m tall.', spans: ['The tower is 330 m tall.'], grounded: { degree: 0.2, grounded: true } });
+  ok(strong.confidence.witness > 0.4 && !strong.rescued, 'a strong lexical witness ignores a weaker grounder signal (no downgrade)');
+
+  // safety — a grounder that bound NOTHING (a real confabulation) does not lift.
+  const stillConfab = C.stampDraft({ grain: 'Figure', prose, spans, grounded: { degree: 0, grounded: false } });
+  eq(stillConfab.tag, 'confabulation', 'a confabulation the grounder cannot bind stays confabulation');
+  ok(!stillConfab.rescued, 'and is not marked rescued');
+});
+
+group('Phase two — parseOutline strips a model lead-in and list markers (item 2/6)', () => {
+  const withPreamble = 'Here are the proposed sections:\n1. Introduction\n2. The design and its critics\n3. Records and height';
+  const jobs = C.parseOutline(withPreamble);
+  eq(jobs.length, 3, 'the lead-in line is dropped; three jobs remain');
+  eq(jobs[0], 'Introduction', 'a numbered marker is stripped from the first job');
+  ok(!jobs.some(j => /here are/i.test(j)), 'the preamble never becomes a job');
+  eq(C.parseOutline('I. Introduction\nII. History\nIII. Impact').join('|'), 'Introduction|History|Impact', 'roman-numeral markers are stripped');
+  eq(C.parseOutline('Introduction\nThe history\nThe impact').length, 3, 'a clean one-job-per-line reply keeps every line (no false preamble drop)');
+  eq(C.parseOutline('Introduction\nThe history')[0], 'Introduction', 'and its first line is kept as a job');
+  eq(C.parseOutline('').length, 0, 'empty text yields no jobs');
+});
+
 group('Phase two — the monitor: predicates over the vector, null never blocks', () => {
   const adv = C.decide(C.confidence({ witness: 0.6, form: 0.7 }));
   eq(adv.decision, 'advance', 'witness & form fine, coherence null → advance');
@@ -331,6 +371,29 @@ await group('generateUnit — retrieve → phrase → stamp → route, end to en
   const out2 = await C.generateUnit({ unit, frame, doc_id: doc.id, retrieve, phrase: phraseBad, embed });
   ok(out2.confidence.witness < 0.4, 'an ungrounded draft has low witness');
   ok(out2.route.decision === 'revise', 'with material found but unused, the monitor routes to revise');
+});
+
+await group('generateUnit — the re-citation rescue credits a paraphrase, refuses a confabulation', async () => {
+  const [doc, frame] = C.newDoc({ goal: 'inform', genre: 'plain-report' });
+  const unit = C.make.unit({ doc_id: doc.id, job: 'Introduction', order: 0 });   // a generic job
+  const retrieve = async () => [];                       // the generic job retrieves nothing (item 6, observed live)
+  const embed = async () => [0.1, 0.2, 0.3];
+  // a faithful paraphrase that reuses none of the corpus's words
+  const phrase = async () => 'Rising over the Champ de Mars, the iron monument honours the engineer whose firm assembled it.';
+  // the grounder binds every sentence to a real line (what groundTalkerOutput does)
+  const ground = async () => ({ degree: 1, grounded: true, cites: [{ docId: doc.id, idx: 2 }] });
+  const out = await C.generateUnit({ unit, frame, doc_id: doc.id, retrieve, phrase, embed, ground });
+  eq(out.rescued, true, 'a paraphrase whose generic job retrieved nothing is rescued by the grounder');
+  ok(out.confidence.witness >= 0.4, 'its witness is lifted above the floor');
+  eq(out.route.decision, 'advance', 'so the monitor advances instead of fetch');
+  ok(out.draft.source_events.length >= 1 && out.draft.source_events[0].idx === 2, 'the per-sentence cites become the source_events where the job retrieved none');
+
+  // a genuine confabulation: the grounder binds nothing → no rescue, stays low
+  const groundNone = async () => ({ degree: 0, grounded: false, cites: [] });
+  const out2 = await C.generateUnit({ unit, frame, doc_id: doc.id, retrieve, phrase, embed, ground: groundNone });
+  ok(!out2.rescued, 'a confabulation the grounder cannot bind is not rescued');
+  ok(out2.confidence.witness == null || out2.confidence.witness < 0.4, 'and its witness stays below the floor');
+  eq(out2.route.decision, 'fetch', 'with nothing retrieved or bound, the monitor fetches');
 });
 
 group('the non-breaking floor — empty / garbage logs fold to nothing, never throw', () => {
