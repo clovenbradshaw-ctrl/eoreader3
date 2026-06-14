@@ -8370,11 +8370,15 @@ function projectGraph(events, frame = {}) {
     }
     return out.join('').trim();
   }
-  function salientContext(doc, query) {
-    // Title-page chrome — "Heart of Darkness", "by Joseph Conrad", "Contents",
-    // "I  II  III" — is short and carries no terminal punctuation. It costs
-    // passage slots the model should spend on prose; skip it in the picks.
-    // (Falls back to unfiltered picks if the filter would empty them.)
+  // The structural sample a summary reads from, as sentence indices: the first
+  // sentence of every paragraph, the opening three, the closing two — title
+  // chrome ("Heart of Darkness", "Contents", "I  II  III": short, no terminal
+  // punctuation) dropped because it costs slots the model should spend on prose
+  // (falls back to unfiltered picks if the filter would empty them) — sorted and
+  // capped at 16. Factored out of salientContext so the audit can report the
+  // passages that ACTUALLY fed a summary, not a lexical match on a query
+  // ("summarize this") that has no lexical home in the prose.
+  function salientPicks(doc) {
     const isChrome = (i) => {
       const s = String(doc.sentenceTexts[i] == null ? '' : doc.sentenceTexts[i]).trim();
       return s.length < 60 && !/[.!?…"”'’)]$/.test(s);
@@ -8388,6 +8392,9 @@ function projectGraph(events, frame = {}) {
       for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) picks.add(b.sentences[0].i);
       [0, 1, 2].forEach(i => doc.sentences[i] && picks.add(doc.sentences[i].i));
     }
+    return [...picks].sort((a, b) => a - b).slice(0, 16);
+  }
+  function salientContext(doc, query) {
     // Lead with the FOLD in the reader's voice — the integral fold of the whole
     // document, or, when the turn scoped to a chapter ("summarize chapter 1"),
     // the cumulative fold up to that chapter's end. The model composes from what
@@ -8407,7 +8414,7 @@ function projectGraph(events, frame = {}) {
           + (p.spine.length > 1 ? '. It moved through: ' + p.spine.join(' → ') : '') + '.\n\n'
         : '';
     }
-    const spans = [...picks].sort((a, b) => a - b).slice(0, 16).map(i => `[s${i}] ${doc.sentenceTexts[i]}`).join('\n');
+    const spans = salientPicks(doc).map(i => `[s${i}] ${doc.sentenceTexts[i]}`).join('\n');
     return head + spans;
   }
   // The cast, cleaned for presentation. On a Gutenberg text (and only
@@ -8434,6 +8441,28 @@ function projectGraph(events, frame = {}) {
   function entityContext(doc) {
     const entities = castEntities(doc);
     return entities.slice(0, 10).map(e => `[s${e.sents[0]}] ${doc.sentenceTexts[e.sents[0]]}`).join('\n');
+  }
+  // The passages the BLOB paths (summary / "who appears") actually hand the
+  // model, as hit records the audit can report. A summary reads a structural
+  // sample (salientPicks); a "who" turn reads the cast's first mentions (the
+  // same picks entityContext builds). Lexical retrieval on the bare query
+  // ("summarize this", "who is in this story") matches nothing in the prose, so
+  // the retrieve step USED to read "0 passages" for a turn that grounded on a
+  // full sample — this reports what was truly pulled, mirroring contextScope's
+  // per-doc blob over the same scope. Shaped like retrieve()/retrieveScope hits
+  // ({ docId, i, t }) so the audit maps it the same way as a lexical hit list.
+  function blobHits(docs, query) {
+    const ds = scopeDocs(docs).filter(d => d.kind === 'prose');
+    const who = classifyIntent(query) === 'who';
+    const out = [];
+    for (const d of ds) {
+      const texts = d.sentenceTexts || [];
+      const idxs = who
+        ? castEntities(d).slice(0, 10).map(e => (e.sents || [])[0])
+        : salientPicks(d);
+      for (const i of idxs) if (i != null && texts[i] != null) out.push({ docId: d.id, i, t: texts[i] });
+    }
+    return out;
   }
   function hasGround(doc, q) {
     if (!doc || doc.kind !== 'prose') return true;
@@ -12657,6 +12686,8 @@ function projectGraph(events, frame = {}) {
     contextScope, bindCitationsScope, supportProbeTerms,
     // tiered context for the notes-and-spans grounded prompt
     contextParts, contextPartsScope, partsFromHits, readingNotes,
+    // the passages a summary / "who" blob actually hands the model (audit truth)
+    blobHits,
     // document metadata (Gutenberg headers) + the presentation-cleaned cast
     docMetadata, metadataNote, castEntities,
     // cost-ordered routing (existence → structure → significance) + embedding recall

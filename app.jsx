@@ -57,6 +57,16 @@ const auditHits = (scope, q, k = 6) => {
       .map(h => ({ docId: h.docId, idx: h.i, score: Math.round((h.score || 0) * 1e4) / 1e4, overlap: h.overlap, text: h.t }));
   } catch (e) { return []; }
 };
+// The blob paths (summary / "who appears") feed the model a structural sample,
+// not a lexical query match — so auditHits reads "0" for them. Report what the
+// blob ACTUALLY pulled instead (no relevance score: these are picked by
+// structure, not ranked against the query).
+const blobHitsForAudit = (scope, q) => {
+  try {
+    return (window.EOEngine.blobHits(scope, q) || [])
+      .map(h => ({ docId: h.docId, idx: h.i, text: h.t }));
+  } catch (e) { return []; }
+};
 // Catch the one failure the mechanical veto can't see: a "summary" that is just
 // one source span echoed back verbatim binds and audits clean, but is not an
 // answer. spanCoverage = what fraction of the DRAFT is just this SPAN — shared
@@ -2649,11 +2659,15 @@ function App() {
     // Report the passages that ACTUALLY fed the prompt. When semantic recall
     // drove the turn (an anaphoric ask like "who are his kids?" has no lexical
     // home), the lexical auditHits read "0" and buried that the answer is
-    // grounded — so surface the recovered hits, flagged as found by meaning.
+    // grounded — so surface the recovered hits, flagged as found by meaning. A
+    // summary/"who" turn has the same blind spot: its context is a structural
+    // sample, not a lexical match on "summarize this", so auditHits read "0"
+    // even though the model was handed the whole sample — report that sample.
     const retrievedForAudit = hasSemantic
       ? semanticHits.map(h => ({ docId: h.docId, idx: h.i, score: Math.round((h.score || 0) * 1e4) / 1e4, overlap: h.overlap, text: h.t }))
+      : wantsBlob ? blobHitsForAudit(scope, q)
       : auditHits(scope, q, 6);
-    AUD('step', 'retrieve', { k: 6, task, engine: hasSemantic ? 'embedding' : 'model-context', viaSemantic: hasSemantic, hits: retrievedForAudit });
+    AUD('step', 'retrieve', { k: 6, task, blob: wantsBlob, engine: hasSemantic ? 'embedding' : 'model-context', viaSemantic: hasSemantic, hits: retrievedForAudit });
     // GRAPH TRAVERSAL (depth > 1): depth buys graph work, not just more
     // retrieval. Walk out from the entities the question names PLUS the
     // entities the conversation field holds hot — an anaphoric follow-up

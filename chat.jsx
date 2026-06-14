@@ -361,6 +361,12 @@ function narrateTurn(turn) {
         } else if (s.round && s.round > 1) {
           const sub = (s.subquery || '').trim();
           push('Still hadn’t covered ' + (sub ? '“' + sub + '”' : 'part of the question') + ', so I sought again' + (s.newHits ? ' and found ' + s.newHits + ' more passage' + (s.newHits === 1 ? '' : 's') : '') + '.');
+        } else if (s.blob) {
+          // A summary / "who" turn doesn't rank passages against a query — it
+          // reads a structural sample — so don't call them "most relevant".
+          push(s.task === 'summary'
+            ? 'Sampled ' + n + ' passage' + (n === 1 ? '' : 's') + ' from across the document to summarize from.'
+            : 'Gathered ' + n + ' passage' + (n === 1 ? '' : 's') + ' — the cast’s mentions across the document.');
         } else {
           push('Pulled the ' + n + ' most relevant passage' + (n === 1 ? '' : 's') + (s.viaSemantic ? ' (by meaning).' : '.'));
         }
@@ -614,10 +620,14 @@ function ModelDownloadCard({ msg }) {
   // Re-estimate on every real progress update. The estimate is anchored to the
   // average rate since the download began (steadier than an instantaneous rate)
   // and then smoothed, so the number eases toward the truth instead of jumping.
-  // A progress reset (a stall/retry that drops pct) re-anchors the start sample.
+  // A progress reset (a stall/retry that drops pct) re-anchors it (see below).
   React.useEffect(() => {
     const now = Date.now();
-    if (!startRef.current || pct < startRef.current.p) startRef.current = { t: now, p: pct };
+    // A progress reset (a stall/retry that drops pct below its low-water mark)
+    // re-anchors the start sample AND drops the old estimate — that estimate was
+    // measured against bytes we're now refetching, so it no longer describes
+    // this load and must not keep ticking down on screen.
+    if (!startRef.current || pct < startRef.current.p) { startRef.current = { t: now, p: pct }; etaRef.current = null; }
     const s = startRef.current;
     const dp = pct - s.p, dt = (now - s.t) / 1000;
     if (pct > 0 && pct < 1 && dp > 0.02 && dt > 0.75) {
@@ -643,8 +653,22 @@ function ModelDownloadCard({ msg }) {
   } else if (!etaRef.current) {
     big = 'Estimating…'; small = 'gauging your connection';
   } else {
-    const remain = Math.max(0, etaRef.current.secs - (Date.now() - etaRef.current.at) / 1000);
-    if (remain <= 3) { big = 'Almost ready'; small = 'any second now'; }
+    const now = Date.now();
+    // The smoothed estimate ticks down each second so the countdown feels alive
+    // between progress updates — but left alone it keeps falling even when the
+    // download has stalled, draining to "any second now" while the bar still
+    // reads 11%. Two corrections keep the displayed time honest:
+    //   1. Floor it at a live average-rate estimate (time ÷ progress since this
+    //      load began). While progress is stuck that floor climbs, so the number
+    //      stops falling — and rises — instead of bottoming out at zero.
+    //   2. Reserve "Almost ready / any second now" for when the bar itself is
+    //      nearly full. A tiny ETA at low progress means the estimate outran the
+    //      download, not that we're done — so show the (honest, larger) time left.
+    const s = startRef.current;
+    const dp = pct - s.p, dt = (now - s.t) / 1000;
+    const floor = dp > 0.02 && dt > 0.75 ? (1 - pct) * (dt / dp) : 0;   // remaining ÷ average rate, recomputed live
+    const remain = Math.max(0, etaRef.current.secs - (now - etaRef.current.at) / 1000, floor);
+    if (remain <= 3 && pct >= 0.9) { big = 'Almost ready'; small = 'any second now'; }
     else { big = fmtEta(remain); small = 'estimated time left'; }
   }
   const whole = Math.round(pct * 100);
