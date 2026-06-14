@@ -616,6 +616,56 @@
     }
   }
 
+  /* ============================================================
+     searchEntities() — one offer across the conversation's hottest subjects.
+
+     When a forced message names no target of its own, the thing worth looking
+     up isn't the bare token — it's what the reader has been talking about. Given
+     a heat-ranked list of subjects, spend a cheap list=search on the top few and
+     MERGE their hits into ONE ranked option list: the hottest subject's articles
+     first, deduped by title, each tagged with the subject it came from (`via`).
+     Same option shape searchOptions returns, so the existing card renders it.
+     Rate-limited like any lookup; nothing is fetched in full or ingested until
+     the reader picks one. opts.subjects (default 3), opts.perSubject (default 2).
+     ============================================================ */
+  async function searchEntities(entities, opts) {
+    opts = opts || {};
+    const list = (entities || []).map(s => String(s == null ? '' : s).trim()).filter(Boolean);
+    if (!list.length) return { status: 'miss', query: '' };
+    if (!proxyBase() || !_fetch()) return { status: 'disabled', query: list[0] };
+    const maxSubjects = Math.max(1, Math.min(5, opts.subjects || 3));
+    const perSubject = Math.max(1, Math.min(5, opts.perSubject || 2));
+    // dedup the subjects (heat order preserved) and cap the network spend
+    const subjects = [];
+    const seenSubj = new Set();
+    for (const s of list) { const k = s.toLowerCase(); if (!seenSubj.has(k)) { seenSubj.add(k); subjects.push(s); } if (subjects.length >= maxSubjects) break; }
+    const results = await Promise.all(subjects.map(s =>
+      searchOptions(s, { limit: perSubject + 2, severity: opts.severity || 0 })
+        .catch(e => ({ status: 'error', error: String((e && e.message) || e), query: s }))));
+    const options = [];
+    const seen = new Set();
+    let anyHit = false, fallback = null;
+    results.forEach((r, i) => {
+      if (r && r.status === 'hit' && Array.isArray(r.options)) {
+        anyHit = true;
+        let kept = 0;
+        for (const o of r.options) {
+          const key = String(o.title || '').toLowerCase();
+          if (!key || seen.has(key)) continue;          // a title another subject already offered
+          seen.add(key);
+          options.push({ title: o.title, snippet: o.snippet, via: subjects[i] });
+          if (++kept >= perSubject) break;
+        }
+      } else if (r && !fallback && (r.status === 'gated' || r.status === 'error' || r.status === 'disabled')) {
+        fallback = r;                                    // remember the first real failure for an honest card
+      }
+    });
+    if (options.length) return { status: 'hit', query: subjects[0], subjects, options };
+    if (anyHit) return { status: 'no-options', query: subjects[0], subjects };
+    return fallback ? { status: fallback.status, query: subjects[0], error: fallback.error, reason: fallback.reason }
+                    : { status: 'miss', query: subjects[0], subjects };
+  }
+
   // Pick the term worth looking up from a free-text chat message: a quoted
   // phrase, else the longest capitalized run (after stripping a question
   // lead-in), else the cleaned remainder. Pure — drives the chat enrichment.
@@ -789,7 +839,7 @@
     SCHEMA,
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
-    enrichTerm, article, searchOptions, pickQuery, acquireIntent, seedQuery, isSpecificQuery,
+    enrichTerm, article, searchOptions, searchEntities, pickQuery, acquireIntent, seedQuery, isSpecificQuery,
     stripWikiSections, articleDocText,
     hasConsent, grantConsent, revokeConsent,
     clearCache,

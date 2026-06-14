@@ -3170,7 +3170,18 @@ function App() {
     // force ('on' mode / the button on a chatty message) shows the card alongside
     // the model's reply. This turn injects no doc: it answers from what's already
     // in scope, and the chosen article grounds later turns.
-    return { offered: true, term, explicit };
+    //
+    // For a NON-EXPLICIT offer the bare token is the wrong thing to look up — the
+    // reader's hottest conversation subjects (ctx, force-only) are. Hand the
+    // caller that heat-ranked pool so it can search them at once and surface the
+    // hottest's articles on top; lead with a specific subject the message itself
+    // named ("look at Tesla" still leads with Tesla), even if it isn't hot yet.
+    let pool = (ctx && Array.isArray(ctx.entities)) ? ctx.entities.slice() : [];
+    if (!explicit) {
+      const raw = (X.pickQuery && X.pickQuery(q)) || '';
+      if (raw && X.isSpecificQuery && X.isSpecificQuery(raw)) pool = [raw, ...pool];
+    }
+    return { offered: true, term, explicit, entities: pool };
   };
 
   // The "initial search → offer options" step (the AUTOMATIC path). A cheap
@@ -3197,6 +3208,32 @@ function App() {
     if (res.status === 'error') { tag({ status: 'error', term, error: res.error }); return { status: 'error', term, error: res.error }; }
     if (res.status === 'hit' && res.options && res.options.length) { const options = res.options.slice(0, 6); tag({ status: 'options', term, options }); return { status: 'options', term, options }; }
     tag({ status: 'no-options', term }); return { status: 'no-options', term };
+  };
+
+  // The hottest-subjects offer (the non-explicit / forced path). Instead of one
+  // search on a bare token, search the conversation's hottest subjects at once
+  // and merge their top articles into ONE ranked card — hottest on top
+  // (EOExternal.searchEntities). Degrades to the single-term offer on an older
+  // external.js; settles an honest miss/error card when the multi-search comes
+  // back empty. Drives the live message's card by turnId like offerWikiOptions.
+  const offerWikiHot = async (turnId, entities) => {
+    const X = window.EOExternal;
+    const list = (entities || []).filter(Boolean);
+    if (!list.length) return { status: 'no-options' };
+    if (!X || typeof X.searchEntities !== 'function') return offerWikiOptions(turnId, list[0]);   // older build → single
+    const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
+    try { X.grantConsent && X.grantConsent(); } catch (e) {}
+    tag({ status: 'searching', term: list[0] });
+    let res;
+    try { res = await X.searchEntities(list, { subjects: 3, perSubject: 2 }); }
+    catch (e) { res = { status: 'error', error: String((e && e.message) || e) }; }
+    if (!res || res.status === 'disabled') { tag(null); return { status: 'disabled' }; }
+    if (res.status === 'hit' && res.options && res.options.length) {
+      const options = res.options.slice(0, 6);
+      tag({ status: 'options', term: list[0], options }); return { status: 'options', term: list[0], options };
+    }
+    if (res.status === 'error') { tag({ status: 'error', term: list[0], error: res.error }); return { status: 'error', term: list[0] }; }
+    tag({ status: 'no-options', term: list[0] }); return { status: 'no-options', term: list[0] };
   };
 
   // The coordinated reply for an EXPLICIT Wikipedia lookup ("search wikipedia for
@@ -3490,7 +3527,12 @@ function App() {
         // EXPLICIT lookup ("search wikipedia for X") is decided once scope is known
         // (below): a turn-taking card when there's nothing to ground on, else a
         // side-offer beside the grounded answer.
-        if (!wr.explicit) offerWikiOptions(turnId, wr.term).catch((e) => eoWarn('wiki-options', e));
+        if (!wr.explicit) {
+          // hottest-subjects offer when the conversation has a subject to anchor
+          // on; the single-term offer only as the cold-field fallback.
+          if (wr.entities && wr.entities.length) offerWikiHot(turnId, wr.entities).catch((e) => eoWarn('wiki-hot', e));
+          else offerWikiOptions(turnId, wr.term).catch((e) => eoWarn('wiki-options', e));
+        }
       }
     }
 
