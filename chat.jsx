@@ -492,6 +492,7 @@ function narrateTurn(turn) {
       : /flag/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', kept but flagged — the page’s exact mechanical reading is one click away.'
       : /caveat/.test(f.engine) ? 'Final answer: the model’s phrasing, kept with unverified terms struck and citations bound.'
       : /model/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', with citations bound to the document.'
+      : /reference/.test(f.engine) ? 'Final answer: a Wikipedia search — the matching articles are offered above to research; nothing was summarized from memory.'
       : 'Final answer: ' + f.engine + '.');
   }
   return out;

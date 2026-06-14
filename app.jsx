@@ -2866,14 +2866,19 @@ function App() {
     // off-device action, so a missing or throwing decider SUPPRESSES it rather
     // than waving it through. A per-message force ('on' mode or the composer
     // button) skips the intent/identity gate (but never the corpus check below).
+    // EXPLICIT acquisition = the message itself asks to look something up (a
+    // lookup verb / frame, or "who is / what is <ProperName>"). Computed once: it
+    // gates the auto path AND tells the caller this offer earns a coordinated
+    // reply, instead of a model free-association that contradicts the card.
+    let explicit = false;
+    try { explicit = !!(X.acquireIntent && X.acquireIntent(q)); } catch (e) { eoWarn('acquireIntent', e); }
     const hot = (!force && typeof hotEntity === 'function') ? hotEntity() : null;
     if (!force) {
       //   (1) the turn must EXPLICITLY ask to acquire (a lookup verb / frame). A
       //       bare factual or follow-up question ("what are his inspirations?")
       //       is intent: factual and never reaches the fetcher.
       if (typeof X.acquireIntent !== 'function') return null;
-      let wantsAcquire; try { wantsAcquire = X.acquireIntent(q); } catch (e) { eoWarn('acquireIntent', e); return null; }
-      if (!wantsAcquire) return null;
+      if (!explicit) return null;
       //   (3) a follow-up bound to the active subject answers against the held
       //       document — nothing to acquire. With an active subject we MUST be
       //       able to prove it isn't such a follow-up, or we don't fetch.
@@ -2889,7 +2894,7 @@ function App() {
     //       check the corpus, we can't prove a fetch is warranted, so we don't.
     if (!E || typeof E.resolveSubjectDoc !== 'function') return null;
     let have; try { have = E.resolveSubjectDoc(docsRef.current, term); } catch (e) { eoWarn('resolveSubjectDoc', e); return null; }
-    if (have) { addSource(have.id); return have; }
+    if (have) { addSource(have.id); return { doc: have }; }
     // Ambiguous acquisition (a bare token that collides with the active subject —
     // "look up Shore" while a different Shore is active) must not silently
     // fetch-and-swap; hold (gate only — a force overrides).
@@ -2897,12 +2902,14 @@ function App() {
     // The turn reaches here either because the gate decided it (Auto) or because
     // a force waved it past the gate ('on' mode / the per-message button). EITHER
     // WAY it only takes a stab and OFFERS options — it NEVER pulls a full article
-    // in on its own. The lightweight search surfaces the candidates (with any
-    // disambiguation); the reader picks one (runWikiSearch) and only THEN is the
-    // article fetched and ingested. Returns null: this turn answers from the
-    // sources already in scope, and the chosen article grounds later turns.
-    offerWikiOptions(turnId, term).catch((e) => eoWarn('wiki-options', e));
-    return null;
+    // in on its own. The CALLER fires the lightweight search and surfaces the
+    // candidates; the reader picks one (runWikiSearch) and only THEN is the
+    // article fetched and ingested. An EXPLICIT lookup ("search wikipedia for X")
+    // additionally earns a coordinated reply (the card is the answer); a soft
+    // force ('on' mode / the button on a chatty message) shows the card alongside
+    // the model's reply. This turn injects no doc: it answers from what's already
+    // in scope, and the chosen article grounds later turns.
+    return { offered: true, term, explicit };
   };
 
   // The "initial search → offer options" step (the AUTOMATIC path). A cheap
@@ -2915,18 +2922,36 @@ function App() {
     const X = window.EOExternal;
     const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
     try { X && X.grantConsent && X.grantConsent(); } catch (e) {}
+    // Returns the final outcome ({ status, term, options? }) so a caller settling a
+    // coordinated reply can match its words to what the card shows.
     // Older external.js without the options search → degrade to a single editable
     // confirm card (the picked term), so the feature still works.
-    if (!X || typeof X.searchOptions !== 'function') { tag({ status: 'confirm', term }); return; }
+    if (!X || typeof X.searchOptions !== 'function') { tag({ status: 'confirm', term }); return { status: 'confirm', term }; }
     tag({ status: 'searching', term });
     let res;
     try { res = await X.searchOptions(term); }
     catch (e) { res = { status: 'error', error: String((e && e.message) || e) }; }
-    if (!res || res.status === 'disabled') { tag(null); return; }          // lookups off → no card
-    if (res.status === 'gated') { tag({ status: 'gated', term }); return; }
-    if (res.status === 'error') { tag({ status: 'error', term, error: res.error }); return; }
-    if (res.status === 'hit' && res.options && res.options.length) { tag({ status: 'options', term, options: res.options.slice(0, 6) }); return; }
-    tag({ status: 'no-options', term });
+    if (!res || res.status === 'disabled') { tag(null); return { status: 'disabled', term }; }          // lookups off → no card
+    if (res.status === 'gated') { tag({ status: 'gated', term }); return { status: 'gated', term }; }
+    if (res.status === 'error') { tag({ status: 'error', term, error: res.error }); return { status: 'error', term, error: res.error }; }
+    if (res.status === 'hit' && res.options && res.options.length) { const options = res.options.slice(0, 6); tag({ status: 'options', term, options }); return { status: 'options', term, options }; }
+    tag({ status: 'no-options', term }); return { status: 'no-options', term };
+  };
+
+  // The coordinated reply for an EXPLICIT Wikipedia lookup ("search wikipedia for
+  // dolphins"). The options card IS the substantive output; this is the short,
+  // honest line that pairs with it — never a model "summary" of an article it has
+  // not read (the local model fabricates one, contradicting the card). Tailored to
+  // the search outcome so the words match what the card actually shows.
+  const wikiOfferReply = (term, res) => {
+    const t = '“' + term + '”';
+    const status = res && res.status;
+    if (status === 'options') return `I searched Wikipedia for ${t} — the matches are above. Pick one and I’ll read the full article and answer with citations, rather than summarizing it from memory.`;
+    if (status === 'gated') return `I held back on ${t} — it reads as a private individual, and the reference desk doesn’t resolve people against Wikipedia.`;
+    if (status === 'error') return `I tried to search Wikipedia for ${t} but couldn’t reach it just now. Give it a moment and try again.`;
+    if (status === 'disabled') return `Wikipedia lookups are off, so I can’t search for ${t}. Turn the reference desk on and I’ll pull the article in.`;
+    if (status === 'confirm') return `I can search Wikipedia for ${t} — confirm the term in the card above and I’ll read the article and answer with citations.`;
+    return `I searched Wikipedia for ${t} but didn’t find a matching article. Try different wording, or ask me something else.`;
   };
 
   // The confirmed fetch — the reader chose an option to research (or, on the
@@ -3055,19 +3080,44 @@ function App() {
     //   on   → every substantive turn, past the gate (a standing "always take a
     //          stab"); the FORCE button does the same for one send.
     // In every case the turn only TAKES A STAB and offers options — it never pulls
-    // an article in on its own. chatWikipedia returns no fetched doc (the reader
-    // clicks an option to ingest one, which grounds later turns); the only doc it
-    // can hand back is an ALREADY-ingested corpus match, threaded into this turn's
-    // scope. `force` ('on' / the button) bypasses the gate, not the offer.
+    // an article in on its own (the reader clicks an option to ingest one, which
+    // grounds later turns). chatWikipedia returns a small decision: { doc } for an
+    // ALREADY-ingested corpus match (threaded into this turn's scope), or
+    // { offered, term, explicit } for an options offer — an EXPLICIT lookup gets a
+    // coordinated reply below, a soft force shows the card alongside the model's
+    // reply. `force` ('on' / the button) bypasses the gate, not the offer.
     let injectedDoc = null;
+    let wikiOffer = null;
     const forceWiki = wikiMode === 'on' || forcedThisMessage;
     if (wikiMode !== 'off' && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {
-      try { injectedDoc = await chatWikipedia(q, turnId, { force: forceWiki }); } catch (e) { eoWarn('wiki-chat', e); }
+      let wr = null;
+      try { wr = await chatWikipedia(q, turnId, { force: forceWiki }); } catch (e) { eoWarn('wiki-chat', e); }
+      if (wr && wr.doc) injectedDoc = wr.doc;             // an already-ingested corpus match, threaded into scope
+      else if (wr && wr.offered) {
+        wikiOffer = wr;
+        // A SOFT offer ('on' mode / the button on a chatty message) shows the card
+        // alongside the model's reply — fire it now and let the turn proceed. An
+        // EXPLICIT lookup ("search wikipedia for X") is decided once scope is known
+        // (below): a turn-taking card when there's nothing to ground on, else a
+        // side-offer beside the grounded answer.
+        if (!wr.explicit) offerWikiOptions(turnId, wr.term).catch((e) => eoWarn('wiki-options', e));
+      }
     }
 
     let doc = backingDoc() || injectedDoc;
     let scope = scopeList();   // explicit source chips, else the focused doc
     if (injectedDoc && !scope.some(d => d.id === injectedDoc.id)) scope = [injectedDoc, ...scope];
+
+    // An EXPLICIT lookup ("search wikipedia for X") with NOTHING in scope to
+    // ground on takes over the turn: the options card is the answer, settled below
+    // with a coordinated reply so the model never fabricates a "summary" (abstain,
+    // never fabricate). With a document already in scope the card is only a
+    // side-offer — fire it now and let the turn ground on the doc as usual (so
+    // "search the document for X" still answers from the document). A soft offer
+    // ('on' mode / the button on a chatty message) was already fired above.
+    const wikiTakeover = !!(wikiOffer && wikiOffer.explicit && !scope.length);
+    if (wikiOffer && wikiOffer.explicit && !wikiTakeover) offerWikiOptions(turnId, wikiOffer.term).catch((e) => eoWarn('wiki-options', e));
+
     const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
       ? window.EOLLM.hasAnthropicKey()
       : model.provider === 'wllama'
@@ -3119,6 +3169,26 @@ function App() {
       AUD('step', 'calculation', { shown: calc.shown, eval: calc.eval, display: calc.display, result: calc.result, operands: calc.operands, cites: calc.cites });
       replaceLast({ role: 'assistant', text: calc.text, audit: null, mode: 'grounded', calc });
       AUD('end', { engine: 'mechanical', text: calc.text, audit: calc.audit, cites: calc.cites });
+      setBusy(false);
+      return;
+    }
+
+    // EXPLICIT WIKIPEDIA SEARCH with nothing to ground on. The turn asked, in so
+    // many words, to look something up ("search wikipedia for dolphins"), the
+    // subject isn't already in the corpus, and no document is in scope — so the
+    // OPTIONS card is the answer. Run the search, show the matches, and settle a
+    // short honest reply that points at them; do NOT wake the model to "summarize
+    // Wikipedia" from memory, which contradicts the card and fabricates (abstain,
+    // never fabricate). The deep fetch is still one click away on a chosen option,
+    // and grounds the next turn with citations.
+    if (wikiTakeover) {
+      lastGroundedRef.current = false;
+      const res = await offerWikiOptions(turnId, wikiOffer.term);
+      if (genStale(myGen)) return;                        // stopped during the search
+      const reply = wikiOfferReply(wikiOffer.term, res);
+      AUD('step', 'route', { referencing: false, reason: 'wiki-offer', path: 'wiki-offer' });
+      replaceLast({ role: 'assistant', text: reply, audit: null });
+      AUD('end', { engine: 'reference', text: reply, audit: null, reason: (res && res.status) || 'offered' });
       setBusy(false);
       return;
     }

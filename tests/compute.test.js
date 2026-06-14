@@ -54,6 +54,21 @@ group('evaluates pure expressions deterministically (no model)', () => {
   eq(C.detect('5!').display, '120', 'factorial — a trailing ! is the operator, not punctuation');
 });
 
+group('informal operators — "x"/"×"/"÷" are arithmetic, never the model', () => {
+  // The regression: "what is 123009 x 39?" used to drop to the model (the prose
+  // gate rejected the stray "x"), which then did the arithmetic and got it wrong.
+  const r = C.detect('what is 123009 x 39?');
+  ok(r != null, '"123009 x 39" is a calculation, not a prose turn');
+  eq(r && r.display, '4,797,351', 'x between numbers is multiplication, computed exactly');
+  eq(r && r.eval, '123009*39', 'the "x" is normalized to * in the worked expression');
+  eq(C.detect('12 × 39').display, '468', 'the × sign multiplies');
+  eq(C.detect('100 ÷ 4').display, '25', 'the ÷ sign divides');
+  eq(C.detect('2 x 2 x 2').display, '8', 'chained "x" all multiply');
+  eq(C.detect('what is 5x5?').display, '25', '"5x5" with no spaces still multiplies');
+  // but a stray "x" in prose is still not a calculation (the gate holds)
+  eq(C.detect('the 3 x 4 grid layout'), null, 'a measured "3 x 4 grid" in prose is not hijacked as a calc');
+});
+
 group('money runs in BigNumber precision', () => {
   eq(C.detect('0.1 + 0.2').exact, '0.3', '0.1 + 0.2 is exactly 0.3 — no float drift');
   const r = C.detect('15% of $240,000');

@@ -629,9 +629,16 @@
          // verb ("search for dogs" → "dogs", "look up Howard Shore" → "Howard
          // Shore", "find the article on socialism" → "socialism")
          .replace(/^(?:please\s+)?(?:look\s+up|look\s+for|pull\s+up|search\s+for|search|google|find|get|read\s+up\s+on|read\s+about|read\s+on)\b[\s,:'-]*/i, '')
-         .replace(/^(?:me\s+)?(?:the\s+)?(?:(?:wiki(?:pedia)?\s+)?(?:article|page|entry|wiki|info|information)\s+(?:on|about|for)\s+)?/i, '')
+         // strip a "wikipedia/article/page … on/about/for" lead-in down to the
+         // subject — including a BARE "wikipedia for X" ("search wikipedia for
+         // dolphins" → "dolphins", "the article on socialism" → "socialism")
+         .replace(/^(?:me\s+)?(?:the\s+)?(?:wiki(?:pedia)?\s+)?(?:article|page|entry|wiki|info|information)?\s*(?:on|about|for)\s+/i, '')
          // strip a RUN of leading question / auxiliary words ("what is", "who was")
          .replace(/^(?:(?:who|what|which|where|when|why|how|whose|whom|is|are|was|were|do|does|did|can|could|would|should)\b[\s,:'-]*)+/i, '')
+         // strip a residual conversational frame the question-word run leaves
+         // behind ("what do you know about X" → after "what do" → "you know about
+         // X" → "X"); the subject is what follows the about/of/on
+         .replace(/^(?:you|we|i)\s+(?:know|knew|have|need|want|wanna)\s+(?:to\s+know\s+)?(?:much\s+|anything\s+|something\s+|more\s+)?(?:about|on|of|regarding)\s+/i, '')
          .replace(/[?.!]+\s*$/, '').trim();
     const caps = t.match(/\b[A-Z][\w'’-]+(?:\s+(?:of|the|and|de|van|von|du|la|le)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+)*\b/g) || [];
     if (caps.length) { caps.sort((a, b) => b.length - a.length); return caps[0]; }
