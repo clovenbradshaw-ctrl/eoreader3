@@ -1429,15 +1429,22 @@ function App() {
   const depositConversation = (q, answer) => {
     const E = window.EOEngine;
     if (!E || !E.conversationField || !E.namedReferents) return;
-    let names;
+    let names = [];
     try {
-      const seen = new Set(); names = [];
-      for (const n of E.namedReferents(String(q || '')).concat(E.namedReferents(String(answer || '')))) {
-        const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); names.push(n); }
+      if (E.depositTurn) {
+        // Centralized + gated: OFF deposits every name at weight 1 (parity); ON
+        // weights the user's named subject above incidental answer mentions, so
+        // the next bare pronoun resolves instead of tying. Returns the names.
+        names = E.depositTurn(E.conversationField, String(q || ''), String(answer || '')) || [];
+      } else {
+        const seen = new Set();
+        for (const n of E.namedReferents(String(q || '')).concat(E.namedReferents(String(answer || '')))) {
+          const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); names.push(n); }
+        }
+        if (names.length) E.conversationField.deposit({ entities: names }, 1);
       }
-    } catch (e) { eoWarn('conversation referents', e); return; }
+    } catch (e) { eoWarn('chat field deposit', e); return; }
     if (!names.length) return;
-    try { E.conversationField.deposit({ entities: names }, 1); } catch (e) { eoWarn('chat field deposit', e); return; }
     try { AUD('step', 'field-deposit', { source: 'chat', entities: names }); } catch (e) {}
   };
 
@@ -1714,7 +1721,13 @@ function App() {
     AUD('step', 'intent', { intent });
     if (refs) AUD('step', 'referents', { matter: refs.matter, antimatter: refs.antimatter });
     AUD('step', 'retrieve', { k: 6, engine: 'mechanical', hits: auditHits(scope, q, 6) });
-    let plan = givenPlan || window.EOEngine.answerScope(scope, q, { hotEntity: hotEntity() });
+    // answerResolved rewrites a carried pronoun to its referent before reading,
+    // so "what about his role" binds to the figure the conversation made; off-dial
+    // (binding_resolution OFF) it is exactly answerScope (parity floor).
+    const _b = hotBinding(q);
+    let plan = givenPlan || (window.EOEngine.answerResolved
+      ? window.EOEngine.answerResolved(scope, q, { hotEntity: (_b && _b.name) || hotEntity(), hotBinding: _b })
+      : window.EOEngine.answerScope(scope, q, { hotEntity: hotEntity() }));
     if (plan.checks) {
       AUD('step', 'confirm', { checks: plan.checks.map(c => ({ subject: c.subject, predicate: c.predicate, negated: !!c.negated, verdict: c.verdict })) });
       try { plan = maybeRetract(scope, plan); } catch (e) { eoWarn('retract', e); }

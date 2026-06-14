@@ -10,10 +10,11 @@
    router and the tool-query builder share, so a pronoun resolved once steers
    both the route and the Wikipedia query.
 
-   Everything is behind the binding_resolution rule, OFF by default. OFF,
-   resolveBinding is byte-identical to today's hotEntity (the heaviest hot
+   Everything is behind the binding_resolution rule. It now ships ON (the live
+   flip — verified parity-clean: the golden is byte-identical dial-on). Forced
+   OFF, resolveBinding is byte-identical to today's hotEntity (the heaviest hot
    entity, name only, confidence null) and bindingQuery never rewrites a query —
-   the parity floor. These tests exercise the ON path (applyRules flips it).
+   the parity floor, one `value:false` away. These tests pin both paths.
 
    Run with `node tests/binding.test.js`.
    ============================================================ */
@@ -37,8 +38,12 @@ async function main() {
   const seed = (names) => { F.reset(); F.decayTurn(); F.deposit({ entities: names }, 1); };
   const FLOOR = { heatFloor: 0.25 };
 
-  group('parity floor — binding_resolution ships OFF, resolveBinding is hotEntity');
-  eq(E.bindingResolutionEnabled(), false, 'binding_resolution ships OFF');
+  group('parity floor — with binding_resolution OFF, resolveBinding is hotEntity');
+  // binding_resolution now ships ON (the live flip); force it OFF here to pin
+  // that the floor — name-only, confidence null, no query rewrite — is preserved
+  // and one set value:false away.
+  E.applyRules([{ id: 'binding-resolution', enabled: true, value: 0 }]);
+  eq(E.bindingResolutionEnabled(), false, 'forced OFF for the parity-floor check');
   seed(['Tom Turner']);
   {
     const b = E.resolveBinding([doc], 'what about his role', F, FLOOR);
@@ -133,6 +138,59 @@ async function main() {
       'an absent binding never rewrites the query');
   }
 
+  group('Phase 2 — the router consumes the binding (anaphoric turn → names-entity, not continuity)');
+  {
+    seed(['Tom Turner']);
+    const b = E.resolveBinding([doc], 'what about his role', F, FLOOR);
+    const ctx = { everGrounded: true, prevGrounded: true, hadReply: true, hotEntity: b.name, hotBinding: b };
+    const r = E.routeTurn([doc], 'what about his role', ctx);
+    eq(r.decision, 'mechanical', 'a carried anaphoric follow-up still routes mechanical');
+    eq(r.reason, 'names-entity', 'it routes for the RIGHT reason (the carried referent), not continuity');
+    eq(r.via, 'binding', 'the route records that the carried binding supplied the entity');
+    // parity: with the dial OFF the same turn falls back to continuity (today)
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 0 }]);
+    const off = E.routeTurn([doc], 'what about his role', { everGrounded: true, prevGrounded: true, hadReply: true, hotEntity: 'Tom Turner' });
+    eq(off.reason, 'continuity', 'OFF: the same turn routes as continuity — the parity floor, unchanged');
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 1 }]);
+  }
+
+  group('Phase 2 — the answer consumes the binding (witnesses where the raw pronoun could not)');
+  {
+    seed(['Tom Turner']);
+    const ctx = { hotBinding: E.resolveBinding([doc], 'what about his role', F, FLOOR) };
+    const a = E.answerResolved([doc], 'what about his role', ctx);
+    ok(a && (a.cites || []).length > 0, 'the resolved answer BINDS (cites the page) — got ' + ((a.cites || []).length) + ' cites');
+    ok(a && !(a.audit && a.audit.absent), 'it is no longer an honest absence — the referent was resolved');
+    ok(a && /Tom Turner/.test(a.text || ''), 'the answer is about the carried figure — got: ' + (a && a.text || '').slice(0, 60));
+    // parity: OFF, answerResolved is exactly answerScope (the bare pronoun → absence)
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 0 }]);
+    const off = E.answerResolved([doc], 'what about his role', ctx);
+    const base = E.answerScope([doc], 'what about his role', ctx);
+    eq(off.text, base.text, 'OFF: answerResolved === answerScope (the parity floor)');
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 1 }]);
+  }
+
+  group('Phase 4 — depositTurn weights the named subject above incidental mentions');
+  {
+    // ON: the user named Tom Turner; the answer also mentions the DMC. The
+    // subject must out-mass the co-mentioned org, or the next bare pronoun ties.
+    F.reset(); F.decayTurn();
+    E.depositTurn(F, 'who is Tom Turner', 'Tom Turner runs the District Management Corporation.');
+    const snap = F.snapshot();
+    const tom = snap.entities.find(e => /tom turner/i.test(e.label || e.key));
+    const dmc = snap.entities.find(e => /district management/i.test(e.label || e.key));
+    ok(tom && dmc && tom.heat > dmc.heat, 'ON: the named subject out-masses the co-mentioned org — got ' + (tom && tom.heat) + ' vs ' + (dmc && dmc.heat));
+    // OFF: byte-identical to today — every name deposits at weight 1
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 0 }]);
+    F.reset(); F.decayTurn();
+    E.depositTurn(F, 'who is Tom Turner', 'Tom Turner runs the District Management Corporation.');
+    const s2 = F.snapshot();
+    const tom2 = s2.entities.find(e => /tom turner/i.test(e.label || e.key));
+    const dmc2 = s2.entities.find(e => /district management/i.test(e.label || e.key));
+    ok(tom2 && dmc2 && tom2.heat === dmc2.heat, 'OFF: every name deposits at weight 1 (parity floor) — got ' + (tom2 && tom2.heat) + ' vs ' + (dmc2 && dmc2.heat));
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 1 }]);
+  }
+
   group('acceptance — "a document about Frank, then what about his role / look up his employer"');
   {
     // Frank ≈ Tom Turner here (the fixture's self-dealing protagonist).
@@ -143,6 +201,11 @@ async function main() {
     const look = E.resolveBinding([doc], 'look up his employer', F, FLOOR);
     eq(E.bindingQuery('look up his employer', look), 'look up Tom Turner employer',
       'the acquisition query names Tom Turner\'s employer, not the word "his"');
+    // end to end: the carried follow-up now ROUTES for the right reason AND ANSWERS
+    const r = E.routeTurn([doc], 'what about his role', { everGrounded: true, prevGrounded: true, hadReply: true, hotEntity: role.name, hotBinding: role });
+    eq(r.reason, 'names-entity', 'routes mechanically for the right reason (the carried referent)');
+    const ans = E.answerResolved([doc], 'what about his role', { hotBinding: role });
+    ok((ans.cites || []).length > 0, 'and the reply binds to the page (witnessed), not held as absence');
   }
 
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

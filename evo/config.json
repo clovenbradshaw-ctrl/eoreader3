@@ -1,6 +1,6 @@
 {
-  "_comment": "Evolution-loop configuration. The quality weights live here (not in engine.js READING_RULES) so the agent — which may edit READING_RULES — can never retune its own exam. Change these by hand to tell the loop which failure mode it currently cares about.",
-  "weights": { "binding": 0.30, "stall": 0.30, "grounding": 0.20, "integration": 0.20 },
+  "_comment": "Evolution-loop configuration. The quality weights live here (not in engine.js READING_RULES) so the agent — which may edit READING_RULES — can never retune its own exam. Change these by hand to tell the loop which failure mode it currently cares about. `routing` (Phase 4) scores routes/resolutions by the engine's own witness degree (EOAudit.truthfulness) over a multi-turn conversation — the loop raises it by tuning the evolvable binding guards (chat_field_mass, binding_conf_*, binding_ambiguous_margin) or proposing binding_resolution ON, never by touching the grounder.",
+  "weights": { "binding": 0.25, "stall": 0.25, "grounding": 0.15, "routing": 0.20, "integration": 0.15 },
   "qualityWinThreshold": 0.01,
   "justifiedBreakThreshold": 0.03,
   "generations": 6,
