@@ -357,6 +357,14 @@ ol.md-list { list-style: decimal; }
    Solid-but-muted: this IS evidence, not a strike-through. */
 .cite.absent { color: #5b6470; background: #eef0f3; border: 1px solid #d4d8de; cursor: help; }
 .cite.absent:hover { border-color: #5b6470; }
+/* The reader can hide the inline footnote chips for cleaner prose (Settings →
+   Answers). It's purely visual — the marker text is untouched, so a copied reply
+   reads the same. Two things stay on principle, mirroring "Grounding details":
+   the glass-box disclosures (.mech — the mechanical reading, the worked math)
+   keep their citations, since hiding chrome must never touch the trace; and void
+   chips stay, because a void renders the flagged WORD itself, not a reference. */
+:root.hide-citations .msg-asst .cite:not(.void) { display: none; }
+:root.hide-citations .msg-asst .mech .cite { display: inline; }
 /* a retracted reply — a later graph-check failed a claim it made; the note
    outranks whatever badge the answer originally earned */
 .retract-note {
