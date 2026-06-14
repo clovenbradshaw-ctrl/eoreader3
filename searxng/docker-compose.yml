@@ -1,0 +1,36 @@
+# Self-hosted SearXNG — the default and only required search backend for Cleo
+# web sources (spec §2, §4.1). It is the upstream the cleon-search-proxy queries;
+# the proxy hides the origin IP, SearXNG aggregates the public engines.
+#
+# Single-user operation: the limiter is disabled (see settings.yml) so requests
+# from the proxy's "abnormal" User-Agent are not rejected. Bind SearXNG to
+# localhost and put the proxy in front of it; do NOT expose 8080 publicly.
+#
+#   docker compose up -d
+#   # then run the proxy with SEARXNG_URL=http://127.0.0.1:8080
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: cleo-searxng
+    ports:
+      # localhost only — the proxy reaches it over the loopback; the public
+      # never touches SearXNG directly.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      # Must match the bind URL the proxy uses. No trailing path.
+      - SEARXNG_BASE_URL=http://127.0.0.1:8080/
+      - SEARXNG_HOSTNAME=127.0.0.1
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "1"

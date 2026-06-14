@@ -75,6 +75,33 @@
   async function saveAudit(turns) { return kvPut('audit', Array.isArray(turns) ? turns : []); }
   async function loadAudit() { const a = await kvGet('audit'); return Array.isArray(a) ? a : []; }
 
+  // ---- web sources (web-source/1) — external pages admitted as first-class
+  //      groundable sources (websource.js). Stored as an array keyed by id, with
+  //      a content-hash lookup so a re-paste of the same URL finds the frozen
+  //      record and pays no network. supersede/retract are status mutations, so
+  //      an upsert by id covers them (the old record is retained, not deleted).
+  async function loadWebSources() { const w = await kvGet('websources'); return Array.isArray(w) ? w : []; }
+  async function saveWebSources(list) { return kvPut('websources', Array.isArray(list) ? list : []); }
+  async function saveWebSource(record) {
+    if (!record || !record.id) return false;
+    const list = await loadWebSources();
+    const i = list.findIndex(r => r && r.id === record.id);
+    if (i >= 0) list[i] = record; else list.push(record);
+    return saveWebSources(list);
+  }
+  async function findWebSourceByHash(contentHash) {
+    if (!contentHash) return null;
+    const list = await loadWebSources();
+    return list.find(r => r && r.content_hash === contentHash) || null;
+  }
+  async function setWebSourceStatus(id, status) {
+    const list = await loadWebSources();
+    const r = list.find(x => x && x.id === id);
+    if (!r) return false;
+    r.status = status;
+    return saveWebSources(list);
+  }
+
   // ---- small JSON in localStorage ----
   const lsGet = (k) => { try { const s = localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch (e) { return null; } };
   const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
@@ -89,12 +116,13 @@
   // Wipe everything (used by a "clear local data" affordance / tests).
   async function clearAll() {
     try { localStorage.removeItem(LS_PREFS); localStorage.removeItem(LS_LEDGER); } catch (e) {}
-    try { await kvPut('docs', []); await kvPut('chat', {}); await kvPut('audit', []); } catch (e) {}
+    try { await kvPut('docs', []); await kvPut('chat', {}); await kvPut('audit', []); await kvPut('websources', []); } catch (e) {}
   }
 
   window.EOStore = {
     available: typeof indexedDB !== 'undefined',
     saveDocs, loadDocs, saveChat, loadChat, saveAudit, loadAudit,
+    loadWebSources, saveWebSources, saveWebSource, findWebSourceByHash, setWebSourceStatus,
     savePrefs, loadPrefs, saveLedger, loadLedger, clearAll,
     // generic IndexedDB kv (used by the external-knowledge freeze cache). Same
     // defensive contract as the rest: a storage failure resolves undefined/false,

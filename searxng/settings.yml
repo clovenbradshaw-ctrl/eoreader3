@@ -1,0 +1,56 @@
+# SearXNG settings snippet for Cleo web sources (spec §4.1, §12).
+#
+# Two things matter for the proxy to work in single-user operation:
+#   1. JSON output must be enabled (the proxy calls /search?format=json).
+#   2. The limiter must be OFF, or requests from the proxy's "abnormal"
+#      User-Agent are rejected.
+#
+# Prefer `bing` and `duckduckgo`; `reddit` and others rate-limit a single IP and
+# inject silent timeouts that skew the merged list. This is a minimal snippet —
+# merge it into the image's default settings.yml (keep the upstream defaults you
+# don't override).
+
+use_default_settings: true
+
+general:
+  instance_name: "cleo-searxng"
+  # No public stats / metrics surface for a single-user instance.
+  enable_metrics: false
+
+server:
+  # Replace with a long random secret (e.g. `openssl rand -hex 32`).
+  secret_key: "CHANGE_ME_openssl_rand_hex_32"
+  # Single-user behind the proxy on loopback: disable the bot limiter so the
+  # proxy's User-Agent is not blocked. Do NOT do this on a public instance.
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "POST"
+
+search:
+  # (1) Enable JSON so the proxy can parse results.
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+
+# (2) Keep the engine set lean and IP-stable. Enable the two the proxy prefers;
+# disable the chatty / rate-limiting ones. (Merge with the image defaults.)
+engines:
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: reddit
+    disabled: true
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 10.0
+  pool_connections: 100
+  pool_maxsize: 20
