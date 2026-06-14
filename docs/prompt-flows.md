@@ -354,12 +354,16 @@ matters — the first match settles the turn.
 a reply, but the model came back empty / failed audit" message.
 
 **The unbound lane is the dominant truthfulness term.** Keeping a draft
-that bound to no passage is the one dishonest move (it overstates binding
-status), so WI-4 removed the kept-unbound path entirely: an unbound draft
-now becomes the *residual* (an explicit void on the absent target plus the
-bound subject material, settled as `status: 'residual'` — a success), or
-the mechanical reading, or an honest refusal. The per-turn unbound count
-(glass box, §I) is therefore 0 by construction.
+that bound to no passage *as a clean assertion* is the one dishonest move
+(it overstates binding status). WI-4 does not discard the draft and speak
+the mechanical reading in its place — that was the inversion. Instead the
+talker's own sentence is **served as the residual**: its unsupported terms
+struck (`{{void:…}}`), the absent target flagged (`{{absent:…}}`), settled
+`status: 'residual'` (grounded, a success) with the witness degree (§I)
+reading low so the gap is visible *without the talker asserting silence*.
+The mechanical reading rides as click-to-view evidence, never as the reply;
+an honest refusal is reserved for when the model produced no prose to stamp.
+The per-turn unbound count (glass box, §I) is therefore 0 by construction.
 
 ## F. History wrapping (`epistemicTag`)
 
@@ -490,27 +494,72 @@ convergence under a standing revision channel, not arrival.
 
 **The instrument (WI-7).** `EOAudit.truthfulness(final)` (audit.js)
 attaches a `truth` block to every settled turn — `{ bound, voids,
-unbound, coverage }` — computed uniformly in `end()`, so grounded, chat,
-mechanical, residual, repair and compute turns are all measured. The glass
-box (auditview.jsx) surfaces it:
+unbound, coverage, degree, witnessed, witnessContent, witness }` —
+computed uniformly in `end()`, so grounded, chat, mechanical, residual,
+repair and compute turns are all measured. The glass box (auditview.jsx)
+surfaces it:
 
-- a per-turn chip `N✓ M⟨⟩ K⊥ · coverage%` (unbound `K` shown in alarm if
-  ever non-zero);
+- a per-turn chip `N✓ M⟨⟩ K⊥ · D% witnessed` (unbound `K` shown in alarm
+  if ever non-zero);
 - a ⚠ L1 badge when a turn's assembled history carried a prior turn's
   unverified tokens (`turn.l1Violations`);
 - a per-session summary (`TruthSummary`): unbound total (must be 0), L1
-  carry-forward (must be 0), and the coverage trace — the approximation
-  climbing toward the asymptote.
+  carry-forward (must be 0), and the witness-degree trace — the
+  approximation climbing toward the asymptote.
 
-**EO mapping.** DEF defines binding (the grounding criterion); EVA tests
-each claim against it (the binder, the vetoes, `coverageGaps`); REC
-restructures when EVA cannot conclude (gap-retrieve, the convergence loop,
-the residual). Coverage is the approximation, complete binding the
-asymptote, defeasibility what keeps it open.
+**The witness DEGREE (the asymptote, re-attached).** A stamp that says
+verified / not-verified is still arithmetic, just relocated; to leave the
+floor the stamp has to carry *degree*. `witnessOnProse` (audit.js) measures,
+on the talker's **own** settled prose, the fraction of each sentence's
+content tokens that a span witnesses: a sentence that bound to a span
+witnesses its content; a `{{void:…}}`/`{{absent:…}}` subtracts what the page
+could not carry; an unbound sentence witnesses nothing. The turn `degree` is
+the content-weighted mean; the session degree is `Σwitnessed / Σcontent`
+across turns. Any standing void or unbound sentence holds it strictly below
+1 — approached from below, never reached. This is the quantity the asymptote
+attaches to: degree of witness on what was *said*, not a literal string
+match (the floor the earlier framing was stuck on).
 
-**Parity floor.** None of WI-1…WI-7 alters a goldened engine function
-(`retrieve` / `context` / `answer` text·audit·cites / `inventedTerms` /
-`bindCitations`). Every change lives in the talker/orchestration layer
-(app.jsx), the LLM layer (llm.js: `modelTier`), or read-only
-instrumentation (audit.js, auditview.jsx). `tests/parity.js` stays
-bit-exact by construction.
+**The type gate (DEF — the fourth NUL state).** The veto used to decide
+"is this capitalized span a referent the page should carry?" with
+`body.includes(token)`, an existence-layer operator doing significance-layer
+work: a sentence-initial "Give"/"Based"/"Sure"/"What's" was harvested as a
+name, failed the substring test, fell into antimatter, and annihilated the
+turn. `nonReferentialCaps` (engine.js) now classifies each capitalized token
+by **shape** (compromise POS in context) before the presence test. A
+*referent* is a nominal (Noun/ProperNoun, not a Pronoun); a *structural*
+token (connective, discourse adverb) or *pragmatic* one (imperative verb,
+interrogative, interjection, contraction) is **not truth-apt** — the fourth
+NUL state (present / absent / never-set are the other three) — and can never
+reach antimatter or be struck as invented. Derived, never enumerated: the
+same surface flips by role ("Give me the gist" ⇒ dropped vs "The Give was
+generous" ⇒ kept), which no word list can do. `referents` / `referentsScope`
+/ `inventedTerms` all gate this way.
+
+**EO mapping.** DEF defines what is even truth-apt (the type gate) and the
+binding criterion; EVA tests each claim against it (the binder, the vetoes
+— now *stamps*, `coverageGaps`); REC restructures when EVA cannot conclude
+(gap-retrieve, the convergence loop, the residual). The witness degree is
+the approximation, complete witness the asymptote, defeasibility what keeps
+it open.
+
+**The grounder never speaks in the talker's place.** The veto stamps; it no
+longer gates-and-substitutes. A mis-classified token becomes a `{{void:…}}`
+flag on the talker's own sentence (served, read), not a discard. The WI-4
+residual attaches a registered-absence flag to the talker's sentence rather
+than prepending the mechanical reading as a body; `runGroundedSmall` serves
+the talker's flagged rephrase rather than the mechanical text when join-only
+breaks; and the mechanical reading rides as click-to-view **evidence** (the
+glass box), never as the reply. No raw span or mechanical reading is ever
+the chat reply in the grounded path.
+
+**Parity floor.** The type gate edits goldened engine functions *on
+purpose* (`referents` / `referentsScope` / `inventedTerms`) — that freeze
+was exactly why the defect was unreachable. The change is parity-safe on the
+*old* fixtures (a real name, present or absent, is unchanged; only
+non-nominals drop) and `tests/parity.js` is re-goldened with **corrected
+fixtures** that pin the new invariant: a sentence-initial "Give" produces no
+antimatter referent and "Based"/"Sure"/"What's" are never struck invented,
+with none of those words in any list. The instrument additions (WI-7 degree)
+and the orchestration changes live in audit.js / auditview.jsx / app.jsx.
+`tests/typegate.test.js` is the behavioral pin.

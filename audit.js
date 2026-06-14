@@ -59,6 +59,69 @@
     const t = String(text == null ? '' : text);
     return (t.match(/\{\{(?:void|absent):/g) || []).length;
   }
+
+  /* ---- WI-7 (extended): the witness DEGREE, per sentence ----
+     A stamp that says verified / not-verified is still arithmetic, just
+     relocated; to leave the floor the stamp has to carry DEGREE. This measures,
+     on the talker's OWN settled prose, the fraction of each sentence's content
+     tokens that are witnessed — not a literal-presence count, but how much of
+     what the talker said is backed by a span.
+
+     It reads only the marked text (so the instrument stays pure and engine-free):
+       • a sentence that bound to a span (carries a {{cite}}/{{infer}} marker)
+         witnesses its bare content tokens;
+       • a {{void:…}} strikes one content token the page could not carry, and an
+         {{absent:…}} is one thing the page could not establish — both count
+         against the sentence but for it (the void is honest, not witnessed);
+       • a sentence that bound to NOTHING witnesses none of its content.
+     degree = witnessed / (witnessed + unwitnessed) ∈ [0,1]; the turn degree is
+     the content-weighted mean over sentences. Any standing void or unbound
+     sentence holds it strictly below 1 — the asymptote is approached, never
+     reached, never silently dropped. Pure and total: malformed input ⇒ null. */
+  const WITNESS_STOP = new Set(('a an the and or but if then else for of to in on at by with from into over under is are '
+    + 'was were be been being am do does did doing have has had having will would shall should can could may might must '
+    + 'not no nor so than too very just only also this that these those it its he she they them his her their there here '
+    + 'who whom which what when where why how as up out off down about above below i we you us me my your our said say says '
+    + 'he\'s she\'s it\'s they\'re we\'re you\'re what\'s here\'s there\'s').split(/\s+/));
+  function witnessOnProse(text) {
+    const T = String(text == null ? '' : text);
+    // Sentinels for the three marker kinds — punctuation-free, content-free
+    // control codes (built here so no literal control char sits in the source),
+    // substituted BEFORE the sentence split so neither a marker's payload nor an
+    // absent-message's own periods can break the split.
+    const V = String.fromCharCode(1);   // a struck {{void:…}} token
+    const C = String.fromCharCode(2);   // a {{cite}}/{{infer}} binding
+    const A = String.fromCharCode(3);   // a {{absent:…}} registered absence
+    const neutral = T.replace(/\{\{(cite|infer|void|absent):[^}]*\}\}/g, (m, k) =>
+      ' ' + (k === 'void' ? V : k === 'absent' ? A : C) + ' ');
+    const frags = neutral.split(/(?<=[.!?])\s+|\n+/);
+    const per = [];
+    const citesIn = (s) => s.indexOf(C) !== -1;
+    const voidsIn = (s) => (s.split(V).length - 1) + (s.split(A).length - 1);
+    const attachPrev = (cite, voids) => { if (per.length && (cite || voids)) { const pr = per[per.length - 1]; pr.bound = pr.bound || cite; pr.voids += voids; } };
+    for (let f of frags) {
+      f = f.trim(); if (!f) continue;
+      // A marker that trailed the PREVIOUS sentence past its period lands at the
+      // head of this fragment after the split — attach those leading markers
+      // backwards, then read this fragment as its own sentence.
+      const lead = f.match(/^[\s\u0001\u0002\u0003]+/);
+      if (lead) { attachPrev(citesIn(lead[0]), voidsIn(lead[0])); f = f.slice(lead[0].length); }
+      const cite = citesIn(f), voids = voidsIn(f);
+      const content = (f.toLowerCase().match(/[a-z0-9][a-z0-9'’-]*/g) || [])
+        .map(w => w.replace(/['’]s$/, ''))
+        .filter(w => w.length > 2 && !WITNESS_STOP.has(w));
+      if (!content.length) { attachPrev(cite, voids); continue; }   // marker-only / punctuation
+      per.push({ bound: cite, content: content.length, voids });
+    }
+    let wTot = 0, dTot = 0;
+    for (const r of per) {
+      const denom = r.content + r.voids;
+      const wit = r.bound ? r.content : 0;                 // an unbound sentence witnesses none of its content
+      r.degree = denom ? Math.round((wit / denom) * 1e4) / 1e4 : null;
+      wTot += wit; dTot += denom;
+    }
+    return { degree: dTot ? Math.round((wTot / dTot) * 1e4) / 1e4 : null, witnessed: wTot, content: dTot, sentences: per };
+  }
   function truthfulness(final) {
     final = final || {};
     const audit = final.audit || null;
@@ -77,7 +140,12 @@
     const denom = bound + voids;
     const coverage = denom ? bound / denom
       : (audit && audit.covers ? _parseFrac(audit.covers) : null);
-    return { covers: (audit && audit.covers) || null, coverage, bound, voids, unbound };
+    // The DEGREE (WI-7 extended): witness measured on the talker's own prose,
+    // per sentence. This is the quantity the asymptote is actually attached to —
+    // degree of witness on what was said, not a literal string match.
+    const w = witnessOnProse(text);
+    return { covers: (audit && audit.covers) || null, coverage, bound, voids, unbound,
+      degree: w.degree, witnessed: w.witnessed, witnessContent: w.content, witness: w.sentences };
   }
 
   function isEnabled() { return enabled; }

@@ -24,12 +24,23 @@ const QUERIES = [
   'what does Marlow want', 'boat to the mainland', 'the storm on the seaward side',
   'What did Zorthax say?', 'thanks that really helps', 'tell me a joke',
   'where is Voss Point', 'who argued about the boat', 'lamp at midnight',
+  // The type gate (the fourth NUL state). These leads — an imperative verb, a
+  // discourse adverb, an interrogative contraction, an interjection — are NOT
+  // referents; the golden pins that they produce no antimatter and nothing
+  // invented, while the real names they carry (Marlow, Voss Point) survive and
+  // a real absent name (Zorthax, above) still voids. Classified by shape, with
+  // none of these leading words enumerated in any list.
+  'Give me the gist of this', 'Based on the text who argues about the boat',
+  "What's happening at Voss Point", 'Sure tell me what Marlow wants',
 ];
 const ANSWERS = [
   'Edith set the kettle down and listened.',
   'The keeper said no one could row to the mainland tonight.',
   'Sefton wanted to reach Marlow on the mainland.',
   'The spaceship departed for Jupiter at dawn.',
+  // A draft that opens with a discourse adverb: "Based" must never be struck as
+  // an invented term (it is the draft's own connective tissue, not a name).
+  'Based on the lamp, Edith waited at the head of the stairs.',
 ];
 
 function snapshotProse(doc, tag) {

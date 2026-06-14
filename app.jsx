@@ -2140,6 +2140,37 @@ function App() {
       AUD('end', { engine: decision, text, audit, cites: cites || [] });
       setBusy(false);
     };
+    const mechEvidenceSmall = () => (mech && mech.text && mech.text.trim())
+      ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null;
+    // The rephrase introduced material the bound reading does not carry. The
+    // grounder does not speak in its place: SERVE the talker's rephrase, strike
+    // the unwitnessed additions in place (a visible flag, not a deletion), and
+    // keep the mechanical reading as click-to-view evidence. The witness degree
+    // (WI-7) reads how much of the rephrase a span backs.
+    const serveSmallFlagged = (re, added, invented, reason) => {
+      if (genStale(myGen)) return;
+      const strike = [...new Set([...(invented || []), ...(added || [])])].filter(t => t && String(t).length > 2);
+      let text = re; try { text = E.voidInvented(re, strike); } catch (e) {}
+      let b = null; try { b = E.bindCitationsScope(scope, re, q, intent, { hotEntity: hotEntity() }); } catch (e) {}
+      const audit = { status: 'warn', grounded: true,
+        covers: (b && b.audit && b.audit.covers) || (mech.audit && mech.audit.covers) || null, stable: true,
+        note: `Small-tier rephrase introduced material the bound reading does not carry (${reason}); it is served as written with those parts struck as unverified, and the witness degree marks the gap. The exact mechanical reading rides as evidence.` };
+      AUD('step', 'veto', { decision: 'model-flagged (small)', reason, added, invented });
+      settleSmall(text, audit, (b && b.cites) || mech.cites || [], 'model (small, flagged: ' + reason + ')', mechEvidenceSmall());
+    };
+    // The model produced nothing to rephrase — there is no talker sentence to
+    // stamp. Refuse honestly; the mechanical reading rides as evidence, never as
+    // the reply.
+    const refuseSmall = (reason, message) => {
+      if (genStale(myGen)) return;
+      lastGroundedRef.current = false;
+      const audit = { status: 'error', grounded: false, covers: '0/1', stable: false,
+        note: 'Small-tier: the model produced nothing to rephrase (' + reason + '). The grounder never speaks in the talker’s place — the mechanical reading rides as evidence, never as the reply.' };
+      AUD('step', 'error', { where: 'grounded-small', message: 'refused: ' + reason });
+      replaceLast({ role: 'assistant', text: message, audit, mode: 'grounded', mechanical: mechEvidenceSmall() });
+      AUD('end', { engine: 'refused (small, ' + reason + ')', text: message, audit, cites: [] });
+      setBusy(false);
+    };
     // No usable bound reading to smooth (a hold/void): serve the mechanical
     // reading honestly — the small tier never free-composes.
     if (!mechUsable) { AUD('step', 'veto', { decision: 'mechanical', reason: 'small tier, no bound reading to smooth' }); runMechanicalScope(scope, q); return; }
@@ -2163,7 +2194,7 @@ function App() {
     } catch (e) {
       if (window.EOLLM.isAbort(e) || genStale(myGen)) return;
       AUD('step', 'error', { where: 'grounded-small', message: String((e && e.message) || e) });
-      settleSmall(mech.text, mech.audit, mech.cites || [], 'mechanical (small, rephrase failed)');
+      refuseSmall('rephrase-error', 'I drafted, but the model failed mid-answer and left nothing I can stand behind. The page’s mechanical reading is one click away as evidence. Try rephrasing, or point me at the line you want me to read.');
       return;
     }
     // EVA: the cite set is fixed (mech.cites). The rephrase may only re-join the
@@ -2177,12 +2208,20 @@ function App() {
     const fixed = new Set((mech.cites || []).map(c => c.docId + ':' + c.idx));
     const newCite = !!(boundRe && (boundRe.cites || []).some(c => !fixed.has(c.docId + ':' + c.idx)));
     const empty = !re || re.trim().length < 3;
-    if (empty || added.length || invented.length || newCite || !(boundRe && boundRe.audit && boundRe.audit.grounded)) {
-      AUD('step', 'veto', { decision: 'mechanical',
-        reason: empty ? 'rephrase empty' : invented.length ? 'rephrase invented terms'
-          : added.length ? 'rephrase added unbound tokens' : newCite ? 'rephrase bound outside the fixed cite set' : 'rephrase did not bind',
-        added, invented });
-      settleSmall(mech.text, mech.audit, mech.cites || [], 'mechanical (small, rephrase discarded)');
+    if (empty) {
+      // No talker prose to stamp — refuse honestly, mechanical reading as evidence.
+      refuseSmall('rephrase-empty', 'I drafted, but the model came back with nothing to smooth, and there’s no sentence of its own to show you. The page’s mechanical reading is one click away as evidence. Try rephrasing, or point me at the line you want me to read.');
+      return;
+    }
+    if (added.length || invented.length || newCite || !(boundRe && boundRe.audit && boundRe.audit.grounded)) {
+      // The rephrase produced prose but broke join-only. The old move discarded
+      // it and served the mechanical text in its place — the inversion. Now the
+      // talker's rephrase is SERVED, the unwitnessed additions struck, the
+      // witness degree reading the gap, the mechanical reading kept as evidence.
+      const reason = invented.length ? 'rephrase invented terms'
+        : added.length ? 'rephrase added unbound tokens'
+          : newCite ? 'rephrase bound outside the fixed cite set' : 'rephrase did not bind';
+      serveSmallFlagged(re, added, invented, reason);
       return;
     }
     // Kept: every cite is from the set fixed before the model spoke, and no token
@@ -2423,14 +2462,17 @@ function App() {
       const refuseModel = (reason, message) => {
         if (genStale(myGen)) return;                  // stopped — stopTurn already settled the message
         const audit = { status: 'error', grounded: false, covers: '0/1', stable: false,
-          note: 'Refused — the model\'s draft failed audit (' + reason + '). Rather than substitute a mechanically-generated answer that would look like the model\'s reply, the turn surfaces the failure honestly.' };
+          note: 'Refused — the model\'s draft failed audit (' + reason + '). The grounder never speaks in the talker\'s place: rather than substitute the mechanical reading as the reply, the turn surfaces the failure honestly and keeps that reading as click-to-view evidence.' };
         AUD('step', 'error', { where: 'grounded', message: 'refused: ' + reason });
         lastGroundedRef.current = false;
-        replaceLast({ role: 'assistant', text: message, audit, mode: 'grounded' });
+        // The mechanical reading rides as EVIDENCE (the glass box, and a
+        // click-to-view panel) — never as the reply text.
+        const mechPanel = (mech && mech.text && mech.text.trim()) ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null;
+        replaceLast({ role: 'assistant', text: message, audit, mode: 'grounded', mechanical: mechPanel });
         AUD('end', { engine: 'refused (' + reason + ')', text: message, audit, cites: [] });
         setBusy(false);
       };
-      const settle = (res, decision) => {
+      const settle = (res, decision, mechOverride) => {
         if (genStale(myGen)) return;                  // stopped — stopTurn already settled the message
         // Only a model-phrased answer can carry an inference void; a mechanical
         // fallback states only what the page does.
@@ -2452,54 +2494,68 @@ function App() {
               audit: res.audit ? { ...res.audit, note: 'Repeats an earlier reply (flagged conversationally in the opening line). ' + (res.audit.note || '') } : res.audit };
           }
         } catch (e) { eoWarn('echo flag', e); }
-        // The deterministic reading rides along as a click-to-view panel, but
-        // only when the MODEL phrased the answer — a mechanical fallback (veto)
-        // already IS this reading, so a panel would just echo the reply.
-        const showMech = mech && mech.text && /^model/.test(String(decision || '')) && mech.text !== res.text
-          ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null;
+        // The deterministic reading rides along as click-to-view EVIDENCE,
+        // never as the reply. By default it shows only when the MODEL phrased the
+        // answer (a mechanical fallback already IS this reading); a caller — the
+        // residual, which serves the talker's own stamped sentence — may pass an
+        // explicit panel so its evidence still rides along.
+        const showMech = mechOverride !== undefined ? mechOverride
+          : (mech && mech.text && /^model/.test(String(decision || '')) && mech.text !== res.text
+            ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null);
         replaceLast({ role: 'assistant', text: res.text, audit: res.audit, mode: 'grounded', mechanical: showMech });
         if (res.cites && res.cites.length) setTimeout(() => flashCitation(res.cites[0].docId, res.cites[0].idx), 380);
         depositSettled(scope, q, res.cites);
         noteOpaque(res, decision);                        // edge-of-trace marker (Phase 6)
         AUD('end', { engine: decision, text: res.text, audit: res.audit, cites: res.cites || [] });
       };
-      // FIX 4: prefer the deterministic mechanical reading over a canned refusal
-      // when the model's draft can't be served — a clean exact-reading IS a real
-      // answer. NEVER render the editor note or an empty string. Refuse honestly
-      // only when there is no usable mechanical reading to fall back on.
-      const mechUsable = !!(mech && mech.text && mech.text.trim()
-        && mech.audit && mech.audit.status !== 'held'
-        && (mech.audit.status === 'clean' || mech.audit.status === 'warn' || mech.audit.grounded));
+      // The mechanical reading is kept ONLY for the EVIDENCE panel (the glass
+      // box, click-to-view) — never to be served as the reply text.
+      const mechEvidence = () => (mech && mech.text && mech.text.trim())
+        ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null;
+      // The grounder never speaks in the talker's place. When the model's draft
+      // cannot be served AND there is no talker prose to stamp (an empty/declined
+      // draft, an echoed note), the honest move is a refusal — NOT the mechanical
+      // reading swapped in as the reply. The mechanical reading rides as evidence.
       const fallbackMechOrRefuse = (reason, message) => {
         if (genStale(myGen)) return;
-        if (mechUsable) {
-          AUD('step', 'veto', { decision: 'mechanical', reason: reason + ' → mechanical reading (no model answer to serve)' });
-          settle({ text: mech.text, audit: mech.audit, cites: mech.cites || [] }, 'mechanical (' + reason + ')');
-          return;
-        }
+        AUD('step', 'veto', { decision: 'refused', reason: reason + ' → refuse honestly; the mechanical reading is kept as evidence, never as the reply' });
         refuseModel(reason, message);
       };
-      // WI-4 — THE TRUTHFUL RESIDUAL (a first-class answer, not a failure). When
-      // binding the full target fails but the page DOES establish material about
-      // the subject, the honest move is: void the absent target explicitly, then
-      // give the bound subject material with its cites. This generalizes the
-      // repair addendum to the main path. It settles as 'residual' — a success
-      // (grounded, carrying no unbound assertion), distinct from 'error'
-      // (refused). Returns true when it settled, false when it can't (no clearly
-      // absent target, or no bound subject material) so the caller falls back.
-      const residualAnswer = (reason) => {
+      // WI-4 — THE TRUTHFUL RESIDUAL, as a STAMP on the talker's own sentence
+      // (not a mechanical substitution). The talker's prose is what the user
+      // reads; what the page could not witness rides on top as a registered-
+      // absence FLAG, and the witness degree (WI-7) carries how much of the
+      // sentence a span backs. The mechanical reading rides as click-to-view
+      // evidence. Returns true when it settled, false when there is no talker
+      // prose to stamp (the caller then refuses honestly — never a span dump).
+      const residualAnswer = (reason, draft, preBound, invented) => {
         if (genStale(myGen)) return false;
-        if (!mechUsable) return false;                      // no bound subject material to give
+        const plain = String(draft == null ? '' : draft).replace(/\{\{[^}]*\}\}/g, ' ').trim();
+        if (plain.length < 3) return false;                 // no talker sentence to stamp
+        // Bind whatever the talker DID say, so the served sentence carries its
+        // real cites and a real witness degree; the gap is flagged, not spoken.
+        let boundDraft = preBound;
+        if (!boundDraft) { try { boundDraft = window.EOEngine.bindCitationsScope(scope, draft, q, intent, { hotEntity: hotEntity() }); } catch (e) {} }
         let target = null;
         try { target = (window.EOEngine.referentsScope(scope, q).antimatter || [])[0] || null; } catch (e) {}
-        if (!target) return false;                          // no clearly-absent target to void
         const docId = (primaryDoc && primaryDoc.id) || (scope[0] && scope[0].id) || '';
-        const voidLine = `The document doesn’t establish ${target}. {{absent:${docId}:no presence found for “${target}”}}`;
-        const text = voidLine + ' Here is what it does establish about the subject:\n\n' + mech.text;
-        const audit = { status: 'residual', grounded: true, covers: (mech.audit && mech.audit.covers) || null, stable: true,
-          note: `The target (${target}) is absent from what the page establishes, so it is voided explicitly; the bound subject material follows, cited. A residual answer (success), not an overclaim.` };
+        // The disclosure is a FLAG, never a sentence the talker speaks: a
+        // registered absence on the target the page does not carry (or, with no
+        // clearly-absent target, on the part the passages did not witness). It
+        // lowers the witness degree; it is never phrased as "the document doesn't say".
+        const absentFlag = target
+          ? ` {{absent:${docId}:no presence found for “${target}”}}`
+          : ` {{absent:${docId}:the retrieved passages did not witness all of this}}`;
+        let bodyText = (boundDraft && boundDraft.text) ? boundDraft.text : String(draft);
+        // Any term the page does not contain is struck in place (a flag on the
+        // talker's own sentence), not removed — readable, with the void visible.
+        if (invented && invented.length) { try { bodyText = window.EOEngine.voidInvented(bodyText, invented); } catch (e) {} }
+        const text = bodyText + absentFlag;
+        const audit = { status: 'residual', grounded: true,
+          covers: (boundDraft && boundDraft.audit && boundDraft.audit.covers) || null, stable: true,
+          note: `The talker’s sentence is served as written; ${target ? `“${target}” is absent from what the page establishes and is flagged` : 'the part the passages did not witness is flagged'} as a registered absence, and what bound is cited. A residual (success) carrying its witness degree, not an overclaim — the mechanical reading rides as evidence.` };
         AUD('step', 'veto', { decision: 'residual', reason, target, boundCovers: audit.covers });
-        settle({ text, audit, cites: mech.cites || [] }, 'residual (' + reason + ')');
+        settle({ text, audit, cites: (boundDraft && boundDraft.cites) || [] }, 'residual (' + reason + ')', mechEvidence());
         return true;
       };
       if (modelDeclined(full)) {
@@ -2626,10 +2682,11 @@ function App() {
         const peeled = peelMetaHead(full, shapeNote);
         if (peeled.peeled) { AUD('step', 'veto', { decision: 'peel-head', head: peeled.peeled, reason: 'leading meta clause stripped (WI-2)' }); full = peeled.text; }
         if (!full || full.trim().length < 3) {
-          // Nothing real remained after peeling — route to the truthful residual
-          // or the mechanical reading; never settle an empty/meta draft.
-          if (!residualAnswer('empty-after-peel')) fallbackMechOrRefuse('empty_after_peel',
-            'After stripping a meta preamble the draft had no actual answer left, and I have no clean reading of the page to fall back on. Try rephrasing, or point me at the line you want me to read.');
+          // Nothing real remained after peeling — there is no talker sentence to
+          // stamp, so refuse honestly. The mechanical reading rides as evidence,
+          // never as the reply; an empty/meta draft is never settled as prose.
+          if (!residualAnswer('empty-after-peel', full)) fallbackMechOrRefuse('empty_after_peel',
+            'After stripping a meta preamble the draft had no actual answer left. I’d rather say so than read the page’s mechanical answer back to you as if I’d written it — it’s one click away as evidence. Try rephrasing, or point me at the line you want me to read.');
           if (!genStale(myGen)) setBusy(false);
           return;
         }
@@ -2722,16 +2779,17 @@ function App() {
           settle(flagged, 'model (flagged: ' + reason + ')');
         };
         if (!bound.audit.grounded) {
-          // WI-4 / law L2 — the draft bound to NOTHING. Keeping it would be the
-          // one dishonest move: an unbound assertion, the dominant truthfulness
-          // term. Underclaim instead — the truthful residual when the page
-          // establishes subject material (void the absent target, give the bound
-          // subject material), else the mechanical reading, else an honest
-          // refusal. Never the kept-unbound overclaim. (unbound count stays 0.)
+          // WI-4 / law L2 — the draft bound to NOTHING. The old move discarded
+          // it and spoke the mechanical reading in its place; that was the
+          // inversion. Now the talker's sentence is SERVED as the residual — its
+          // unsupported terms struck, the absent target flagged, the witness
+          // degree (WI-7) reading low so the gap is visible without the talker
+          // asserting silence. status 'residual' (grounded, not an overclaim), so
+          // the unbound count stays 0. Refuse only when there is no prose to stamp.
           if (budget && budget.replan) AUD('step', 'plan-seg', { from: 'factual', to: 'question-about-silence', reason: 'the draft bound to nothing on the page' });
-          AUD('step', 'veto', { decision: 'residual-or-mechanical', reason: 'unbound', invented, boundGrounded: false, boundCovers: bound.audit.covers });
-          if (!residualAnswer('unbound')) fallbackMechOrRefuse('unbound',
-            'I drafted an answer, but it didn’t bind to any passage in the document, and I have no clean reading of the page to fall back on — so I’d rather not assert it than overstate it. Try rephrasing, or point me at the line you want me to read.');
+          AUD('step', 'veto', { decision: 'residual', reason: 'unbound — served as a stamped talker sentence, mechanical reading kept as evidence', invented, boundGrounded: false, boundCovers: bound.audit.covers });
+          if (!residualAnswer('unbound', full, bound, invented)) fallbackMechOrRefuse('unbound',
+            'I drafted an answer, but the model came back with nothing I can stand behind, and there’s no sentence of its own to flag and show you. The page’s mechanical reading is one click away as evidence. Try rephrasing, or point me at the line you want me to read.');
         } else if (contradictions.length) {
           AUD('step', 'veto', { decision: 'model-flagged', reason: 'contradicts-assertion',
             contradictions: contradictions.map(c => ({ subject: c.subject, is: c.is, sent: c.sent, claim: c.claim, docId: c.docId })),
