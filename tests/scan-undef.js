@@ -9,7 +9,7 @@ const traverse = require('@babel/traverse').default;
 
 const ROOT = path.resolve(__dirname, '..');
 const FILES = ['data.jsx', 'icons.jsx', 'sidebar.jsx', 'chat.jsx', 'reference.jsx', 'docview.jsx',
-  'rulesets.jsx', 'auditview.jsx', 'eomri.jsx', 'graphaudit.jsx', 'promptflow.jsx', 'sandbox.jsx', 'pivot.jsx', 'settings.jsx', 'app.jsx'];
+  'rulesets.jsx', 'auditview.jsx', 'eomri.jsx', 'graphaudit.jsx', 'promptflow.jsx', 'sandbox.jsx', 'pivot.jsx', 'settings.jsx', 'websearch.jsx', 'app.jsx'];
 
 // browser + app globals that are legitimately free identifiers
 const GLOBALS = new Set([

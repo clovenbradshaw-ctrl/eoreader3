@@ -40,6 +40,7 @@ const ICON_PATHS = {
   fork:      '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   // The EO cube — three faces meeting at a vertex (Act · Site · Resolution).
   cube:      '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
+  globe:     '<circle cx="12" cy="12" r="9"/><line x1="3" y1="12" x2="21" y2="12"/><path d="M12 3a14.5 14.5 0 0 1 0 18a14.5 14.5 0 0 1 0-18"/>',
 };
 function Icon({ name, size = 18, style, className, strokeWidth = 1.7 }) {
   const p = ICON_PATHS[name];

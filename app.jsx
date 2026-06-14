@@ -177,6 +177,9 @@ function App() {
   // chips. Added intentionally (on upload, via the + menu, or by a project), not
   // just by being the focused tab. Empty falls back to the active doc.
   const [sources, setSources] = useState([]);
+  // The deep-read "add a web source" panel (websearch.jsx). Explicit, never a
+  // side effect of a chat message; off until window.EO_SEARCH_PROXY resolves.
+  const [webSearchOpen, setWebSearchOpen] = useState(false);
   // Projects are named, persistent source sets. Selecting one loads its docs as
   // the scope; editing the scope while a project is active updates the project.
   const [projects, setProjects] = useState([]);
@@ -3328,6 +3331,27 @@ function App() {
     return doc;
   };
 
+  // Admit a web page (a /fetch payload) as a FIRST-CLASS, citable source: it
+  // travels the same pipeline an uploaded document travels (EOWebSource.admit →
+  // engine.parseDocument), is frozen to the local store with its provenance, and
+  // joins the answer scope so the next turn grounds against it. Unlike the wiki
+  // enrichment grab, this is a deliberate user act, so it is not provisional.
+  const ingestWebSource = async (payload) => {
+    if (!(window.EOWebSource && window.EOWebSource.admit)) throw new Error('web sources are unavailable (no proxy configured)');
+    const out = await window.EOWebSource.admit(payload);
+    const doc = out.doc;
+    setDocs(ds => ds.some(d => d.id === doc.id) ? ds : [...ds, doc]);
+    // Bring it into scope without dropping the doc the reader is already on: when
+    // scope was implicit (the focused doc), seed it with that doc + the web source.
+    setSources(s => {
+      if (s.includes(doc.id)) return s;
+      if (s.length) return [...s, doc.id];
+      let bid = null; try { const b = backingDoc(); bid = b && b.id; } catch (e) {}
+      return bid && bid !== doc.id ? [bid, doc.id] : [doc.id];
+    });
+    return out;
+  };
+
   // Render a Wikipedia article payload into an ingestible prose document.
   // Article payload → ingestible text. EOExternal owns the composition
   // (punctuated title/description paragraphs, boilerplate bands dropped,
@@ -4243,9 +4267,14 @@ function App() {
   const composerProps = {
     value: input, onChange: setInput, onSend: () => send(), onStop: stopTurn, generating, mode, onMode: setMode, showModeToggle,
     onAttach: () => fileRef.current.click(), busy,
-    sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
-    addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
+    sources: sources.map(id => docsById[id]).filter(Boolean).map(d => {
+      const web = !!(d.web || d.sourceKind === 'web-source');
+      const prov = web && d.web ? [d.web.title, d.web.final_url || d.web.url, d.web.fetched_at].filter(Boolean).join(' · ') : null;
+      return { id: d.id, name: d.name, kind: d.kind, web, prov };
+    }),
+    addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind, web: !!(d.web || d.sourceKind === 'web-source') })),
     onAddSource: addSource, onRemoveSource: removeSource,
+    onWebSearch: () => setWebSearchOpen(true),
     wikiMode, forceEnrich, onForceEnrich: toggleForceEnrich,
     smartParse, onSmartParse: () => setSmartParse(v => !v), hasTable: docs.some(d => d.kind === 'table'),
   };
@@ -4367,6 +4396,7 @@ function App() {
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
+      {webSearchOpen && <WebSearchPanel onClose={() => setWebSearchOpen(false)} onIngest={ingestWebSource} onToast={showToast} />}
       {eomriOpen && <EOMRIDrawer onClose={() => setEomriOpen(false)} />}
       {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
       {promptFlowOpen && <PromptFlowDrawer onClose={() => setPromptFlowOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}

@@ -946,8 +946,8 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
     <div className="source-chips">
       <span className="src-label">Sources</span>
       {(sources || []).map(s => (
-        <span key={s.id} className={'src-chip' + (s.kind === 'table' ? ' table' : '')} title={s.name}>
-          <span className="src-dot" />
+        <span key={s.id} className={'src-chip' + (s.kind === 'table' ? ' table' : '') + (s.web ? ' web' : '')} title={s.web && s.prov ? s.prov : s.name}>
+          {s.web ? <Icon name="globe" size={11} className="src-globe" /> : <span className="src-dot" />}
           <span className="src-name">{s.name}</span>
           <button className="src-x" onClick={() => onRemoveSource(s.id)} aria-label={'Remove ' + s.name + ' from sources'}>×</button>
         </span>
@@ -959,7 +959,7 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
             <div className="src-menu" onMouseLeave={() => setOpen(false)}>
               {addable.map(d => (
                 <button key={d.id} onClick={() => { onAddSource(d.id); setOpen(false); }}>
-                  <span className={'src-dot' + (d.kind === 'table' ? ' table' : '')} /> {d.name}
+                  {d.web ? <Icon name="globe" size={11} className="src-globe" /> : <span className={'src-dot' + (d.kind === 'table' ? ' table' : '')} />} {d.name}
                 </button>
               ))}
             </div>
@@ -970,7 +970,7 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, showModeToggle, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich, smartParse, onSmartParse, hasTable }) {
+function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, showModeToggle, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, onWebSearch, wikiMode, forceEnrich, onForceEnrich, smartParse, onSmartParse, hasTable }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
@@ -1007,6 +1007,13 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, s
             title="Search Wikipedia for this message now — surface matching articles to research, even in Auto (skips the gate, not the choice). Only the search term (not the document) goes to Wikipedia through the proxy; nothing is pulled in until you pick one."
             onClick={onForceEnrich}>
             <Icon name="book" size={15} /> Wikipedia
+          </button>
+        )}
+        {onWebSearch && window.EOWebSource && (
+          <button type="button" className="comp-btn enrich web"
+            title="Search the web and add a page as a grounded source — an explicit deep-read action, never a side effect of sending a message. Only the search term goes out, through your proxy to public engines; nothing is pulled in until you pick a result and confirm."
+            onClick={onWebSearch}>
+            <Icon name="globe" size={15} /> Web
           </button>
         )}
         {hasTable && onSmartParse && (
