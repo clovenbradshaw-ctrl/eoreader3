@@ -667,19 +667,57 @@ function App() {
     showToast('Project “' + p.name + '” — ' + ids.length + ' source' + (ids.length !== 1 ? 's' : ''));
     if (mobileRef.current) setCollapsed(true);
   };
-  const newProject = () => {
+  // Create a project around a seed set of docs. The "+" by the Projects label
+  // seeds it from the current scope and makes it active (you're working in it
+  // now); the "New project…" path from a document's file menu just files that
+  // one document and leaves your current scope alone.
+  const createProject = (seedIds, activate) => {
     const fallback = 'Project ' + (projects.length + 1);
     const name = ((window.prompt && window.prompt('Name this project', fallback)) || '').trim() || fallback;
     const id = uid('p');
-    setProjects(ps => [{ id, name, docIds: sources.slice() }, ...ps]);
-    setActiveProject(id);
+    const docIds = (seedIds || []).filter(d => docsById[d]);
+    setProjects(ps => [{ id, name, docIds }, ...ps]);
+    if (activate) setActiveProject(id);
     showToast('Created project “' + name + '”');
+    return id;
   };
+  const newProject = () => createProject(sources, true);
+  const newProjectWithDoc = (docId) => createProject(docId ? [docId] : [], false);
   const deleteProject = (id) => {
     setProjects(ps => ps.filter(p => p.id !== id));
     if (activeProject === id) setActiveProject(null);
   };
   const clearProject = () => setActiveProject(null);
+  const renameProject = (id, name) => {
+    const clean = (name || '').trim();
+    if (!clean) return;
+    setProjects(ps => ps.map(p => p.id === id ? { ...p, name: clean } : p));
+  };
+  // Move a document in/out of a SPECIFIC project without selecting it or
+  // disturbing the current scope — the gesture of dragging a document onto a
+  // project, and the document's own file menu, both land here. When the target
+  // happens to be the active project, its scope (the source chips) stays in sync
+  // so the project and the set you're working with never drift apart.
+  const addDocToProject = (docId, projectId) => {
+    const proj = projects.find(p => p.id === projectId);
+    if (!proj || !docsById[docId]) return;
+    if (proj.docIds.includes(docId)) { showToast('Already in “' + proj.name + '”'); return; }
+    setProjects(ps => ps.map(p => p.id === projectId ? { ...p, docIds: [...p.docIds, docId] } : p));
+    if (activeProject === projectId) setSources(s => s.includes(docId) ? s : [...s, docId]);
+    showToast('Added to “' + proj.name + '”');
+  };
+  const removeDocFromProject = (docId, projectId) => {
+    const proj = projects.find(p => p.id === projectId);
+    if (!proj) return;
+    setProjects(ps => ps.map(p => p.id === projectId ? { ...p, docIds: p.docIds.filter(x => x !== docId) } : p));
+    if (activeProject === projectId) setSources(s => s.filter(x => x !== docId));
+    showToast('Removed from “' + proj.name + '”');
+  };
+  const toggleDocInProject = (docId, projectId) => {
+    const proj = projects.find(p => p.id === projectId);
+    if (!proj) return;
+    (proj.docIds.includes(docId) ? removeDocFromProject : addDocToProject)(docId, projectId);
+  };
   // The documents the turn grounds against: the explicit source set if any,
   // otherwise the focused doc (preserves the single-doc experience).
   const scopeList = () => {
@@ -1537,7 +1575,10 @@ function App() {
     setSources(s => s.filter(id => !doomed.has(id)));
     setOpenTabs(t => t.filter(x => !doomed.has(docId(x))));
     setActiveTab(a => doomed.has(docId(a)) ? null : a);
-    if (activeProject) setProjects(ps => ps.map(p => p.id === activeProject ? { ...p, docIds: p.docIds.filter(id => !doomed.has(id)) } : p));
+    // Prune the swept docs out of every project, not just the active one, so a
+    // project can't keep a dangling reference (and an inflated count) to a doc
+    // that no longer exists.
+    setProjects(ps => ps.map(p => p.docIds.some(id => doomed.has(id)) ? { ...p, docIds: p.docIds.filter(id => !doomed.has(id)) } : p));
   };
 
   // The follow-up's retrieval seed: the turn's own words plus the previous
@@ -4358,6 +4399,9 @@ function App() {
         projects={projects} activeProject={activeProject}
         onSelectProject={selectProject} onNewProject={newProject}
         onDeleteProject={deleteProject} onClearProject={clearProject}
+        onRenameProject={renameProject} onNewProjectWithDoc={newProjectWithDoc}
+        onAddDocToProject={addDocToProject} onRemoveDocFromProject={removeDocFromProject}
+        onToggleDocInProject={toggleDocInProject}
         sourceIds={new Set(sources)} onToggleSource={toggleSource} />
 
       {isMobile && !collapsed && <div className="sb-backdrop" onClick={() => setCollapsed(true)} />}
