@@ -2559,6 +2559,11 @@ function App() {
     // every draft claim is checked relation-against-relation. Down ⇒ every
     // step below is byte-identical to today (the parity floor).
     const gateOn = !!(window.EOEngine.relationGateEnabled && window.EOEngine.relationGateEnabled());
+    // The cross-source veto (cross_source rule, OFF by default). Up, a draft
+    // over ≥2 sources is checked claim-by-claim for a subject bound to a source
+    // it never appears in (the multi-document conflation). Down or single-source
+    // ⇒ vacuous, byte-identical to today (the parity floor).
+    const crossOn = !!(window.EOEngine.crossSourceEnabled && window.EOEngine.crossSourceEnabled());
     if (genStale(myGen)) return;                  // stopped during shaping — stand down
     try {
       replaceLast({ role: 'assistant', text: '', mode: 'grounded', streaming: true });
@@ -2944,6 +2949,21 @@ function App() {
               edge: m.edge ? `${m.edge.s} —${m.edge.v}→ ${m.edge.o}` : null, sent: m.edge ? m.edge.sent : null })),
           });
         }
+        // CROSS-SOURCE VETO (cross_source rule): with two or more sources in
+        // scope, the draft's own graph (each claim → the source it binds to) is
+        // checked against the sources' entity membership — a claim whose subject
+        // lives in one source but binds to ANOTHER, where that subject never
+        // appears, is the multi-document conflation the within-source vetoes
+        // (assertion/kin/relation, each reading one graph) structurally can't
+        // see. Its own audit step; flag down or single-source ⇒ never reached.
+        let conflations = [];
+        if (crossOn && scope.length > 1 && window.EOEngine.checkCrossSource) {
+          try { conflations = window.EOEngine.checkCrossSource(scope, fullForChecks, { topic: hotEntity() }) || []; }
+          catch (e) { eoWarn('cross-source-check', e); }
+          if (conflations.length) AUD('step', 'cross-source', {
+            conflations: conflations.map(c => ({ subject: c.subject, subjectDoc: c.subjectDoc,
+              boundDoc: c.boundDoc, sent: c.sent, anaphor: c.anaphor, claim: c.claim })) });
+        }
         // GROUNDING ENVELOPE (mechanism D, embedder-backed): each cited
         // claim's embedding distance to the span its OWN footnote names —
         // drift from the cited source flags; style never does. Vacuous
@@ -3018,6 +3038,15 @@ function App() {
             relationMismatches: relationMismatches.map(m => ({ kind: m.kind, claim: m.claim, docId: m.docId })),
             boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
           flagModel('relation-mismatch', 'Kept the model’s answer, but one claim’s relation doesn’t match the page’s recorded edge — flagged. The mechanical reading is one click away.');
+        } else if (conflations.length) {
+          // A claim that attributes to a subject from one source a fact that
+          // lives only in another — the multi-document conflation. Kept but
+          // flagged, the misattribution named, mirroring the flags above.
+          const c = conflations[0];
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'cross-source-conflation',
+            conflations: conflations.map(x => ({ subject: x.subject, subjectDoc: x.subjectDoc, boundDoc: x.boundDoc, sent: x.sent, anaphor: x.anaphor, claim: x.claim })),
+            boundGrounded: bound.audit.grounded, boundCovers: bound.audit.covers });
+          flagModel('cross-source-conflation', `Kept the model’s answer, but it ties ${c.subject} (from “${c.subjectDoc}”) to something that appears only in “${c.boundDoc}”, where ${c.subject} is never mentioned — the two sources aren’t joined on the page. Flagged; the mechanical reading is one click away.`);
         } else if (kinMismatches.length) {
           AUD('step', 'veto', { decision: 'model-flagged', reason: 'kin-subject-mismatch',
             kinMismatches: kinMismatches.map(m => ({ possessor: m.possessor, kin: m.kin, sent: m.sent, claim: m.claim, docId: m.docId })),

@@ -788,6 +788,11 @@ const READING_RULES = {
     value: 0.55, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'Predicate compatibility floor for the relation gate: a claim verb and an edge verb are the same relation when their lemmas overlap or their embedding cosine clears this. Measured on the app\'s own MiniLM-q8: cos(afford, pay) = 0.62 clears; cos(argued, hear) = 0.50 does not. This is the one place the embedder helps the relational cure, and only as a similarity scorer feeding a mechanical decision.',
   },
+  // ── Cross-source attribution — the multi-document conflation veto ──
+  cross_source: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, a draft over TWO OR MORE sources is read as its own graph (each claim → the source it binds to) and checked against the sources\' entity membership: a claim whose governing subject is an entity ABSENT from the source it cites but PRESENT in another in-scope source is held and flagged cross-source — the model bridged two documents the page never joins ("Oracle\'s partnership with the MNPD to deploy cameras," cited to the surveillance doc in which Oracle never appears). Needs ≥2 sources, a named topic, and a clean bind; a shared entity, an abstract subject, or a local definite reference never flags. OFF ships today\'s behavior byte-identical (the parity floor); the within-source vetoes (assertion / kin / relation) are unaffected either way.',
+  },
   // ── Site face — the Entity cell named at its level ──────
   site_entity_cell: {
     value: false, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
@@ -2194,7 +2199,7 @@ function _originalSig() { return ORIGINAL_LANGS.size ? ('§om:' + [...ORIGINAL_L
 const REPLAY_PHASE_IDS = new Set(['decay_gamma', 'inertia_delta', 'eva_energy_budget',
   'quote_interior_coupling', 'anaphora_coupling', 'audit_paraphrase_strong', 'audit_resemblance', 'audit_bind_floor',
   'proposal_auto_accept_sim', 'sentinel_draft_overlap', 'sentinel_budget_ratio', 'sentinel_max_drafts',
-  'relation_gate', 'relation_align_floor', 'relation_rel_floor']);
+  'relation_gate', 'relation_align_floor', 'relation_rel_floor', 'cross_source']);
 function _rulePhase(id) { return REPLAY_PHASE_IDS.has(id) ? 'replay' : 'extract'; }
 function _packsKey(packs) { return [...packs].sort().join('|'); }
 function _strHash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return h >>> 0; }
@@ -7423,6 +7428,7 @@ function projectGraph(events, frame = {}) {
     'mass-weight': 'mass_weight',
     'singular-they': 'singular_they',
     'relation-gate': 'relation_gate',
+    'cross-source': 'cross_source',
     'site-entity-cell': 'site_entity_cell',
     'distance-gravity': 'distance_gravity',
     'gravity-alpha': 'gravity_alpha',
@@ -11412,6 +11418,7 @@ function projectGraph(events, frame = {}) {
   // applyRules coerces card values through Number(), so an installed card
   // arrives as 1; the seed is boolean false. Either truthy form means ON.
   function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
+  function crossSourceEnabled() { const v = READING_RULES.cross_source.value; return v === true || v === 1; }
   function distanceGravityEnabled() { return DISTANCE_GRAVITY(); }
 
   // RG_STOP / RG_PRONOUN_RE / RG_ATTRIB are the relation_gate_* conventions,
@@ -11654,6 +11661,130 @@ function projectGraph(events, frame = {}) {
       if (d.kind === 'table') continue;
       let ms = []; try { ms = await checkRelations(d, draftText); } catch (e) {}
       for (const m of ms) out.push({ ...m, docId: d.id });
+    }
+    return out;
+  }
+
+  /* ---------- the cross-source veto: a subject from one source, a fact from another ----------
+     The vetoes above each read ONE source's graph — assertions, kin, relations
+     all checked inside a single document. None can see the MULTI-source failure
+     that the integral fold and a shared chat history make easy: a claim whose
+     subject is an entity of source A, bound to a span of source B, where A's
+     subject never appears. "Oracle's partnership with the MNPD to deploy 15
+     fixed cameras," cited to the surveillance document — in which Oracle is named
+     nowhere — is the case that motivates it. Each sentence binds cleanly (the
+     camera words DO live on the page it cites) and the BRIDGE is supported by no
+     source: the subject lives only in the Ellison article, the cameras only in
+     the MNPD article, and nothing on either page joins them.
+
+     This reads the draft's own graph — each claim resolved to the source it
+     binds to — against the sources' entity membership. A claim governed by an
+     entity that is ABSENT from the source it cites but PRESENT in another
+     in-scope source is a cross-source attribution: the model bridged two
+     documents the page never joins. The subject is carried across sentences the
+     way a reader carries a topic, so an anaphor ("the company") inherits it.
+
+     Conservative by design — it needs ≥2 sources, a named topic entity, and a
+     clean bind; an entity shared across sources never flags (it is not foreign),
+     an abstract subject with no topic in view never flags, and a local definite
+     reference ("the cameras", whose head noun lives in the cited doc) is read as
+     B's own, not the topic's. The failure direction of every heuristic is a
+     MISSED flag, never a false one. Like its siblings, its failure mode is the
+     model's answer kept with the misattribution named in the trace. Behind the
+     cross_source rule (OFF by default — the parity floor). */
+  const _CS_DET_SET = new Set(['the', 'this', 'that', 'these', 'those', 'its', 'their', 'his', 'her', 'our', 'such', 'a', 'an']);
+  const _CS_PRON_SET = new Set(['it', 'they', 'he', 'she', 'this', 'that', 'these', 'those']);
+  // The sentence's leading noun phrase, read off the raw prefix (not the POS
+  // tagger's noun ORDER, which mis-ranks "the firm partnered with the MNPD" —
+  // an untagged "firm" lets the object surface as the first noun). Three shapes:
+  //   • a determiner + a LOWERCASE head ("the firm") — a definite description,
+  //     an anaphor candidate that inherits the topic unless its head lives in B;
+  //   • a bare pronoun ("it", "they") — always anaphoric to the topic;
+  //   • a proper name, with an optional leading article ("The Metro Nashville
+  //     Police Department", "Oracle's") — a named subject.
+  function _csLeadingNP(sent) {
+    const s = String(sent || '').replace(/^\s+/, '');
+    let m = s.match(/^([A-Za-z]+)\s+([a-z][a-z'’-]+)/);
+    if (m && _CS_DET_SET.has(m[1].toLowerCase())) return { surface: m[1] + ' ' + m[2], head: m[2].toLowerCase(), kind: 'definite' };
+    m = s.match(/^([A-Za-z]+)\b/);
+    if (m && _CS_PRON_SET.has(m[1].toLowerCase())) return { kind: 'pronoun' };
+    m = s.match(/^((?:[Tt]he\s+)?\p{Lu}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+){0,4})/u);
+    if (m) return { surface: m[1], kind: 'name' };
+    return null;
+  }
+  function _csNameToks(name) {
+    return String(name || '').toLowerCase().replace(/['’]s\b/g, '')
+      .split(/[\s,]+/).filter(t => t.length >= 3 && !QA_STOP.has(t));
+  }
+  // present(doc, name): the name's significant tokens all occur in the source —
+  // an entity-name match first, the body scan as the floor. A false "present"
+  // only ever MISSES a flag (the safe direction).
+  function _csNameInDoc(doc, name, entNames) {
+    const toks = _csNameToks(name);
+    if (!toks.length) return false;
+    if (entNames) for (const n of entNames) {
+      const nt = _csNameToks(n);
+      if (nt.length && nt.every(t => toks.includes(t)) && toks.every(t => nt.includes(t))) return true;
+    }
+    const body = docBodyLC(doc);
+    return toks.every(t => body.includes(t));
+  }
+  function checkCrossSource(docs, draftText, opts = {}) {
+    const scope = scopeDocs(docs).filter(d => d && d.kind === 'prose');
+    if (scope.length < 2) return [];                 // a single source can't be crossed
+    const entOf = new Map();                          // docId → its entity names
+    for (const d of scope) { let es = []; try { es = (projectEntities(d).entities || []).map(e => e.name); } catch (e) {} entOf.set(d.id, es); }
+    const present = (d, name) => _csNameInDoc(d, name, entOf.get(d.id));
+    const homeDocs = (name) => scope.filter(d => present(d, name));
+    // every named entity in scope, longest first (so "Larry Ellison" wins over "Larry")
+    const allEnts = [];
+    for (const d of scope) for (const n of (entOf.get(d.id) || [])) if (n && !allEnts.some(e => normSurface(e) === normSurface(n))) allEnts.push(n);
+    allEnts.sort((a, b) => b.length - a.length);
+    // resolve a surface to an in-scope entity (token subset either way)
+    const entityFor = (surface) => {
+      const st = _csNameToks(surface);
+      if (!st.length) return null;
+      return allEnts.find(n => { const nt = _csNameToks(n); return nt.length && (nt.every(t => st.includes(t)) || st.every(t => nt.includes(t))); }) || null;
+    };
+    const topicLiteralIn = (sent, name) => {
+      const toks = _csNameToks(name); if (!toks.length) return false;
+      const lc = ' ' + sent.toLowerCase() + ' ';
+      return toks.every(t => lc.includes(t));
+    };
+
+    const parts = splitDraft(String(draftText == null ? '' : draftText).replace(/\{\{[^}]*\}\}/g, ' ').replace(/\[s?\d+\]/gi, ' '));
+    let topic = null;                                 // the carried subject entity (a name)
+    if (opts.topic) { const e = entityFor(opts.topic); if (e && homeDocs(e).length) topic = e; }
+    const out = [], seen = new Set();
+    for (const sent of parts) {
+      if (out.length >= 3) break;
+      if (tok(sent).length < 3) continue;
+      // where does this claim bind? the best-supported span across the scope
+      let bound = null;
+      for (const d of scope) {
+        let cand; try { cand = retrieve(d, sent, 1)[0]; } catch (e) { continue; }
+        if (cand && supportsClaim(cand, sent, CITE_FLOOR) && (!bound || cand.score > bound.score)) bound = { doc: d, i: cand.i, score: cand.score };
+      }
+      // resolve the claim's governing subject S, and carry the topic forward
+      let S = null, anaphor = false;
+      const lead = _csLeadingNP(sent);
+      if (lead && lead.kind === 'name') { const e = entityFor(lead.surface); if (e) { S = e; topic = e; } }  // (a) a named subject updates the topic
+      if (!S && bound && topic && lead) {
+        if (lead.kind === 'pronoun') { S = topic; anaphor = true; }           // (b) "it"/"they" → topic
+        else if (lead.kind === 'definite' && !docBodyLC(bound.doc).includes(lead.head)) { S = topic; anaphor = true; }  // "the firm" (head not in B) → topic
+      }
+      if (!S && bound && topic && topicLiteralIn(sent, topic)) S = topic;     // (c) the topic named mid-sentence
+      if (!bound || !S) continue;
+      const B = bound.doc;
+      if (present(B, S)) continue;                    // consistent: the subject lives in the cited source
+      const home = homeDocs(S).filter(d => d.id !== B.id);
+      if (!home.length) continue;                     // foreign to every source → the void's job, not ours
+      const A = home[0];
+      const key = normSurface(S) + '|' + B.id + '|' + bound.i;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ subject: S, subjectDocId: A.id, subjectDoc: A.name,
+        boundDocId: B.id, boundDoc: B.name, sent: bound.i, anaphor, claim: sent.trim() });
     }
     return out;
   }
@@ -12299,6 +12430,11 @@ function projectGraph(events, frame = {}) {
     // from the claim's OWN cited span, never an exemplar library)
     relationGateEnabled, checkRelations, checkRelationsScope,
     bindClaimKeys, bindClaimKeysScope, groundingEnvelope,
+    // the cross-source veto (cross_source rule, OFF by default — parity floor):
+    // a claim whose subject is an entity of one source but binds to another,
+    // where the subject never appears — the multi-document conflation the
+    // within-source vetoes structurally cannot see (the model's own bridge).
+    crossSourceEnabled, checkCrossSource,
     // distance-based gravity (distance_gravity rule, OFF by default — the parity
     // floor): the pure ACT-R power-law recency kernel and its switch, for the
     // A/B harness and tests. gravityPull(positions, cursor, α, k) is stateless.

@@ -132,6 +132,9 @@ const RULESETS = [
   { id: 'relation-gate', group: 'Chatting & grounding', phase: 'chat', name: 'Relation Gate', glyph: '⇋',
     layer: 'significance', value: 1, mass: 4, src: 'add-on', installed: false, enabled: false, locked: false, live: true,
     desc: 'The inversion fix. Provenance binds at generation (the model tags each claim with the span it used; the old binder serves only unkeyed claims), and every claim’s subject–predicate–object is checked against the relations the page deposited — a claim whose agency inverts against its edge (“the Association cannot afford” when the OWNERS pay), names the wrong speaker, or hangs the act on a figure the edge doesn’t carry is held and flagged, never waved through with a clean cite. Off ships today’s behavior byte-identical.' },
+  { id: 'cross-source', group: 'Chatting & grounding', phase: 'chat', name: 'Cross-Source Attribution', glyph: '⊗',
+    layer: 'significance', value: 1, mass: 4, src: 'add-on', installed: false, enabled: false, locked: false, live: true,
+    desc: 'The conflation fix, for two or more sources tagged together. The draft is read as its own graph — each claim resolved to the source it cites — and checked against the sources’ entity membership: a claim whose subject lives in one source but binds to ANOTHER, where that subject never appears, is held and flagged. “Oracle’s partnership with the MNPD to deploy cameras,” cited to the surveillance document in which Oracle is named nowhere, is the case — each sentence binds cleanly and the bridge between the two documents is the model’s, joined on no page. The topic is carried across sentences so an anaphor (“the company”) inherits it. A shared entity, an abstract subject, or a definite reference local to the cited doc never flags. Off ships today’s behavior byte-identical.' },
   { id: 'convention-proposals', group: 'Chatting & grounding', phase: 'chat', name: 'Convention Proposals', glyph: '✎',
     layer: 'structure', value: 3, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
     desc: 'Lets the local model propose reading conventions from registered friction — repeated shapes the reading hit and could not consume (a “LABEL:” line bound to no speaker, a *** line read as a sentence). It proposes in one plain sentence citing engine-minted spans; it never commits: a proposal is a signal until an independent document or your one-tap Confirm corroborates it past the admission threshold (the model can never be its own witness). The value is the per-session proposal budget; runs only at idle and never blocks a turn. Review pending proposals in the Glass box.' },
@@ -245,7 +248,7 @@ const LANGUAGES = [
 const LANG_SHARED_PARSING = ['attribution', 'reconcile'];
 
 // Tier 3 — grounding: cross-cutting QA conventions (RULESETS ids), chat phase.
-const GROUNDING_IDS = ['auditor', 'cite-binding', 'paraphrase', 'void', 'inference-void', 'two-voice', 'mode-policy', 'cross-check', 'relation-gate'];
+const GROUNDING_IDS = ['auditor', 'cite-binding', 'paraphrase', 'void', 'inference-void', 'two-voice', 'mode-policy', 'cross-check', 'relation-gate', 'cross-source'];
 
 /* ---------------- rule-pack schema + LLM authoring prompt ---------------- */
 const RULE_PACK_SCHEMA = {
