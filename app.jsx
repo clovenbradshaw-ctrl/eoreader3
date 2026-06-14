@@ -1704,7 +1704,13 @@ function App() {
     AUD('step', 'intent', { intent });
     if (refs) AUD('step', 'referents', { matter: refs.matter, antimatter: refs.antimatter });
     AUD('step', 'retrieve', { k: 6, engine: 'mechanical', hits: auditHits(scope, q, 6) });
-    let plan = givenPlan || window.EOEngine.answerScope(scope, q, { hotEntity: hotEntity() });
+    // answerResolved rewrites a carried pronoun to its referent before reading,
+    // so "what about his role" binds to the figure the conversation made; off-dial
+    // (binding_resolution OFF) it is exactly answerScope (parity floor).
+    const _b = hotBinding(q);
+    let plan = givenPlan || (window.EOEngine.answerResolved
+      ? window.EOEngine.answerResolved(scope, q, { hotEntity: (_b && _b.name) || hotEntity(), hotBinding: _b })
+      : window.EOEngine.answerScope(scope, q, { hotEntity: hotEntity() }));
     if (plan.checks) {
       AUD('step', 'confirm', { checks: plan.checks.map(c => ({ subject: c.subject, predicate: c.predicate, negated: !!c.negated, verdict: c.verdict })) });
       try { plan = maybeRetract(scope, plan); } catch (e) { eoWarn('retract', e); }

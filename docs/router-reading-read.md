@@ -6,18 +6,17 @@ This read both GATED the build (Phase 0) and now VERIFIES it: B.2/B.3/C run with
 
 ## Read A — the outcome read (route reason × witness)
 
-Each turn of the scripted, anchored, and resolution conversations is run in the app's exact turn order; the route REASON is joined to the answer's witness DEGREE, COVERAGE, and UNBOUND count (`EOAudit.truthfulness`, WI-7). Sizing only — it localizes where the router is weak; it is not a pass/fail bar.
+Each turn of the scripted, anchored, and resolution conversations is run in the app's exact turn order; the route REASON is joined to the answer's witness DEGREE, COVERAGE, and UNBOUND count (`EOAudit.truthfulness`, WI-7). Sizing only — it localizes where the router is weak; it is not a pass/fail bar. Measured on the BUILT engine (the dial is ON), so anaphoric carried follow-ups route via `names-entity` and answer through `answerResolved`, where at the Phase-0 gate they routed `continuity` and settled at witness 0.
 
 | reason | n | mean degree | mean coverage | unbound% | absent% | strong% |
 | --- | --- | --- | --- | --- | --- | --- |
-| strong-lexical | 39 | 0.976 | 1.000 | 0% | 0% | 97% |
-| names-entity | 19 | 0.878 | 0.895 | 0% | 11% | 89% |
-| continuity | 10 | 0.000 | 0.000 | 0% | 0% | 0% |
-| question-no-lexical | 4 | 0.000 | 0.000 | 0% | 0% | 0% |
+| strong-lexical | 39 | 0.957 | 1.000 | 0% | 0% | 95% |
+| names-entity | 31 | 0.603 | 0.613 | 0% | 6% | 61% |
 | summary | 3 | 0.532 | 1.000 | 0% | 0% | 100% |
+| question-no-lexical | 2 | 0.000 | 0.000 | 0% | 0% | 0% |
 | no-signal | 1 | 0.000 | 0.000 | 0% | 0% | 0% |
 
-Overall: **76% of 76 turns settle strong** (witness degree ≥ 0.5 and nothing unbound). Weak cluster (mean witness < 0.40 with real volume): **continuity, question-no-lexical**. The brief's expectation was weakness concentrated in escalate-miss and the summary/factual NAME class; the table shows where it actually sits.
+Overall: **78% of 76 turns settle strong** (witness degree ≥ 0.5 and nothing unbound). Weak cluster (mean witness < 0.40 with real volume): **question-no-lexical**. At the gate the weak cluster was `continuity` (witness 0.000) and `question-no-lexical`; the carried `continuity` turns are now folded into `names-entity` and answered through the binding, so the residual weakness is the embed-recall band (`question-no-lexical`), not the chat-carry band.
 
 ## Read B.1 — does the parse recover intent as well as the cascade?
 
@@ -128,7 +127,7 @@ On the 5 pronoun cases: raw names the target **0%**, seedQuery **0%**, resolved 
 
 ### What the gate says, by phase
 
-**Direction — Phase 1 & Phase 3 — confirmed.** The chat field resolves the user's pronoun more often than the document's salience (74% vs 61%), and a query built from that guess names a real target where both `pickQuery` and `seedQuery` name a pronoun (100% vs 0%). Read A shows why this is load-bearing and not cosmetic: the `continuity` route already FIRES on these anaphoric turns, but settles at witness degree 0.000 — the route is right and the binding is missing. So the field carrying a best-guess *binding* (Phase 1) and the tool query being built from it (Phase 3) are sound to build. The external-knowledge read already showed the residual is binding-shaped, not knowledge-shaped; this is the binding half.
+**Direction — Phase 1 & Phase 3 — confirmed.** The chat field resolves the user's pronoun more often than the document's salience (74% vs 61%), and a query built from that guess names a real target where both `pickQuery` and `seedQuery` name a pronoun (100% vs 0%). This is load-bearing, not cosmetic: at the Phase-0 gate these anaphoric turns routed `continuity` and settled at witness 0 — the route was right and the binding was missing. With the binding built, they route `names-entity` (the right reason) and the answer is read on the resolved referent, so the chat-carry band now witnesses (Read A). The external-knowledge read already showed the residual is binding-shaped, not knowledge-shaped; this is the binding half.
 
 **Confidence — Phase 1 — fix before weighting.** The best-guess confidence calibrates (ECE 0.022 ≤ 0.15); it can be carried on the binding and weighted.
 

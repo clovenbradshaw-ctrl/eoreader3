@@ -133,6 +133,38 @@ async function main() {
       'an absent binding never rewrites the query');
   }
 
+  group('Phase 2 — the router consumes the binding (anaphoric turn → names-entity, not continuity)');
+  {
+    seed(['Tom Turner']);
+    const b = E.resolveBinding([doc], 'what about his role', F, FLOOR);
+    const ctx = { everGrounded: true, prevGrounded: true, hadReply: true, hotEntity: b.name, hotBinding: b };
+    const r = E.routeTurn([doc], 'what about his role', ctx);
+    eq(r.decision, 'mechanical', 'a carried anaphoric follow-up still routes mechanical');
+    eq(r.reason, 'names-entity', 'it routes for the RIGHT reason (the carried referent), not continuity');
+    eq(r.via, 'binding', 'the route records that the carried binding supplied the entity');
+    // parity: with the dial OFF the same turn falls back to continuity (today)
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 0 }]);
+    const off = E.routeTurn([doc], 'what about his role', { everGrounded: true, prevGrounded: true, hadReply: true, hotEntity: 'Tom Turner' });
+    eq(off.reason, 'continuity', 'OFF: the same turn routes as continuity — the parity floor, unchanged');
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 1 }]);
+  }
+
+  group('Phase 2 — the answer consumes the binding (witnesses where the raw pronoun could not)');
+  {
+    seed(['Tom Turner']);
+    const ctx = { hotBinding: E.resolveBinding([doc], 'what about his role', F, FLOOR) };
+    const a = E.answerResolved([doc], 'what about his role', ctx);
+    ok(a && (a.cites || []).length > 0, 'the resolved answer BINDS (cites the page) — got ' + ((a.cites || []).length) + ' cites');
+    ok(a && !(a.audit && a.audit.absent), 'it is no longer an honest absence — the referent was resolved');
+    ok(a && /Tom Turner/.test(a.text || ''), 'the answer is about the carried figure — got: ' + (a && a.text || '').slice(0, 60));
+    // parity: OFF, answerResolved is exactly answerScope (the bare pronoun → absence)
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 0 }]);
+    const off = E.answerResolved([doc], 'what about his role', ctx);
+    const base = E.answerScope([doc], 'what about his role', ctx);
+    eq(off.text, base.text, 'OFF: answerResolved === answerScope (the parity floor)');
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 1 }]);
+  }
+
   group('acceptance — "a document about Frank, then what about his role / look up his employer"');
   {
     // Frank ≈ Tom Turner here (the fixture's self-dealing protagonist).
@@ -143,6 +175,11 @@ async function main() {
     const look = E.resolveBinding([doc], 'look up his employer', F, FLOOR);
     eq(E.bindingQuery('look up his employer', look), 'look up Tom Turner employer',
       'the acquisition query names Tom Turner\'s employer, not the word "his"');
+    // end to end: the carried follow-up now ROUTES for the right reason AND ANSWERS
+    const r = E.routeTurn([doc], 'what about his role', { everGrounded: true, prevGrounded: true, hadReply: true, hotEntity: role.name, hotBinding: role });
+    eq(r.reason, 'names-entity', 'routes mechanically for the right reason (the carried referent)');
+    const ans = E.answerResolved([doc], 'what about his role', { hotBinding: role });
+    ok((ans.cites || []).length > 0, 'and the reply binds to the page (witnessed), not held as absence');
   }
 
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
