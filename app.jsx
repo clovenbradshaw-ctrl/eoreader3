@@ -232,6 +232,15 @@ function App() {
   // options, bypassing the acquisition gate. One-shot — consumed/cleared on send.
   const [forceEnrich, setForceEnrich] = useState(false);
   const [model, setModel] = useState(defaultModel);
+  // Auto model selection. When on (the default for a fresh install), Cleo probes
+  // the device on boot and loads the model that runs best here — see the boot
+  // effect and EOLLM.recommendModel. Picking a specific model turns it off
+  // (an explicit choice wins); the "Auto" affordance in the picker turns it back
+  // on. Persisted with prefs as `autoModel`. `autoPick` carries the resolved
+  // recommendation ({ id, reason, tier, path }) so the picker can explain it.
+  const [autoModel, setAutoModel] = useState(true);
+  const autoModelRef = useRef(autoModel); autoModelRef.current = autoModel;
+  const [autoPick, setAutoPick] = useState(null);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelStatus, setModelStatus] = useState('idle'); // idle | loading | ready
   const [modelProgress, setModelProgress] = useState(0);
@@ -381,6 +390,12 @@ function App() {
           setRules(rs => rs.map(r => { const p = prefs.rules.find(x => x.id === r.id); return p ? { ...r, ...p } : r; }));
         }
         if (prefs.modelId) { const m = window.MODELS.find(x => x.id === prefs.modelId); if (m) setModel(m); }
+        // Auto model selection: ON by default for new users. A returning user who
+        // had explicitly picked a model before this existed (a stored modelId, no
+        // autoModel flag) is treated as a manual choice, so we never yank their
+        // model out from under them on upgrade.
+        if (typeof prefs.autoModel === 'boolean') setAutoModel(prefs.autoModel);
+        else if (prefs.modelId) setAutoModel(false);
         if (Array.isArray(prefs.fallbackModelIds)) {
           const slots = [null, null, null];
           for (let i = 0; i < 3; i++) {
@@ -491,8 +506,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
-  }, [rules, langModes, model, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews]);
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, autoModel, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
+  }, [rules, langModes, model, autoModel, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews]);
   // Hiding the answer-mode control means every turn runs on Auto: hold `mode`
   // there whenever the toggle is off, so a 'grounded'/'creative' left in prefs
   // (or any stray set) can't keep steering turns from behind a hidden control.
@@ -951,7 +966,23 @@ function App() {
     if (saved && model && model.provider === 'anthropic') loadModel(model);
     else if (!saved && model && model.provider === 'anthropic') setModelStatus('idle');
   };
-  const pickModel = (m) => { setModel(m); setModelStatus('idle'); loadModel(m); };
+  // An explicit pick: pin this model and turn auto off (a chosen model wins).
+  const pickModel = (m) => { setAutoModel(false); setAutoPick(null); setModel(m); setModelStatus('idle'); loadModel(m); };
+  // Re-enable auto and (re)pick the model that runs best on this device, then
+  // load it. The "Auto" affordance in the model picker / Settings. Keeps the
+  // single-resident-engine flow: switch the active model, then load it.
+  const chooseAuto = async () => {
+    setAutoModel(true); setAutoPick(null);
+    if (!window.EOLLM || !window.EOLLM.recommendModel) return;
+    try {
+      const rec = await window.EOLLM.recommendModel({ preferCached: true });
+      if (!rec || !rec.key) return;
+      const chosen = window.MODELS.concat(uploadedModels).find(x => x.mlc === rec.key);
+      if (!chosen) return;
+      setAutoPick({ id: chosen.id, reason: rec.reason, tier: rec.tier, path: rec.path });
+      setModel(chosen); setModelStatus('idle'); loadModel(chosen);
+    } catch (e) {}
+  };
   // Register a user-uploaded GGUF as a new wllama (CPU) model, add it to the
   // popover list, and immediately pick it. Session-only — see uploadedModels.
   const uploadModel = (file) => {
@@ -1034,16 +1065,18 @@ function App() {
     return () => { armed = false; document.removeEventListener('pointerdown', retry, { capture: true }); };
   }, [storagePersisted]);
 
-  useEffect(() => {
-    if (!bootReady || !window.EOLLM) return;
-    if (model.provider === 'anthropic') {
-      // A persisted Claude selection resumes if its key is stored; otherwise stay
-      // idle and let the popover collect the key.
-      if (window.EOLLM.hasAnthropicKey()) loadModel(model);
-    } else if (model.provider === 'wllama') {
-      loadModel(model);                      // on-device CPU — no WebGPU needed
+  // Load `m` with the right boot-time treatment per backend: Claude resumes only
+  // if its key is stored; the CPU model runs anywhere; a GPU model also pre-warms
+  // the instant CPU fallback; a GPU model with no WebGPU drops to CPU. Extracted
+  // so the auto-pick path runs the same dispatch once the recommendation lands.
+  const bootLoad = (m) => {
+    if (!m || !window.EOLLM) return;
+    if (m.provider === 'anthropic') {
+      if (window.EOLLM.hasAnthropicKey()) loadModel(m);
+    } else if (m.provider === 'wllama') {
+      loadModel(m);                          // on-device CPU — no WebGPU needed
     } else if (window.EOLLM.hasWebGPU()) {
-      loadModel(model);
+      loadModel(m);
       // Keep the CPU backup READY: pre-import the wllama runtime (small, cached)
       // AND pre-fetch the tiny fallback GGUF into OPFS in the background, so a
       // later GPU stall swaps over with NO download — only wllama init. This
@@ -1057,10 +1090,38 @@ function App() {
       // A GPU model with no WebGPU here → drop straight to the on-device CPU model.
       if (window.EO_CPU_FALLBACK !== 'off') fallbackToCPU();
     }
+  };
+
+  useEffect(() => {
+    if (!bootReady || !window.EOLLM) return;
+    let cancelled = false;
+    (async () => {
+      let m = model;
+      // Auto mode (no model pinned): probe the device and switch to the
+      // recommended pick BEFORE loading, so the very first download is already
+      // the right one — no guess-then-redownload. recommendModel is cheap (it
+      // never imports a runtime) and preferCached makes an already-downloaded,
+      // good-enough model win, which is the "as quickly as possible" half.
+      if (autoModelRef.current && window.EOLLM.recommendModel) {
+        try {
+          const rec = await window.EOLLM.recommendModel({ preferCached: true });
+          if (!cancelled && rec && rec.key) {
+            const chosen = window.MODELS.find(x => x.mlc === rec.key);
+            if (chosen) {
+              m = chosen;
+              if (chosen.id !== model.id) setModel(chosen);
+              setAutoPick({ id: chosen.id, reason: rec.reason, tier: rec.tier, path: rec.path });
+            }
+          }
+        } catch (e) {}
+      }
+      if (!cancelled) bootLoad(m);
+    })();
     // Warm the structure-layer embedding reader in the background so the first
     // escalation isn't also paying the (one-time, cached) model download. Inert
     // if embed.js is absent or the model fails to load — routing stays lexical.
     try { if (window.EOEmbed && window.EOEmbed.warm) window.EOEmbed.warm(); } catch (e) {}
+    return () => { cancelled = true; };
   }, [bootReady]);
 
   // ---- responsive: collapse the sidebar to an off-canvas drawer on phones and
@@ -4088,7 +4149,7 @@ function App() {
         groundingInfo={groundingInfo} onGroundingInfo={setGroundingInfo}
         showModeToggle={showModeToggle} onShowModeToggle={setShowModeToggle}
         wikiMode={wikiMode} onWikiMode={changeWikiMode}
-        models={window.MODELS.concat(uploadedModels)} defaultModelId={model.id} onDefaultModel={(id) => { const m = window.MODELS.concat(uploadedModels).find(x => x.id === id); if (m) pickModel(m); }}
+        models={window.MODELS.concat(uploadedModels)} autoModel={autoModel} defaultModelId={autoModel ? 'auto' : model.id} onDefaultModel={(id) => { if (id === 'auto') { chooseAuto(); return; } const m = window.MODELS.concat(uploadedModels).find(x => x.id === id); if (m) pickModel(m); }}
         fallbackModelIds={fallbackModelIds} onFallbackModelIds={setFallbackModelIds}
         onClearData={clearLocalData} storageOK={!!(window.EOStore && window.EOStore.available)} />}
       {auditOpen && <AuditDrawer onClose={() => setAuditOpen(false)} enabled={auditEnabled} onToggle={toggleAudit} onToast={showToast}
@@ -4100,6 +4161,7 @@ function App() {
       {modelOpen && <ModelPopover models={window.MODELS.concat(uploadedModels)} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
                      status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel}
                      webgpu={!!(window.EOLLM && window.EOLLM.hasWebGPU && window.EOLLM.hasWebGPU())}
+                     autoModel={autoModel} autoPick={autoPick} onAuto={chooseAuto}
                      anthropicKeySet={anthropicKeySet} onSetAnthropicKey={setAnthropicKey}
                      onUploadModel={uploadModel} />}
       {entityModal && (() => { const d = docsById[entityModal.docId]; return d ? (

@@ -27,6 +27,18 @@ without WebGPU the app falls back to an on-device **CPU model** (llama.cpp via
 WebAssembly) so answers are still phrased — and grounded answers and pivots work
 mechanically regardless of any model.
 
+You don't have to choose, though: on a fresh load the model selector sits on
+**Auto**, which probes the device — WebGPU adapter and its limits, device RAM,
+CPU cores, mobile — and loads the model that runs best *here*, downloading it
+immediately rather than guessing and re-fetching. A capable GPU gets the 3B
+sweet spot; a modest one a 1B; a phone a 0.5B; no WebGPU drops to a CPU model
+sized to your cores and RAM; and if a strong model is **already cached**, Auto
+prefers it so you're ready instantly. Picking a specific model from the selector
+turns Auto off (an explicit choice wins); the **Auto** row in the picker, or
+*Settings → Model → Auto*, turns it back on. The probe imports no runtime, so it
+costs nothing at load (`window.EOLLM.recommendModel()` / `probeDevice()` expose
+it; `window.EO_PROBE_OVERRIDE` forces a profile for testing).
+
 The CPU model runs single-threaded out of the box. To unlock multi-threaded CPU
 inference (faster), serve the app cross-origin-isolated — with
 `Cross-Origin-Opener-Policy: same-origin` and
