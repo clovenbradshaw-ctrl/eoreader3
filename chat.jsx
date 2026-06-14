@@ -849,7 +849,7 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich, smartParse, onSmartParse, hasTable }) {
+function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, showModeToggle, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich, smartParse, onSmartParse, hasTable }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
@@ -867,14 +867,19 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, o
         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }} />
       <div className="composer-bar">
         <button className="comp-btn icon" title="Attach a file" onClick={onAttach}><Icon name="paperclip" size={16} /></button>
-        <div className="mode-seg">
-          {MODES.map(md => (
-            <button key={md.id} className={(mode === md.id ? 'on ' + md.id : '')} onClick={() => onMode(md.id)}>
-              {md.id === 'grounded' && <Icon name="check" size={13} />}
-              {md.id === 'creative' && <Icon name="sparkle" size={13} />}{md.label}
-            </button>
-          ))}
-        </div>
+        {/* The Auto / Grounded / Creative control is opt-in (Settings → Answers):
+            hidden, every chat runs on Auto, which reads the question and grounds
+            or composes on its own. Shown, it lets the reader pin a mode per chat. */}
+        {showModeToggle && (
+          <div className="mode-seg">
+            {MODES.map(md => (
+              <button key={md.id} className={(mode === md.id ? 'on ' + md.id : '')} onClick={() => onMode(md.id)}>
+                {md.id === 'grounded' && <Icon name="check" size={13} />}
+                {md.id === 'creative' && <Icon name="sparkle" size={13} />}{md.label}
+              </button>
+            ))}
+          </div>
+        )}
         {showWiki && onForceEnrich && (
           <button type="button" className={'comp-btn enrich' + (forceEnrich ? ' on' : '')} aria-pressed={!!forceEnrich}
             title="Search Wikipedia for this message now — surface matching articles to research, even in Auto (skips the gate, not the choice). Only the search term (not the document) goes to Wikipedia through the proxy; nothing is pulled in until you pick one."
