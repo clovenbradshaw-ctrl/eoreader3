@@ -33,7 +33,7 @@ const BAND_LABEL = { owed: 'owed', advance: 'advance', revise: 'revise', fetch: 
    not measured is shown as `null` — never a zero-height bar, which would read as
    "measured, and zero". The one place a scalar appears is the colour band; the
    predicate that produced it travels on the route (shown on hover). */
-function ConfBars({ confidence, tag }) {
+function ConfBars({ confidence, tag, rescued }) {
   const c = confidence || {};
   return (
     <div className="cmp-conf">
@@ -52,7 +52,7 @@ function ConfBars({ confidence, tag }) {
           </div>
         );
       })}
-      {tag && <div className={'cmp-tag cmp-tag-' + tag}>{tag}</div>}
+      {tag && <div className={'cmp-tag cmp-tag-' + tag}>{tag}{rescued && <span className="cmp-tag-rescued" title="Grounded by mechanical re-citation: the token-overlap witness read low, so each sentence was re-bound to a real source line after drafting (engine.groundTalkerOutput).">· re-cited</span>}</div>}
     </div>
   );
 }
@@ -237,7 +237,7 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
       )}
       {node.draft && !flight && selected && (
         <React.Fragment>
-          <ConfBars confidence={node.confidence} tag={node.stamp && node.stamp.tag} />
+          <ConfBars confidence={node.confidence} tag={node.stamp && node.stamp.tag} rescued={node.stamp && node.stamp.rescued} />
           {node.draft.source_events && node.draft.source_events.length > 0 && (
             <div className="cmp-sources">
               <span className="cmp-sources-l">drew from</span>
@@ -345,6 +345,26 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     if (!window.EOEmbed || !window.EOEmbed.embedQuery) return null;
     try { return await window.EOEmbed.embedQuery(t); } catch (e) { return null; }
   }, []);
+  // The mechanical re-citation grounder — engine.groundTalkerOutput over the
+  // active corpus. For a draft the token-overlap witness reads as confabulation,
+  // this re-binds each sentence to a real source line (per-sentence retrieval
+  // over the whole source) and returns the best-covered doc's binding, so
+  // generateUnit / stampProse can credit an honest paraphrase the lexical
+  // witness can't see. Pure mechanical retrieval — no model, no embedder.
+  const ground = React.useCallback(async (prose) => {
+    if (!window.EOEngine || !window.EOEngine.groundTalkerOutput || !corpusDocs.length || !prose) return null;
+    let best = null;
+    for (const d of corpusDocs) {
+      if (!d.sentenceTexts || !d.sentenceTexts.length) continue;
+      let g; try { g = window.EOEngine.groundTalkerOutput(d, prose, []); } catch (e) { continue; }
+      const m = /^(\d+)\/(\d+)/.exec((g && g.audit && g.audit.covers) || '');
+      const total = m ? +m[2] : 0, bound = m ? +m[1] : 0;
+      const degree = total ? bound / total : 0;
+      if (!best || degree > best.degree)
+        best = { degree, grounded: !!(g.audit && g.audit.grounded), cites: g.cites || [] };
+    }
+    return best;
+  }, [corpusDocs.map(d => d.id).join(',')]);
 
   // --- appending: every action stamps a shared batch id so undo reverts the
   //     whole action (a draft + its stamp + its route) in one move ----------
@@ -427,7 +447,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
       const streamPhrase = (p) => phrase(p, (delta) => setStreaming(s => s && s.unitId === unit.id ? { unitId: unit.id, text: (s.text || '') + delta } : s));
       const out = await C.generateUnit({
         unit, frame, doc_id: doc.id,
-        retrieve, phrase: streamPhrase, embed, formLib: formLibRef.current,
+        retrieve, phrase: streamPhrase, embed, ground, formLib: formLibRef.current,
         neighbors: o.neighbors || [],
       });
       if (out && out.draft) appendBatch([out.draft, out.stamp, out.route]);
@@ -467,14 +487,23 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     const spans = await retrieve(unit.job);
     const grain = (unit.hole && unit.hole.owed_grain) || unit.owed_grain || 'Figure';
     let draftVec = null; try { draftVec = await embed(prose); } catch (e) {}
+    const spanTexts = spans.map(s => s.text);
+    // Same mechanical re-citation rescue as the draft path: only when the lexical
+    // witness reads low do we re-bind sentences to real source lines, so a
+    // re-stamped paraphrase isn't condemned as confabulation.
+    let grounded = null;
+    if (prose) {
+      const wLex = C.witnessGrain({ prose, spans: spanTexts, grain });
+      if (wLex.degree == null || wLex.degree < C.FLOOR.witness) { try { grounded = await ground(prose); } catch (e) {} }
+    }
     const st = C.stampDraft({
-      prose, spans: spans.map(s => s.text), grain,
+      prose, spans: spanTexts, grain,
       draftVec, genre: frame.genre, formLib: formLibRef.current,
-      retrieval: C.retrievalDegree(spans),
+      retrieval: C.retrievalDegree(spans), grounded,
     });
     const r = C.decide(st.confidence, {});
     return [
-      C.make.stamp({ doc_id: doc.id, unit_id: unit.id, draft_id: draftId, confidence: st.confidence, tag: st.tag }),
+      C.make.stamp({ doc_id: doc.id, unit_id: unit.id, draft_id: draftId, confidence: st.confidence, tag: st.tag, rescued: st.rescued }),
       C.make.route({ doc_id: doc.id, unit_id: unit.id, decision: r.decision, predicate: r.predicate, triggered_by: r.triggered_by }),
     ];
   };
@@ -529,7 +558,10 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
       u.push('');
       u.push('Propose the sections, one job per line:');
       const text = await phrase({ system, user: u.join('\n'), max_tokens: 260 }, (delta) => setPlanning(t => (t || '') + delta));
-      const jobs = String(text || '').split(/\n+/).map(s => s.replace(/^\s*[-*\d.)]+\s*/, '').trim()).filter(s => s.length > 2).slice(0, 8);
+      // Parse mechanically: drop a model lead-in ("Here are the sections:") and
+      // strip list markers (1. / I. / (a) / •) so a preamble never drafts as a
+      // unit and "I. Introduction" becomes the job "Introduction".
+      const jobs = C.parseOutline(text, 8);
       let created = [];
       if (jobs.length) {
         let order = nextOrder();
