@@ -258,17 +258,24 @@ function grainOwe(g) {
 
 /* The action surface — contextual to what is selected. Every action is an event,
    so every action is undoable. */
-function ActionSurface({ folded, selectedId, busy, modelReady, onAct }) {
+function ActionSurface({ folded, selectedId, busy, modelReady, onAct, progress }) {
   const u = selectedId ? folded.unitsById[selectedId] : null;
   const Btn = ({ act, label, primary, disabled, title }) => (
     <button className={'cmp-act' + (primary ? ' primary' : '')} disabled={busy || disabled} title={title}
       onClick={() => onAct(act)}>{label}</button>
   );
+  const hasUnits = folded.counts.units > 0;
+  const status = !busy ? null
+    : progress && progress.phase === 'outline' ? 'Outlining…'
+    : progress && progress.phase === 'draft' ? 'Drafting ' + progress.i + '/' + progress.n + (progress.job ? ' — ' + (progress.job.length > 36 ? progress.job.slice(0, 36) + '…' : progress.job) : '')
+    : 'working…';
   return (
     <div className="cmp-actions">
       <div className="cmp-actions-grp">
         <span className="cmp-actions-l">Doc</span>
-        <Btn act="planFromFrame" label="Plan from frame" disabled={!modelReady} title={modelReady ? 'propose a tree of units from the frame' : 'load a model first'} />
+        <Btn act="write" label={hasUnits ? '✍ Write the rest' : '✍ Write it'} primary disabled={!modelReady}
+          title={modelReady ? 'outline if needed, then draft every unit — watch it write' : 'load a model first'} />
+        <Btn act="planFromFrame" label="Outline only" disabled={!modelReady} title={modelReady ? 'propose a tree of units from the frame, without drafting' : 'load a model first'} />
         <Btn act="addUnit" label="+ Unit" />
         <Btn act="restampAll" label="Restamp all" />
         <Btn act="undo" label="Undo" title="undo the last action (supersession by REC)" />
@@ -283,7 +290,7 @@ function ActionSurface({ folded, selectedId, busy, modelReady, onAct }) {
           {u.draft && <Btn act="contest" label={u.contested ? 'Un-contest' : 'Mark contested'} />}
         </div>
       )}
-      {busy && <span className="cmp-busy"><span className="cmp-orb" /> working…</span>}
+      {busy && <span className="cmp-busy"><span className="cmp-orb" /> {status}</span>}
     </div>
   );
 }
@@ -296,6 +303,8 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   const [selectedId, setSelectedId] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [streaming, setStreaming] = React.useState(null);
+  const [planning, setPlanning] = React.useState(null);   // partial outline text while it forms
+  const [progress, setProgress] = React.useState(null);   // { phase:'outline'|'draft', i, n, job } during autopilot
   const [corpus, setCorpus] = React.useState(null);     // null = "all prose"; else an id list
   const formLibRef = React.useRef(null);
 
@@ -408,21 +417,47 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   };
 
   // --- the loop: draft / revise / restamp --------------------------------
-  const draftUnit = async (id) => {
-    const u = folded.unitsById[id]; if (!u || busy) return;
-    setBusy(true); setSelectedId(id); setStreaming({ unitId: id, text: '' });
+  // draft ONE unit (object, not id — so the autopilot can draft a unit the fold
+  // hasn't re-derived yet). Streams tokens into the unit live; emits the draft +
+  // stamp + route as one batch. The caller owns `busy`.
+  const draftOne = async (unit, opts) => {
+    const o = opts || {};
+    setSelectedId(unit.id); setStreaming({ unitId: unit.id, text: '' });
     try {
-      const lib = formLibRef.current;
-      // a streaming phrase wrapper so the unit shows tokens as they arrive
-      const streamPhrase = (p) => phrase(p, (delta) => setStreaming(s => s && s.unitId === id ? { unitId: id, text: (s.text || '') + delta } : s));
+      const streamPhrase = (p) => phrase(p, (delta) => setStreaming(s => s && s.unitId === unit.id ? { unitId: unit.id, text: (s.text || '') + delta } : s));
       const out = await C.generateUnit({
-        unit: u, frame, doc_id: doc.id,
-        retrieve, phrase: streamPhrase, embed, formLib: lib,
-        neighbors: neighborsOf(id),
+        unit, frame, doc_id: doc.id,
+        retrieve, phrase: streamPhrase, embed, formLib: formLibRef.current,
+        neighbors: o.neighbors || [],
       });
       if (out && out.draft) appendBatch([out.draft, out.stamp, out.route]);
-    } catch (e) { if (window.eoWarn) window.eoWarn('draftUnit', e); }
-    finally { setBusy(false); setStreaming(null); }
+      return out;
+    } finally { setStreaming(null); }
+  };
+  const draftUnit = async (id) => {
+    const u = folded.unitsById[id]; if (!u || busy) return;
+    setBusy(true);
+    try { await draftOne(u, { neighbors: neighborsOf(id) }); }
+    catch (e) { if (window.eoWarn) window.eoWarn('draftUnit', e); }
+    finally { setBusy(false); }
+  };
+  // AUTOPILOT — one move that writes the whole document, visibly: outline first
+  // (streamed, so you watch it form), then draft every undrafted unit in order,
+  // each streaming its tokens, with live progress. This is "start writing."
+  const write = async () => {
+    if (busy || !modelReady) return;
+    setBusy(true);
+    try {
+      let units = folded.units.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      if (!units.length) { setProgress({ phase: 'outline' }); units = await planFromFrame({ keepBusy: true }); }
+      const drafted = folded.unitsById;
+      const todo = units.filter(u => !(drafted[u.id] && drafted[u.id].draft));
+      for (let i = 0; i < todo.length; i++) {
+        setProgress({ phase: 'draft', i: i + 1, n: todo.length, job: todo[i].job });
+        await draftOne(todo[i], {});
+      }
+    } catch (e) { if (window.eoWarn) window.eoWarn('write', e); }
+    finally { setBusy(false); setProgress(null); }
   };
   // stamp a GIVEN prose for a unit: retrieve fresh material against the job,
   // measure the grain-relative witness on THAT prose, decide a route. Returns
@@ -476,9 +511,13 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     try { for (const n of flat) if (n.draft) await restampUnit(n.id, { silent: true }); }
     finally { setBusy(false); }
   };
-  const planFromFrame = async () => {
-    if (busy || !modelReady) return;
-    setBusy(true);
+  // Outline the document from the frame — STREAMED into the plan pane so the
+  // user watches the sections arrive, not a dead "working…". Returns the units
+  // it created so the autopilot can draft them without waiting for a re-fold.
+  const planFromFrame = async (opts) => {
+    const o = opts || {};
+    if (!o.keepBusy) { if (busy || !modelReady) return []; setBusy(true); }
+    setPlanning('');
     try {
       const system = 'You are planning the STRUCTURE of a document, not writing it. Propose between four and seven sections. Each section is ONE line: a short job describing what that section must DO (its direction), never its content. No numbering, no prose, no blank lines — one job per line.';
       const u = [];
@@ -489,17 +528,20 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
       u.push('Genre: ' + (frame.genre || 'plain-report'));
       u.push('');
       u.push('Propose the sections, one job per line:');
-      const text = await phrase({ system, user: u.join('\n'), max_tokens: 260 });
+      const text = await phrase({ system, user: u.join('\n'), max_tokens: 260 }, (delta) => setPlanning(t => (t || '') + delta));
       const jobs = String(text || '').split(/\n+/).map(s => s.replace(/^\s*[-*\d.)]+\s*/, '').trim()).filter(s => s.length > 2).slice(0, 8);
+      let created = [];
       if (jobs.length) {
         let order = nextOrder();
-        const evts = jobs.map(j => C.make.unit({ doc_id: doc.id, job: j, order: order++ }));
+        created = jobs.map(j => C.make.unit({ doc_id: doc.id, job: j, order: order++ }));
+        const evts = created.slice();
         // record WHY the plan arrived, in the log (a plan hypothesis)
-        evts.push(C.make.planEdit({ doc_id: doc.id, edit_kind: 'add-unit', affected_unit_ids: evts.map(e => e.id), reason: 'planned from the frame', confidence: C.confidence({ frame: 0.5 }) }));
+        evts.push(C.make.planEdit({ doc_id: doc.id, edit_kind: 'add-unit', affected_unit_ids: created.map(e => e.id), reason: 'planned from the frame', confidence: C.confidence({ frame: 0.5 }) }));
         appendBatch(evts);
       }
-    } catch (e) { if (window.eoWarn) window.eoWarn('planFromFrame', e); }
-    finally { setBusy(false); }
+      return created;
+    } catch (e) { if (window.eoWarn) window.eoWarn('planFromFrame', e); return []; }
+    finally { setPlanning(null); if (!o.keepBusy) setBusy(false); }
   };
 
   // undo: supersede every live event of the most recent batch (REC supersession).
@@ -514,6 +556,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   };
 
   const onAct = (act) => {
+    if (act === 'write') return write();
     if (act === 'planFromFrame') return planFromFrame();
     if (act === 'addUnit') return addUnit('');
     if (act === 'restampAll') return restampAll();
@@ -538,10 +581,15 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
               return base.includes(id) ? base.filter(x => x !== id) : [...base, id];
             })} modelName={modelName} />
           <div className="cmp-tree">
-            {folded.tree.length ? folded.tree.map(n => (
+            {planning != null ? (
+              <div className="cmp-outlining">
+                <div className="cmp-outlining-h"><span className="cmp-orb" /> Outlining…</div>
+                <pre className="cmp-outlining-body">{planning || '…'}</pre>
+              </div>
+            ) : folded.tree.length ? folded.tree.map(n => (
               <PlanNode key={n.id} node={n} depth={0} selectedId={selectedId} onSelect={setSelectedId}
                 onJob={editJob} onMove={moveUnit} onCut={cutUnit} onGrain={setGrain} />
-            )) : <div className="cmp-empty">No plan yet. Set a thesis above, then <b>Plan from frame</b> — or add a unit by hand. The plan is a hypothesis; the drafting will revise it.</div>}
+            )) : <div className="cmp-empty">No plan yet. Set a thesis above, then press <b>✍ Write it</b> — it outlines, then drafts every unit, live. (Or <b>Outline only</b>, or add a unit by hand.)</div>}
           </div>
           {folded.planEdits.length > 0 && (
             <div className="cmp-planlog">
@@ -563,11 +611,11 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
             {flat.length ? flat.map(n => (
               <UnitCard key={n.id} node={n} selected={selectedId === n.id} onSelect={setSelectedId}
                 onProse={editProse} streaming={streaming} onCite={onCite} />
-            )) : <div className="cmp-empty">The drafted document appears here, unit by unit — each claim bound to evidence, each unit stamped with its full confidence vector.</div>}
+            )) : <div className="cmp-empty">Press <b>✍ Write it</b> and watch it draft, unit by unit — each claim bound to evidence, each unit stamped with its full confidence vector.</div>}
           </div>
         </div>
       </div>
-      <ActionSurface folded={folded} selectedId={selectedId} busy={busy} modelReady={modelReady} onAct={onAct} />
+      <ActionSurface folded={folded} selectedId={selectedId} busy={busy} modelReady={modelReady} onAct={onAct} progress={progress} />
     </div>
   );
 }
