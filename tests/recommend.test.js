@@ -229,6 +229,26 @@ function group(name, fn) { console.log('• ' + name); return fn(); }
     ok(!threw, 'primePump never throws (no-op without a document)');
   });
 
+  await group('self-host (zip) — config, gating, and entry mapping', async () => {
+    const Ls = freshLLM({}, { EO_WEBLLM_SELFHOST: { 'Llama-3.2-3B-Instruct-q4f16_1-MLC': 'https://b/x.zip' } });
+    eq(Ls.selfHostZipUrl('Llama-3.2-3B-Instruct-q4f16_1-MLC'), 'https://b/x.zip', 'reads the configured zip URL');
+    eq(Ls.selfHostZipUrl('Qwen3-1.7B-q4f16_1-MLC'), null, 'an unconfigured model has no self-host URL');
+    // No document/caches/serviceWorker in this harness ⇒ unsupported ⇒ gated OFF
+    // even when configured, so the normal load runs (never a half-built zip path).
+    eq(Ls.isSelfHosted('Llama-3.2-3B-Instruct-q4f16_1-MLC'), false, 'gated off where the browser features are absent');
+    const Lw = freshLLM({}, { EO_WEBLLM_SELFHOST: { 'wllama:llama32-3b': 'https://b/x.zip' } });
+    eq(Lw.isSelfHosted('wllama:llama32-3b'), false, 'CPU/wllama keys are out of scope for the WebLLM zip path');
+
+    // Entry → the flat filename WebLLM requests at the base: basename, wrapper
+    // folder stripped, directory + degenerate names dropped.
+    eq(L.selfHostEntryName('params_shard_0.bin'), 'params_shard_0.bin', 'flat name kept');
+    eq(L.selfHostEntryName('Llama-3.2-3B-Instruct-q4f16_1-MLC/ndarray-cache.json'), 'ndarray-cache.json', 'wrapper folder stripped');
+    eq(L.selfHostEntryName('a/b/tokenizer.json'), 'tokenizer.json', 'nested path → basename');
+    eq(L.selfHostEntryName('model/'), null, 'directory entry dropped');
+    eq(L.selfHostEntryName('weird/..'), null, 'a ".." basename is rejected');
+    eq(L.selfHostEntryName(''), null, 'empty rejected');
+  });
+
   console.log(`\nrecommend.test: ${pass} passed, ${fail} failed`);
   if (fail) { for (const f of fails) console.error('   - ' + f); process.exitCode = 1; }
 })().catch(e => { console.error(e); process.exitCode = 1; });

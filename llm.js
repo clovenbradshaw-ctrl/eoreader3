@@ -964,18 +964,170 @@
   // these alive. Combined with persistStorage(), this is what locks the
   // multi-GB download to a one-time cost. The prebuiltAppConfig (the model
   // registry WebLLM ships) is spread first so we don't drop any entries.
+  // ---- self-hosting a WebLLM model from a single zip ----------------------
+  // A slow or VPN'd connection chokes on WebLLM's ~30 separate shard fetches —
+  // each a fresh request that can stall. EO_WEBLLM_SELFHOST lets a deployment
+  // host a model's weights as ONE zip (its mlc-chat-config.json, ndarray-cache,
+  // params_shard_*.bin and tokenizer files) on its own bucket; the app streams
+  // that single resumable download once, unzips it into a Cache, and the tiny
+  // sw.js service worker then serves the files to WebLLM locally. The model_lib
+  // wasm (a few MB) still comes from its normal origin. Entirely INERT unless
+  // EO_WEBLLM_SELFHOST maps the model key → a zip URL, and any failure falls
+  // straight back to the normal Hugging Face load (see load()), so it can only
+  // ever help:  window.EO_WEBLLM_SELFHOST = { 'Llama-3.2-3B-…-MLC': 'https://…/x.zip' }
+  let activeSelfHostBase = null, activeSelfHostKey = null;   // set just before a self-host build
+  const selfHostDisabled = (typeof Set === 'function') ? new Set() : null;   // keys whose zip failed this session
+  const SELFHOST_CACHE_NAME = 'cleo-webllm-selfhost-v1';
+  const SELFHOST_FFLATE = (typeof window !== 'undefined' && window.EO_FFLATE_URL) || 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
+  function selfHostMap() {
+    const m = (typeof window !== 'undefined' && window.EO_WEBLLM_SELFHOST) || null;
+    return (m && typeof m === 'object') ? m : {};
+  }
+  function selfHostZipUrl(mlcKey) { const u = selfHostMap()[mlcKey]; return (typeof u === 'string' && u) ? u : null; }
+  // The browser features the zip path needs. Absent any of them (older browser,
+  // file://, the Node harness) self-host stays off and the normal load runs.
+  function selfHostSupported() {
+    return typeof window !== 'undefined' && typeof document !== 'undefined'
+      && typeof caches !== 'undefined' && typeof navigator !== 'undefined'
+      && !!navigator.serviceWorker && typeof ReadableStream === 'function';
+  }
+  function isSelfHosted(mlcKey) {
+    if (isWllama(mlcKey) || isAnthropic(mlcKey)) return false;
+    if (selfHostDisabled && selfHostDisabled.has(mlcKey)) return false;
+    return !!selfHostZipUrl(mlcKey) && selfHostSupported();
+  }
+  // The synthetic, same-origin base WebLLM is pointed at; sw.js serves it from
+  // the Cache. Under the service worker's scope (the app's own directory).
+  function selfHostBase(mlcKey) {
+    const root = (typeof document !== 'undefined' && document.baseURI) || (typeof location !== 'undefined' ? location.href : 'https://localhost/');
+    return new URL('__webllm__/' + encodeURIComponent(mlcKey) + '/', root).href;
+  }
+  // Map a zip entry to the flat filename WebLLM requests at the base. WebLLM
+  // models are a flat directory, so the BASENAME is what it asks for — this also
+  // transparently strips a leading wrapper folder (Model-Name/params_shard_0.bin
+  // → params_shard_0.bin). Directory entries and path-traversal names drop out.
+  function selfHostEntryName(name) {
+    const n = String(name == null ? '' : name).replace(/\\/g, '/');
+    if (!n || n.charAt(n.length - 1) === '/') return null;
+    const base = n.slice(n.lastIndexOf('/') + 1);
+    if (!base || base === '.' || base === '..' || base.indexOf('..') !== -1) return null;
+    return base;
+  }
+  function selfHostContentType(name) {
+    if (/\.json$/i.test(name)) return 'application/json';
+    if (/\.wasm$/i.test(name)) return 'application/wasm';
+    return 'application/octet-stream';
+  }
+  // Register sw.js and wait until it controls this page, so the first model
+  // fetch is intercepted. Idempotent — re-registering an active worker is cheap.
+  async function ensureSelfHostSW() {
+    const root = (typeof document !== 'undefined' && document.baseURI) || location.href;
+    const swUrl = new URL('sw.js', root).href;
+    await navigator.serviceWorker.register(swUrl, { scope: './' });
+    await navigator.serviceWorker.ready;
+    if (navigator.serviceWorker.controller) return;
+    // First registration: wait (briefly) for it to take control of the page.
+    await new Promise((res) => {
+      const t = setTimeout(res, 4000);
+      try { navigator.serviceWorker.addEventListener('controllerchange', () => { clearTimeout(t); res(); }, { once: true }); }
+      catch (_) { clearTimeout(t); res(); }
+    });
+  }
+  // Stream the single bucket zip, unzip it into the self-host Cache so sw.js can
+  // serve the files to WebLLM. A per-chunk stall watchdog (shared STALL_MS) aborts
+  // a dead connection instead of hanging. Resolves once every file is cached.
+  async function materializeSelfHost(mlcKey, onProgress, myToken) {
+    const zipUrl = selfHostZipUrl(mlcKey);
+    if (!zipUrl) throw new Error('No self-host source for ' + mlcKey);
+    const base = selfHostBase(mlcKey);
+    const cache = await caches.open(SELFHOST_CACHE_NAME);
+    const manifestUrl = base + '__manifest__';
+    if (await cache.match(manifestUrl)) return base;        // already unzipped → nothing to fetch
+    if (onProgress) onProgress(0, 'Downloading the model from your source…');
+    const ac = (typeof AbortController === 'function') ? new AbortController() : null;
+    let stallTimer = ac ? setTimeout(() => { try { ac.abort(); } catch (_) {} }, STALL_MS) : null;
+    const rearm = () => { if (!ac) return; clearTimeout(stallTimer); stallTimer = setTimeout(() => { try { ac.abort(); } catch (_) {} }, STALL_MS); };
+    try {
+      const resp = await fetch(zipUrl, ac ? { signal: ac.signal } : undefined);
+      if (!resp.ok || !resp.body) throw new Error('Self-host zip fetch failed (' + resp.status + ')');
+      const total = +(resp.headers.get('content-length') || 0);
+      const fflate = await import(SELFHOST_FFLATE);
+      const Unzip = fflate.Unzip, Inflate = fflate.AsyncUnzipInflate || fflate.UnzipInflate;
+      const unzip = new Unzip();
+      if (Inflate) unzip.register(Inflate);
+      const names = [], pending = [];
+      unzip.onfile = (file) => {
+        const name = selfHostEntryName(file.name);
+        if (!name) { file.ondata = () => {}; try { file.start(); } catch (_) {} return; }
+        names.push(name);
+        let ctrl = null;
+        const stream = new ReadableStream({ start(c) { ctrl = c; } });
+        file.ondata = (err, chunk, final) => {
+          if (err) { try { ctrl.error(err); } catch (_) {} return; }
+          if (chunk && chunk.length && ctrl) { try { ctrl.enqueue(chunk); } catch (_) {} }
+          if (final && ctrl) { try { ctrl.close(); } catch (_) {} }
+        };
+        pending.push(cache.put(base + name, new Response(stream, { headers: { 'content-type': selfHostContentType(name) } })));
+        try { file.start(); } catch (_) {}
+      };
+      const reader = resp.body.getReader();
+      let loaded = 0;
+      for (;;) {
+        if (myToken !== loadToken) throw Object.assign(new Error('Model load canceled'), { code: 'CANCEL' });
+        const r = await reader.read();
+        if (r.done) { unzip.push(new Uint8Array(0), true); break; }
+        rearm();
+        loaded += r.value.length;
+        unzip.push(r.value, false);
+        if (onProgress) onProgress(total ? Math.min(0.99, loaded / total) : 0,
+          total ? 'Downloading the model from your source — ' + Math.round(loaded / total * 100) + '%' : 'Downloading the model from your source…');
+      }
+      await Promise.all(pending);
+      if (!names.length) throw new Error('Self-host zip held no model files');
+      await cache.put(manifestUrl, new Response(JSON.stringify({ mlcKey, names, at: Date.now() }), { headers: { 'content-type': 'application/json' } }));
+      if (onProgress) onProgress(1, '');
+      return base;
+    } catch (e) {
+      if (ac && e && (e.name === 'AbortError')) throw Object.assign(new Error('Model download stalled'), { code: 'STALL' });
+      throw e;
+    } finally { if (stallTimer) clearTimeout(stallTimer); }
+  }
+  // Drop a model's unzipped files once WebLLM has cached its own copy (keyed by
+  // the same synthetic base), so steady state isn't storing the weights twice.
+  async function purgeSelfHostCache(mlcKey) {
+    try {
+      const base = selfHostBase(mlcKey);
+      const cache = await caches.open(SELFHOST_CACHE_NAME);
+      const keys = await cache.keys();
+      await Promise.all(keys.filter((req) => req.url.indexOf(base) === 0).map((req) => cache.delete(req)));
+    } catch (_) {}
+  }
+
   function webllmAppConfig() {
     try {
       const m = mod; if (!m) return undefined;
       const base = m.prebuiltAppConfig || {};
-      return Object.assign({}, base, { useIndexedDBCache: true });
+      const cfg = Object.assign({}, base, { useIndexedDBCache: true });
+      // Self-host: repoint THIS model's weights URL at the synthetic base sw.js
+      // serves. WebLLM then fetches (and caches) the weights from there; the
+      // model_lib wasm stays on its normal origin. Only the matching entry is
+      // touched, so every other model is unaffected.
+      if (activeSelfHostBase && activeSelfHostKey && Array.isArray(base.model_list)) {
+        cfg.model_list = base.model_list.map((e) =>
+          (e && e.model_id === activeSelfHostKey) ? Object.assign({}, e, { model: activeSelfHostBase }) : e);
+      }
+      return cfg;
     } catch (_) { return undefined; }
   }
   async function createEngine(mlcKey, opts) {
     const webllm = await importWebLLM();
     const appConfig = webllmAppConfig();
     const optsWithConfig = appConfig ? Object.assign({}, opts, { appConfig }) : opts;
-    if (!workerBroken && typeof Worker !== 'undefined' && typeof webllm.CreateWebWorkerMLCEngine === 'function') {
+    // A self-host build must run on the MAIN thread: the service worker reliably
+    // intercepts the controlling page's own fetches, whereas a blob module
+    // worker's interception isn't guaranteed. (One-time UI pause while it
+    // compiles; the weights themselves are already local by this point.)
+    if (!activeSelfHostBase && !workerBroken && typeof Worker !== 'undefined' && typeof webllm.CreateWebWorkerMLCEngine === 'function') {
       let worker = null, sawProgress = false;
       try {
         worker = spawnWorker();
@@ -1159,6 +1311,34 @@
     loadedModel = mlcKey;
     const myToken = ++loadToken;
     loadingActive = true;
+    // Self-host: if this model is configured to come from a single bucket zip,
+    // stream + unzip it into the service-worker cache and point WebLLM at it
+    // (the redirect is read by webllmAppConfig/createEngine). Skip the fetch when
+    // WebLLM already has the weights cached under the same synthetic base. Any
+    // self-host failure clears the redirect and falls back to the normal
+    // Hugging Face download below, so it can only ever help.
+    activeSelfHostBase = null; activeSelfHostKey = null;
+    let didMaterialize = false;
+    if (isSelfHosted(mlcKey)) {
+      try {
+        await importWebLLM();
+        activeSelfHostBase = selfHostBase(mlcKey); activeSelfHostKey = mlcKey;
+        const already = await cacheStatusCheap(mlcKey);     // WebLLM's own cache, keyed under the synthetic base
+        if (!already) {
+          await ensureSelfHostSW();
+          await materializeSelfHost(mlcKey, onProgress, myToken);
+          didMaterialize = true;
+        }
+      } catch (e) {
+        if (e && e.code === 'CANCEL') {
+          if (myToken === loadToken) { enginePromise = null; loadedModel = null; loadingActive = false; }
+          throw e;
+        }
+        activeSelfHostBase = null; activeSelfHostKey = null;   // fall back to the normal load
+        if (selfHostDisabled) selfHostDisabled.add(mlcKey);    // don't re-attempt the zip this session
+        if (onProgress) onProgress(0, 'Loading the model normally…');
+      }
+    }
     const attempt = (async () => {
       try {
         return await buildOnce(mlcKey, onProgress, myToken);
@@ -1168,6 +1348,16 @@
         // the error propagate.
         if (e && e.code === 'STALL' && myToken === loadToken) {
           if (onProgress) onProgress(0, 'Download stalled — retrying…');
+          try { return await buildOnce(mlcKey, onProgress, myToken); }
+          catch (e2) { e = e2; }
+        }
+        // A self-host build that failed must never leave the user worse off than
+        // the default path: drop the redirect and try the normal Hugging Face
+        // load once before surfacing the error.
+        if (activeSelfHostBase && myToken === loadToken && !(e && e.code === 'CANCEL')) {
+          activeSelfHostBase = null; activeSelfHostKey = null;
+          if (selfHostDisabled) selfHostDisabled.add(mlcKey);
+          if (onProgress) onProgress(0, 'Loading the model normally…');
           return await buildOnce(mlcKey, onProgress, myToken);
         }
         throw e;
@@ -1176,6 +1366,7 @@
     enginePromise = attempt;
     try {
       await attempt;          // surface a build failure here, not on first turn
+      if (didMaterialize && myToken === loadToken) purgeSelfHostCache(mlcKey);   // WebLLM cached its copy → reclaim the zip's
     } catch (e) {
       if (myToken === loadToken) { enginePromise = null; loadedModel = null; }   // honest isLoaded(); allow retry. Don't clobber a newer load.
       throw friendlyError(e);
@@ -1741,5 +1932,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, primePump, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, primePump, isSelfHosted, selfHostZipUrl, selfHostEntryName, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
