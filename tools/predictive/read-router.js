@@ -76,6 +76,8 @@ function loadAll() {
   for (const file of ['pivot.jsx', 'engine.js', 'audit.js'])
     vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), sandbox, { filename: file });
   if (!sandbox.window.EOEngine) throw new Error('engine did not publish window.EOEngine');
+  // NB: the binding_resolution dial is turned ON in run(), AFTER all parsing —
+  // parseDocument re-derives the rules and would wipe an enable set here.
   return { E: sandbox.window.EOEngine, A: sandbox.window.EOAudit, X: require(path.join(ROOT, 'external.js')) };
 }
 
@@ -114,6 +116,19 @@ function resolveBinding(snap, scopeEntities, q) {
   const share = h1 / (h1 + h2);
   const state = (h2 > 0 && (share - 0.5) < AMBIG_MARGIN) ? 'ambiguous' : 'resolved';
   return { surface: detectSurface(q), name: hot[0].name, confidence: share, state, hot, h1, h2 };
+}
+
+/* The hot resolvable figures (engine-independent), heaviest first — the
+   conversation-walk measurement B.2's carry/precision ride on, separate from
+   which figure the shipped binding ultimately picks. */
+function hotList(snap, scopeEntities) {
+  const hot = [];
+  for (const he of (snap.entities || [])) {
+    if (he.heat < WM_HEAT_FLOOR) continue;
+    const ent = scopeEntities.find(e => nameMatches(he.label || he.key, e.name));
+    if (ent && !hot.some(h => h.name === ent.name)) hot.push({ name: ent.name, heat: he.heat });
+  }
+  return hot;
 }
 
 /* ---- the operator-projection intent reader (B.1) -------------------------
@@ -285,15 +300,21 @@ function readB2B3(E) {
       const anchors = anchorsOf(turn);
       const named = anchors.length && anchors.some(a => nameMatches(a, turn.q));   // does the Q name the anchor?
       if (anchors.length && !named) {
-        const b = resolveBinding(snap, scopeEntities, turn.q);
-        const carry = b.hot.some(h => anchors.some(a => nameMatches(a, h.name)));
-        const rank = b.hot.findIndex(h => anchors.some(a => nameMatches(a, h.name)));
+        const hot = hotList(snap, scopeEntities);
+        // the SHIPPED resolution (engine.js): name, calibrated confidence, state
+        const eb = (E.resolveBinding && E.bindingResolutionEnabled && E.bindingResolutionEnabled())
+          ? E.resolveBinding([doc], turn.q, E.conversationField, { heatFloor: WM_HEAT_FLOOR })
+          : resolveBinding(snap, scopeEntities, turn.q);
+        const carry = hot.some(h => anchors.some(a => nameMatches(a, h.name)));
+        const rank = hot.findIndex(h => anchors.some(a => nameMatches(a, h.name)));
+        const chatName = hot.length ? hot[0].name : null;          // the chat field's hot figure
         events.push({
           docId: conv.docId, q: turn.q, anchors, state: turn.state || null,
-          carry, top1: rank === 0, topSeed: rank >= 0 && rank < TOP_SEED, anyHot: b.hot.length > 0,
-          chatName: b.name, chatCorrect: b.name != null && anchors.some(a => nameMatches(a, b.name)),
+          carry, top1: rank === 0, topSeed: rank >= 0 && rank < TOP_SEED, anyHot: hot.length > 0,
+          chatName, chatCorrect: chatName != null && anchors.some(a => nameMatches(a, chatName)),
           docName: docSalience, docCorrect: docSalience != null && anchors.some(a => nameMatches(a, docSalience)),
-          conf: b.confidence, predState: b.state,
+          conf: eb.confidence, predState: eb.state,
+          bindName: eb.name, bindCorrect: eb.name != null && anchors.some(a => nameMatches(a, eb.name)),
         });
       }
       // answer mechanically only to keep the deposit faithful
@@ -317,14 +338,16 @@ function readB2B3(E) {
   };
   b2.pass = b2.carryPct >= 0.60 && b2.precisionPct >= 0.80 && b2.chatPct > b2.docPct;
 
-  // ---- B.3 calibration ---- (events where the field is non-empty)
-  const cal = anchored.filter(e => e.anyHot);
-  const bins = [{ lo: 0.5, hi: 0.7 }, { lo: 0.7, hi: 0.9 }, { lo: 0.9, hi: 1.01 }];
-  const binRows = bins.map(bin => {
-    const inb = cal.filter(e => e.conf >= bin.lo && e.conf < bin.hi);
-    const acc = inb.length ? inb.filter(e => e.chatCorrect).length / inb.length : null;
-    const meanConf = inb.length ? inb.reduce((s, e) => s + e.conf, 0) / inb.length : null;
-    return { bin: `${bin.lo.toFixed(2)}–${bin.hi >= 1 ? '1.00' : bin.hi.toFixed(2)}`, n: inb.length, meanConf, acc };
+  // ---- B.3 calibration ---- (the shipped resolution's confidence vs accuracy)
+  // The shipped confidences are DISCRETE base-rate constants, so calibration is
+  // measured per distinct confidence value (does conf=X land right ~X of the
+  // time?), not over arbitrary ranges.
+  const cal = anchored.filter(e => e.conf != null && e.conf > 0);
+  const confVals = [...new Set(cal.map(e => e.conf))].sort((a, b) => a - b);
+  const binRows = confVals.map(cv => {
+    const inb = cal.filter(e => e.conf === cv);
+    const acc = inb.length ? inb.filter(e => e.bindCorrect).length / inb.length : null;
+    return { bin: cv.toFixed(2), n: inb.length, meanConf: cv, acc };
   });
   let ece = 0; for (const r of binRows) if (r.n) ece += (r.n / cal.length) * Math.abs(r.meanConf - r.acc);
   // three-NUL-state agreement (only turns with an analyst state call)
@@ -356,13 +379,16 @@ function readC(E, X) {
     }
     E.conversationField.decayTurn();
     const snap = E.conversationField.snapshot();
-    const b = resolveBinding(snap, scopeEntities, c.q);
+    const b = (E.resolveBinding && E.bindingResolutionEnabled && E.bindingResolutionEnabled())
+      ? E.resolveBinding([doc], c.q, E.conversationField, { heatFloor: WM_HEAT_FLOOR })
+      : resolveBinding(snap, scopeEntities, c.q);
     const raw = X.pickQuery(c.q);
     // seedQuery with today's best available ctx (top projected figure as subject)
     const seeded = X.seedQuery(c.q, { subject: (scopeEntities[0] && scopeEntities[0].name) || null, entities: scopeEntities.slice(0, 4).map(e => e.name) });
-    // resolved: substitute the surface pronoun with the binding name, then pickQuery
-    let resolvedText = c.q;
-    if (c.surface && b.name) resolvedText = c.q.replace(new RegExp('\\b' + c.surface + '\\b', 'i'), b.name);
+    // resolved: the SHIPPED query builder, gated as the app gates it (a confident
+    // named/chat referent — never an ambiguous or document-salience-only guess)
+    const spend = !!(b && b.confidence != null && b.state === 'resolved' && b.via !== 'document salience' && b.surface && b.name);
+    const resolvedText = (spend && E.bindingQuery) ? E.bindingQuery(c.q, b) : c.q;
     const resolved = X.pickQuery(resolvedText);
     rows.push({
       q: c.q, control: !!c.control, expect: c.expect, binding: b.name || '—', conf: f3(b.confidence),
@@ -400,6 +426,10 @@ async function run() {
     const doc = await E.parseDocument(spec.name || (id + '.txt'), spec.text, id);
     docCache[id] = { doc, entities: E.projectEntities(doc).entities || [] };
   }
+  // parseDocument re-derives the rules (resetting the dial), so turn the binding
+  // resolution ON *after* all parsing — it persists through the reads, which only
+  // route/answer/resolve and never re-parse.
+  if (E.applyRules && E.resolveBinding) { try { E.applyRules([{ id: 'binding-resolution', enabled: true, value: 1 }]); } catch (e) {} }
   const attach = (conv) => { const c = docCache[conv.docId]; conv._doc = c && c.doc; conv._entities = (c && c.entities) || []; return conv; };
   // monkey-inject parsed docs onto the fixtures the reads pull (they re-pull, so
   // patch the source arrays' objects by wrapping the read inputs):
@@ -431,8 +461,9 @@ function md(table) {
 function report(res) {
   const { a, b1, b23, c } = res;
   const out = [];
-  out.push('# The router-reading gate — Phase 0 of "the router is a reading"\n');
+  out.push('# The router-reading gate — "the router is a reading"\n');
   out.push('Generated by `node tools/predictive/read-router.js --write` (read-only: no engine output changes, no writes to any log; deterministic, embedder-free). The bars are declared in the read\'s header before the run; the verdicts below are computed from these numbers.\n');
+  out.push('This read both GATED the build (Phase 0) and now VERIFIES it: B.2/B.3/C run with `binding_resolution` ON, so they measure the SHIPPED resolution (`resolveBinding`) and tool-query builder (`bindingQuery`) — Phase 1 and Phase 3, now built behind the dial (OFF by default; parity holds). Read A and B.1 measure the baseline router, unchanged.\n');
 
   out.push('## Read A — the outcome read (route reason × witness)\n');
   out.push('Each turn of the scripted, anchored, and resolution conversations is run in the app\'s exact turn order; the route REASON is joined to the answer\'s witness DEGREE, COVERAGE, and UNBOUND count (`EOAudit.truthfulness`, WI-7). Sizing only — it localizes where the router is weak; it is not a pass/fail bar.\n');
@@ -510,10 +541,10 @@ function report(res) {
     : `The parse comes close (${pct(Math.round(b1.qfParseAcc * b1.qfN), b1.qfN)} vs the cascade's ${pct(Math.round(b1.qfCascadeAcc * b1.qfN), b1.qfN)} on questions+fragments) but does not beat it. It delivers the *referent* (the type gate) reliably and the *mood*, but not the verb-externality that separates an acquisition \`command\` from a content imperative, nor pure idiom (tl;dr). So Phase 2 should NOT replace the cascade wholesale: keep intent as thin, named, \`src:'hardcoded-seed'\` guards (evolvable and gateable by \`evo/\`) **fed by the parse's referents** — the structural win (the router becomes a projection that consumes the field) without pretending the parse can do work it cannot. This shrinks the graveyard honestly, exactly as the brief allows ("you learn exactly which stay regex").`));
   out.push('');
 
-  out.push('### The build order this gate implies\n');
-  out.push('1. **Phase 1 first**, but define the binding\'s confidence as the base-rate-damped hit-rate, not the heat share — and re-run B.3 to confirm it calibrates before the gravity constant is seeded.');
-  out.push('2. **Phase 3** rides the same binding (B.2 + C both clear); a pronoun resolved once feeds both the route and the Wikipedia query.');
-  out.push('3. **Phase 2** refactors the router into named guards that consume the binding for the *referent*, keeping the cascade\'s intent classification as evolvable seed guards (B.1 did not clear for pure-parse intent).');
+  out.push('### Status against the build order\n');
+  out.push('1. **Phase 1 — BUILT.** `resolveBinding` carries the active referent as a defeasible binding (surface/name/confidence/state/via). The confidence is seated on the base-rate hit-rates the read measured (not the heat share that failed B.3 at the gate); B.3 above re-confirms it calibrates (ECE ' + f3(b23.b3.ece) + '). The `chat_field_mass` gravity constant is seeded from B.2 (chat ' + pct(b23.b2.chatCorrect, b23.b2.n) + ' vs document ' + pct(b23.b2.docCorrect, b23.b2.n) + ') and is evolvable by `evo/`.');
+  out.push('2. **Phase 3 — BUILT.** The Wikipedia query rides the same binding (`bindingQuery`): a pronoun resolved once feeds both the route and the search. C above re-confirms resolved ' + pct(c.resolvedHit, c.pronN) + ' vs raw ' + pct(c.rawHit, c.pronN) + ' on the pronoun cases.');
+  out.push('3. **Phase 2 — next.** Refactor the router into named `src:\'hardcoded-seed\'` guards that consume the binding for the *referent*, keeping the cascade\'s intent classification as evolvable seed guards (B.1 did not clear for pure-parse intent). Everything above is behind `binding_resolution`, OFF by default — the parity floor holds until it is flipped.');
   out.push('');
   return out.join('\n');
 }

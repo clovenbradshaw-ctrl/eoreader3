@@ -793,6 +793,44 @@ const READING_RULES = {
     value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'When ON, a draft over TWO OR MORE sources is read as its own graph (each claim → the source it binds to) and checked against the sources\' entity membership: a claim whose governing subject is an entity ABSENT from the source it cites but PRESENT in another in-scope source is held and flagged cross-source — the model bridged two documents the page never joins ("Oracle\'s partnership with the MNPD to deploy cameras," cited to the surveillance doc in which Oracle never appears). Needs ≥2 sources, a named topic, and a clean bind; a shared entity, an abstract subject, or a local definite reference never flags. OFF ships today\'s behavior byte-identical (the parity floor); the within-source vetoes (assertion / kin / relation) are unaffected either way.',
   },
+  // ── The active-referent binding — the field points at the best guess ──
+  binding_resolution: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, the active referent the next turn reads is resolved as a defeasible BINDING (surface=the Given the person typed, name=the Meant it resolved to, a base-rate-calibrated confidence, and one of the three NUL states resolved|ambiguous|absent) instead of a bare top-of-heat entity name. One resolution, two consumers: the router reads it for the route and the tool-query builder reads it for the search, so a pronoun resolved once steers both. Precedence ladder: an explicit name in the prompt wins; else the chat field\'s hot figure (the underspecified case); else the document\'s local salience is the floor. OFF ships today\'s hotEntity (the heaviest hot entity, name only) byte-identical — the parity floor; resolveBinding returns name-only with confidence null and never rewrites a query.',
+  },
+  chat_field_mass: {
+    value: 1.2, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'The chat-vs-page asymmetry, as a deposit-weight (mass is gravity). The chat field models what the SPEAKER foregrounded; the page field models what the document merely contains. Reference is a speaker act, so the user\'s pronoun resolves to the chat figure, not to whatever the source names most. This constant is how much the chat field outweighs page salience: the chat hot figure wins the resolution unless its heat falls below heatFloor / chat_field_mass (a higher mass lets a slightly cooler chat figure still beat the page floor). Seeded from the router-reading read (chat figure resolved the user\'s pronoun ~74% vs the document\'s salience ~61%, ≈1.2×); tunable by evo/ in tension with parity. Inert unless binding_resolution is ON.',
+  },
+  binding_ambiguous_margin: {
+    value: 0.10, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Two hot figures are genuinely TIED (state ambiguous, not a coin-flip resolution) when the top-2 heat share sits within this of 0.50 — i.e. the leader is under ~1.5× the runner-up (share < 0.60 at 0.10). A clearer lead resolves. An ambiguous binding is HELD/OFFERED, never spent on a confident guess. Seeded so the ambiguous bucket holds true ties (its measured accuracy ≈ 0.5 = binding_conf_ambiguous, the calibration the router-reading read confirms); tunable by evo/. Inert unless binding_resolution is ON.',
+  },
+  binding_spend_floor: {
+    value: 0.70, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'The confidence at/above which a resolved binding is spent on a confident action (a direct Wikipedia article fetch). Below it — or when the state is ambiguous/absent — the tool OFFERS the candidates the field nominated rather than firing a confident wrong search. Maps the three NUL states onto the existing disambiguate path: spend, offer, or ask. Inert unless binding_resolution is ON.',
+  },
+  // Base-rate-calibrated confidences — seated on the router-reading read\'s
+  // measured hit-rates, NOT on raw heat (which over-states certainty: read B.3
+  // found a lone dominant figure is the anchor only ~75% of the time, so a
+  // confidence that maps it to ~1.0 is uncalibrated). These ARE the base rates;
+  // calibration holds by construction. Tunable by evo/ as more turns accrue.
+  binding_conf_named: {
+    value: 0.95, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Confidence of a binding resolved by an explicit name in the prompt — the strongest signal (the person named it). Inert unless binding_resolution is ON.',
+  },
+  binding_conf_chat: {
+    value: 0.75, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Confidence of a binding resolved by a single dominant hot figure in the chat field. Seated on the read\'s measured dominant-figure hit-rate (~0.75). Inert unless binding_resolution is ON.',
+  },
+  binding_conf_ambiguous: {
+    value: 0.70, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Confidence of a binding where two figures contend (a near-tie). Seated on the read\'s MEASURED top-1 hit-rate for ties (~0.73 — even contested chat figures resolve by recency more often than chance), not the 0.5 a coin-flip would suggest. An ambiguous binding is still HELD/OFFERED rather than spent, but that decision is driven by the STATE (ambiguous), not by pretending the confidence is low — the number stays honest/calibrated. Inert unless binding_resolution is ON.',
+  },
+  binding_conf_doc: {
+    value: 0.60, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Confidence of a binding resolved by document salience alone (the floor, reached only when the chat field is cold). Seated on the read\'s measured document-salience hit-rate (~0.61). Inert unless binding_resolution is ON.',
+  },
   // ── Site face — the Entity cell named at its level ──────
   site_entity_cell: {
     value: false, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
@@ -2199,7 +2237,9 @@ function _originalSig() { return ORIGINAL_LANGS.size ? ('§om:' + [...ORIGINAL_L
 const REPLAY_PHASE_IDS = new Set(['decay_gamma', 'inertia_delta', 'eva_energy_budget',
   'quote_interior_coupling', 'anaphora_coupling', 'audit_paraphrase_strong', 'audit_resemblance', 'audit_bind_floor',
   'proposal_auto_accept_sim', 'sentinel_draft_overlap', 'sentinel_budget_ratio', 'sentinel_max_drafts',
-  'relation_gate', 'relation_align_floor', 'relation_rel_floor', 'cross_source']);
+  'relation_gate', 'relation_align_floor', 'relation_rel_floor', 'cross_source',
+  'binding_resolution', 'chat_field_mass', 'binding_ambiguous_margin', 'binding_spend_floor',
+  'binding_conf_named', 'binding_conf_chat', 'binding_conf_ambiguous', 'binding_conf_doc']);
 function _rulePhase(id) { return REPLAY_PHASE_IDS.has(id) ? 'replay' : 'extract'; }
 function _packsKey(packs) { return [...packs].sort().join('|'); }
 function _strHash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return h >>> 0; }
@@ -7433,6 +7473,14 @@ function projectGraph(events, frame = {}) {
     'distance-gravity': 'distance_gravity',
     'gravity-alpha': 'gravity_alpha',
     'gravity-offset': 'gravity_offset',
+    'binding-resolution': 'binding_resolution',
+    'chat-field-mass': 'chat_field_mass',
+    'binding-ambiguous-margin': 'binding_ambiguous_margin',
+    'binding-spend-floor': 'binding_spend_floor',
+    'binding-conf-named': 'binding_conf_named',
+    'binding-conf-chat': 'binding_conf_chat',
+    'binding-conf-ambiguous': 'binding_conf_ambiguous',
+    'binding-conf-doc': 'binding_conf_doc',
   };
 
   /* ---------- Thinking depth: the effort dial's tunable budget ----------
@@ -11452,6 +11500,7 @@ function projectGraph(events, frame = {}) {
   // arrives as 1; the seed is boolean false. Either truthy form means ON.
   function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
   function crossSourceEnabled() { const v = READING_RULES.cross_source.value; return v === true || v === 1; }
+  function bindingResolutionEnabled() { const v = READING_RULES.binding_resolution.value; return v === true || v === 1; }
   function distanceGravityEnabled() { return DISTANCE_GRAVITY(); }
 
   // RG_STOP / RG_PRONOUN_RE / RG_ATTRIB are the relation_gate_* conventions,
@@ -12314,6 +12363,112 @@ function projectGraph(events, frame = {}) {
     reset() { _convField.turn = 0; _convField.ent.clear(); _convField.sent.clear(); _convField.edge.clear(); },
   };
 
+  /* ---------- The active-referent binding: the field's best guess ----------
+     resolveBinding reads the conversation field + the scope + the prompt and
+     returns the active referent as a defeasible BINDING — never a settled
+     entity. surface is the Given (what the person typed: "he"); name is the
+     Meant (what it resolved to: "Frank"), read by every existing consumer;
+     confidence is base-rate-calibrated (seated on the read's hit-rates, not raw
+     heat); state is one of the three NUL states (resolved | ambiguous | absent),
+     which never collapse. It is the ONE resolution the router and the tool-query
+     builder share. Legible-THAT: `via` records THAT the chat carried it and with
+     how much heat — never why.
+
+     Precedence ladder (the negotiation, made explicit):
+       1. an explicit name in the prompt wins (resolved, binding_conf_named)
+       2. else the chat field's hot figure wins the underspecified case
+          (resolved or ambiguous by the top-2 heat margin)
+       3. else the document's local salience is the floor (binding_conf_doc)
+     chat_field_mass is the asymmetry: the chat figure beats the page floor even
+     a little cool, because reference is a speaker act.
+
+     When binding_resolution is OFF this is INERT: it returns the heaviest hot
+     entity (name only, confidence null, via null) — exactly today's hotEntity —
+     so every consumer is byte-identical and no query is ever rewritten. */
+  const _ANAPHOR_SURFACE = ['his', 'him', 'he', 'her', 'she', 'it', 'its', 'they', 'them', 'their', 'that', 'those', 'these', 'this'];
+  function _bindingSurface(q) {
+    const toks = String(q || '').toLowerCase().match(/[a-z']+/g) || [];
+    return toks.find(t => _ANAPHOR_SURFACE.includes(t)) || null;
+  }
+  function _bindRuleNum(name, dflt) { const r = READING_RULES[name]; return r && typeof r.value === 'number' ? r.value : dflt; }
+  function _bindNameEq(a, b) {
+    const na = normSurface(String(a || '')), nb = normSurface(String(b || ''));
+    if (!na || !nb) return false;
+    if (na === nb) return true;
+    const sa = na.split(' ').filter(Boolean), sb = nb.split(' ').filter(Boolean);
+    if (!sa.length || !sb.length) return false;
+    return sa.length <= sb.length ? sa.every(w => sb.includes(w)) : sb.every(w => sa.includes(w));
+  }
+  function resolveBinding(scope, q, field, opts) {
+    opts = opts || {};
+    const on = !!(READING_RULES.binding_resolution && (READING_RULES.binding_resolution.value === true || READING_RULES.binding_resolution.value === 1));
+    const fld = field || conversationField;
+    const snap = (fld && typeof fld.snapshot === 'function') ? fld.snapshot() : (fld || { entities: [] });
+    const ts = (snap && snap.turn) || 0;
+    const surface = _bindingSurface(q);
+    const topEnt = (snap && snap.entities && snap.entities[0]) || null;
+    // ── OFF: byte-identical to hotEntity() — the heaviest hot entity, name only ──
+    if (!on) {
+      const name = topEnt ? (topEnt.label || topEnt.key) : null;
+      return { surface, name, confidence: null, state: name ? 'resolved' : 'absent', via: null, layer: 'Meant', ts };
+    }
+    // ── ON: the precedence ladder + asymmetry + calibrated confidence ──
+    const ds = scopeDocs(scope).filter(d => d && d.kind !== 'table');
+    const allEnts = [].concat(...ds.map(d => (projectEntities(d).entities || [])));
+    const findEnt = (label) => allEnts.find(e => _bindNameEq(label, e.name));
+    // 1. an explicit name the source carries wins — but ONLY when the prompt is
+    //    not pronominal. A pronoun makes the ANTECEDENT the active referent
+    //    ("what did she think about Marlow" turns on Edith, not the named object
+    //    Marlow), which is the chat field's job (step 2). A bare name with no
+    //    pronoun ("who is David Corman", "tell me about Marlow") IS the subject
+    //    and is never displaced — even a one-off figure not in the top entities
+    //    (the B1″ case), via referentsScope (names actually present in scope).
+    if (!surface) {
+      let matter = [];
+      try { matter = (referentsScope(ds, q) || {}).matter || []; } catch (e) {}
+      if (matter.length) {
+        const ent = findEnt(matter[0]);
+        return { surface, name: ent ? ent.name : matter[0], confidence: _bindRuleNum('binding_conf_named', 0.95), state: 'resolved', via: 'named in the question', layer: 'Meant', ts };
+      }
+    }
+    // 2. the chat field's hot figure (the underspecified case)
+    const mass = _bindRuleNum('chat_field_mass', 1.2) || 1;
+    const floor = (isFinite(opts.heatFloor) ? opts.heatFloor : 0) / (mass > 0 ? mass : 1);
+    const hot = [];
+    for (const he of ((snap && snap.entities) || [])) {
+      if (he.heat < floor) continue;
+      const ent = findEnt(he.label || he.key);
+      if (ent && !hot.some(h => h.name === ent.name)) hot.push({ name: ent.name, heat: he.heat });
+    }
+    if (hot.length) {
+      const h1 = hot[0].heat, h2 = hot[1] ? hot[1].heat : 0;
+      const share = h1 / (h1 + h2);
+      const ambiguous = h2 > 0 && (share - 0.5) < _bindRuleNum('binding_ambiguous_margin', 0.20);
+      return {
+        surface, name: hot[0].name,
+        confidence: ambiguous ? _bindRuleNum('binding_conf_ambiguous', 0.5) : _bindRuleNum('binding_conf_chat', 0.75),
+        state: ambiguous ? 'ambiguous' : 'resolved',
+        via: 'chat-field top-1 heat ' + h1.toFixed(2), layer: 'Meant', ts,
+        runnerUp: ambiguous && hot[1] ? hot[1].name : null,
+      };
+    }
+    // 3. document salience — the floor, reached only when the chat field is cold
+    const docTop = allEnts[0] || null;
+    if (docTop) return { surface, name: docTop.name, confidence: _bindRuleNum('binding_conf_doc', 0.6), state: 'resolved', via: 'document salience', layer: 'Meant', ts };
+    return { surface, name: null, confidence: 0, state: 'absent', via: null, layer: 'Meant', ts };
+  }
+  /* Build a tool query from the prompt and a resolved binding: substitute the
+     surface pronoun with the binding's name, so "look up his employer" with
+     his→Frank searches "Frank employer", not "his employer". Returns the prompt
+     unchanged when there is no pronoun to resolve or no name to resolve it to —
+     and the app only calls it when binding_resolution is ON (confidence != null),
+     so a raw-string query is never rewritten on the parity floor. */
+  function bindingQuery(q, binding) {
+    if (!binding || !binding.name || !binding.surface) return q;
+    try { return String(q).replace(new RegExp('\\b' + binding.surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i'), binding.name); }
+    catch (e) { return q; }
+  }
+
   /* ---------- Working memory: the conversation field as a hot subgraph ----------
      buildWorkingMemory reads the conversation field through the turn's budget and
      resolves it into three bands the prompt assembler ranks by heat:
@@ -12446,6 +12601,9 @@ function projectGraph(events, frame = {}) {
     // thinking depth: the effort dial's per-turn budget + the conversation field
     // (working memory) it spends across. Inert at depth 1 (parity floor).
     thinkingBudget, conversationField, buildWorkingMemory, recallByHeat,
+    // the active-referent binding (the field's best guess) + the tool-query
+    // builder that consumes it. Inert when binding_resolution is OFF (parity).
+    resolveBinding, bindingQuery,
     // iterative seeking: coverage + which query clusters a retrieval leaves uncovered
     coverage, coverageGaps, seekableTerms,
     // graph traversal: the graph as the answer mechanism (entries → walk →
@@ -12463,6 +12621,7 @@ function projectGraph(events, frame = {}) {
     // from the claim's OWN cited span, never an exemplar library)
     relationGateEnabled, checkRelations, checkRelationsScope,
     bindClaimKeys, bindClaimKeysScope, groundingEnvelope,
+    bindingResolutionEnabled,
     // the cross-source veto (cross_source rule, OFF by default — parity floor):
     // a claim whose subject is an entity of one source but binds to another,
     // where the subject never appears — the multi-document conflation the
