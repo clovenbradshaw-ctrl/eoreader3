@@ -1,7 +1,7 @@
 {
   "id": "asr-whisper-small",
   "name": "Whisper small",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "perceptual",
   "modality": "audio",
   "capability": "asr",
@@ -20,7 +20,9 @@
   "failureModes": [
     "no calibrated confidence — derived from avg_logprob when present, else a presence flag",
     "language auto-detect can be wrong on short or noisy clips",
-    "weights fail to download / backend unavailable (reported as a failure event)"
+    "weights fail to download / backend unavailable (reported as a failure event)",
+    "audio is resampled to 16 kHz mono in-browser; an unsupported container can fail to decode (reported as a failure event)",
+    "WebGPU (fp16) is preferred when present and falls back to wasm (int8) if it cannot initialize — int8 has higher WER"
   ],
   "output": {
     "event": "one per segment",
@@ -28,6 +30,8 @@
   },
   "meta": {
     "sampleRateHz": 16000,
-    "size": "small"
+    "size": "small",
+    "device": "webgpu→wasm",
+    "dtype": "fp16→q8"
   }
 }

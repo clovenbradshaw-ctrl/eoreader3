@@ -361,19 +361,38 @@
   function stampDraft(opts) {
     const o = opts || {};
     const w = witnessGrain({ prose: o.prose, spans: o.spans, grain: o.grain });
+    // The grain-relative witness is token-overlap only: it cannot see that a
+    // paraphrase carries a span's MEANING when it reuses none of its words —
+    // exactly what a small local model produces, so an honest restatement reads
+    // as confabulation. When the lexical witness reads low but a mechanical
+    // re-citation pass (engine.groundTalkerOutput, injected as o.grounded) bound
+    // the draft's sentences back to real source lines — a lower-floor,
+    // per-sentence retrieval over the whole source, robust to a generic unit job
+    // that retrieved nothing — credit that binding instead of condemning the
+    // paraphrase. The rescue only ever LIFTS the witness, and the grounder binds
+    // nothing for a genuine confabulation, so it stays low.
+    let witness = w.degree, tag = w.tag, rescued = false;
+    const g = o.grounded;
+    if (g && typeof g.degree === 'number'
+        && (witness == null || witness < FLOOR.witness)
+        && g.degree > (witness || 0)) {
+      witness = clamp01(g.degree);
+      rescued = true;
+      if (g.grounded && (tag === 'confabulation' || tag === 'empty')) tag = 'figure-grounded';
+    }
     let form = null;
     if (o.formLib && o.draftVec != null && o.genre) {
       try { form = o.formLib.formDegree(o.genre, o.draftVec); } catch (e) { form = null; }
     } else if (typeof o.form === 'number') form = clamp01(o.form);
     const conf = confidence({
-      witness: w.degree,
+      witness,
       form,
       coherence: o.coherence != null ? o.coherence : null,
       retrieval: o.retrieval != null ? o.retrieval : null,
       temporal: o.temporal != null ? o.temporal : null,
       frame: o.frame != null ? o.frame : null,
     });
-    return { confidence: conf, tag: w.tag, witness_detail: w.detail };
+    return { confidence: conf, tag, witness_detail: w.detail, rescued };
   }
 
   // ============================================================ the monitor
@@ -465,6 +484,22 @@
     try { if (d.embed && prose) draftVec = await d.embed(prose); } catch (e) { draftVec = null; }
     const grain = (unit.hole && unit.hole.owed_grain) || unit.owed_grain || 'Figure';
     const retrieval = retrievalDegree(spans);
+
+    // Mechanical re-citation rescue: a small local model paraphrases the spans
+    // rather than quoting them, so the token-overlap witness reads its honest
+    // restatement as confabulation. Only when the lexical witness is below the
+    // floor do we ask the injected grounder to re-bind each sentence to a real
+    // source line (per-sentence retrieval over the whole source — so it also
+    // recovers a unit whose generic job retrieved nothing). The result lifts the
+    // witness in stampDraft; a genuine confabulation binds nothing and stays low.
+    let grounded = null;
+    if (d.ground && prose) {
+      const wLex = witnessGrain({ prose, spans, grain });
+      if (wLex.degree == null || wLex.degree < FLOOR.witness) {
+        try { grounded = await d.ground(prose); } catch (e) { grounded = null; }
+      }
+    }
+
     let frameDeg = null;
     if (d.embed && frame && frame.goal) {
       try {
@@ -476,29 +511,36 @@
     const st = stampDraft({
       prose, spans, grain,
       draftVec, genre: frame.genre, formLib: d.formLib,
-      retrieval, frame: frameDeg,
+      retrieval, frame: frameDeg, grounded,
     });
 
     // 4. emit the events: a Draft, its Stamp, and the monitor's Route. The
     // talker authored every sentence here, so the provenance is uniformly
-    // 'talker' — a later user edit re-attributes the sentences it changes.
+    // 'talker' — a later user edit re-attributes the sentences it changes. When
+    // the rescue bound sentences to real lines, those per-sentence cites are
+    // stronger evidence than the job-level spans (and exist where the job
+    // retrieved nothing), so they become the draft's source_events.
+    const rescuedCites = (st.rescued && grounded && grounded.cites)
+      ? grounded.cites.map(c => ({ docId: c.docId, idx: c.idx })).filter(s => s.docId != null && s.idx != null)
+      : null;
     const draft = make.draft({
       unit_id: unit.id, prose,
       author: 'talker',
       provenance: splitSentences(prose).map(t => ({ text: t, author: 'talker' })),
-      source_events: spans.map(s => ({ docId: s.docId, idx: s.idx })).filter(s => s.docId != null),
+      source_events: (rescuedCites && rescuedCites.length) ? rescuedCites
+        : spans.map(s => ({ docId: s.docId, idx: s.idx })).filter(s => s.docId != null),
       confidence: st.confidence, doc_id: d.doc_id,
     });
     const stamp = make.stamp({
       draft_id: draft.id, unit_id: unit.id,
-      confidence: st.confidence, tag: st.tag, doc_id: d.doc_id,
+      confidence: st.confidence, tag: st.tag, rescued: st.rescued, doc_id: d.doc_id,
     });
     const r = decide(st.confidence, {});
     const route = make.route({
       unit_id: unit.id, decision: r.decision, predicate: r.predicate,
       triggered_by: r.triggered_by, doc_id: d.doc_id,
     });
-    return { draft, stamp, route, prose, spans, confidence: st.confidence, tag: st.tag };
+    return { draft, stamp, route, prose, spans, confidence: st.confidence, tag: st.tag, rescued: st.rescued };
   }
 
   // The talker's prompt. Spans first as factual material to use; the job and the
@@ -544,6 +586,32 @@
     for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
     const den = Math.sqrt(na) * Math.sqrt(nb);
     return den ? clamp01(dot / den) : null;
+  }
+
+  // ============================================================ outline parsing
+  // Turn a model's outline reply into a list of unit jobs. The talker is asked
+  // for one bare job per line, but a small local model disobeys: it prefixes a
+  // lead-in ("Here are the proposed sections:"), numbers the items (1. / I. /
+  // (a) / •), and pads with blanks. Parsing mechanically here keeps a lead-in
+  // from ever becoming a drafted unit, and turns "I. Introduction" into the job
+  // "Introduction" — both observed with Llama 3.2 3B.
+  const OUTLINE_MARKER = /^\s*(?:[-*•·‣◦–—]|\(?\d{1,2}[.)]|\(?[ivxlcdm]{1,4}[.)]|\(?[a-z][.)])\s+/i;
+  function parseOutline(text, max = 8) {
+    let lines = String(text == null ? '' : text).split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
+    // Drop a leading line that carries no list marker when it reads as a
+    // preamble — it ends in a colon, or the line after it IS a marked item. A
+    // clean "one job per line" reply (no markers anywhere) keeps its first line.
+    if (lines.length > 1 && !OUTLINE_MARKER.test(lines[0])
+        && (/[:：]\s*$/.test(lines[0]) || OUTLINE_MARKER.test(lines[1]))) {
+      lines = lines.slice(1);
+    }
+    const jobs = [];
+    for (const s of lines) {
+      const job = s.replace(OUTLINE_MARKER, '').replace(/\s+/g, ' ').trim();
+      if (job.length > 2) jobs.push(job);
+      if (jobs.length >= max) break;
+    }
+    return jobs;
   }
 
   // ============================================================ doc helpers
@@ -741,7 +809,7 @@
     make, ev,
     fold, buildTree, bandFor,
     witnessGrain, stampDraft, decide,
-    generateUnit, buildTalkerPrompt, retrievalDegree,
+    generateUnit, buildTalkerPrompt, retrievalDegree, parseOutline,
     newDoc, assemble,
     diffProvenance, authorship, project, projectFold,
     seedFromProse, splitIntoUnits, deMarkdown, parseCites,

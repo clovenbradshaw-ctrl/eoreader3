@@ -102,7 +102,8 @@ genuinely can't, the interface is extended in writing, in the spec).
 
 ## Shipped in this first wave
 
-`ocr` (Tesseract, TrOCR printed + handwritten) · `asr` (Whisper tiny/base/small)
-· `pdf-text` (pdf.js + a built-in fallback) · `csv-parse` (papaparse + built-in)
+`ocr` (Tesseract, TrOCR printed + handwritten) · `asr` (Whisper tiny/base/small —
+WebGPU/fp16 with a wasm/int8 fallback, 16 kHz mono resampling) · `pdf-text`
+(pdf.js + a built-in fallback) · `csv-parse` (papaparse + built-in)
 · `code-ast` (tree-sitter, JavaScript + Python) · `doc-layout` (docling-lite
 heuristic) · `text-embed` (the resident MiniLM) · `image-text-embed` (CLIP).
