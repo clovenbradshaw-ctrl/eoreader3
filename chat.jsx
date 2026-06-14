@@ -333,6 +333,7 @@ function narrateTurn(turn) {
     switch (s.t) {
       case 'route':
         if (s.detour) push('Read it as a question about the document (' + s.detour + ').');
+        else if (s.path === 'verbatim') push(s.found === 0 ? 'Verbatim mode: nothing in the document matched this to quote.' : 'Verbatim mode — quoting the matching passage' + (s.found > 1 ? 's' : '') + ' straight from the document, word for word, no synthesis.');
         else if (s.path === 'creative') push('Answering in creative mode' + (s.referencing ? ', drawing on the open document.' : ', writing freely.'));
         else if (s.path && s.referencing === false) push('This read as ordinary conversation, not a question about the document.');
         else if (s.primary) push('Focused on “' + s.primary.name + '” as the source to read.');
@@ -816,7 +817,7 @@ function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onO
   );
 }
 
-const MODES = [{ id: 'auto', label: 'Auto' }, { id: 'grounded', label: 'Grounded' }, { id: 'creative', label: 'Creative' }];
+const MODES = [{ id: 'auto', label: 'Auto' }, { id: 'verbatim', label: 'Verbatim' }, { id: 'grounded', label: 'Grounded' }, { id: 'creative', label: 'Creative' }];
 function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   const [open, setOpen] = React.useState(false);
   const has = (sources && sources.length) || (addable && addable.length);
@@ -874,6 +875,7 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, s
           <div className="mode-seg">
             {MODES.map(md => (
               <button key={md.id} className={(mode === md.id ? 'on ' + md.id : '')} onClick={() => onMode(md.id)}>
+                {md.id === 'verbatim' && <Icon name="copy" size={13} />}
                 {md.id === 'grounded' && <Icon name="check" size={13} />}
                 {md.id === 'creative' && <Icon name="sparkle" size={13} />}{md.label}
               </button>

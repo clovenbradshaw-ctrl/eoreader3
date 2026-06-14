@@ -190,7 +190,7 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
             <div className="set-row">
               <div className="set-row-main">
                 <div className="set-label">Answer mode control</div>
-                <div className="set-sub">Show the Auto · Grounded · Creative buttons in the message box. Off keeps every chat on Auto — it reads each question and grounds or composes on its own. On lets you pin <b>Grounded</b> (answer only from the document) or <b>Creative</b> (compose freely, not fact-checked) for a chat.</div>
+                <div className="set-sub">Show the Auto · Verbatim · Grounded · Creative buttons in the message box. Off keeps every chat on Auto — it reads each question and grounds or composes on its own. On lets you pin <b>Verbatim</b> (quote passages straight from the document, word for word), <b>Grounded</b> (answer from the document, synthesized), or <b>Creative</b> (compose freely, not fact-checked) for a chat.</div>
               </div>
               <button className={'switch' + (showModeToggle ? ' on' : '')} role="switch"
                       aria-checked={!!showModeToggle} aria-label="Answer mode control"
