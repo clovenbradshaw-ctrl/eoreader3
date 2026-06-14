@@ -3216,8 +3216,15 @@ function trimNounSpan(surf) {
   const TITLE_ABBREV = /^(mr|mrs|ms|dr|st|prof|jr|sr|col|gen|lt|capt|rev|hon|messrs|mme|mlle)$/i;
   const bMatch = s.match(/^(.*?\b([\p{L}]{3,}))\.\s+\p{Lu}/u);
   if (bMatch && !TITLE_ABBREV.test(bMatch[2])) s = bMatch[1].trim();
-  // Clip at any internal quote character — entities don't span into a quote
-  const qIdx = s.search(/["'`«»\u201C\u201D\u2018\u2019]/);
+  // Clip at an internal quote boundary — a greedy span that crossed into a
+  // quotation. But a single quote / apostrophe FLANKED BY LETTERS is part of
+  // the name, not a boundary ("O'Connell", "D'Arcy"); clipping it beheaded
+  // the name to its first letter and the residue ("O") was dropped, so an
+  // apostrophe-named figure vanished from the graph entirely. Double quotes,
+  // backticks, guillemets and curly double quotes stay hard boundaries, as
+  // does a single quote at a word edge (a real delimiter the span ran into).
+  const qMatch = s.match(/["`«»“”]|(?<![\p{L}\p{M}])['‘’]|['‘’](?![\p{L}\p{M}])/u);
+  const qIdx = qMatch ? qMatch.index : -1;
   if (qIdx > 0) s = s.slice(0, qIdx).trim();
   // Clip at participial / attribution introducers
   const CLIP_RE = /\s+(?:recognizing|saying|said|asked|shouted|replied|cried|muttered|whispered|exclaimed|continued|added|remarked|announced|called)\b/i;
