@@ -23,6 +23,7 @@ import '../docview.jsx';
 import '../compose.jsx';
 import '../rulesets.jsx';
 import '../auditview.jsx';
+import '../eomri.jsx';
 import '../graphaudit.jsx';
 import '../promptflow.jsx';
 import '../settings.jsx';

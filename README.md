@@ -133,8 +133,14 @@ The intelligence is **mechanical**; the language model only phrases things.
   turn's pipeline step by step and exports it as JSONL. In-memory; deterministic;
   no model involved.
 - **UI** (`app.jsx`, `chat.jsx`, `docview.jsx`, `sidebar.jsx`, `rulesets.jsx`,
-  `auditview.jsx`, `icons.jsx`) — React via in-browser Babel; `styles.css` for
-  the look.
+  `auditview.jsx`, `eomri.jsx`, `icons.jsx`) — React via in-browser Babel;
+  `styles.css` for the look.
+- **`eomri.jsx`** — **EO-MRI**, the cognition instrument beside the Glass box.
+  Where the Glass box is the audit *log*, EO-MRI is the *scan*: a live
+  cross-section of a turn as it runs, drawn as the EO cube's three faces — the
+  operator helix + order-check (EO reader compliance), the Site face, the
+  Resolution face — and the `operator(Site, Resolution)` 3-fold address. See
+  `docs/eo-mri.md`.
 - **`data.jsx`** — example documents, model list, and the reading rulesets.
 - **`store.js`** — local persistence (IndexedDB for docs/chat, localStorage for
   prefs/rules and the learned rules-ledger delta).
@@ -512,6 +518,39 @@ And when a check fails a claim **the assistant itself made earlier**, the old
 reply is **retracted**: flagged in the chat, re-tagged in the model's history
 ("…RETRACTED — do not repeat or defend it"), and the retraction said out loud
 in the new answer — a correction the user deposits actually lands somewhere.
+
+### Conflation across sources (the cross-source veto)
+
+Load two sources and a question that hands the model both at once and a third
+failure appears, invisible to every check that reads one document at a time. Ask
+for an essay on *Oracle's ethics* with a Larry Ellison article **and** a Nashville
+police-surveillance article in scope, and the model writes "Oracle's partnership
+with the Metropolitan Nashville Police Department to deploy 15 fixed cameras" —
+each sentence binding cleanly (the camera words really do live on the page it
+cites) while the *bridge between the two documents* is the model's own. It was
+never Oracle that deployed the cameras; the subject lives only in the Ellison
+article, the cameras only in the police one, and **no page joins them**. The
+within-source vetoes (assertion, kin, relation) each read a single graph and
+structurally cannot see it.
+
+The fix is to read the **draft's own graph** — each claim resolved to the source
+it binds to — against the sources' entity membership. A claim whose governing
+subject is an entity *absent* from the source it cites but *present* in another
+in-scope source is a cross-source attribution: held and flagged, the
+misattribution named in the trace ("ties Oracle, from the Ellison article, to
+something that appears only in the surveillance doc, where Oracle is never
+mentioned"). The topic is **carried across sentences** the way a reader carries
+one, so an anaphor inherits it — "*The company's* partnership…" is read as
+Oracle's, and flags, even though the sentence never says the name. Conservative
+by construction: it needs two or more sources, a named topic, and a clean bind;
+an entity shared across sources is not foreign and never flags, and a definite
+reference local to the cited doc ("the cameras", whose head noun lives there) is
+read as that page's own, not the topic's — the failure direction of every
+heuristic is a missed flag, never a false one. Behind the *Cross-Source
+Attribution* rule (off by default — the parity floor); on, it keeps the model's
+answer and downgrades the badge to an honest caveat, exactly like the vetoes
+beside it. `tests/cross-source.test.js` pins the catch, the topic carry, and the
+zero-false-flag bar.
 
 ### De-chroming (the page, minus its chrome)
 

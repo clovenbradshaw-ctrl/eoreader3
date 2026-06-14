@@ -101,6 +101,50 @@ async function main() {
     ok(p && p.id === 'doc-3', 'no ctx ⇒ lexical home (doc-3) wins, exactly as before — got ' + (p && p.id));
   });
 
+  // B1″ — the active subject is named in the lead, then carried by pronoun /
+  // bare surname (which the children share), so the projection ranks the kids
+  // and the subject is NOT a top entity. A pure-projection bind would miss it
+  // and "who are his kids?" would fall to the first tagged chip (the report).
+  // The activation still names the subject; bind to the source whose TITLE or
+  // PROSE carries that name. (The reported session: a Wikipedia article plus an
+  // unrelated "Untitled document" tagged together — "who are his kids?" focused
+  // on the .txt and pulled nothing.)
+  await (async () => {
+    const REPORT = ['The quarterly report covers logistics across three regions.',
+      'Shipments rose in spring and fell by autumn.', 'The Denver warehouse handled the bulk.'].join(' ');
+    const WIKI = ['Larry Ellison is an American businessman, born on August 17, 1944.',
+      'He is the co-founder and chairman of Oracle Corporation.',
+      'He has two children, David Ellison and Megan Ellison.',
+      'David Ellison founded Skydance Media.', 'Megan Ellison founded Annapurna Pictures.'].join(' ');
+    const report = await E.parseDocument('Untitled document (1).txt', REPORT, 'doc-report');
+    const wiki = await E.parseDocument('Wikipedia · Larry Ellison', WIKI, 'doc-wiki');
+    const sc = [report, wiki];
+    const he = { hotEntity: 'Larry Ellison' };
+
+    group('B1″ — activation binds the source that NAMES the subject (pronoun/surname article)', () => {
+      const projected = (E.projectEntities(wiki).entities || []).map(e => e.name);
+      ok(!projected.includes('Larry Ellison'), 'precondition: the subject is not a top projected entity — got [' + projected.join(', ') + ']');
+      ok(E.resolveSubjectDoc(sc, 'Larry Ellison') === wiki, 'resolveSubjectDoc binds the Wikipedia source by surface name (title/prose)');
+      const b = E.discourseBinding(sc, 'who are his kids?', he);
+      ok(b && b.hold && b.doc === wiki, 'discourseBinding HOLDS the Wikipedia source for the anaphoric follow-up');
+      ok(E.routePrimary(sc, 'who are his kids?', he) === wiki, 'routePrimary focuses on the Wikipedia source, not the first tagged chip');
+      // parity floor: no activation + no lexical signal ⇒ first chip, unchanged.
+      ok(E.routePrimary(sc, 'who are his kids?') === report, 'no ctx ⇒ first-chip floor (parity), unchanged');
+      // the fallback is inert when no source names the subject (→ lexical decides).
+      ok(E.resolveSubjectDoc(sc, 'Marie Curie') === null, 'a subject named in no source does not bind');
+    });
+
+    group('focus follows the passages — primaryFromHits / routePrimary(ctx.hits)', () => {
+      // Even with NO activation, the source the retrieved passages came from is
+      // the source we focused on — a stronger signal than re-scoring a pronoun
+      // question that scores zero everywhere.
+      const hits = [{ docId: 'doc-wiki', i: 2, score: 0.81 }, { docId: 'doc-wiki', i: 3, score: 0.4 }];
+      ok(E.primaryFromHits(sc, hits) === wiki, 'primaryFromHits returns the source owning the strongest hits');
+      ok(E.primaryFromHits(sc, []) === null, 'primaryFromHits is null with no hits');
+      ok(E.routePrimary(sc, 'who are his kids?', { hits }) === wiki, 'routePrimary(ctx.hits) focuses on the source the passages came from');
+    });
+  })();
+
   group('absence — the held document cannot fabricate from the other', () => {
     // Bound to doc-2, the mechanical reading must not surface Kahan's
     // inspiration sentence. answerScope routes to the held subject.

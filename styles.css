@@ -202,6 +202,8 @@ button { font-family: inherit; cursor: pointer; }
 .sb-item .sb-x:hover { color: #c0392b; background: var(--bg-sunken); }
 .sb-item .sb-src.on { display: inline-flex; color: var(--accent); }
 .sb-item .sb-src:hover { background: var(--accent-tint); color: var(--accent); }
+/* a forked thread sits one notch in from its source, marked with a branch glyph */
+.sb-item.forked { padding-left: 18px; }
 .sb-link { background: none; border: 0; cursor: pointer; color: var(--accent); font-size: 12px; padding: 4px 8px; text-align: left; }
 .sb-link:hover { text-decoration: underline; }
 
@@ -487,6 +489,10 @@ ol.md-list { list-style: decimal; }
 
 .msg-actions { display: flex; gap: 4px; margin-top: 8px; opacity: 0; transition: opacity .15s; }
 .msg-row.asst:hover .msg-actions { opacity: 1; }
+/* the user bubble carries a single fork action, tucked at its lower edge */
+.msg-row.user { align-items: flex-end; }
+.msg-actions.user-actions { margin-top: 0; margin-bottom: 2px; }
+.msg-row.user:hover .user-actions { opacity: 1; }
 .msg-actions button {
   width: 28px; height: 28px; border-radius: 7px; border: 0; background: transparent; color: var(--text-3);
   display: grid; place-items: center;
@@ -2112,4 +2118,31 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 @media (max-width: 720px) {
   .cmp-split { flex-direction: column; }
   .cmp-plan { width: auto; border-right: 0; border-bottom: 1px solid var(--border); max-height: 45%; }
+}
+
+/* ============================================================ EO-MRI
+   The cognition instrument (eomri.jsx), beside the Glass box: a large,
+   self-contained dark canvas in a centered overlay. The instrument carries
+   its own chrome (top bar + close ✕), so the drawer is just the frame. The
+   canvas styles ride inline (ported from the dc-runtime template); only the
+   frame, the instrument-local keyframes, and its scoped scrollbars live here.
+   The keyframe NAMES are kept (cleoAppear/Pulse/Blink) so the ported logic's
+   style strings are unchanged. */
+.eomri-drawer {
+  width: min(1320px, 96vw); height: min(900px, 94vh);
+  position: relative; border-radius: 12px; overflow: hidden;
+  background: #05090a; box-shadow: var(--sh-lg);
+  animation: eomriPop .2s cubic-bezier(.4, 0, .2, 1);
+}
+@keyframes eomriPop { from { transform: scale(.985); opacity: .4; } }
+@keyframes cleoAppear { from { transform: translateY(5px); } to { transform: none; } }
+@keyframes cleoPulse { 0%, 100% { opacity: 1; } 50% { opacity: .38; } }
+@keyframes cleoBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+.eomri-canvas ::-webkit-scrollbar { width: 7px; height: 7px; }
+.eomri-canvas ::-webkit-scrollbar-thumb { background: #1d2e2b; border-radius: 4px; }
+.eomri-canvas ::-webkit-scrollbar-track { background: transparent; }
+/* The instrument's spine is a fixed 248 | 1fr | 360 grid; below ~1000px give it
+   the whole viewport so the three columns still breathe. */
+@media (max-width: 1000px) {
+  .eomri-drawer { width: 100vw; height: 100vh; border-radius: 0; }
 }

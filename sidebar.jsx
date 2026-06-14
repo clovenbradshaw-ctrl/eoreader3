@@ -25,7 +25,10 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, on
           <div className="sb-section">
             <div className="sb-label">Chats</div>
             {chats.map(c => (
-              <div key={c.id} className={'sb-item' + (c.id === activeChat ? ' active' : '')} onClick={() => onSelectChat(c.id)}>
+              <div key={c.id} className={'sb-item' + (c.id === activeChat ? ' active' : '') + (c.forkedFrom ? ' forked' : '')}
+                   onClick={() => onSelectChat(c.id)}
+                   title={c.forkedFrom ? 'Forked conversation' : c.title}>
+                {c.forkedFrom && <span className="ti"><Icon name="fork" size={14} /></span>}
                 <span className="tl">{c.title}</span>
               </div>
             ))}

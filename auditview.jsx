@@ -139,6 +139,9 @@ function AuditStep({ s }) {
       {(s.contradictions || []).map((c, i) => (
         <div key={i} className="aud-dim">⊨ the page asserts “{c.subject} is {c.is}”{c.sent != null ? <span> <span className="aud-cite">s{c.sent}</span></span> : null} · the draft said: <span className="aud-void">{c.claim}</span></div>
       ))}
+      {(s.conflations || []).map((c, i) => (
+        <div key={'cf' + i} className="aud-dim">⊗ <b className="aud-void">{c.subject}</b> is from “{c.subjectDoc}”, but this claim binds to “{c.boundDoc}”{c.sent != null ? <span> <span className="aud-cite">s{c.sent}</span></span> : null} where it never appears{c.anaphor ? <span className="aud-dim"> (via “the …” carry)</span> : null} · the draft said: <span className="aud-void">{c.claim}</span></div>
+      ))}
     </Line>
   );
   if (s.t === 'traverse') return (
@@ -208,6 +211,14 @@ function AuditStep({ s }) {
             <div key={i} className="aud-dim">⇋ <b className="aud-void">{m.kind}</b> · the draft said: <span className="aud-void">{m.claim}</span>{m.edge ? <span> · the page holds: {m.edge}{m.sent != null ? <span> <span className="aud-cite">s{m.sent}</span></span> : null}</span> : null}</div>
           ))
         : <span className="aud-dim"> · no relation contradicts its edge</span>}
+    </Line>
+  );
+  if (s.t === 'cross-source') return (
+    <Line label="cross-source" kind="veto">
+      <span className="aud-dim"><b>{(s.conflations || []).length}</b> claim{(s.conflations || []).length !== 1 ? 's' : ''} attribute{(s.conflations || []).length === 1 ? 's' : ''} a subject to a source it never appears in</span>
+      {(s.conflations || []).map((c, i) => (
+        <div key={i} className="aud-dim">⊗ <b className="aud-void">{c.subject}</b> (from “{c.subjectDoc}”) bound to “{c.boundDoc}”{c.sent != null ? <span> <span className="aud-cite">s{c.sent}</span></span> : null}{c.anaphor ? <span> · via topic carry</span> : null} · the draft said: <span className="aud-void">{c.claim}</span></div>
+      ))}
     </Line>
   );
   if (s.t === 'envelope') return (

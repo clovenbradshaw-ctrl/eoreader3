@@ -788,6 +788,11 @@ const READING_RULES = {
     value: 0.55, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'Predicate compatibility floor for the relation gate: a claim verb and an edge verb are the same relation when their lemmas overlap or their embedding cosine clears this. Measured on the app\'s own MiniLM-q8: cos(afford, pay) = 0.62 clears; cos(argued, hear) = 0.50 does not. This is the one place the embedder helps the relational cure, and only as a similarity scorer feeding a mechanical decision.',
   },
+  // ── Cross-source attribution — the multi-document conflation veto ──
+  cross_source: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, a draft over TWO OR MORE sources is read as its own graph (each claim → the source it binds to) and checked against the sources\' entity membership: a claim whose governing subject is an entity ABSENT from the source it cites but PRESENT in another in-scope source is held and flagged cross-source — the model bridged two documents the page never joins ("Oracle\'s partnership with the MNPD to deploy cameras," cited to the surveillance doc in which Oracle never appears). Needs ≥2 sources, a named topic, and a clean bind; a shared entity, an abstract subject, or a local definite reference never flags. OFF ships today\'s behavior byte-identical (the parity floor); the within-source vetoes (assertion / kin / relation) are unaffected either way.',
+  },
   // ── Site face — the Entity cell named at its level ──────
   site_entity_cell: {
     value: false, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
@@ -2194,7 +2199,7 @@ function _originalSig() { return ORIGINAL_LANGS.size ? ('§om:' + [...ORIGINAL_L
 const REPLAY_PHASE_IDS = new Set(['decay_gamma', 'inertia_delta', 'eva_energy_budget',
   'quote_interior_coupling', 'anaphora_coupling', 'audit_paraphrase_strong', 'audit_resemblance', 'audit_bind_floor',
   'proposal_auto_accept_sim', 'sentinel_draft_overlap', 'sentinel_budget_ratio', 'sentinel_max_drafts',
-  'relation_gate', 'relation_align_floor', 'relation_rel_floor']);
+  'relation_gate', 'relation_align_floor', 'relation_rel_floor', 'cross_source']);
 function _rulePhase(id) { return REPLAY_PHASE_IDS.has(id) ? 'replay' : 'extract'; }
 function _packsKey(packs) { return [...packs].sort().join('|'); }
 function _strHash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return h >>> 0; }
@@ -3035,6 +3040,73 @@ function eoSiteOfEvent(ev) {
 function eoAddress(site, type) {
   if (!site) return null;
   return (site === eoSiteGrid().Existence.Figure && type) ? site + ' / ' + type : site;
+}
+
+/* ============================================================
+   The other two faces of the cube — read-time projections.
+
+   The Act face fixes Mode×Domain in the operator itself. The Site face (above)
+   is Domain×Object. The Stance/Resolution face is Mode×Object. Together the
+   three faces recover the full phenomenological address ⟨Mode, Domain, Object⟩
+   of what an operator touched, encoded compactly as operator(Site, Resolution).
+   Nothing here is stamped on the event or stored — the append-only log stays
+   the one source of truth; these re-derive the address on demand. (The reader
+   was act-face biased: it recorded only the operator, never the rest.)
+   ============================================================ */
+// Mode (the Identity column) is INTRINSIC to the operator — a lookup, never
+// scored: the first of each Domain triad Differentiates, the second Relates,
+// the third Generates. NUL/SEG/DEF · SIG/CON/EVA · INS/SYN/REC.
+const EO_MODE_OF_OP = {
+  NUL: 'Differentiate', SEG: 'Differentiate', DEF: 'Differentiate',
+  SIG: 'Relate',        CON: 'Relate',        EVA: 'Relate',
+  INS: 'Generate',      SYN: 'Generate',      REC: 'Generate',
+};
+// Mode × Object → the grain of engagement (the Stance/Resolution face). Like
+// the Site grid, these nine cells are GENERATED products of two coordinates,
+// never points on an axis.
+const EO_RESOLUTION_GRID = {
+  Differentiate: { Ground: 'Clearing',    Figure: 'Dissecting', Pattern: 'Unraveling' },
+  Relate:        { Ground: 'Tending',     Figure: 'Binding',    Pattern: 'Tracing' },
+  Generate:      { Ground: 'Cultivating', Figure: 'Making',     Pattern: 'Composing' },
+};
+// The Object (Ground/Figure/Pattern) coordinate an EVENT touched — the SAME
+// selection eoSiteOfEvent makes for the Site, factored out so the Site and the
+// Resolution read one coordinate and can never drift (including the NUL /
+// unattributed-SIG → Ground correction under site_entity_cell).
+function eoObjectOfEvent(ev) {
+  if (!ev || !ev.op) return null;
+  const domain = EO_DOMAIN_OF_OP[ev.op];
+  if (!domain) return null;
+  if (siteEntityCellEnabled()) {
+    if (ev.op === 'NUL') return 'Ground';
+    if (ev.op === 'SIG' && (!ev.speaker || ev.speaker === '?')) return 'Ground';
+  }
+  const target = ev.op === 'SIG' ? ev.speaker
+    : (ev.op === 'CON' || ev.op === 'SYN') ? (ev.o != null ? ev.o : ev.targetName)
+    : (ev.target != null ? ev.target : ev.targetName);
+  return objectOf(target, ev.entityType || null);
+}
+// The full three-fold address of what an event touched: ⟨Mode, Domain, Object⟩
+// plus the two generated cells (Site = Domain×Object, Resolution = Mode×Object)
+// and the holon it was read at. A pure read-time projection.
+function eoAddressOfEvent(ev, holon) {
+  if (!ev || !ev.op) return null;
+  const domain = EO_DOMAIN_OF_OP[ev.op];
+  if (!domain) return null;
+  const mode = EO_MODE_OF_OP[ev.op] || null;
+  const object = eoObjectOfEvent(ev);
+  const site = eoSiteOfEvent(ev);
+  const resolution = (mode && object) ? (EO_RESOLUTION_GRID[mode] || {})[object] : null;
+  return { op: ev.op, mode, domain, object, site, resolution,
+    holon: holon || ev.holon || (ev.sentence_idx != null ? 'sentence' : null) };
+}
+// The compact cube notation operator(Site, Resolution) — e.g. INS(Entity, Making).
+// One line that proves all three faces agree: the operator names the Act, the
+// Site names the address, the Resolution names the grain.
+function eoNotation(ev, holon) {
+  const a = eoAddressOfEvent(ev, holon);
+  if (!a || !a.site || !a.resolution) return null;
+  return a.op + '(' + a.site + ', ' + a.resolution + ')';
 }
 
 function aliasRelation(aTok, bTok) {
@@ -7356,6 +7428,7 @@ function projectGraph(events, frame = {}) {
     'mass-weight': 'mass_weight',
     'singular-they': 'singular_they',
     'relation-gate': 'relation_gate',
+    'cross-source': 'cross_source',
     'site-entity-cell': 'site_entity_cell',
     'distance-gravity': 'distance_gravity',
     'gravity-alpha': 'gravity_alpha',
@@ -10243,10 +10316,34 @@ function projectGraph(events, frame = {}) {
   // cluster co-referent with hotName). Null when no source holds it.
   function activeSubjectDoc(ds, hotName) {
     if (!hotName) return null;
+    // Precise: a projected entity co-refers with the active subject.
     for (const d of ds) {
       if (d.kind !== 'prose') continue;
       let ents = []; try { ents = projectEntities(d).entities || []; } catch (e) { continue; }
       if (ents.some(e => entityCoRefersName(e, hotName))) return d;
+    }
+    // Recall: the subject is carried by pronoun or bare surname and never
+    // surfaced as a TOP projected entity — the common shape of a real article,
+    // which names its subject once in the lead, then says "he" or the bare
+    // surname (which any children share), so the projection ranks the kids over
+    // the subject, or drops the subject entirely. The activation still knows who
+    // the turn is about; bind to the source whose TITLE or PROSE names that
+    // subject whole, so a follow-up like "who are his kids?" reads the right
+    // source instead of falling to the first tagged chip. Multi-token names only
+    // — a single shared token is too weak to move the bound document. The chip
+    // title ("Wikipedia · Larry Ellison") is itself decisive even when the lead
+    // reads "Lawrence Joseph Ellison". Lower precedence than the projected-entity
+    // pass above, and inert when no source names the subject (→ lexical decides).
+    const seq = contentSeqOf(hotName);
+    if (seq.length >= 2) {
+      const needle = normSurface(hotName).replace(/['’]s\b/g, '').trim();
+      // Word-boundaried so "Al Gore" can't match inside "national gore".
+      const re = needle ? new RegExp('(?:^|\\W)' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:\\W|$)') : null;
+      for (const d of ds) {
+        if (d.kind !== 'prose') continue;
+        if (isOrderedSubseq(seq, contentSeqOf(d.name || ''))) return d;   // title carries the subject
+        if (re && re.test(docBodyLC(d))) return d;                        // the prose names it whole
+      }
     }
     return null;
   }
@@ -10283,15 +10380,41 @@ function projectGraph(events, frame = {}) {
     return { doc: subjDoc, hold: true };
   }
 
+  // The scope document that owns the strongest retrieved hits — heaviest summed
+  // score per docId, constrained to the in-scope sources. Null when the hits name
+  // no in-scope source. The "source the answer's passages actually came from."
+  // Pure read.
+  function primaryFromHits(docs, hits) {
+    const ds = scopeDocs(docs);
+    if (!ds.length || !Array.isArray(hits) || !hits.length) return null;
+    const weight = new Map();
+    for (const h of hits) {
+      if (!h || h.docId == null) continue;
+      weight.set(h.docId, (weight.get(h.docId) || 0) + (Number(h.score) || 0));
+    }
+    let topId = null, topW = -Infinity;
+    for (const [id, w] of weight) if (w > topW) { topW = w; topId = id; }
+    return ds.find(d => d.id === topId) || null;
+  }
+
   // The single source a turn is most about. Discourse precedence first (an
-  // active subject holds its document); only then does lexical surface
-  // decide — strongest retrieval, falling back to the first that
-  // referencesDoc, then the first in scope.
+  // active subject holds its document); then the source the already-retrieved
+  // passages came from (ctx.hits, e.g. semantic recall) when the caller has
+  // them; only then does lexical surface decide — strongest retrieval, falling
+  // back to the first that referencesDoc, then the first in scope.
   function routePrimary(docs, query, ctx) {
     const ds = scopeDocs(docs);
     if (!ds.length) return null;
     const bind = discourseBinding(ds, query, ctx);
     if (bind) return bind.doc;
+    // Retrieval already located the answer (semantic recall handed back as
+    // ctx.hits): focus on the document those passages came from rather than
+    // re-scoring the bare query, which for an anaphoric ask ("who are his
+    // kids?") scores zero everywhere and falls to the first tagged chip.
+    if (ctx && ctx.hits) {
+      const fromHits = primaryFromHits(ds, ctx.hits);
+      if (fromHits) return fromHits;
+    }
     let best = null, bestScore = -1;
     for (const d of ds) {
       if (d.kind === 'table') continue;
@@ -11295,6 +11418,7 @@ function projectGraph(events, frame = {}) {
   // applyRules coerces card values through Number(), so an installed card
   // arrives as 1; the seed is boolean false. Either truthy form means ON.
   function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
+  function crossSourceEnabled() { const v = READING_RULES.cross_source.value; return v === true || v === 1; }
   function distanceGravityEnabled() { return DISTANCE_GRAVITY(); }
 
   // RG_STOP / RG_PRONOUN_RE / RG_ATTRIB are the relation_gate_* conventions,
@@ -11537,6 +11661,130 @@ function projectGraph(events, frame = {}) {
       if (d.kind === 'table') continue;
       let ms = []; try { ms = await checkRelations(d, draftText); } catch (e) {}
       for (const m of ms) out.push({ ...m, docId: d.id });
+    }
+    return out;
+  }
+
+  /* ---------- the cross-source veto: a subject from one source, a fact from another ----------
+     The vetoes above each read ONE source's graph — assertions, kin, relations
+     all checked inside a single document. None can see the MULTI-source failure
+     that the integral fold and a shared chat history make easy: a claim whose
+     subject is an entity of source A, bound to a span of source B, where A's
+     subject never appears. "Oracle's partnership with the MNPD to deploy 15
+     fixed cameras," cited to the surveillance document — in which Oracle is named
+     nowhere — is the case that motivates it. Each sentence binds cleanly (the
+     camera words DO live on the page it cites) and the BRIDGE is supported by no
+     source: the subject lives only in the Ellison article, the cameras only in
+     the MNPD article, and nothing on either page joins them.
+
+     This reads the draft's own graph — each claim resolved to the source it
+     binds to — against the sources' entity membership. A claim governed by an
+     entity that is ABSENT from the source it cites but PRESENT in another
+     in-scope source is a cross-source attribution: the model bridged two
+     documents the page never joins. The subject is carried across sentences the
+     way a reader carries a topic, so an anaphor ("the company") inherits it.
+
+     Conservative by design — it needs ≥2 sources, a named topic entity, and a
+     clean bind; an entity shared across sources never flags (it is not foreign),
+     an abstract subject with no topic in view never flags, and a local definite
+     reference ("the cameras", whose head noun lives in the cited doc) is read as
+     B's own, not the topic's. The failure direction of every heuristic is a
+     MISSED flag, never a false one. Like its siblings, its failure mode is the
+     model's answer kept with the misattribution named in the trace. Behind the
+     cross_source rule (OFF by default — the parity floor). */
+  const _CS_DET_SET = new Set(['the', 'this', 'that', 'these', 'those', 'its', 'their', 'his', 'her', 'our', 'such', 'a', 'an']);
+  const _CS_PRON_SET = new Set(['it', 'they', 'he', 'she', 'this', 'that', 'these', 'those']);
+  // The sentence's leading noun phrase, read off the raw prefix (not the POS
+  // tagger's noun ORDER, which mis-ranks "the firm partnered with the MNPD" —
+  // an untagged "firm" lets the object surface as the first noun). Three shapes:
+  //   • a determiner + a LOWERCASE head ("the firm") — a definite description,
+  //     an anaphor candidate that inherits the topic unless its head lives in B;
+  //   • a bare pronoun ("it", "they") — always anaphoric to the topic;
+  //   • a proper name, with an optional leading article ("The Metro Nashville
+  //     Police Department", "Oracle's") — a named subject.
+  function _csLeadingNP(sent) {
+    const s = String(sent || '').replace(/^\s+/, '');
+    let m = s.match(/^([A-Za-z]+)\s+([a-z][a-z'’-]+)/);
+    if (m && _CS_DET_SET.has(m[1].toLowerCase())) return { surface: m[1] + ' ' + m[2], head: m[2].toLowerCase(), kind: 'definite' };
+    m = s.match(/^([A-Za-z]+)\b/);
+    if (m && _CS_PRON_SET.has(m[1].toLowerCase())) return { kind: 'pronoun' };
+    m = s.match(/^((?:[Tt]he\s+)?\p{Lu}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+){0,4})/u);
+    if (m) return { surface: m[1], kind: 'name' };
+    return null;
+  }
+  function _csNameToks(name) {
+    return String(name || '').toLowerCase().replace(/['’]s\b/g, '')
+      .split(/[\s,]+/).filter(t => t.length >= 3 && !QA_STOP.has(t));
+  }
+  // present(doc, name): the name's significant tokens all occur in the source —
+  // an entity-name match first, the body scan as the floor. A false "present"
+  // only ever MISSES a flag (the safe direction).
+  function _csNameInDoc(doc, name, entNames) {
+    const toks = _csNameToks(name);
+    if (!toks.length) return false;
+    if (entNames) for (const n of entNames) {
+      const nt = _csNameToks(n);
+      if (nt.length && nt.every(t => toks.includes(t)) && toks.every(t => nt.includes(t))) return true;
+    }
+    const body = docBodyLC(doc);
+    return toks.every(t => body.includes(t));
+  }
+  function checkCrossSource(docs, draftText, opts = {}) {
+    const scope = scopeDocs(docs).filter(d => d && d.kind === 'prose');
+    if (scope.length < 2) return [];                 // a single source can't be crossed
+    const entOf = new Map();                          // docId → its entity names
+    for (const d of scope) { let es = []; try { es = (projectEntities(d).entities || []).map(e => e.name); } catch (e) {} entOf.set(d.id, es); }
+    const present = (d, name) => _csNameInDoc(d, name, entOf.get(d.id));
+    const homeDocs = (name) => scope.filter(d => present(d, name));
+    // every named entity in scope, longest first (so "Larry Ellison" wins over "Larry")
+    const allEnts = [];
+    for (const d of scope) for (const n of (entOf.get(d.id) || [])) if (n && !allEnts.some(e => normSurface(e) === normSurface(n))) allEnts.push(n);
+    allEnts.sort((a, b) => b.length - a.length);
+    // resolve a surface to an in-scope entity (token subset either way)
+    const entityFor = (surface) => {
+      const st = _csNameToks(surface);
+      if (!st.length) return null;
+      return allEnts.find(n => { const nt = _csNameToks(n); return nt.length && (nt.every(t => st.includes(t)) || st.every(t => nt.includes(t))); }) || null;
+    };
+    const topicLiteralIn = (sent, name) => {
+      const toks = _csNameToks(name); if (!toks.length) return false;
+      const lc = ' ' + sent.toLowerCase() + ' ';
+      return toks.every(t => lc.includes(t));
+    };
+
+    const parts = splitDraft(String(draftText == null ? '' : draftText).replace(/\{\{[^}]*\}\}/g, ' ').replace(/\[s?\d+\]/gi, ' '));
+    let topic = null;                                 // the carried subject entity (a name)
+    if (opts.topic) { const e = entityFor(opts.topic); if (e && homeDocs(e).length) topic = e; }
+    const out = [], seen = new Set();
+    for (const sent of parts) {
+      if (out.length >= 3) break;
+      if (tok(sent).length < 3) continue;
+      // where does this claim bind? the best-supported span across the scope
+      let bound = null;
+      for (const d of scope) {
+        let cand; try { cand = retrieve(d, sent, 1)[0]; } catch (e) { continue; }
+        if (cand && supportsClaim(cand, sent, CITE_FLOOR) && (!bound || cand.score > bound.score)) bound = { doc: d, i: cand.i, score: cand.score };
+      }
+      // resolve the claim's governing subject S, and carry the topic forward
+      let S = null, anaphor = false;
+      const lead = _csLeadingNP(sent);
+      if (lead && lead.kind === 'name') { const e = entityFor(lead.surface); if (e) { S = e; topic = e; } }  // (a) a named subject updates the topic
+      if (!S && bound && topic && lead) {
+        if (lead.kind === 'pronoun') { S = topic; anaphor = true; }           // (b) "it"/"they" → topic
+        else if (lead.kind === 'definite' && !docBodyLC(bound.doc).includes(lead.head)) { S = topic; anaphor = true; }  // "the firm" (head not in B) → topic
+      }
+      if (!S && bound && topic && topicLiteralIn(sent, topic)) S = topic;     // (c) the topic named mid-sentence
+      if (!bound || !S) continue;
+      const B = bound.doc;
+      if (present(B, S)) continue;                    // consistent: the subject lives in the cited source
+      const home = homeDocs(S).filter(d => d.id !== B.id);
+      if (!home.length) continue;                     // foreign to every source → the void's job, not ours
+      const A = home[0];
+      const key = normSurface(S) + '|' + B.id + '|' + bound.i;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ subject: S, subjectDocId: A.id, subjectDoc: A.name,
+        boundDocId: B.id, boundDoc: B.name, sent: bound.i, anaphor, claim: sent.trim() });
     }
     return out;
   }
@@ -12153,7 +12401,7 @@ function projectGraph(events, frame = {}) {
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
     ingestionReport, classifyTokens, evaAcrossDocs, textGraph,
     // multi-doc scope: ground a conversation against an explicit set of sources
-    referencesScope, retrieveScope, routePrimary, discourseBinding, referentsScope, namedReferents, answerScope,
+    referencesScope, retrieveScope, routePrimary, primaryFromHits, discourseBinding, referentsScope, namedReferents, answerScope,
     resolveSubjectDoc: activeSubjectDoc,
     contextScope, bindCitationsScope, supportProbeTerms,
     // tiered context for the notes-and-spans grounded prompt
@@ -12182,6 +12430,11 @@ function projectGraph(events, frame = {}) {
     // from the claim's OWN cited span, never an exemplar library)
     relationGateEnabled, checkRelations, checkRelationsScope,
     bindClaimKeys, bindClaimKeysScope, groundingEnvelope,
+    // the cross-source veto (cross_source rule, OFF by default — parity floor):
+    // a claim whose subject is an entity of one source but binds to another,
+    // where the subject never appears — the multi-document conflation the
+    // within-source vetoes structurally cannot see (the model's own bridge).
+    crossSourceEnabled, checkCrossSource,
     // distance-based gravity (distance_gravity rule, OFF by default — the parity
     // floor): the pure ACT-R power-law recency kernel and its switch, for the
     // A/B harness and tests. gravityPull(positions, cursor, α, k) is stateless.
@@ -12235,6 +12488,9 @@ function projectGraph(events, frame = {}) {
     get EO_SITE_GRID() { return eoSiteGrid(); },
     get EO_SITES() { return eoSites(); },
     EO_DOMAIN_OF_OP, eoSite, eoSiteOfEvent, objectOf, eoAddress, siteEntityCellEnabled,
+    // the other two faces of the cube (read-time projections of the full
+    // ⟨Mode, Domain, Object⟩ address) — de-biasing the reader off the Act face
+    EO_MODE_OF_OP, EO_RESOLUTION_GRID, eoObjectOfEvent, eoAddressOfEvent, eoNotation,
     // EVA failures hydrate the conventions: the session's REC records,
     // JSONL-shaped and append-ready for memory/conventions.jsonl. A host may
     // set EOEngine.onConventionsRec = (rec) => … to ship each one out.
