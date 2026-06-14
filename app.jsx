@@ -2942,11 +2942,17 @@ function App() {
   // dolphins"). The options card IS the substantive output; this is the short,
   // honest line that pairs with it — never a model "summary" of an article it has
   // not read (the local model fabricates one, contradicting the card). Tailored to
-  // the search outcome so the words match what the card actually shows.
+  // the search outcome so the words match what the card actually shows. Picking a
+  // match is no longer a dead end: the click reads that article and answers with
+  // citations in the same reply (runWikiSearch → answerFromWikiPick).
   const wikiOfferReply = (term, res) => {
     const t = '“' + term + '”';
     const status = res && res.status;
-    if (status === 'options') return `I searched Wikipedia for ${t} — the matches are above. Pick one and I’ll read the full article and answer with citations, rather than summarizing it from memory.`;
+    if (status === 'options') {
+      const opts = (res && res.options) || [];
+      if (opts.length === 1) return `I found one Wikipedia match for ${t}: “${opts[0].title}”. Click it and I’ll read the full article and answer with citations.`;
+      return `I searched Wikipedia for ${t} — the matches are above. Pick one and I’ll read the full article and answer with citations, rather than summarizing it from memory.`;
+    }
     if (status === 'gated') return `I held back on ${t} — it reads as a private individual, and the reference desk doesn’t resolve people against Wikipedia.`;
     if (status === 'error') return `I tried to search Wikipedia for ${t} but couldn’t reach it just now. Give it a moment and try again.`;
     if (status === 'disabled') return `Wikipedia lookups are off, so I can’t search for ${t}. Turn the reference desk on and I’ll pull the article in.`;
@@ -2954,27 +2960,25 @@ function App() {
     return `I searched Wikipedia for ${t} but didn’t find a matching article. Try different wording, or ask me something else.`;
   };
 
-  // The confirmed fetch — the reader chose an option to research (or, on the
-  // fallback confirm card, pressed Search on the term). NOW the request fires. The
-  // new source lands for the NEXT turn (React state updates after this handler),
-  // so the card's footer says "ask a follow-up to ground on it" (deferred) rather
-  // than claiming the reply already shown used it.
-  const runWikiSearch = async (turnId, rawTerm) => {
-    const X = window.EOExternal;
-    const term = String(rawTerm == null ? '' : rawTerm).trim();
-    if (!X || !X.enabled || !X.enabled() || !term) return null;
-    return await fetchWikiArticle(turnId, term, true);
+  // The reader chose an article to research (or confirmed the single term on the
+  // fallback card). This is the thin click handler; answerFromWikiPick owns the
+  // read → ground → settle and resets busy on every exit. The card does not await
+  // it, so a throw here can't strand the composer — surface it and release busy.
+  const runWikiSearch = (turnId, rawTerm) => {
+    answerFromWikiPick(turnId, rawTerm).catch((e) => { eoWarn('wiki-research', e); setBusy(false); });
   };
 
   // The reader dismissed the proposed search — clear the card, fetch nothing.
   const dismissWikiSearch = (turnId) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: null } : m));
 
-  // The actual off-device fetch, shared by the confirmed search and a forced
-  // in-turn lookup: pull the article, drive the live message's card through its
-  // loading → result lifecycle, and ingest a hit as a citable source. `deferred`
-  // selects the footer copy — a confirmed search grounds the NEXT turn ("ask a
-  // follow-up"), a forced fetch grounds THIS one — and the doc is returned so a
-  // forced caller can thread it into this turn's scope. Best-effort throughout.
+  // The actual off-device fetch: pull the article, drive the live message's card
+  // through its loading → result lifecycle, and ingest a hit as a citable source.
+  // `deferred` selects the footer copy — `false` (the only live caller now) means
+  // the answer settles in THIS reply right below the card; `true` is the legacy
+  // "ask a follow-up" footer. Returns `{ doc, status }` — the ingested doc (so the
+  // caller can thread it into scope and ground on it) and the upstream status
+  // (hit / miss / gated / error) so the caller can word an honest line on a
+  // non-hit without re-reading React state. Best-effort throughout.
   const fetchWikiArticle = async (turnId, term, deferred) => {
     const X = window.EOExternal;
     const tag = (patch) => setMessages(ms => ms.map(m => m.turnId === turnId ? { ...m, enrichment: patch } : m));
@@ -2985,7 +2989,8 @@ function App() {
     catch (e) { res = { status: 'error', error: String((e && e.message) || e) }; }
     const base = { ...res, term, query: (res && res.query) || term };
     tag(base);
-    if (!res || res.status !== 'hit' || !res.payload) return null;
+    const status = (res && res.status) || 'error';
+    if (status !== 'hit' || !res.payload) return { doc: null, status };
     const name = 'Wikipedia · ' + res.payload.title;
     let doc = docsRef.current.find(d => d.name === name);
     if (!doc) {
@@ -2993,7 +2998,131 @@ function App() {
       if (text && text.replace(/\s+/g, ' ').trim().length > 60) doc = await ingestExternalSource(name, text);
     }
     if (doc) { addSource(doc.id); tag({ ...base, ingested: { id: doc.id, name, deferred: !!deferred } }); }
-    return doc || null;
+    return { doc: doc || null, status };
+  };
+
+  // The reader picked an article from the offer (or confirmed the single term):
+  // make good on what the offer promised — "I'll read the full article and answer
+  // with citations" — instead of ingesting in silence and waiting for a re-ask.
+  // Pull the article in, then settle a GROUNDED answer about it INTO THIS REPLY,
+  // the article card pinned above it (the shape chat.jsx already lays out: card on
+  // top, the response below reads from it). Honest the whole way — the card shows
+  // the reading state, the reply shows the thinking indicator, and the settled
+  // answer is bound to the article's lines, or to its mechanical reading when no
+  // model is available here (a miss/gate/error settles an honest line, never a
+  // fabricated answer). Owns busy + the generation guard end to end.
+  const answerFromWikiPick = async (turnId, rawTerm) => {
+    const X = window.EOExternal;
+    const term = String(rawTerm == null ? '' : rawTerm).trim();
+    if (!X || !X.enabled || !X.enabled() || !term) return;
+    if (busyRef.current) return;                 // a turn is already in flight — ignore the click
+    const myGen = ++genRef.current;              // a fresh generation; Stop (or a new turn) supersedes it
+    setBusy(true);
+
+    // The settle helpers (replaceLast/streamInto) write to the LAST message, so
+    // the grounded answer needs the right message to be last. Two cases:
+    //  • an EXPLICIT-lookup offer ("pick one and I'll read it") IS this reply, so
+    //    reuse it in place — the offer line becomes the grounded answer, the card
+    //    above it (the shape chat.jsx lays out). Marked `wikiOffer` at settle time.
+    //  • a SOFT offer sits beside a real answer the reader already saw (a doc reply
+    //    with a "research this?" card), so don't clobber it: append a fresh reply
+    //    below and move the card onto it. Same if the reader sent something after
+    //    the offer (it's no longer last).
+    const ms0 = messagesRef.current || [];
+    const xi = ms0.findIndex(m => m.turnId === turnId);
+    const offerMsg = xi >= 0 ? ms0[xi] : null;
+    const reuse = xi >= 0 && xi === ms0.length - 1 && !!(offerMsg && offerMsg.wikiOffer);
+    let cardTurnId = turnId;
+    if (reuse) {
+      patchLast({ typing: true, loading: false, streaming: false, interrupted: false, text: '' });
+    } else {
+      cardTurnId = 'wt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      setMessages(m => [...m.map(mm => mm.turnId === turnId ? { ...mm, enrichment: null } : mm),
+                        { role: 'assistant', typing: true, turnId: cardTurnId }]);
+    }
+
+    // What the reader actually asked, recovered from the user turn that opened
+    // this offer — so a real content question ("who is …") is answered as asked,
+    // while a bare acquisition frame ("search wikipedia for …") becomes a grounded
+    // overview of the article they chose.
+    let originalQ = '';
+    for (let i = xi - 1; i >= 0; i--) { const m = ms0[i]; if (m && m.role === 'user' && m.text) { originalQ = m.text; break; } }
+
+    // Pull + ingest the article. The card runs reading → added, keyed to the reply
+    // that will hold the answer; deferred:false — the answer settles right below it.
+    let doc = null, status = 'error';
+    try { const r = await fetchWikiArticle(cardTurnId, term, false); doc = r && r.doc; status = (r && r.status) || 'error'; }
+    catch (e) { eoWarn('wiki-fetch', e); }
+    if (genStale(myGen)) return;                 // stopped during the fetch
+
+    if (!doc) {
+      // miss / gated / error: the card already shows why. Settle a short honest
+      // line that matches it — never a fabricated answer (abstain, never fabricate).
+      const t = '“' + term + '”';
+      const why = status === 'gated'
+        ? `I held back on ${t} — it reads as a private individual, and the reference desk doesn’t resolve people against Wikipedia.`
+        : status === 'error'
+        ? `I couldn’t reach Wikipedia for ${t} just now. Give it a moment and try again.`
+        : `I couldn’t find a Wikipedia article for ${t}.`;
+      replaceLast({ role: 'assistant', text: why, audit: null });
+      AUD('end', { engine: 'reference', text: why, audit: null, reason: status || 'no-article' });
+      setBusy(false);
+      return;
+    }
+
+    // The grounded question: the reader's own question when it carried real
+    // content, else an overview of the article they chose.
+    const isBareLookupFrame = (s) => {
+      const x = String(s || '').trim().toLowerCase();
+      if (!x) return true;
+      const lead = /^(search|look\s*up|lookup|find|google|pull\s*up|bring\s*up|show\s*me)\b/.test(x);
+      const wh = /\b(who|what|which|whom|whose|when|where|why|how)\b/.test(x);
+      return lead && !wh;                        // a pure acquisition frame, no content question
+    };
+    const title = doc.name.replace(/^Wikipedia · /, '');
+    const gq = (originalQ && !isBareLookupFrame(originalQ)) ? originalQ : ('Tell me about ' + title);
+
+    let scope = scopeList();
+    if (!scope.some(d => d.id === doc.id)) scope = [doc, ...scope];   // state may not have flushed; thread it in directly
+    const history = historyFor();
+
+    // A fresh turn budget (mirrors runTurn) and the model, loaded on demand.
+    const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(999) : null;
+    turnBudgetRef.current = budget; turnAssocRef.current = [];
+    const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
+      ? window.EOLLM.hasAnthropicKey()
+      : model.provider === 'wllama'
+      ? (!window.EOLLM.hasWasm || window.EOLLM.hasWasm())
+      : window.EOLLM.hasWebGPU()));
+
+    // Open the grounded answer's audit record (the offer turn closed its own) and
+    // pin it to this reply, so the thinking panel shows the grounded trace.
+    const auditId = AUD('begin', {
+      input: gq, mode, budget,
+      scope: auditScope(scope),
+      model: { id: model.id, name: model.name, mlc: model.mlc },
+      hasWebGPU: canLLM, via: 'wikipedia-pick', term: title,
+    });
+    if (auditId) patchLast({ auditId });
+
+    if (canLLM && !window.EOLLM.isLoaded(model.mlc)) {
+      patchLast({ typing: false, loading: true, loadPct: modelProgress, loadName: model.name, loadCloud: model.provider === 'anthropic', loadCpu: model.provider === 'wllama' });
+      const ok = await loadModel(model);
+      if (genStale(myGen)) return;                // stopped during the load — stopTurn already settled
+      AUD('step', 'model', { action: 'load', model: model.name, ok: !!ok });
+      patchLast({ loading: false, typing: true });
+    }
+    const ready = !!(window.EOLLM && window.EOLLM.isLoaded(model.mlc));
+    AUD('set', { modelReady: ready });
+
+    lastGroundedRef.current = true; everGroundedRef.current = true;
+    const useLLM = ready && doc.kind === 'prose';
+    AUD('step', 'route', { referencing: true, reason: 'wikipedia-pick', confidence: 'forced',
+      path: useLLM ? 'grounded-llm' : 'mechanical',
+      primary: { id: doc.id, name: doc.name, kind: doc.kind } });
+    // runGroundedScope / runMechanicalScope settle the reply and reset busy.
+    if (useLLM) { runGroundedScope(scope, gq, history, null).catch(turnFailed('grounded')); return; }
+    runMechanicalScope(scope, gq);
   };
 
   // Outer guard around turn routing: a throw in the router itself (or in an
@@ -3179,15 +3308,17 @@ function App() {
     // OPTIONS card is the answer. Run the search, show the matches, and settle a
     // short honest reply that points at them; do NOT wake the model to "summarize
     // Wikipedia" from memory, which contradicts the card and fabricates (abstain,
-    // never fabricate). The deep fetch is still one click away on a chosen option,
-    // and grounds the next turn with citations.
+    // never fabricate). Picking a match then reads that article and answers with
+    // citations IN PLACE — this reply becomes the grounded answer (the offer line
+    // is marked `wikiOffer` so answerFromWikiPick reuses it rather than appending).
     if (wikiTakeover) {
       lastGroundedRef.current = false;
       const res = await offerWikiOptions(turnId, wikiOffer.term);
       if (genStale(myGen)) return;                        // stopped during the search
       const reply = wikiOfferReply(wikiOffer.term, res);
+      const clickable = !!(res && (res.status === 'options' || res.status === 'confirm'));
       AUD('step', 'route', { referencing: false, reason: 'wiki-offer', path: 'wiki-offer' });
-      replaceLast({ role: 'assistant', text: reply, audit: null });
+      replaceLast({ role: 'assistant', text: reply, audit: null, wikiOffer: clickable });
       AUD('end', { engine: 'reference', text: reply, audit: null, reason: (res && res.status) || 'offered' });
       setBusy(false);
       return;
