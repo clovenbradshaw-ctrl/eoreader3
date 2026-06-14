@@ -128,6 +128,8 @@ function ModelsAdaptersSection() {
 function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                          pythonEnabled, onPythonEnabled, pythonAvailable,
                          groundingInfo, onGroundingInfo,
+                         showCitations, onShowCitations,
+                         tools, hiddenTools, onToggleTool,
                          showModeToggle, onShowModeToggle, wikiMode, onWikiMode,
                          models, defaultModelId, onDefaultModel, autoModel,
                          fallbackModelIds, onFallbackModelIds,
@@ -225,6 +227,27 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
             </div>
           </section>
 
+          {Array.isArray(tools) && tools.length > 0 && onToggleTool && (
+            <section className="set-section">
+              <h3 className="set-h">Tools</h3>
+              <div className="set-sub">The tools in the workspace toolbar. Turn one off to drop its pill from the toolbar — the tool and anything it has recorded stay, and you can turn it back on here anytime.</div>
+              {tools.map(t => {
+                const visible = !(hiddenTools || []).includes(t.id);
+                return (
+                  <div className="set-row" key={t.id}>
+                    <div className="set-row-main">
+                      <div className="set-label">{t.label}</div>
+                      <div className="set-sub">{t.sub}</div>
+                    </div>
+                    <button className={'switch' + (visible ? ' on' : '')} role="switch"
+                            aria-checked={visible} aria-label={'Show ' + t.label + ' in the toolbar'}
+                            onClick={() => onToggleTool(t.id)} />
+                  </div>
+                );
+              })}
+            </section>
+          )}
+
           {Array.isArray(models) && models.length > 0 && onDefaultModel && (
             <section className="set-section">
               <h3 className="set-h">Model</h3>
@@ -311,6 +334,16 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
               <button className={'switch' + (groundingInfo !== false ? ' on' : '')} role="switch"
                       aria-checked={groundingInfo !== false} aria-label="Grounding details"
                       onClick={() => onGroundingInfo(groundingInfo === false)} />
+            </div>
+
+            <div className="set-row">
+              <div className="set-row-main">
+                <div className="set-label">Citation chips</div>
+                <div className="set-sub">Show the inline footnote chips that mark where each claim came from — the “s12” reference, the inferred-link chip, the ⊥ absence mark. Off hides them in the answer for cleaner reading; the grounding badge and the glass-box disclosures beneath each answer (the mechanical reading, the worked math) keep their citations, so nothing is lost.</div>
+              </div>
+              <button className={'switch' + (showCitations !== false ? ' on' : '')} role="switch"
+                      aria-checked={showCitations !== false} aria-label="Citation chips"
+                      onClick={() => onShowCitations(showCitations === false)} />
             </div>
           </section>
 
