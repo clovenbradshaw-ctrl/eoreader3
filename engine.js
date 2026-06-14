@@ -10407,6 +10407,79 @@ function projectGraph(events, frame = {}) {
     return receipts.join('; ');
   }
 
+  /* The answer-voice void. absenceClaim() above reads the page's own denial
+     grammar — "X is mentioned nowhere", "names no speaker as Marlow". A talker
+     reporting an honest miss writes a different sentence: "I couldn't find any
+     information about Gregor's salary", "the text doesn't specify the city". Same
+     ⊥, spoken the way an answer speaks rather than the way an attribution denial
+     reads — and missed by absenceClaim(), whose verb list (mention/name/state…)
+     and named-subject requirement don't reach an *aspect* void (an absent
+     attribute of a PRESENT figure: Gregor is on the page, his salary is not).
+
+     The line between a FOUND void and a CONFABULATION is held exactly where
+     absenceClaim() holds it: VERIFICATION. We attest only the terms that check
+     out absent — a content token the source carries in neither body nor stem. A
+     token that IS on the page returns null, so a fluent assertion about on-page
+     material can never wear a void's receipt. Two more guards keep it honest: a
+     positive claim does not match the absence grammar at all (a confabulation
+     asserts; it does not report a miss), and the caller runs this only AFTER an
+     ordinary bind has had its chance — so a groundable claim merely wearing an
+     absence flavor ("moves to a new city, not specified in the text") still cites
+     its span and is never struck. The witness asymmetry is the whole point: a
+     grounded answer drifts the sense, a void is held, a confabulation is flagged. */
+  const ABSENCE_REPORT_RE = /\b(?:could\s*n'?t|could\s+not|can\s*not|cannot|can'?t|(?:un(?:able|available))\s+to)\s+(?:find|locate|see|determine|tell|identify)\b|\bthere\s+(?:is|are|was|were)\s+no\b|\bno\s+(?:information|mention|reference|record|detail|details|indication|data|evidence|specifics?|figure|figures)\b|\bnot\s+(?:specified|stated|given|provided|mentioned|named|listed|recorded|indicated|found|disclosed|reported|defined)\b|\bdoes\s*n'?t\s+(?:contain|include|specify|state|mention|say|give|provide|record|indicate)\b|\bdo\s+not\s+(?:contain|include|specify|state|mention|say|give|provide|record|indicate)\b|\bnothing\s+(?:about|on|regarding|concerning)\b/i;
+  // Vocabulary the absence FRAME owns — the words that report a miss, never the
+  // missing thing itself. Stripped before we ask which terms verify absent.
+  const ABSENCE_FRAME = new Set((
+    // the words that REPORT a miss — modals, locators, negations…
+    'could couldnt cannot cant unable unavailable there here anywhere nowhere nothing none about regarding concerning within' +
+    // …the acts of looking and telling…
+    ' find finds found locate located determine determining see seeing tell telling identify identifying' +
+    // …and the documentary frame the answer hangs the miss on.
+    ' information mention mentioned mentions reference references record records recorded detail details indication indications data evidence specifics specific figure figures specify specified state stated given provide provided contain include included indicate indicated disclose disclosed report reported define defined document documents text texts source sources page pages passage passages anything something'
+  ).split(' '));
+  // The content terms a void-report is ABOUT, minus the frame — what must verify
+  // absent. tok() already lowercases, strips possessives, and drops stopwords; we
+  // additionally drop contractions ("couldn't", "doesn't" — never the asked-about
+  // noun) so only the substantive subject of the miss is tested for presence.
+  function reportedVoidTerms(sent) {
+    const seen = new Set(), terms = [];
+    for (const t of tok(sent)) {
+      if (t.length < 4 || /['’]/.test(t) || ABSENCE_FRAME.has(t) || seen.has(t)) continue;
+      seen.add(t); terms.push(t);
+    }
+    return terms;
+  }
+  // Does a body carry a content term? Body OR conservative singular stem, so
+  // "euros" counts "euro" present — the bias is toward PRESENT, never toward an
+  // over-eager void (the safe direction: at worst a real void stays unmarked).
+  function bodyCarries(body, t) {
+    if (body.includes(t)) return true;
+    const st = singularStem(t);
+    return !!(st && body.includes(st));
+  }
+  // A receipt naming the verified-absent terms, in absenceClaim()'s shape so the
+  // auditor counts a {{absent:…}} (a ⊥, honest) and never an unbound assertion.
+  function _voidReceipt(absent, tail) {
+    const named = absent.slice(0, 4).map(t => `“${t}”`).join(', ');
+    return `${named} ${absent.length > 1 ? 'appear' : 'appears'} nowhere ${tail}`;
+  }
+  function reportedVoid(doc, sent) {
+    const s = String(sent == null ? '' : sent);
+    if (!ABSENCE_REPORT_RE.test(s)) return null;
+    const body = docBodyLC(doc);
+    const absent = reportedVoidTerms(s).filter(t => !bodyCarries(body, t));
+    return absent.length ? _voidReceipt(absent, 'in this source') : null;
+  }
+  function reportedVoidScope(ds, sent) {
+    const s = String(sent == null ? '' : sent);
+    if (!ds.length || !ABSENCE_REPORT_RE.test(s)) return null;
+    const bodies = ds.map(docBodyLC);
+    // a term verifies absent only when NO source in scope carries it
+    const absent = reportedVoidTerms(s).filter(t => bodies.every(b => !bodyCarries(b, t)));
+    return absent.length ? _voidReceipt(absent, `in any of the ${ds.length} sources`) : null;
+  }
+
   // bind [sN] citations onto an LLM answer mechanically (model never writes them)
   function bindCitations(doc, answerText, query, intent, opts) {
     const floor = CITE_FLOOR;
@@ -10420,6 +10493,10 @@ function projectGraph(events, frame = {}) {
       if (receipt) { attested++; return `${sent.trim()} {{absent:${doc.id}:${receipt}}}`; }
       const cands = retrieve(doc, sent, 1);
       if (cands.length && supportsClaim(cands[0], sent, floor)) { cited.push({ docId: doc.id, idx: cands[0].i }); return `${sent.trim()} {{cite:${doc.id}:${cands[0].i}:s${cands[0].i}}}`; }
+      // an answer-voice void that bound to nothing: attest the asked term as a ⊥
+      // (verified absent), so the loop reads an honest miss, not a confabulation
+      const vr = reportedVoid(doc, sent);
+      if (vr) { attested++; return `${sent.trim()} {{absent:${doc.id}:${vr}}}`; }
       return sent.trim();
     });
     const supported = cited.length + attested;
@@ -10855,6 +10932,9 @@ function projectGraph(events, frame = {}) {
       }
       const cand = retrieveScope(ds, sent, 1)[0];
       if (cand && supportsClaim(cand, sent, floor)) { cited.push({ docId: cand.docId, idx: cand.i }); return `${sent.trim()} {{cite:${cand.docId}:${cand.i}:s${cand.i}}}`; }
+      // an answer-voice void verified absent in EVERY source — attested as a ⊥
+      const vr = reportedVoidScope(ds, sent);
+      if (vr) { attested++; return `${sent.trim()} {{absent:${ds[0].id}:${vr}}}`; }
       return sent.trim();
     });
     const supported = cited.length + attested;
@@ -12030,6 +12110,10 @@ function projectGraph(events, frame = {}) {
       if (receipt) { attested++; return `${clean} {{absent:${doc.id}:${receipt}}}`; }
       const cands = retrieve(doc, clean, 1);
       if (cands.length && supportsClaim(cands[0], clean, floor)) { cited.push({ docId: doc.id, idx: cands[0].i }); return `${clean} {{cite:${doc.id}:${cands[0].i}:s${cands[0].i}}}`; }
+      // an unkeyed answer-voice void (the model cannot key a span that isn't
+      // there) — attest the verified-absent term as a ⊥, not a confabulation
+      const vr = reportedVoid(doc, clean);
+      if (vr) { attested++; return `${clean} {{absent:${doc.id}:${vr}}}`; }
       return clean;
     });
     const supported = cited.length + attested;
