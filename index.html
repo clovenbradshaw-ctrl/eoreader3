@@ -172,6 +172,10 @@
      Wiktionary) through the proxy, rate-limited and prioritised. Inert unless
      window.EO_REFERENCE_PROXY resolves; clear it to keep the reader local. -->
 <script src="external.js"></script>
+<!-- prompt-flow registry: the machine-readable map of how a turn becomes a model
+     call, with every prompt string read LIVE from llm.js (window.EOPromptFlow).
+     Pure data + live reads; loads no model. Backs the Prompt-flow dashboard. -->
+<script src="promptflow.js"></script>
 
 <!-- evo sandbox (dev-only): bundled constitution + in-browser evolution loop, plus the
      baked fixtures/golden/harness. Loads one IIFE (window.EVO_SANDBOX) + one data global. -->
@@ -189,6 +193,7 @@
 <script type="text/babel" src="rulesets.jsx"></script>
 <script type="text/babel" src="auditview.jsx"></script>
 <script type="text/babel" src="graphaudit.jsx"></script>
+<script type="text/babel" src="promptflow.jsx"></script>
 <script type="text/babel" src="sandbox.jsx"></script>
 <script type="text/babel" src="settings.jsx"></script>
 <script type="text/babel" src="app.jsx"></script>
