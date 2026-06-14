@@ -10,5 +10,9 @@ evo/proposals/*.md
 # local model cache for Node-side measurement (vendored MiniLM, never committed)
 .models/
 
+# form-genres fetch freeze (regenerable source-text cache; the trimmed instances
+# + provenance live in form-genres.jsonl, the version of record)
+tools/form-genres/cache/*.txt
+
 # Claude Code local session state (settings, agent worktrees)
 .claude/

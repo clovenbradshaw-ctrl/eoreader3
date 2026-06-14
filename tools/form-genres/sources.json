@@ -1,0 +1,155 @@
+{
+  "_comment": [
+    "The form-genres source manifest. Every entry is a REAL public-domain or",
+    "openly-licensed source for one output FORM (not Cleo's voice — that is the",
+    "separate exemplars.jsonl). fetch.mjs pulls each `url`, slices one-or-more",
+    "clean instances of the genre with the named `slicer`, and stamps each",
+    "record with this entry's provenance (source, license) plus the retrieval",
+    "date. Nothing copyrighted, paywalled, or modern. Obituaries are of the",
+    "long dead (pre-1929 newspapers), never living people.",
+    "",
+    "license strings are the BASIS for the public-domain / open claim, recorded",
+    "per record so the file is auditable. URLs are the canonical home of each",
+    "source; the text we keep is a copy with its papers attached.",
+    "",
+    "search entries (type:search) hit a JSON API and fan out to many results,",
+    "so the subject varies and the centroid is a shape, not the memory of one",
+    "article. file entries (type:file) fetch one document and slice instances",
+    "out of it. Add more entries to widen any genre — more occasions of the",
+    "same form, varied subjects, is exactly what a learned shape needs."
+  ],
+
+  "recipe": [
+    {
+      "type": "file",
+      "url": "https://www.gutenberg.org/cache/epub/65061/pg65061.txt",
+      "source": "The Boston Cooking-School Cook Book, Fannie Merritt Farmer (1918). Project Gutenberg eBook #65061.",
+      "license": "Public domain (US, first published 1918; author d. 1915).",
+      "slicer": "gutenberg-recipe",
+      "max": 30
+    },
+    {
+      "type": "file",
+      "url": "https://www.gutenberg.org/cache/epub/10136/pg10136.txt",
+      "source": "Mrs Beeton's Book of Household Management, Isabella Beeton (1861). Project Gutenberg eBook #10136.",
+      "license": "Public domain (UK/US, first published 1861).",
+      "slicer": "gutenberg-recipe",
+      "max": 30
+    },
+    {
+      "type": "file",
+      "url": "https://www.gutenberg.org/cache/epub/24407/pg24407.txt",
+      "source": "The Whitehouse Cookbook, Hugo Ziemann & F.L. Gillette (1887). Project Gutenberg eBook #24407.",
+      "license": "Public domain (US, first published 1887).",
+      "slicer": "gutenberg-recipe",
+      "max": 20
+    }
+  ],
+
+  "encyclopedic-summary": [
+    {
+      "type": "wikisource",
+      "titles": [
+        "1911_Encyclopædia_Britannica/Aardvark",
+        "1911_Encyclopædia_Britannica/Basalt",
+        "1911_Encyclopædia_Britannica/Comet",
+        "1911_Encyclopædia_Britannica/Dolphin",
+        "1911_Encyclopædia_Britannica/Granite",
+        "1911_Encyclopædia_Britannica/Lighthouse",
+        "1911_Encyclopædia_Britannica/Magnetism",
+        "1911_Encyclopædia_Britannica/Obelisk",
+        "1911_Encyclopædia_Britannica/Quartz",
+        "1911_Encyclopædia_Britannica/Tide",
+        "1911_Encyclopædia_Britannica/Volcano",
+        "1911_Encyclopædia_Britannica/Windmill"
+      ],
+      "source": "Encyclopædia Britannica, 11th edition (1911). English Wikisource.",
+      "license": "Public domain (first published 1911).",
+      "slicer": "wikisource-article",
+      "max": 1
+    }
+  ],
+
+  "news-article": [
+    {
+      "type": "search",
+      "api": "chronam",
+      "query": "",
+      "params": { "andtext": "fire destroyed building", "dateFilterType": "yearRange", "date1": "1880", "date2": "1922", "rows": "20", "format": "json" },
+      "source": "Chronicling America, Library of Congress (pre-1923 newspaper pages).",
+      "license": "Public domain (US newspapers published before 1923).",
+      "slicer": "chronam-article",
+      "max": 20
+    },
+    {
+      "type": "search",
+      "api": "chronam",
+      "params": { "andtext": "council voted ordinance", "dateFilterType": "yearRange", "date1": "1880", "date2": "1922", "rows": "20", "format": "json" },
+      "source": "Chronicling America, Library of Congress (pre-1923 newspaper pages).",
+      "license": "Public domain (US newspapers published before 1923).",
+      "slicer": "chronam-article",
+      "max": 20
+    }
+  ],
+
+  "obituary": [
+    {
+      "type": "search",
+      "api": "chronam",
+      "params": { "andtext": "died at his residence after a long illness", "dateFilterType": "yearRange", "date1": "1870", "date2": "1922", "rows": "20", "format": "json" },
+      "source": "Chronicling America, Library of Congress (pre-1923 newspaper obituaries).",
+      "license": "Public domain (US newspapers published before 1923). Long-dead subjects only.",
+      "slicer": "chronam-obituary",
+      "max": 20
+    },
+    {
+      "type": "search",
+      "api": "chronam",
+      "params": { "andtext": "funeral will be held death of beloved", "dateFilterType": "yearRange", "date1": "1870", "date2": "1922", "rows": "20", "format": "json" },
+      "source": "Chronicling America, Library of Congress (pre-1923 newspaper obituaries).",
+      "license": "Public domain (US newspapers published before 1923). Long-dead subjects only.",
+      "slicer": "chronam-obituary",
+      "max": 20
+    }
+  ],
+
+  "plain-report": [
+    {
+      "type": "search",
+      "api": "weather-gov",
+      "points": ["LOX/155,45", "OKX/33,35", "MPX/107,71", "SEW/124,67", "FFC/51,87", "BOU/62,61"],
+      "source": "U.S. National Weather Service public forecast API (api.weather.gov).",
+      "license": "Public domain (U.S. federal government work, 17 U.S.C. §105).",
+      "slicer": "nws-forecast",
+      "max": 6
+    },
+    {
+      "type": "file",
+      "url": "https://www.gutenberg.org/cache/epub/45634/pg45634.txt",
+      "source": "Monthly Weather Review / U.S. government report transcription (Project Gutenberg).",
+      "license": "Public domain (U.S. federal government work).",
+      "slicer": "gutenberg-paragraph",
+      "max": 12,
+      "optional": true
+    }
+  ],
+
+  "letter": [
+    {
+      "type": "file",
+      "url": "https://www.gutenberg.org/cache/epub/3361/pg3361.txt",
+      "source": "The Letters of Charles Dickens, ed. Georgina Hogarth & Mary Dickens. Project Gutenberg eBook #3361.",
+      "license": "Public domain (letters written 1833–1870; author d. 1870).",
+      "slicer": "gutenberg-letter",
+      "max": 25
+    },
+    {
+      "type": "file",
+      "url": "https://www.gutenberg.org/cache/epub/41982/pg41982.txt",
+      "source": "Letters of Jane Austen, ed. Edward Lord Brabourne. Project Gutenberg eBook #41982.",
+      "license": "Public domain (letters written 1796–1817; author d. 1817).",
+      "slicer": "gutenberg-letter",
+      "max": 25
+    }
+  ]
+}

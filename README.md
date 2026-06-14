@@ -306,15 +306,25 @@ register, commitment, structure — and steers the model toward it. The model
 does the linguistic work of joining them.
 
 Form is measured against a library of pre-written **exemplars**
-(`exemplars.jsonl` — 373 exemplars across 22 intents: lookup, synthesis,
+(`exemplars.jsonl` — 430 exemplars across 22 intents: lookup, synthesis,
 connect-passages, clarify-question, pushback-repair, hedge-uncertain,
 disagree-with-source, refusal-without-condescension, out-of-scope-offer,
-name-tension, meta-about-cleo, and the rest). Their *content* is incidental
+name-tension, meta-about-cleo, and the rest, every intent held above a
+stability floor so its centroid is a learned shape and not the memory of a
+handful of answers). Their *content* is incidental
 and their *shape* is the signal — full length range (two-word answers to
 essay-length syntheses, plus a few ASCII diagrams), and **both poles of every
 interpretable axis** anchored via each line's `anchor_axes` (short↔long,
 committed↔hedged, warm↔dry, prose↔structured, …) so the axes survive an
-embedder swap as centroid differences. Each exemplar's response **and its
+embedder swap as centroid differences. Those axes can be read back out of the
+embedded space by **`tools/factor-intents.js`** (`npm run factor-intents`),
+which runs shape.js's `pca()` over the responses and reports the exemplars at
+each pole (to hand-label an axis), the pairwise centroid separation between
+intents (close pairs are merge candidates; the `hedge-uncertain`↔`commit-opinion`
+confidence pair is called out explicitly, since confidence rides the stamp), and
+a per-intent spread read (a cloud that splits in two is a split candidate). It
+embeds at run, writes to no prompt, and abstains rather than invent a factoring
+if the embedder is absent. Each exemplar's response **and its
 prompt** (`user_turn`) are embedded once (the resident MiniLM, borrowed lazily
 so an exemplar vector never triggers a download) and cached — the response
 vectors score drafts, the prompt vectors match incoming questions (§9 below).
@@ -379,6 +389,58 @@ override — absent it, the default caps are byte-identical to before, so a
 session with no embedder or no loaded library answers exactly as it did
 (`app.jsx` only reaches for a shaped budget once MiniLM is already resident and
 the library has loaded, warming it in the background and never blocking a turn).
+
+### The form-genres library (a second, fetched library)
+
+`exemplars.jsonl` is Cleo's own **voice** — 22 intents (lookup, synthesis, dry,
+playful, pushback-repair…) authored in her register. You cannot fetch those
+from the wild: there is no public corpus of Cleo being dry, and pouring outside
+prose into those intents would poison the centroids with a voice that isn't
+hers. So output **form** lives in a *separate* library, `form-genres.jsonl`,
+built from **real public-domain / openly-licensed** instances of each genre —
+how a news article looks, an obituary, a recipe, an encyclopedic summary, a
+plain report, a letter. The centroid per genre is the learned *shape* of that
+form; a draft's output is cosined against it for the form degree, the subject
+washing out across many varied instances.
+
+The two libraries are kept apart on purpose. The discriminative score draws
+competitors from every *other* intent in the same library — so if `news-article`
+shared a file with `dry` and `playful`, a news draft would be scored against
+assistant-voice moves, which is noise. Loaded as its own library
+(`window.EOFormLibrary`, the twin of `EOShapeLibrary`), `news-article` is scored
+against `obituary` against `recipe` — a real contrast. Same loader, same lazy
+MiniLM embed at load, same parity fallback (resolves `null` when absent or
+unreachable). **No vectors are ever stored**: the responses are embedded at
+load and recompute against the new space on any embedder swap, for free — store
+text and provenance only.
+
+Every record carries **provenance** — `source`, `license`, `retrieved` —
+carried into memory by `parseExemplars` so a form exemplar's papers travel with
+it in the runtime audit. A record with no provenance does not go in the file.
+Fair game is Project Gutenberg public-domain texts (cookbooks for `recipe`,
+letter collections for `letter`), the 1911 *Encyclopædia Britannica* for
+`encyclopedic-summary`, Chronicling America pre-1923 newspapers for
+`news-article` and obituaries of the **long dead**, and US federal works
+(NWS forecasts, court syllabi) for `plain-report` — nothing copyrighted,
+paywalled, scraped against terms, or modern.
+
+The corpus is built by **`tools/form-genres/fetch.mjs`** from a manifest
+(`tools/form-genres/sources.json`), mirroring the external desk's discipline:
+freeze/replay (the version actually fetched is the version of record),
+abstain-never-fabricate (no source reached ⇒ skipped, not invented), and a
+stamped provenance on every record. It fetches through the same proxy the
+reference desk uses (or `--direct`), and **stores no embeddings**.
+
+```
+node tools/form-genres/fetch.mjs --live       # pay the network, freeze, write
+node tools/form-genres/fetch.mjs --validate    # check every record's provenance
+```
+
+The hard rule carries forward from the shape layer: a centroid stays a
+*measure*. It is never read, summarized into "what a news article contains,"
+and written into a prompt. The shape is tacit — a distance, not a spec. The
+moment a fetched corpus becomes a feature list in the talker's prompt, it is a
+checklist again.
 
 ### Checking a claim (CONFIRM/DENY)
 
