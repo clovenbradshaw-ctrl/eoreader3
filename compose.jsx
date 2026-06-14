@@ -182,20 +182,25 @@ function PlanNode({ node, depth, selectedId, onSelect, onJob, onMove, onCut, onG
   );
 }
 
-/* The prose of one draft, sentence by sentence, each shaded by WHO wrote it —
-   the talker, or you. Authorship is per-sentence provenance (derived by diff on
-   edit), so a talker draft you lightly edited shows mostly talker prose with
-   your touched sentences marked. The shading is the only thing added; the words
-   are verbatim. */
+/* The prose of one draft, rendered continuously and shaded by WHO wrote it.
+   Consecutive sentences by the same author are grouped into a run, and each run
+   carries an inline chip ([you] / talker) so authorship is legible right in the
+   flow — derived from per-sentence provenance, the words themselves verbatim. */
 function ProvenanceProse({ draft }) {
   const sents = window.EOComposition.splitSentences(draft.prose || '');
   const prov = (draft.provenance && draft.provenance.length === sents.length) ? draft.provenance : null;
   if (!sents.length) return draft.prose || '';
-  return sents.map((s, k) => {
-    const author = prov ? prov[k].author : (draft.author || 'talker');
-    return <span key={k} className={'cmp-sent cmp-by-' + author}
-      title={author === 'user' ? 'you wrote this' : 'the talker wrote this'}>{s}{' '}</span>;
+  const runs = [];
+  sents.forEach((s, k) => {
+    const a = prov ? prov[k].author : (draft.author || 'talker');
+    const last = runs[runs.length - 1];
+    if (last && last.author === a) last.text += ' ' + s; else runs.push({ author: a, text: s });
   });
+  return runs.map((r, i) => (
+    <span key={i} className={'cmp-run cmp-by-' + r.author}>{r.text}<sup
+      className={'cmp-chip cmp-by-' + r.author}
+      title={r.author === 'user' ? 'you wrote this' : 'the talker wrote this'}>{r.author === 'user' ? 'you' : 'talker'}</sup>{' '}</span>
+  ));
 }
 
 /* A unit as a paragraph of the document canvas: provenance-shaded prose,
@@ -207,6 +212,12 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
   const [editing, setEditing] = React.useState(false);
   const [text, setText] = React.useState((node.draft && node.draft.prose) || '');
   React.useEffect(() => { if (!editing) setText((node.draft && node.draft.prose) || ''); }, [node.draft, editing]);
+  // on entering edit, focus the field and drop the cursor at the end — a
+  // ref+effect, not autoFocus, so it behaves in jsdom and the browser alike
+  const taRef = React.useRef(null);
+  React.useEffect(() => {
+    if (editing && taRef.current) { try { const el = taRef.current; el.focus(); el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} }
+  }, [editing]);
   const flight = streaming && streaming.unitId === node.id;
   return (
     <div className={'cmp-card band-' + node.band + (selected ? ' sel' : '')} id={'cmp-card-' + node.id} onClick={() => onSelect(node.id)}>
@@ -215,9 +226,10 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
         <div className="cmp-prose streaming">{streaming.text || '…'}<span className="cmp-caret" /></div>
       ) : node.draft ? (
         editing
-          ? <textarea className="cmp-prose-edit" autoFocus value={text} onChange={e => setText(e.target.value)}
+          ? <textarea className="cmp-prose-edit" ref={taRef} value={text} onChange={e => setText(e.target.value)}
+              onClick={e => e.stopPropagation()}
               onBlur={() => { setEditing(false); if (text !== node.draft.prose) onProse(node.id, text); }} />
-          : <div className="cmp-prose" onDoubleClick={() => setEditing(true)} title="double-click to edit — your changes are attributed to you"><ProvenanceProse draft={node.draft} /></div>
+          : <div className="cmp-prose" onClick={e => { e.stopPropagation(); onSelect(node.id); setEditing(true); }} title="click to edit — your changes are attributed to you"><ProvenanceProse draft={node.draft} /></div>
       ) : node.hole ? (
         <div className="cmp-owe">This unit is a <b>hole</b> — it owes a <b>{node.hole.owed_grain}</b>. {grainOwe(node.hole.owed_grain)}</div>
       ) : (
