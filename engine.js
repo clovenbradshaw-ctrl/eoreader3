@@ -10243,10 +10243,34 @@ function projectGraph(events, frame = {}) {
   // cluster co-referent with hotName). Null when no source holds it.
   function activeSubjectDoc(ds, hotName) {
     if (!hotName) return null;
+    // Precise: a projected entity co-refers with the active subject.
     for (const d of ds) {
       if (d.kind !== 'prose') continue;
       let ents = []; try { ents = projectEntities(d).entities || []; } catch (e) { continue; }
       if (ents.some(e => entityCoRefersName(e, hotName))) return d;
+    }
+    // Recall: the subject is carried by pronoun or bare surname and never
+    // surfaced as a TOP projected entity — the common shape of a real article,
+    // which names its subject once in the lead, then says "he" or the bare
+    // surname (which any children share), so the projection ranks the kids over
+    // the subject, or drops the subject entirely. The activation still knows who
+    // the turn is about; bind to the source whose TITLE or PROSE names that
+    // subject whole, so a follow-up like "who are his kids?" reads the right
+    // source instead of falling to the first tagged chip. Multi-token names only
+    // — a single shared token is too weak to move the bound document. The chip
+    // title ("Wikipedia · Larry Ellison") is itself decisive even when the lead
+    // reads "Lawrence Joseph Ellison". Lower precedence than the projected-entity
+    // pass above, and inert when no source names the subject (→ lexical decides).
+    const seq = contentSeqOf(hotName);
+    if (seq.length >= 2) {
+      const needle = normSurface(hotName).replace(/['’]s\b/g, '').trim();
+      // Word-boundaried so "Al Gore" can't match inside "national gore".
+      const re = needle ? new RegExp('(?:^|\\W)' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:\\W|$)') : null;
+      for (const d of ds) {
+        if (d.kind !== 'prose') continue;
+        if (isOrderedSubseq(seq, contentSeqOf(d.name || ''))) return d;   // title carries the subject
+        if (re && re.test(docBodyLC(d))) return d;                        // the prose names it whole
+      }
     }
     return null;
   }
@@ -10283,15 +10307,41 @@ function projectGraph(events, frame = {}) {
     return { doc: subjDoc, hold: true };
   }
 
+  // The scope document that owns the strongest retrieved hits — heaviest summed
+  // score per docId, constrained to the in-scope sources. Null when the hits name
+  // no in-scope source. The "source the answer's passages actually came from."
+  // Pure read.
+  function primaryFromHits(docs, hits) {
+    const ds = scopeDocs(docs);
+    if (!ds.length || !Array.isArray(hits) || !hits.length) return null;
+    const weight = new Map();
+    for (const h of hits) {
+      if (!h || h.docId == null) continue;
+      weight.set(h.docId, (weight.get(h.docId) || 0) + (Number(h.score) || 0));
+    }
+    let topId = null, topW = -Infinity;
+    for (const [id, w] of weight) if (w > topW) { topW = w; topId = id; }
+    return ds.find(d => d.id === topId) || null;
+  }
+
   // The single source a turn is most about. Discourse precedence first (an
-  // active subject holds its document); only then does lexical surface
-  // decide — strongest retrieval, falling back to the first that
-  // referencesDoc, then the first in scope.
+  // active subject holds its document); then the source the already-retrieved
+  // passages came from (ctx.hits, e.g. semantic recall) when the caller has
+  // them; only then does lexical surface decide — strongest retrieval, falling
+  // back to the first that referencesDoc, then the first in scope.
   function routePrimary(docs, query, ctx) {
     const ds = scopeDocs(docs);
     if (!ds.length) return null;
     const bind = discourseBinding(ds, query, ctx);
     if (bind) return bind.doc;
+    // Retrieval already located the answer (semantic recall handed back as
+    // ctx.hits): focus on the document those passages came from rather than
+    // re-scoring the bare query, which for an anaphoric ask ("who are his
+    // kids?") scores zero everywhere and falls to the first tagged chip.
+    if (ctx && ctx.hits) {
+      const fromHits = primaryFromHits(ds, ctx.hits);
+      if (fromHits) return fromHits;
+    }
     let best = null, bestScore = -1;
     for (const d of ds) {
       if (d.kind === 'table') continue;
@@ -12153,7 +12203,7 @@ function projectGraph(events, frame = {}) {
     // ingestion itself, word by word. classifyTokens CALLS tok() so it can't drift.
     ingestionReport, classifyTokens, evaAcrossDocs, textGraph,
     // multi-doc scope: ground a conversation against an explicit set of sources
-    referencesScope, retrieveScope, routePrimary, discourseBinding, referentsScope, namedReferents, answerScope,
+    referencesScope, retrieveScope, routePrimary, primaryFromHits, discourseBinding, referentsScope, namedReferents, answerScope,
     resolveSubjectDoc: activeSubjectDoc,
     contextScope, bindCitationsScope, supportProbeTerms,
     // tiered context for the notes-and-spans grounded prompt

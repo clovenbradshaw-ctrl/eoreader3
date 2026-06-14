@@ -36,6 +36,7 @@ const ICON_PATHS = {
   activity:  '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
   stop:      '<rect x="6" y="6" width="12" height="12" rx="2.5"/>',
   calculator:'<rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="8" y2="11"/><line x1="12" y1="11" x2="12" y2="11"/><line x1="16" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="8" y2="15"/><line x1="12" y1="15" x2="12" y2="15"/><line x1="16" y1="15" x2="16" y2="15"/>',
+  fork:      '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   // The EO cube — three faces meeting at a vertex (Act · Site · Resolution).
   cube:      '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
 };

@@ -438,9 +438,18 @@ function App() {
         }
       }
       if (savedChat) {
-        if (Array.isArray(savedChat.messages)) setMessages(savedChat.messages);
-        if (Array.isArray(savedChat.chats)) { setChats(savedChat.chats); bumpUid(savedChat.chats.map(c => c.id)); }
-        if (savedChat.activeChat) setActiveChat(savedChat.activeChat);
+        // Each chat now carries its own message log so switching/forking keeps
+        // every thread intact. Older snapshots stored a single running log at the
+        // top level (`messages`) with chats holding only {id,title} — upgrade them
+        // by attaching that log to whichever chat was active when they were saved.
+        const topMsgs = Array.isArray(savedChat.messages) ? savedChat.messages : [];
+        const active = savedChat.activeChat;
+        const savedChats = (Array.isArray(savedChat.chats) ? savedChat.chats : []).map(c =>
+          Array.isArray(c.messages) ? c : { ...c, messages: (c.id === active ? topMsgs : []) });
+        setChats(savedChats); bumpUid(savedChats.map(c => c.id));
+        if (active) setActiveChat(active);
+        const activeObj = savedChats.find(c => c.id === active);
+        setMessages(activeObj && Array.isArray(activeObj.messages) ? activeObj.messages : topMsgs);
         // only re-open tabs whose backing document actually came back
         const tabOK = (id) => id.startsWith('@ent/') ? docIds.has(id.split('/')[1]) : docIds.has(id);
         if (Array.isArray(savedChat.openTabs)) setOpenTabs(savedChat.openTabs.filter(tabOK));
@@ -464,12 +473,20 @@ function App() {
   }, [docs]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    const t = setTimeout(() => window.EOStore.saveChat({
-      messages, chats, activeChat, openTabs, activeTab, sources,
-      // The conversation field (working memory) is chat-scoped: it rides in the
-      // chat snapshot, NOT the cross-session learned ledger. Pointers only.
-      field: (window.EOEngine && window.EOEngine.conversationField) ? window.EOEngine.conversationField.snapshot() : null,
-    }), 450);
+    const t = setTimeout(() => {
+      // The live `messages` array is the active chat's working copy; fold it back
+      // into that chat's stored log so the snapshot holds every thread's content
+      // (the chat objects lag during streaming and only catch up on a switch).
+      const chatsToSave = (activeChat && activeChat !== 'new')
+        ? chats.map(c => c.id === activeChat ? { ...c, messages } : c)
+        : chats;
+      window.EOStore.saveChat({
+        messages, chats: chatsToSave, activeChat, openTabs, activeTab, sources,
+        // The conversation field (working memory) is chat-scoped: it rides in the
+        // chat snapshot, NOT the cross-session learned ledger. Pointers only.
+        field: (window.EOEngine && window.EOEngine.conversationField) ? window.EOEngine.conversationField.snapshot() : null,
+      });
+    }, 450);
     return () => clearTimeout(t);
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
@@ -1105,9 +1122,12 @@ function App() {
   }, [modelProgress, modelLoadText]);
 
   // ---- chat ----
+  // A chat title from its first words; matches the sidebar's truncation budget.
+  const titleFrom = (q) => { const s = String(q == null ? '' : q).trim() || 'New chat'; return s.length > 32 ? s.slice(0, 32) + '…' : s; };
+  const firstUserText = (msgs) => { const u = (msgs || []).find(m => m && m.role === 'user'); return u ? u.text : ''; };
   const ensureChat = (q) => {
     if (activeChat === 'new') {
-      const id = uid('c'); setChats(cs => [{ id, title: q.length > 32 ? q.slice(0, 32) + '…' : q }, ...cs]); setActiveChat(id);
+      const id = uid('c'); setChats(cs => [{ id, title: titleFrom(q), messages: [] }, ...cs]); setActiveChat(id);
     }
   };
   // A settle clears the in-flight flags by default (typing always; streaming
@@ -2421,7 +2441,14 @@ function App() {
     } else {
       parts = window.EOEngine.contextPartsScope(scope, q, 6);
     }
-    AUD('step', 'retrieve', { k: 6, task, engine: 'model-context', hits: auditHits(scope, q, 6) });
+    // Report the passages that ACTUALLY fed the prompt. When semantic recall
+    // drove the turn (an anaphoric ask like "who are his kids?" has no lexical
+    // home), the lexical auditHits read "0" and buried that the answer is
+    // grounded — so surface the recovered hits, flagged as found by meaning.
+    const retrievedForAudit = hasSemantic
+      ? semanticHits.map(h => ({ docId: h.docId, idx: h.i, score: Math.round((h.score || 0) * 1e4) / 1e4, overlap: h.overlap, text: h.t }))
+      : auditHits(scope, q, 6);
+    AUD('step', 'retrieve', { k: 6, task, engine: hasSemantic ? 'embedding' : 'model-context', viaSemantic: hasSemantic, hits: retrievedForAudit });
     // GRAPH TRAVERSAL (depth > 1): depth buys graph work, not just more
     // retrieval. Walk out from the entities the question names PLUS the
     // entities the conversation field holds hot — an anaphoric follow-up
@@ -2475,8 +2502,11 @@ function App() {
     const wm = buildWMForTurn(scope, q);
     // Discourse precedence: the active subject (conversation field) holds the
     // bound document, so a follow-up never silently rebinds to whichever
-    // source has the strongest content-word overlap.
-    const primaryDoc = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
+    // source has the strongest content-word overlap. When semantic recall
+    // already located the answer, the passages it returned point at the source
+    // we focused on — so the impression query and prompt title stay on the
+    // document that actually answered, not the first tagged chip.
+    const primaryDoc = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity(), hits: semanticHits }) || scope[0];
     // IMPRESSION QUERY (the embedder as a fuzzy graph query): alongside the
     // lexical retrieval, query the page by MEANING — gather the semantically
     // related region and hand the model both the verbatim related spans AND the
@@ -3786,7 +3816,7 @@ function App() {
       if (genStale(myGen)) return;                  // stopped during the recall — stand down
       const recovered = hits.length && (reader.indexOf('embedding') >= 0 ? hits.some(h => h.semantic) : true);
       AUD('step', 'escalate', { reason: route.reason, reader, found: hits.length, recovered: !!recovered });
-      if (recovered) { route.decision = 'mechanical'; route.confidence = 'recovered'; semanticHits = hits.filter(h => h.semantic).length ? hits : null; route.primary = route.primary || window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0]; }
+      if (recovered) { route.decision = 'mechanical'; route.confidence = 'recovered'; semanticHits = hits.filter(h => h.semantic).length ? hits : null; route.primary = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity(), hits }) || route.primary || scope[0]; }
       else { route.decision = 'chat'; }
     }
 
@@ -3815,7 +3845,7 @@ function App() {
         if (route.decision === 'chat') {
           route.decision = 'mechanical'; route.confidence = 'carry';
           route.reason += '+carry';
-          route.primary = route.primary || window.EOEngine.routePrimary(scope, cq, { hotEntity: hotEntity() }) || scope[0];
+          route.primary = window.EOEngine.routePrimary(scope, cq, { hotEntity: hotEntity(), hits: carryHits }) || route.primary || scope[0];
         }
       }
     }
@@ -3857,8 +3887,56 @@ function App() {
   // Reset the conversation field on a fresh or switched chat — working memory is
   // chat-scoped, matching newChat's reset semantics (distinct from the learned ledger).
   const resetField = () => { try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.reset(); } catch (e) { eoWarn('field reset', e); } };
-  const newChat = () => { sweepProvisional(true); setMessages([]); setActiveChat('new'); lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
-  const selectChat = (id) => { sweepProvisional(true); setActiveChat(id); lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; resetField(); if (mobileRef.current) setCollapsed(true); };
+  // Per-chat carry/repair flags share one reset whenever the active thread changes.
+  const resetTurnRefs = () => { lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; };
+  // Stash the active chat's live messages back into its stored log before we
+  // switch away, so the thread we're leaving keeps everything it had. ('new' has
+  // no chat object yet — its messages ride along until the first send.)
+  const stashActiveInto = (cs) => (activeChat && activeChat !== 'new')
+    ? cs.map(c => c.id === activeChat ? { ...c, messages } : c) : cs;
+  const newChat = () => { sweepProvisional(true); setChats(cs => stashActiveInto(cs)); setMessages([]); setActiveChat('new'); resetTurnRefs(); resetField(); if (mobileRef.current) setCollapsed(true); };
+  const selectChat = (id) => {
+    if (id === activeChat) { if (mobileRef.current) setCollapsed(true); return; }
+    sweepProvisional(true);
+    const target = chats.find(c => c.id === id);
+    setChats(cs => stashActiveInto(cs));
+    setActiveChat(id);
+    setMessages(target && Array.isArray(target.messages) ? target.messages : []);
+    resetTurnRefs(); resetField(); if (mobileRef.current) setCollapsed(true);
+  };
+
+  // Fork: duplicate the conversation up to and including message `index` into a
+  // new chat and switch to it, leaving the original thread untouched. This is how
+  // you branch — try a different follow-up without losing the path you were on.
+  const forkChat = (index) => {
+    if (busy) { showToast('Let the reply finish, then fork.'); return; }
+    if (!messages.length) return;
+    const cut = Math.max(0, Math.min(index, messages.length - 1));
+    const slice = messages.slice(0, cut + 1).map(m => ({ ...m }));
+    let next = chats.slice();
+    let srcId = activeChat;
+    if (srcId === 'new') {
+      // The live thread was never saved as a chat — promote it first so forking
+      // it preserves the original instead of abandoning the throwaway buffer.
+      srcId = uid('c');
+      next.unshift({ id: srcId, title: titleFrom(firstUserText(messages)), messages: messages.map(m => ({ ...m })) });
+    } else {
+      next = next.map(c => c.id === srcId ? { ...c, messages: messages.map(m => ({ ...m })) } : c);
+    }
+    const srcTitle = (next.find(c => c.id === srcId) || {}).title || 'Chat';
+    const base = srcTitle.replace(/\s*\(fork\)\s*$/, '');
+    const forkTitle = (base + ' (fork)').length > 40 ? base.slice(0, 34) + '… (fork)' : base + ' (fork)';
+    const forkId = uid('c');
+    const srcIdx = next.findIndex(c => c.id === srcId);
+    next.splice(Math.max(0, srcIdx), 0, { id: forkId, title: forkTitle, messages: slice, forkedFrom: srcId });
+    sweepProvisional(true);
+    setChats(next);
+    setActiveChat(forkId);
+    setMessages(slice);
+    resetTurnRefs(); resetField();
+    showToast('Forked the conversation — this copy is yours to continue.');
+    if (mobileRef.current) setCollapsed(true);
+  };
 
   // ---- rules ----
   const toggleRule = (id) => setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
@@ -3984,7 +4062,7 @@ function App() {
               {showChat && (
                 <div style={{ flexBasis: showDocPane ? (splitRatio * 100) + '%' : '100%', flexGrow: showDocPane ? 0 : 1, flexShrink: 0, display: 'flex', minWidth: 0 }}>
                   <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} onConfirmWiki={runWikiSearch} onDismissWiki={dismissWikiSearch} onOpenDoc={openTab}
-                    onApplyTableView={applyTableView} onSaveTableView={saveTableView} onQuickReply={send} />
+                    onApplyTableView={applyTableView} onSaveTableView={saveTableView} onQuickReply={send} onFork={forkChat} />
                 </div>
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}
