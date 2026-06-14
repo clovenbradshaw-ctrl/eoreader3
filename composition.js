@@ -452,13 +452,25 @@
       docId: s && s.docId, idx: s && (s.idx != null ? s.idx : s.i),
     })).filter(s => s.text);
 
-    // 2. phrase the chunk through the membrane (job + spans + frame text only)
-    const prompt = buildTalkerPrompt({ job, frame, spans, neighbors: d.neighbors || [] });
+    // 2. phrase the chunk. The spec carries BOTH a built {system,user} (the
+    //    fallback / test path) AND the structured job/spans/frame/grounded — so
+    //    the injected talker can route a GROUNDED unit through the very same path
+    //    a chat answer takes (the grounded system prompt, the spans as witnessed
+    //    evidence), rather than this layer's weaker inline prompt. `grounded`
+    //    defaults on; `creative` is the opt-out the outset dial sets.
+    const grounded = d.grounded !== false;
+    const prompt = buildTalkerPrompt({ job, frame, spans, neighbors: d.neighbors || [], grounded });
     let prose = '';
     try {
-      if (d.phrase) prose = String((await d.phrase({ system: prompt.system, user: prompt.user, max_tokens: d.maxTokens || 320 })) || '');
+      if (d.phrase) prose = String((await d.phrase({
+        system: prompt.system, user: prompt.user, max_tokens: d.maxTokens || 320,
+        job, frame, spans, neighbors: d.neighbors || [], grounded,
+      })) || '');
     } catch (e) { prose = ''; }
-    prose = prose.trim();
+    // the talker may emit citation markers ({{cite:doc:idx}} or [sN]); fold them
+    // into the source_events and strip them so the canvas reads as clean prose.
+    const bound = bindTalkerCites(prose, spans);
+    prose = bound.prose.trim();
 
     // 3. stamp — witness (grain-relative), form (genre centroid), retrieval
     let draftVec = null;
@@ -482,11 +494,15 @@
     // 4. emit the events: a Draft, its Stamp, and the monitor's Route. The
     // talker authored every sentence here, so the provenance is uniformly
     // 'talker' — a later user edit re-attributes the sentences it changes.
+    // the evidence link: the spans the talker actually cited when it cited any,
+    // else the whole retrieved set it was given to draw from.
+    const source_events = (bound.cites.length ? bound.cites : spans.map(s => ({ docId: s.docId, idx: s.idx })))
+      .filter(s => s.docId != null);
     const draft = make.draft({
       unit_id: unit.id, prose,
       author: 'talker',
       provenance: splitSentences(prose).map(t => ({ text: t, author: 'talker' })),
-      source_events: spans.map(s => ({ docId: s.docId, idx: s.idx })).filter(s => s.docId != null),
+      source_events,
       confidence: st.confidence, doc_id: d.doc_id,
     });
     const stamp = make.stamp({
@@ -508,7 +524,10 @@
     const spans = o.spans || [];
     const frame = o.frame || {};
     const lines = [];
-    lines.push('You are writing ONE passage of a longer document. Write only this passage — flowing prose, no headings, no list unless the material demands it. Use the material below; do not invent facts it does not contain. If the material does not establish something the passage needs, say so plainly rather than guessing.');
+    if (o.grounded === false)
+      lines.push('You are writing ONE passage of a longer document. Write only this passage — flowing prose, no headings. Use the material below as raw material and compose freely; you may go beyond it.');
+    else
+      lines.push('You are writing ONE passage of a longer document. Write only this passage — flowing prose, no headings, no list unless the material demands it. Use the material below; do not invent facts it does not contain. If the material does not establish something the passage needs, say so plainly rather than guessing.');
     const system = lines.join('\n');
 
     const u = [];
@@ -527,6 +546,36 @@
     u.push('');
     u.push('Write this passage: ' + (o.job || ''));
     return { system, user: u.join('\n') };
+  }
+
+  // Resolve the citation markers a grounded talker may leave — either the engine's
+  // own {{cite:docId:idx}} form or the grounded prompt's [sN] tags (1-based into
+  // the span list it was handed) — into source events, and return the prose with
+  // those markers stripped so the canvas reads clean. Unknown / [s?] tags drop.
+  function bindTalkerCites(prose, spans) {
+    const sp = spans || [];
+    const cites = [];
+    const seen = new Set();
+    const add = (docId, idx) => {
+      if (docId == null) return;
+      const k = docId + ':' + idx;
+      if (seen.has(k)) return; seen.add(k); cites.push({ docId, idx });
+    };
+    let out = String(prose == null ? '' : prose);
+    // {{cite:docId:idx}} — the engine's own marker (parseCites also handles void/infer)
+    const parsed = parseCites(out);
+    for (const s of parsed.sources) add(s.docId, s.idx);
+    out = parsed.clean;
+    // [sN] — the grounded prompt's per-claim tag, N into the handed span list.
+    // Tolerant of a bracket that bundles several (`[s1, s2]`, `[s1; s3]`, `[s 1]`).
+    out = out.replace(/\[\s*s\s*\d+(?:\s*[,;]\s*s?\s*\d+)*\s*\]/gi, (m) => {
+      for (const n of (m.match(/\d+/g) || [])) {
+        const s = sp[parseInt(n, 10) - 1];
+        if (s) add(s.docId, s.idx != null ? s.idx : s.i);
+      }
+      return '';
+    }).replace(/\[s\?\]/gi, '').replace(/[ \t]+([.,;:])/g, '$1').replace(/[ \t]{2,}/g, ' ');
+    return { prose: out, cites };
   }
 
   // retrieval degree: did the retriever find usable material? The top score,
@@ -560,6 +609,12 @@
       goal: o.goal || '',
       constraints: o.constraints || [],
       genre: o.genre || 'plain-report',
+      // The two outset dials, on the frame so they fold and revise like the rest:
+      // target_words is the approximate length the autopilot writes toward (it
+      // tessellates sections into subsections to reach it); mode is grounded
+      // (cite the sources, like a chat answer) vs creative (compose freely).
+      target_words: o.target_words != null ? (o.target_words | 0) : 800,
+      mode: o.mode === 'creative' ? 'creative' : 'grounded',
     });
     doc.frame_id = frame.id;
     return [doc, frame];
@@ -638,6 +693,84 @@
       events.push(unit, draft);
     });
     return events;
+  }
+
+  // ============================================================ derive-the-frame
+  // The autonomous on-ramp — the "just press Go" path. Read a SAMPLE of the
+  // source corpus and PROPOSE a frame (thesis/question, reader, goal, genre) for
+  // a document grounded in it, so the user never has to hand-write the brief
+  // before anything appears. Pure + injected, exactly like generateUnit: the
+  // corpus sample and the talker (phrase) come IN; the model answers in labelled
+  // lines and we parse them. A field the model leaves blank stays blank (still
+  // editable in the frame) — we never invent a reader or a goal the sample cannot
+  // support — and the genre snaps to the known set (unknown → plain-report). With
+  // no corpus there is nothing to read, so it returns null (the non-breaking
+  // floor): the autopilot then outlines from whatever frame already exists.
+  const GENRES = ['plain-report', 'news-article', 'encyclopedic-summary', 'obituary', 'letter', 'recipe'];
+
+  // A bounded, representative sample of the corpus for the framer to read: each
+  // document's name and its leading sentences, capped to a character budget so
+  // the prompt stays small no matter how large the corpus is. Reads either a
+  // projection's `sentenceTexts` or a prose doc's `sentences` ([{i,t}]).
+  function sampleCorpus(docs, opts) {
+    const o = opts || {};
+    const perDoc = o.perDoc || 6;      // leading sentences per document
+    const budget = o.budget || 2400;   // total character budget across the sample
+    const out = [];
+    let used = 0;
+    for (const d of (docs || [])) {
+      const texts = (d && (d.sentenceTexts || (d.sentences || []).map(s => s && s.t))) || [];
+      const head = texts.filter(Boolean).slice(0, perDoc).join(' ').replace(/\s+/g, ' ').trim().slice(0, 600);
+      if (!head) continue;
+      if (used && used + head.length > budget) break;
+      out.push({ name: (d && d.name) || 'source', text: head });
+      used += head.length;
+      if (used >= budget) break;
+    }
+    return out;
+  }
+
+  async function deriveFrame(deps) {
+    const d = deps || {};
+    const sample = d.sample || [];
+    const genres = d.genres || GENRES;
+    if (!sample.length || !d.phrase) return null;
+    const system = 'You are FRAMING a document before it is written — not writing it. You are given a sample of the source material the document must stay grounded in. Propose the brief: what the document should argue or the question it answers, who it is for, its rhetorical goal, and the genre that best fits the material. Answer ONLY as the four labelled lines requested, nothing before or after.';
+    const u = [];
+    u.push('Source material (a sample — the document must stay grounded in material like this):');
+    sample.forEach((s, i) => u.push('[' + (i + 1) + '] ' + s.name + ' — ' + s.text));
+    u.push('');
+    u.push('Propose the brief as exactly these four lines, and nothing else:');
+    u.push('THESIS: <one sentence the document argues, or the question it answers>');
+    u.push('READER: <who the document is for>');
+    u.push('GOAL: <one word: inform, persuade, narrate, explain, or summarize>');
+    u.push('GENRE: <one of: ' + genres.join(', ') + '>');
+    let text = '';
+    try { text = String((await d.phrase({ system, user: u.join('\n'), max_tokens: d.maxTokens || 200 }, d.onToken)) || ''); } catch (e) { text = ''; }
+    return parseFrameLines(text, genres);
+  }
+
+  // Parse the framer's labelled lines into a frame patch. Lenient: case-insensitive
+  // labels, tolerant of surrounding quotes/brackets and of a few label synonyms;
+  // a line the model omits simply doesn't appear in the patch (so the frame keeps
+  // whatever the user had). Genre is the one field always present — snapped to the
+  // known set by loose substring match, defaulting to plain-report.
+  function parseFrameLines(text, genres) {
+    const g = genres || GENRES;
+    const patch = { genre: 'plain-report' };
+    const grab = (label) => {
+      const m = new RegExp('^\\s*(?:' + label + ')\\s*[:\\-]\\s*(.+)$', 'im').exec(String(text || ''));
+      return m ? m[1].trim().replace(/^["'<(\[]+|["'>)\]]+$/g, '').trim() : '';
+    };
+    const thesis = grab('THESIS|THESIS/QUESTION|QUESTION');
+    const reader = grab('READER|AUDIENCE|FOR');
+    const goal = grab('GOAL');
+    const genre = grab('GENRE').toLowerCase().replace(/\s+/g, '-');
+    if (thesis) patch.thesis_or_question = thesis.slice(0, 240);
+    if (reader) patch.reader = reader.slice(0, 120);
+    if (goal) patch.goal = goal.slice(0, 40);
+    if (genre) { const hit = g.find(x => genre.includes(x) || x.includes(genre)); if (hit) patch.genre = hit; }
+    return patch;
   }
 
   // The assembled prose, in tree order — the draft pane's straight-through read,
@@ -741,8 +874,9 @@
     make, ev,
     fold, buildTree, bandFor,
     witnessGrain, stampDraft, decide,
-    generateUnit, buildTalkerPrompt, retrievalDegree,
+    generateUnit, buildTalkerPrompt, bindTalkerCites, retrievalDegree,
     newDoc, assemble,
+    GENRES, sampleCorpus, deriveFrame, parseFrameLines,
     diffProvenance, authorship, project, projectFold,
     seedFromProse, splitIntoUnits, deMarkdown, parseCites,
     contentTokens, splitSentences, cosineSafe,

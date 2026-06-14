@@ -47,7 +47,7 @@ supersession by REC.**
 | **Unit** | `DEF · unit` | a node of the plan tree carrying a *job* (direction, not content), an order, a parent. A re-DEF of the same id is a plan edit (rewrite-job / reorder / reparent) |
 | **Draft** | `INS · draft` | the prose attached to a unit, with `source_events` (what the talker drew from) and a Confidence |
 | **Stamp** | `EVA · stamp` | the computed Confidence on a draft + a tag. Produced by the audit, not the talker; re-stamping is frequent |
-| **Hole** | `NUL · hole` | an explicit owed unit with an `owed_grain` (Figure → a citation, Ground → a context, Pattern → corroborating instances). Not an error — a legitimate epistemic position |
+| **Hole** | `NUL · hole` | an explicit owed unit. The event still exists in the log, but the Figure/Ground/Pattern *grain* knob is no longer a surface control — every draft is witnessed as **Figure** (citation coverage) by default, the same shape a chat answer is graded on |
 | **Route** | `DEF · route` | the monitor's decision (advance/revise/fetch/escalate/restructure) carrying the named predicate that fired |
 | **Plan-Edit-By-Draft** | `REC · plan-edit-by-draft` | a record of *why* the plan moved, driven by a draft. User-driven for now; the monitor will emit it once the standing operator ships |
 | **(supersede)** | `REC · supersede` | the undo primitive — drops its target from the fold; itself supersedable (redo) |
@@ -76,10 +76,13 @@ assert what we did not measure.
 
 `witnessGrain({ prose, spans, grain })` measures the talker's **own** settled
 prose against the spans it was given — string overlap only, so it runs with no
-embedder:
+embedder. The grain is no longer a knob the surface exposes; every unit is
+witnessed as **Figure**, but the other grains remain in the engine for when a
+later phase reintroduces them mechanically:
 
-- **Figure** → citation coverage: the fraction of content witnessed by a span.
-  Tags `figure-grounded` / `confabulation` (claims with no span) / `grain-mismatch`.
+- **Figure** (the default) → citation coverage: the fraction of content
+  witnessed by a span. Tags `figure-grounded` / `confabulation` (claims with no
+  span) / `grain-mismatch`.
 - **Ground** → honest-absence-if-warranted: an absence assertion is witnessed
   when the spans are genuinely silent on the thing it denies. Tags
   `honest-absence` / `confabulation` (the spans contradict it).
@@ -96,6 +99,16 @@ job → **phrase** it through the membrane (the talker sees the job, the spans, 
 thin slice of neighbouring drafts for the seam, and the frame text — never the
 whole document, the genre prototype as words, or any operator vocabulary) →
 **stamp** it (witness, form, retrieval, frame) → **route** it.
+
+**Grounded the way a chat answer is.** A grounded unit (the default; `creative`
+is the opt-out) is phrased through the *same* path a chat reply takes — the
+canonical grounded system prompt, the retrieved spans handed in as witnessed
+evidence, the grounded params — so a section is grounded exactly like a turn.
+The talker's citation markers (`{{cite:doc:idx}}` or the grounded prompt's `[sN]`
+tags) are resolved by `bindTalkerCites` into the draft's `source_events` and
+stripped, so the canvas reads as clean prose with the evidence links intact. In
+**creative** mode the same spans are offered as raw material and the talker
+composes freely (witness still measured, just not leaned on).
 
 The **monitor** reads the stamp and emits a Route naming the predicate, per the
 v3 gate table:
@@ -117,34 +130,56 @@ changing the draft; if the stamps drift the next route may demand a revise.
 A single artifact surface, two panes over the same fold:
 
 - **The plan pane** — the frame at the top (editable), then the unit tree. Each
-  node shows its job, state, grain (if a hole), and a confidence sparkline. The
-  colour **band** (owed / advance / revise / fetch / contested / held) is the
-  one place a scalar projection appears; the predicate that produced it shows on
-  hover. Reorder, rewrite-job, set-grain, cut.
+  node shows its job, state, and a confidence sparkline; children nest under
+  their parent to whatever depth the document grew. The colour **band** (owed /
+  advance / revise / fetch / contested / held) is the one place a scalar
+  projection appears; the predicate that produced it shows on hover. Reorder,
+  rewrite-job, cut.
 - **The draft pane** — the assembled doc in tree order. Each unit shows its prose
   (directly editable), its full Confidence vector as labelled bars, its tag as a
   word, the spans it drew from as links, and the monitor's route. Units in flight
   stream.
 - **The action surface** — contextual: Draft / Revise / Restamp / Hold / Mark
-  contested on a unit; Plan from frame / + Unit / Restamp all / Undo on the doc.
-  Every action is an event, so every action is undoable.
+  contested on a unit; ▶ Go / Outline only / + Unit / Restamp all / Undo on the
+  doc. Every action is an event, so every action is undoable.
 
-Three settings are surfaced (Genre, Source corpus, Talker model) because they
-change behaviour; no other generation parameters are exposed — the bet is that
-the model is a small, replaceable component and tuning it per doc is the wrong
-layer.
+Two **outset dials** sit at the top of the frame, because they change the whole
+run and you set them before pressing Go: **Length** (≈ words — the target the
+autopilot writes toward) and **Mode** (grounded vs creative). The other surfaced
+settings — Genre, Source corpus, Talker model — change behaviour too; no
+per-token knobs are exposed, on the bet that the model is a small, replaceable
+component and tuning it per doc is the wrong layer.
 
 ## Starting to write
 
 There are two on-ramps, because "set a thesis, outline, then draft each unit"
 is too many steps before anything appears:
 
-- **✍ Write it (autopilot).** One action: it outlines from the frame — *streamed
-  into the plan pane so you watch the sections arrive* — then drafts every unit
-  in order, each streaming its tokens, with a live status (`Outlining…`,
-  `Drafting 3/6 — …`) in place of a dead "working…". After a plan exists the
-  same button reads **Write the rest** and only fills the undrafted units.
-  `Outline only` still plans without drafting; per-unit `Draft`/`Revise` remain.
+- **▶ Go (autopilot).** One press, no brief to write first. If you never said
+  what the document is, it **reads the sources and frames it for you** —
+  proposing a thesis, reader, goal, and genre from a sample of the corpus
+  (`EOComposition.deriveFrame`, streamed as `Reading the sources…`); your own
+  frame fields always win, it only fills the blanks. Then it outlines from that
+  frame — *streamed into the plan pane so you watch the sections arrive* — then
+  drafts every unit in order, each streaming its tokens, with a live status
+  (`Reading the sources…`, `Outlining…`, `Drafting 3/6 — …`, `Deepening a
+  section…`) in place of a dead "working…". The freshly-derived frame is threaded
+  straight into the outline and every draft, so the in-flight run uses it before
+  the fold re-derives. After a plan exists the same button reads **Write the
+  rest**. `Outline only` still plans without drafting (from whatever frame you've
+  set); per-unit `Draft`/`Revise` remain. With no corpus loaded there is nothing
+  to frame from, so Go falls back to outlining the existing frame — the
+  non-breaking floor.
+
+  **It tessellates to length — spirals within spirals.** Once the top sections
+  are drafted, while the document is still under the **Length** dial's target,
+  the autopilot deepens its most-developed section into subsections
+  (`planFromUnit`), drafts those, and repeats — the same outline→draft loop
+  applied at finer and finer grain, so the tree grows as deep as the length
+  needs. A running registry tracks each unit's words without waiting for a
+  re-fold; the recursion is bounded (`CMP_MAX_DEPTH`, `CMP_MAX_UNITS`) so "any
+  length" still terminates. Each section gets a per-unit word budget derived from
+  the target, and grounded vs creative follows the **Mode** dial.
 - **Open as a document (promote a chat answer).** Every assistant reply in the
   chat carries an *Open as document* action. It seeds a composition from that
   answer with no model wait: each paragraph becomes a talker-authored unit,

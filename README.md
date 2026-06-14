@@ -482,27 +482,39 @@ not a generator with a longer context window and not a planner-then-drafter
 pipeline with a fixed outline — the model stays one component inside the loop,
 and this is the long-form version of that loop.
 
+You don't have to brief it. Set two dials — **Length** (≈ words) and **Mode**
+(grounded vs creative) — and press **▶ Go**: it reads the source corpus and
+**frames the document itself** (thesis, reader, goal, genre), outlines the
+sections, drafts each one *grounded the same way a chat answer is*, and then
+**tessellates** — deepening sections into subsections, spirals within spirals,
+until it reaches the length you asked for. Every step streams into the panes so
+you watch it work.
+
 Everything is a **log event** on the doc, and the document you see is a **fold**
 of the log (`composition.js` → `window.EOComposition`). State is never stored; it
 is derived by replay — the same Given-Log rule as the turn-scale system. The
 objects are a **Doc**, a **Frame** (the rhetorical problem as an object: thesis,
-reader, goal, constraints, genre — revisable), a tree of **Units** each carrying
-a *job* (direction, not content), **Drafts** (the prose, with the spans it drew
-from), **Stamps** (the computed confidence), **Holes** (an owed unit with a
-*grain*: Figure → a citation, Ground → a context, Pattern → corroborating
-instances), and **Routes** (the monitor's decision). Editing is appending;
-**undo is supersession** (a `REC` that drops its target from the fold).
+reader, goal, constraints, genre, plus the two outset dials — target length and
+grounded/creative mode — revisable), a tree of **Units** each carrying a *job*
+(direction, not content) and an optional parent (so sections nest into
+subsections to any depth), **Drafts** (the prose, with the spans it drew from),
+**Stamps** (the computed confidence), and **Routes** (the monitor's decision).
+Editing is appending; **undo is supersession** (a `REC` that drops its target
+from the fold).
 
 Every gate is a predicate over a **Confidence vector** with named components —
 `witness`, `form`, `coherence`, `retrieval`, `temporal`, `frame` — never a
 scalar. A component that wasn't measured is `null` (shown as `null`, never zero)
-and never blocks a gate. The **witness** is grain-relative, measured on the
-talker's own prose against the spans it was given (Figure = citation coverage,
-Ground = honest-absence-if-warranted, Pattern = corroboration count, with a
-`grain-mismatch` flag); the **form** is the cosine to the genre centroid
-(`form-genres.jsonl`), null until that library is populated. The talker only
-**phrases** the chunk — it never sees the whole document, the genre prototype as
-words, or any operator vocabulary; the grounding and the stamp are mechanical.
+and never blocks a gate. The **witness** is measured on the talker's own prose
+against the spans it was given — citation coverage (the grain knob is gone from
+the surface; every unit is witnessed as *Figure*, the same shape a chat answer is
+graded on, though Ground/Pattern remain in the engine for a later phase); the
+**form** is the cosine to the genre centroid (`form-genres.jsonl`), null until
+that library is populated. The talker only **phrases** the chunk — it never sees
+the whole document, the genre prototype as words, or any operator vocabulary —
+and in **grounded** mode it phrases through the *same path a chat reply takes*
+(the grounded prompt, the spans as evidence, citation markers resolved back to
+the draft's evidence links); the grounding and the stamp are mechanical.
 
 The **monitor** reads each stamp and emits a Route naming the predicate that
 fired (`witness >= 0.4 AND form >= 0.5 …` → `advance`; `witness < 0.4 AND
