@@ -1046,6 +1046,12 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
   font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums;
   display: inline-flex; align-items: center; justify-content: center;
 }
+/* the modality tag beside a capability label in Models & adapters */
+.set-cap-mod {
+  margin-left: 7px; font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  color: var(--text-3); background: var(--bg-subtle);
+  padding: 1px 6px; border-radius: var(--r-pill); vertical-align: middle;
+}
 
 /* author / import panel */
 .author-sec { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 20px 2px 8px; }
