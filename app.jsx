@@ -352,6 +352,12 @@ function App() {
   // this material: the prior question's words plus the prior answer's cited
   // sentences are the retrieval seed the bare follow-up lacks.
   const lastCarryRef = useRef(null);
+  // The addressee field (the second person) — window.EOAddressee. A chat-scoped
+  // overlay over the reader's own reading, holding what the EXCHANGE has
+  // established the person has of each span/entity. Lazily created when
+  // addressee_field is ON, reset on a new/switched chat, ridden in the chat
+  // snapshot. Null off-dial — the field is never built (the parity floor).
+  const addresseeRef = useRef(null);
   // How many repair turns this chat has absorbed — cycles the acknowledgment
   // phrasing so a frustrated user is never answered with the same opener twice.
   const repairCountRef = useRef(0);
@@ -521,6 +527,11 @@ function App() {
         if (savedChat.field && window.EOEngine && window.EOEngine.conversationField) {
           try { window.EOEngine.conversationField.restore(savedChat.field); } catch (e) {}
         }
+        // The addressee field rides the chat snapshot beside the chat field —
+        // chat-scoped, pointers only. Restored only when addressee_field is ON.
+        if (savedChat.addresseeField) {
+          try { const AF = addrField(); if (AF) AF.restore(savedChat.addresseeField); } catch (e) {}
+        }
       }
       hydrated.current = true; setBootReady(true);
     })();
@@ -546,6 +557,9 @@ function App() {
         // The conversation field (working memory) is chat-scoped: it rides in the
         // chat snapshot, NOT the cross-session learned ledger. Pointers only.
         field: (window.EOEngine && window.EOEngine.conversationField) ? window.EOEngine.conversationField.snapshot() : null,
+        // The addressee field (the second person) rides beside it — pointers only,
+        // null off-dial (never built). Restored on reload, reset on a new chat.
+        addresseeField: addresseeRef.current ? addresseeRef.current.snapshot() : null,
       });
     }, 450);
     return () => clearTimeout(t);
@@ -1463,6 +1477,69 @@ function App() {
     return c;
   });
 
+  // ── The addressee field (the second person) — window.EOAddressee ──────────
+  // Lazily build the chat-scoped overlay when addressee_field is ON; null
+  // off-dial (never built — the parity floor). The decay γ and resolveBinding
+  // are injected (passed in, never imported), as getters so the field tracks the
+  // live reading rules. One field per chat; reset/restored beside the chat field.
+  const addrField = () => {
+    const E = window.EOEngine, AD = window.EOAddressee;
+    if (!E || !AD || !E.addresseeFieldEnabled || !E.addresseeFieldEnabled()) return null;
+    if (!addresseeRef.current) {
+      try {
+        addresseeRef.current = AD.create({
+          gamma: () => E.addresseeRules().gamma,
+          learn: () => E.addresseeRules().learn,
+          slip: () => E.addresseeRules().slip,
+          uptakeFloor: () => E.addresseeRules().uptakeFloor,
+          uncertainMargin: () => E.addresseeRules().uncertainMargin,
+          resolveBinding: E.resolveBinding,
+        });
+      } catch (e) { eoWarn('addressee create', e); return null; }
+    }
+    return addresseeRef.current;
+  };
+  // Clark's grounding made mechanical: an OFFERED span this user turn takes up
+  // (its content lexically overlaps the question) is promoted to GROUNDED — the
+  // only thing that licenses "as we established at [s12]". A span the system
+  // cited that the person then ignored stays offered and is re-introduced.
+  const addrGroundUptake = (AF, q) => {
+    const E = window.EOEngine;
+    let qt; try { qt = new Set(E.tok(String(q || ''))); } catch (e) { return; }
+    if (!qt.size) return;
+    const byId = new Map((docsRef.current || []).map(d => [d.id, d]));
+    let snap; try { snap = AF.snapshot(); } catch (e) { return; }
+    for (const g of (snap.given || [])) {
+      if (g.status !== 'offered' || g.kind !== 'span' || g.idx == null) continue;
+      const d = byId.get(g.docId); const t = d && d.sentenceTexts && d.sentenceTexts[g.idx];
+      if (!t) continue;
+      let overlap = 0; for (const x of new Set(E.tok(t))) if (qt.has(x)) { if (++overlap >= 2) break; }
+      if (overlap >= 2) { try { AF.ground(g.key); } catch (e) {} }
+    }
+  };
+  // Seed the person's Meant-Graph from a CONFIRM/DENY: the person PROPOSED a
+  // proposition ("it sounds like he's not a speaker"); the graph-check verdicts
+  // it. The proposition enters as the person's belief (from-user-assertion —
+  // proposing IS uptake), world-flagged from the same verdict. A contradicted
+  // belief is the false belief — held, separate, flagged, never merged into the
+  // world-model. Inert unless addressee_meant_graph is ON; audit-only for now.
+  const WORLD_OF_VERDICT = { confirmed: 'supported', 'confirmed-by-absence': 'supported',
+    contradicted: 'contradicted', unattested: 'unsupported', 'denied-by-absence': 'unsupported' };
+  const addrBelieveChecks = (checks) => {
+    const E = window.EOEngine;
+    if (!E || !E.addresseeMeantGraphEnabled || !E.addresseeMeantGraphEnabled()) return;
+    const AF = addrField(); if (!AF) return;
+    for (const c of (checks || [])) {
+      if (!c || !c.subject || !c.predicate) continue;
+      const prop = (c.negated ? c.subject + ' not ' + c.predicate : c.subject + ' ' + c.predicate).trim();
+      const world = WORLD_OF_VERDICT[c.verdict] || 'unsupported';
+      try { AF.believe({ proposition: prop, world, provenance: 'from-user-assertion' }); } catch (e) {}
+    }
+    try { AUD('step', 'addressee', addrSafeAudit(AF)); } catch (e) {}
+  };
+  const addrSafeAudit = (AF) => { try { return AF.auditStep(); } catch (e) { return null; } };
+  const resetAddressee = () => { try { if (addresseeRef.current) addresseeRef.current.reset(); } catch (e) {} addresseeRef.current = null; };
+
   // Deposit a settled, document-grounded turn into the conversation field
   // (working memory): warm the entities it named and the sentences it cited, so
   // the NEXT turn can carry them forward. Always runs (depth-independent); what
@@ -1482,6 +1559,19 @@ function App() {
     try { matter = (window.EOEngine.referentsScope(scope, q) || {}).matter || []; } catch (e) {}
     try { F.deposit({ entities: matter, sentences: (cites || []).map(c => ({ docId: c.docId, idx: c.idx })) }, 1); }
     catch (e) { eoWarn('field deposit', e); }
+    // The second person: the same turn, read toward the addressee. The user's
+    // own referents are USER-TYPED (produced ⇒ grounded); an offered span this
+    // turn took up is promoted to grounded (only uptake grounds); the answer's
+    // cited spans are newly OFFERED (displayed, not yet shared). Inert off-dial.
+    const AF = addrField();
+    if (AF) {
+      try {
+        if (matter.length) AF.userTyped(matter, 'entity');
+        addrGroundUptake(AF, q);
+        AF.offer((cites || []).map(c => ({ docId: c.docId, idx: c.idx })), null, 'span');
+        AUD('step', 'addressee', addrSafeAudit(AF));
+      } catch (e) { eoWarn('addressee deposit', e); }
+    }
   };
 
   // Deposit a settled CHAT turn into the same conversation field a grounded turn
@@ -1800,6 +1890,10 @@ function App() {
       : window.EOEngine.answerScope(scope, q, { hotEntity: hotEntity() }));
     if (plan.checks) {
       AUD('step', 'confirm', { checks: plan.checks.map(c => ({ subject: c.subject, predicate: c.predicate, negated: !!c.negated, verdict: c.verdict })) });
+      // The person PROPOSED these propositions (a CONFIRM/DENY); seed them into
+      // their Meant-Graph, world-flagged from the same verdict, false-belief
+      // separated. A contradicted proposal is the false belief. Inert off-dial.
+      try { addrBelieveChecks(plan.checks); } catch (e) { eoWarn('addressee believe', e); }
       try { plan = maybeRetract(scope, plan); } catch (e) { eoWarn('retract', e); }
     }
     const primary = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
@@ -3966,6 +4060,9 @@ function App() {
     turnAssocRef.current = [];
     try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.decayTurn(); }
     catch (e) { eoWarn('field decay', e); }
+    // One tick of conversational time for the addressee field too — what was
+    // grounded cools toward a fresh offer (the same γ the chat field runs).
+    try { const AF = addrField(); if (AF) AF.decayTurn(); } catch (e) { eoWarn('addressee decay', e); }
 
     // Open the turn's audit record before anything branches, so the routing
     // decision, model load, retrieval and the model call all attach to it.
@@ -4225,7 +4322,7 @@ function App() {
 
   // Reset the conversation field on a fresh or switched chat — working memory is
   // chat-scoped, matching newChat's reset semantics (distinct from the learned ledger).
-  const resetField = () => { try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.reset(); } catch (e) { eoWarn('field reset', e); } };
+  const resetField = () => { try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.reset(); } catch (e) { eoWarn('field reset', e); } resetAddressee(); };
   // Per-chat carry/repair flags share one reset whenever the active thread changes.
   const resetTurnRefs = () => { lastGroundedRef.current = false; everGroundedRef.current = false; lastCarryRef.current = null; repairCountRef.current = 0; };
   // Stash the active chat's live messages back into its stored log before we
