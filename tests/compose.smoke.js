@@ -16,6 +16,10 @@ const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></
 const { window } = dom;
 window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
 try { Object.defineProperty(window, 'performance', { value: { now: () => Date.now() }, configurable: true }); } catch (_) {}
+// jsdom omits the legacy attachEvent/detachEvent that React's dev-mode focus /
+// selection-restore shim probes when a field gains focus inside act(); stub them
+// so focusing the inline editor doesn't raise a spurious (browser-absent) error.
+try { window.HTMLElement.prototype.attachEvent = function () {}; window.HTMLElement.prototype.detachEvent = function () {}; } catch (_) {}
 
 const React = require('react');
 const ReactDOMClient = require('react-dom/client');
@@ -93,19 +97,26 @@ ok(!threw, 'a populated composition renders without throwing' + (threw ? ' — '
 html = container.innerHTML;
 ok(/report the count/.test(html), 'the unit job renders in the plan tree');
 ok(/The city recorded twelve thousand filings/.test(html), 'the drafted prose renders in the document pane');
-// per-sentence provenance shading is ALWAYS visible (the canvas) — who wrote what
-ok(/cmp-by-talker/.test(html) && /cmp-by-user/.test(html), 'per-sentence provenance is shaded (talker vs you)');
+// authorship is ALWAYS visible (the canvas) — shaded runs + inline chips
+ok(/cmp-by-talker/.test(html) && /cmp-by-user/.test(html), 'authorship runs are shaded (talker vs you)');
+ok(/cmp-chip/.test(html) && />you</.test(html) && />talker</.test(html), 'inline author chips render in the flow ([you] / talker)');
 ok(/sentences yours/.test(html), 'the authorship summary renders (you wrote N of M)');
 ok(/band-advance/.test(html), 'the monitor route colours the band (advance)');
 
-// selecting a paragraph reveals its full audit (the canvas stays clean until then)
+// clicking the card (not the prose) selects → reveals the unit's full audit
 const card = container.querySelector('#cmp-card-' + u.id);
-ok(!!card, 'the unit paragraph is in the document canvas');
-TestUtils.act(() => { card && card.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+ok(!!card, 'the unit is a paragraph in the document canvas');
+TestUtils.act(() => { card.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
 html = container.innerHTML;
 ok(/figure-grounded/.test(html), 'selecting reveals the witness tag as a word');
 ok(/witness/.test(html) && /coherence/.test(html), 'selecting reveals the full confidence vector (all six components labelled)');
 ok(/null/.test(html), 'an unmeasured component renders as null, not zero');
+
+// clicking the prose itself turns that paragraph into a seamless inline editor
+const proseEl = container.querySelector('#cmp-card-' + u.id + ' .cmp-prose');
+ok(!!proseEl, 'the prose is present to click into');
+TestUtils.act(() => { proseEl.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+ok(!!container.querySelector('.cmp-prose-edit'), 'clicking the prose opens an inline editor (click anywhere and type)');
 
 // (3) the projection — proves the composition is queryable as a prose shape,
 // provenance traceable, talker-facing text carrying no authorship vocabulary

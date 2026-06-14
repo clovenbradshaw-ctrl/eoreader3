@@ -2069,23 +2069,32 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .cmp-byline { float: right; font-family: var(--mono); font-size: 9.5px; letter-spacing: .03em; padding: 0 6px; border-radius: var(--r-pill); }
 .cmp-byline.cmp-by-user { color: var(--accent); background: var(--accent-tint); }
 .cmp-byline.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); }
-/* per-sentence provenance shading — who wrote each sentence */
-.cmp-sent { transition: background .15s; }
-.cmp-by-user { background: var(--accent-tint); box-shadow: inset 0 -1px 0 var(--accent); border-radius: 2px; }
-:root[data-theme="dark"] .cmp-by-user { background: var(--accent-tint-2); }
-.cmp-by-talker { }
+/* per-run provenance — your prose carries a subtle underline; every run ends
+   with an inline author chip ([you] accented, talker muted) that brightens on
+   hover, so who wrote each stretch is legible right in the flow */
+.cmp-run { transition: box-shadow .15s; }
+.cmp-run.cmp-by-user { box-shadow: inset 0 -2px 0 var(--accent-tint); }
+.cmp-chip { font-family: var(--mono); font-size: 8.5px; font-weight: 600; letter-spacing: .04em;
+  vertical-align: super; line-height: 0; margin: 0 3px 0 1px; padding: 2px 5px; border-radius: var(--r-pill);
+  opacity: .55; transition: opacity .12s; cursor: default; user-select: none; }
+.cmp-prose:hover .cmp-chip { opacity: 1; }
+.cmp-chip.cmp-by-user { color: var(--accent); background: var(--accent-tint); opacity: .9; }
+.cmp-chip.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); }
 /* the legend in the pane header */
 .cmp-legend { margin-left: auto; display: inline-flex; gap: 6px; text-transform: none; letter-spacing: 0; }
 .cmp-leg { font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: var(--r-pill); }
-.cmp-leg.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); box-shadow: none; }
-.cmp-leg.cmp-by-user { color: var(--accent); }
+.cmp-leg.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); }
+.cmp-leg.cmp-by-user { color: var(--accent); background: var(--accent-tint); }
 .cmp-card-job { font-size: 10.5px; color: var(--text-3); font-weight: 600; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; opacity: 0; transition: opacity .12s; }
 .cmp-card:hover .cmp-card-job, .cmp-card.sel .cmp-card-job { opacity: 1; }
 .cmp-card-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 .cmp-prose { font-family: var(--serif); font-size: 15px; line-height: 1.7; color: var(--paper-ink); white-space: pre-wrap; }
 .cmp-prose.streaming { color: var(--text-2); }
-.cmp-prose-edit { font-family: var(--serif); font-size: 15px; line-height: 1.6; width: 100%; min-height: 90px;
-  border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 8px; background: var(--bg); color: var(--text); resize: vertical; }
+/* editing is seamless — same typography as the prose it replaces, no heavy
+   chrome, just a faint focus ring so the document still reads as a document */
+.cmp-prose-edit { font-family: var(--serif); font-size: 15px; line-height: 1.7; width: 100%; min-height: 64px;
+  border: none; border-radius: var(--r-sm); padding: 4px 6px; margin: -4px -6px; background: var(--bg);
+  color: var(--text); resize: vertical; outline: none; box-shadow: 0 0 0 2px var(--accent-tint); }
 .cmp-owe { font-size: 13px; color: var(--text-2); background: var(--void-bg); border: 1px dashed var(--void-bd);
   border-radius: var(--r-sm); padding: 9px 11px; line-height: 1.5; }
 .cmp-caret { display: inline-block; width: 7px; height: 1.05em; background: var(--accent); margin-left: 1px;
