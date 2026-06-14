@@ -729,6 +729,28 @@ function App() {
     if (mobileRef.current) { setLayout('doc'); setCollapsed(true); } else setLayout('split');
   }, []);
 
+  // Turn a chat answer into a composition — the instant on-ramp: no plan-then-
+  // draft, no model wait. The answer's paragraphs seed talker-authored units
+  // (citations preserved as evidence links, markup flattened); the question that
+  // prompted it becomes the thesis. From there it's an editable, queryable doc.
+  const promoteToComposition = useCallback((index) => {
+    if (!window.EOComposition) { showToast('Composition layer unavailable.'); return; }
+    const msg = messages[index];
+    const text = msg && msg.text ? String(msg.text) : '';
+    if (!text.trim()) { showToast('Nothing to turn into a document yet.'); return; }
+    let thesis = '';
+    for (let i = index - 1; i >= 0; i--) { const m = messages[i]; if (m && m.role === 'user' && m.text) { thesis = String(m.text); break; } }
+    const evts = window.EOComposition.seedFromProse({ text, thesis, genre: 'plain-report' });
+    const docEv = evts[0], frameEv = evts[1];
+    const name = ((thesis || 'Composition').replace(/\s+/g, ' ').trim().slice(0, 60)) || 'Composition';
+    const doc = { id: docEv.id, name, kind: 'composition', _events: evts, frame_id: frameEv.id, meta: 'composition' };
+    setDocs(ds => [...ds, doc]);
+    setOpenTabs(t => [...t, doc.id]);
+    setActiveTab(doc.id);
+    if (mobileRef.current) { setLayout('doc'); setCollapsed(true); } else setLayout('split');
+    showToast('Opened as a document — every line starts as the talker’s; your edits are marked yours.');
+  }, [messages]);
+
   // Append events to a composition doc's log and re-derive its tab name from the
   // (possibly new) frame thesis. Pure append — the fold does the rest.
   const appendCompositionEvents = useCallback((docId, newEvents) => {
@@ -4250,7 +4272,7 @@ function App() {
               {showChat && (
                 <div style={{ flexBasis: showDocPane ? (splitRatio * 100) + '%' : '100%', flexGrow: showDocPane ? 0 : 1, flexShrink: 0, display: 'flex', minWidth: 0 }}>
                   <ChatPane messages={messages} onCite={flashCitation} composerProps={composerProps} narrow={showDocPane} wide={layout === 'chat'} onExportPrompts={exportPrompts} showGrounding={groundingInfo} onConfirmWiki={runWikiSearch} onDismissWiki={dismissWikiSearch} onOpenDoc={openTab}
-                    onApplyTableView={applyTableView} onSaveTableView={saveTableView} onQuickReply={send} onFork={forkChat} />
+                    onApplyTableView={applyTableView} onSaveTableView={saveTableView} onQuickReply={send} onFork={forkChat} onPromote={promoteToComposition} />
                 </div>
               )}
               {showDocPane && showChat && <div className={'divider' + (dragging ? ' dragging' : '')} onMouseDown={() => setDragging(true)} />}

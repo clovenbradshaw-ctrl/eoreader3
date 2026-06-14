@@ -277,6 +277,29 @@ group('the projection — a queryable prose shape, provenance traceable, talker 
   ok(empty._empty && empty.sentences.length === 0, 'an undrafted composition projects to an empty (but valid) prose shape');
 });
 
+group('seed-from-prose — turn a chat answer into an editable, talker-authored composition', () => {
+  const text = 'The city logged twelve thousand eviction filings in 2023 {{cite:d1:4}}. Most were downtown.\n\nThe rent freeze ended in spring {{cite:d1:9}}, which many tie to the surge.';
+  const folded = C.fold(C.seedFromProse({ text, thesis: 'Why did evictions rise?', genre: 'plain-report' }));
+  eq(folded.frame.thesis_or_question, 'Why did evictions rise?', 'the question that prompted the answer becomes the frame thesis');
+  eq(folded.counts.units, 2, 'each paragraph becomes a unit');
+  const u0 = folded.tree[0];
+  ok(/twelve thousand/.test(u0.draft.prose), 'the prose is carried verbatim');
+  ok(!/\{\{cite/.test(u0.draft.prose), 'citation tokens are stripped from the prose the canvas shows');
+  eq(u0.draft.author, 'talker', 'a seeded draft is authored by the talker (not you)');
+  ok(u0.draft.provenance.length === 2 && u0.draft.provenance.every(p => p.author === 'talker'), 'every sentence traces to the talker until you edit');
+  ok(u0.draft.source_events.some(s => s.docId === 'd1' && s.idx === 4), 'citations survive as the draft’s evidence links');
+
+  // markup is flattened so the canvas reads as a document, and a lone heading
+  // labels the unit that follows it
+  const f2 = C.fold(C.seedFromProse({ text: '## Findings\n\nA **bold** point and a [link](http://x).' }));
+  const last = f2.tree[f2.tree.length - 1];
+  ok(!/\*\*|\]\(|^#/.test(last.draft.prose), 'bold / link / heading markup is flattened');
+  ok(/bold point/.test(last.draft.prose) && /link/.test(last.draft.prose), 'the words survive the flattening');
+  ok(/Findings/.test(last.job), 'a lone heading line becomes the following unit’s job');
+
+  eq(C.fold(C.seedFromProse({ text: '   ' })).counts.units, 0, 'empty / whitespace prose seeds no units (just the frame)');
+});
+
 // The remaining groups include an async one (generateUnit); run them inside an
 // async IIFE so every assertion settles before the summary prints — a group
 // whose promise the runner didn't await could otherwise fail silently after it.

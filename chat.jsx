@@ -834,7 +834,7 @@ class MessageBoundary extends React.Component {
   }
 }
 
-function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork }) {
+function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork, onPromote }) {
   if (msg.role === 'user') {
     return (
       <div className="msg-row user">
@@ -904,6 +904,7 @@ function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onO
           <div className="msg-actions">
             <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer|absent):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
             {onFork && <button title="Fork from here — copy this conversation up to this reply into a new chat" onClick={onFork}><Icon name="fork" size={15} /></button>}
+            {onPromote && msg.text && <button title="Open as a document — turn this answer into an editable, grounded composition you can revise and query" onClick={onPromote}><Icon name="edit" size={15} /></button>}
             <button title="Good answer"><Icon name="thumbsup" size={15} /></button>
           </div>
         )}
@@ -1024,7 +1025,7 @@ function Hero({ composerProps, onAttach, onExample, onPaste, dragOver }) {
   );
 }
 
-function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork }) {
+function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork, onPromote }) {
   const streamRef = React.useRef(null);
   React.useEffect(() => { const el = streamRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages]);
   // Only offer the export once a turn has actually been recorded.
@@ -1038,7 +1039,8 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
             raw={m.role === 'assistant' ? m.text : null}>
             <Message msg={m} onCite={onCite} showGrounding={showGrounding} onConfirmWiki={onConfirmWiki} onDismissWiki={onDismissWiki} onOpenDoc={onOpenDoc}
               onApplyTableView={onApplyTableView} onSaveTableView={onSaveTableView} onQuickReply={onQuickReply}
-              onFork={onFork ? () => onFork(i) : null} />
+              onFork={onFork ? () => onFork(i) : null}
+              onPromote={onPromote && m.role === 'assistant' ? () => onPromote(i) : null} />
           </MessageBoundary>
         ))}</div>
       </div>

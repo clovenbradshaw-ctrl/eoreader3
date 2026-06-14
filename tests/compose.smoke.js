@@ -70,7 +70,7 @@ let html = container.innerHTML;
 ok(/Plan/.test(html) && /Document/.test(html), 'both panes render (Plan / Document headers)');
 ok(/Set the thesis or question/.test(html) || /cmp-frame/.test(html), 'the frame editor renders');
 ok(/No plan yet/.test(html), 'the empty plan shows its prompt');
-ok(/Plan from frame/.test(html) && /\+ Unit/.test(html), 'the doc action surface renders');
+ok(/Write it/.test(html) && /Outline only/.test(html) && /\+ Unit/.test(html), 'the doc action surface renders (Write / Outline / + Unit)');
 
 // (2) a POPULATED fold — a unit, drafted by the talker, lightly edited by the
 // user so authorship is mixed; stamped figure-grounded / advance.

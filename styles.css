@@ -2058,6 +2058,10 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 /* the plan tree */
 .cmp-tree { flex: 1; overflow: auto; padding: 8px; }
 .cmp-empty { color: var(--text-3); font-size: 13px; line-height: 1.6; padding: 18px 14px; }
+/* the outline forming live, as the talker streams it */
+.cmp-outlining { padding: 12px 14px; }
+.cmp-outlining-h { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 8px; }
+.cmp-outlining-body { font-family: var(--serif); font-size: 13.5px; line-height: 1.7; color: var(--text-2); white-space: pre-wrap; margin: 0; }
 .cmp-node-wrap { }
 .cmp-node { display: flex; align-items: stretch; gap: 8px; padding: 7px 8px; border-radius: var(--r-sm);
   margin-bottom: 4px; cursor: pointer; border: 1px solid transparent; background: var(--bg); }
