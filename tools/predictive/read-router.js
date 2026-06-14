@@ -553,7 +553,7 @@ function report(res) {
   out.push('4. **Phase 4 — BUILT.** The binding guards (`chat_field_mass`, `binding_conf_*`, `binding_ambiguous_margin`, `binding_subject_weight`, `binding_resolution`) are all `src:\'hardcoded-seed\'`, so the `evo/` allow-list already lets the loop evolve them; a **routing** quality component (`evo/scorer.js`) scores routes/resolutions by `EOAudit.truthfulness` over a multi-turn conversation, giving the loop the fitness signal (baseline ≈ 0.42 with the dial off → ≈ 0.92 with the binding on). The model never grades itself.');
   out.push('5. **Phase 5 — optional, deferred.** A small CPU model at the edge for the residual the deterministic reading cannot close (the `question-no-lexical` band). Last, per the brief.');
   out.push('');
-  out.push('Everything above is behind `binding_resolution`, **OFF by default** — the parity floor holds (the golden is byte-identical dial-on) until it is deliberately flipped.');
+  out.push('`binding_resolution` now **ships ON** (the live flip): the whole golden suite is byte-identical dial-on, so the improvement ships with zero parity diffs. The floor is one `value:false` away — forced off, every consumer is exactly the pre-build behavior.');
   out.push('');
   return out.join('\n');
 }

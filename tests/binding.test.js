@@ -10,10 +10,11 @@
    router and the tool-query builder share, so a pronoun resolved once steers
    both the route and the Wikipedia query.
 
-   Everything is behind the binding_resolution rule, OFF by default. OFF,
-   resolveBinding is byte-identical to today's hotEntity (the heaviest hot
+   Everything is behind the binding_resolution rule. It now ships ON (the live
+   flip — verified parity-clean: the golden is byte-identical dial-on). Forced
+   OFF, resolveBinding is byte-identical to today's hotEntity (the heaviest hot
    entity, name only, confidence null) and bindingQuery never rewrites a query —
-   the parity floor. These tests exercise the ON path (applyRules flips it).
+   the parity floor, one `value:false` away. These tests pin both paths.
 
    Run with `node tests/binding.test.js`.
    ============================================================ */
@@ -37,8 +38,12 @@ async function main() {
   const seed = (names) => { F.reset(); F.decayTurn(); F.deposit({ entities: names }, 1); };
   const FLOOR = { heatFloor: 0.25 };
 
-  group('parity floor — binding_resolution ships OFF, resolveBinding is hotEntity');
-  eq(E.bindingResolutionEnabled(), false, 'binding_resolution ships OFF');
+  group('parity floor — with binding_resolution OFF, resolveBinding is hotEntity');
+  // binding_resolution now ships ON (the live flip); force it OFF here to pin
+  // that the floor — name-only, confidence null, no query rewrite — is preserved
+  // and one set value:false away.
+  E.applyRules([{ id: 'binding-resolution', enabled: true, value: 0 }]);
+  eq(E.bindingResolutionEnabled(), false, 'forced OFF for the parity-floor check');
   seed(['Tom Turner']);
   {
     const b = E.resolveBinding([doc], 'what about his role', F, FLOOR);

@@ -795,8 +795,8 @@ const READING_RULES = {
   },
   // ── The active-referent binding — the field points at the best guess ──
   binding_resolution: {
-    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
-    desc: 'When ON, the active referent the next turn reads is resolved as a defeasible BINDING (surface=the Given the person typed, name=the Meant it resolved to, a base-rate-calibrated confidence, and one of the three NUL states resolved|ambiguous|absent) instead of a bare top-of-heat entity name. One resolution, two consumers: the router reads it for the route and the tool-query builder reads it for the search, so a pronoun resolved once steers both. Precedence ladder: an explicit name in the prompt wins; else the chat field\'s hot figure (the underspecified case); else the document\'s local salience is the floor. OFF ships today\'s hotEntity (the heaviest hot entity, name only) byte-identical — the parity floor; resolveBinding returns name-only with confidence null and never rewrites a query.',
+    value: true, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, the active referent the next turn reads is resolved as a defeasible BINDING (surface=the Given the person typed, name=the Meant it resolved to, a base-rate-calibrated confidence, and one of the three NUL states resolved|ambiguous|absent) instead of a bare top-of-heat entity name. One resolution, two consumers: the router reads it for the route and the tool-query builder reads it for the search, so a pronoun resolved once steers both. Precedence ladder: an explicit name in the prompt wins; else the chat field\'s hot figure (the underspecified case); else the document\'s local salience is the floor. Now ships ON: the router-reading read verified the golden is byte-identical dial-on, so the live flip is parity-clean. Set value:false to restore the floor — resolveBinding then returns name-only with confidence null, routes via continuity, and never rewrites a query, exactly as before the build.',
   },
   chat_field_mass: {
     value: 1.2, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
