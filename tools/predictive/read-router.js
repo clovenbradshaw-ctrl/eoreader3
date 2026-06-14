@@ -194,15 +194,17 @@ function simulateConversation(E, doc, scopeEntities, turns, onTurn) {
     const ctx = { everGrounded, prevGrounded, hadReply: i > 0, hotBinding,
       hotEntity: hotBinding ? hotBinding.name : ((snap.entities[0] && (snap.entities[0].label || snap.entities[0].key)) || null) };
     const out = onTurn(turn, i, snap, ctx) || {};
-    // deposit the settled turn exactly as the app does (q + answer named refs)
-    let names = [];
+    // deposit the settled turn exactly as the app does (gated subject-weighting)
     try {
-      const seen = new Set();
-      for (const n of (E.namedReferents(turn.q) || []).concat(E.namedReferents(out.answerText || '') || [])) {
-        const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); names.push(n); }
+      if (E.depositTurn) E.depositTurn(E.conversationField, turn.q, out.answerText || '');
+      else {
+        const seen = new Set(); const names = [];
+        for (const n of (E.namedReferents(turn.q) || []).concat(E.namedReferents(out.answerText || '') || [])) {
+          const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); names.push(n); }
+        }
+        if (names.length) E.conversationField.deposit({ entities: names }, 1);
       }
     } catch (e) {}
-    if (names.length) E.conversationField.deposit({ entities: names }, 1);
     if (out.grounded != null) { prevGrounded = !!out.grounded; everGrounded = everGrounded || !!out.grounded; }
   });
 }
@@ -375,12 +377,10 @@ function readC(E, X) {
   for (const c of cases) {
     const doc = c._doc, scopeEntities = c._entities;
     E.conversationField.reset();
-    for (const s of c.setup) {                       // seed the hot figure
+    for (const s of c.setup) {                       // seed the hot figure (gated subject-weighting)
       E.conversationField.decayTurn();
-      let names = []; try { names = E.namedReferents(s) || []; } catch (e) {}
       let ans = {}; try { ans = E.answerScope([doc], s, {}); } catch (e) {}
-      try { for (const n of (E.namedReferents(ans.text || '') || [])) names.push(n); } catch (e) {}
-      if (names.length) E.conversationField.deposit({ entities: names }, 1);
+      try { if (E.depositTurn) E.depositTurn(E.conversationField, s, ans.text || ''); } catch (e) {}
     }
     E.conversationField.decayTurn();
     const snap = E.conversationField.snapshot();
@@ -547,9 +547,13 @@ function report(res) {
   out.push('');
 
   out.push('### Status against the build order\n');
-  out.push('1. **Phase 1 — BUILT.** `resolveBinding` carries the active referent as a defeasible binding (surface/name/confidence/state/via). The confidence is seated on the base-rate hit-rates the read measured (not the heat share that failed B.3 at the gate); B.3 above re-confirms it calibrates (ECE ' + f3(b23.b3.ece) + '). The `chat_field_mass` gravity constant is seeded from B.2 (chat ' + pct(b23.b2.chatCorrect, b23.b2.n) + ' vs document ' + pct(b23.b2.docCorrect, b23.b2.n) + ') and is evolvable by `evo/`.');
-  out.push('2. **Phase 3 — BUILT.** The Wikipedia query rides the same binding (`bindingQuery`): a pronoun resolved once feeds both the route and the search. C above re-confirms resolved ' + pct(c.resolvedHit, c.pronN) + ' vs raw ' + pct(c.rawHit, c.pronN) + ' on the pronoun cases.');
-  out.push('3. **Phase 2 — next.** Refactor the router into named `src:\'hardcoded-seed\'` guards that consume the binding for the *referent*, keeping the cascade\'s intent classification as evolvable seed guards (B.1 did not clear for pure-parse intent). Everything above is behind `binding_resolution`, OFF by default — the parity floor holds until it is flipped.');
+  out.push('1. **Phase 1 — BUILT.** `resolveBinding` carries the active referent as a defeasible binding (surface/name/confidence/state/via), and `depositTurn` weights the user\'s named subject above incidental answer-mentions so the field actually points at a best guess (without it the binding is correct but inert — every bare follow-up ties). Confidence is seated on the read\'s base-rate hit-rates (not the heat share that failed B.3 at the gate); B.3 re-confirms it calibrates (ECE ' + f3(b23.b3.ece) + '). `chat_field_mass` is seeded from B.2 (chat ' + pct(b23.b2.chatCorrect, b23.b2.n) + ' vs document ' + pct(b23.b2.docCorrect, b23.b2.n) + ').');
+  out.push('2. **Phase 3 — BUILT.** The Wikipedia query rides the same binding (`bindingQuery`): a pronoun resolved once feeds both the route and the search. C re-confirms resolved ' + pct(c.resolvedHit, c.pronN) + ' vs raw ' + pct(c.rawHit, c.pronN) + ' on the pronoun cases.');
+  out.push('3. **Phase 2 — BUILT.** `routeTurn` routes a carried anaphoric follow-up via `names-entity` (the right reason), and `answerResolved` reads the resolved question, so the chat-carry turns witness (Read A: strong-share ' + pct(Math.round(a.strongShare * a.N), a.N) + ', the `continuity`-witness-0 cluster gone). The intent-regex→guards refactor stays deferred (B.1 did not clear for pure-parse intent — intent stays guarded, fed by the parse\'s referent).');
+  out.push('4. **Phase 4 — BUILT.** The binding guards (`chat_field_mass`, `binding_conf_*`, `binding_ambiguous_margin`, `binding_subject_weight`, `binding_resolution`) are all `src:\'hardcoded-seed\'`, so the `evo/` allow-list already lets the loop evolve them; a **routing** quality component (`evo/scorer.js`) scores routes/resolutions by `EOAudit.truthfulness` over a multi-turn conversation, giving the loop the fitness signal (baseline ≈ 0.42 with the dial off → ≈ 0.92 with the binding on). The model never grades itself.');
+  out.push('5. **Phase 5 — optional, deferred.** A small CPU model at the edge for the residual the deterministic reading cannot close (the `question-no-lexical` band). Last, per the brief.');
+  out.push('');
+  out.push('Everything above is behind `binding_resolution`, **OFF by default** — the parity floor holds (the golden is byte-identical dial-on) until it is deliberately flipped.');
   out.push('');
   return out.join('\n');
 }

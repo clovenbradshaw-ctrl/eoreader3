@@ -1419,15 +1419,22 @@ function App() {
   const depositConversation = (q, answer) => {
     const E = window.EOEngine;
     if (!E || !E.conversationField || !E.namedReferents) return;
-    let names;
+    let names = [];
     try {
-      const seen = new Set(); names = [];
-      for (const n of E.namedReferents(String(q || '')).concat(E.namedReferents(String(answer || '')))) {
-        const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); names.push(n); }
+      if (E.depositTurn) {
+        // Centralized + gated: OFF deposits every name at weight 1 (parity); ON
+        // weights the user's named subject above incidental answer mentions, so
+        // the next bare pronoun resolves instead of tying. Returns the names.
+        names = E.depositTurn(E.conversationField, String(q || ''), String(answer || '')) || [];
+      } else {
+        const seen = new Set();
+        for (const n of E.namedReferents(String(q || '')).concat(E.namedReferents(String(answer || '')))) {
+          const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); names.push(n); }
+        }
+        if (names.length) E.conversationField.deposit({ entities: names }, 1);
       }
-    } catch (e) { eoWarn('conversation referents', e); return; }
+    } catch (e) { eoWarn('chat field deposit', e); return; }
     if (!names.length) return;
-    try { E.conversationField.deposit({ entities: names }, 1); } catch (e) { eoWarn('chat field deposit', e); return; }
     try { AUD('step', 'field-deposit', { source: 'chat', entities: names }); } catch (e) {}
   };
 

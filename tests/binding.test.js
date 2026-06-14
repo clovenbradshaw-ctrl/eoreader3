@@ -165,6 +165,27 @@ async function main() {
     E.applyRules([{ id: 'binding-resolution', enabled: true, value: 1 }]);
   }
 
+  group('Phase 4 — depositTurn weights the named subject above incidental mentions');
+  {
+    // ON: the user named Tom Turner; the answer also mentions the DMC. The
+    // subject must out-mass the co-mentioned org, or the next bare pronoun ties.
+    F.reset(); F.decayTurn();
+    E.depositTurn(F, 'who is Tom Turner', 'Tom Turner runs the District Management Corporation.');
+    const snap = F.snapshot();
+    const tom = snap.entities.find(e => /tom turner/i.test(e.label || e.key));
+    const dmc = snap.entities.find(e => /district management/i.test(e.label || e.key));
+    ok(tom && dmc && tom.heat > dmc.heat, 'ON: the named subject out-masses the co-mentioned org — got ' + (tom && tom.heat) + ' vs ' + (dmc && dmc.heat));
+    // OFF: byte-identical to today — every name deposits at weight 1
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 0 }]);
+    F.reset(); F.decayTurn();
+    E.depositTurn(F, 'who is Tom Turner', 'Tom Turner runs the District Management Corporation.');
+    const s2 = F.snapshot();
+    const tom2 = s2.entities.find(e => /tom turner/i.test(e.label || e.key));
+    const dmc2 = s2.entities.find(e => /district management/i.test(e.label || e.key));
+    ok(tom2 && dmc2 && tom2.heat === dmc2.heat, 'OFF: every name deposits at weight 1 (parity floor) — got ' + (tom2 && tom2.heat) + ' vs ' + (dmc2 && dmc2.heat));
+    E.applyRules([{ id: 'binding-resolution', enabled: true, value: 1 }]);
+  }
+
   group('acceptance — "a document about Frank, then what about his role / look up his employer"');
   {
     // Frank ≈ Tom Turner here (the fixture's self-dealing protagonist).
