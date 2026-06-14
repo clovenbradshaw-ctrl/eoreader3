@@ -97,6 +97,14 @@
         response: String(rec.response),
         notes: rec.notes || '',
         weight: typeof rec.weight === 'number' ? rec.weight : 1,
+        // Provenance (the form-genres library, §brief): where a fetched
+        // exemplar came from and under what license. Carried into the runtime
+        // audit so a form exemplar's papers travel with it; the voice library
+        // (exemplars.jsonl) simply omits these and they default to ''. The
+        // text + provenance are the record; the embedding is never stored.
+        source: rec.source || '',
+        license: rec.license || '',
+        retrieved: rec.retrieved || '',
       });
     }
     return out;

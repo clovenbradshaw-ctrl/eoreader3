@@ -380,6 +380,58 @@ session with no embedder or no loaded library answers exactly as it did
 (`app.jsx` only reaches for a shaped budget once MiniLM is already resident and
 the library has loaded, warming it in the background and never blocking a turn).
 
+### The form-genres library (a second, fetched library)
+
+`exemplars.jsonl` is Cleo's own **voice** — 22 intents (lookup, synthesis, dry,
+playful, pushback-repair…) authored in her register. You cannot fetch those
+from the wild: there is no public corpus of Cleo being dry, and pouring outside
+prose into those intents would poison the centroids with a voice that isn't
+hers. So output **form** lives in a *separate* library, `form-genres.jsonl`,
+built from **real public-domain / openly-licensed** instances of each genre —
+how a news article looks, an obituary, a recipe, an encyclopedic summary, a
+plain report, a letter. The centroid per genre is the learned *shape* of that
+form; a draft's output is cosined against it for the form degree, the subject
+washing out across many varied instances.
+
+The two libraries are kept apart on purpose. The discriminative score draws
+competitors from every *other* intent in the same library — so if `news-article`
+shared a file with `dry` and `playful`, a news draft would be scored against
+assistant-voice moves, which is noise. Loaded as its own library
+(`window.EOFormLibrary`, the twin of `EOShapeLibrary`), `news-article` is scored
+against `obituary` against `recipe` — a real contrast. Same loader, same lazy
+MiniLM embed at load, same parity fallback (resolves `null` when absent or
+unreachable). **No vectors are ever stored**: the responses are embedded at
+load and recompute against the new space on any embedder swap, for free — store
+text and provenance only.
+
+Every record carries **provenance** — `source`, `license`, `retrieved` —
+carried into memory by `parseExemplars` so a form exemplar's papers travel with
+it in the runtime audit. A record with no provenance does not go in the file.
+Fair game is Project Gutenberg public-domain texts (cookbooks for `recipe`,
+letter collections for `letter`), the 1911 *Encyclopædia Britannica* for
+`encyclopedic-summary`, Chronicling America pre-1923 newspapers for
+`news-article` and obituaries of the **long dead**, and US federal works
+(NWS forecasts, court syllabi) for `plain-report` — nothing copyrighted,
+paywalled, scraped against terms, or modern.
+
+The corpus is built by **`tools/form-genres/fetch.mjs`** from a manifest
+(`tools/form-genres/sources.json`), mirroring the external desk's discipline:
+freeze/replay (the version actually fetched is the version of record),
+abstain-never-fabricate (no source reached ⇒ skipped, not invented), and a
+stamped provenance on every record. It fetches through the same proxy the
+reference desk uses (or `--direct`), and **stores no embeddings**.
+
+```
+node tools/form-genres/fetch.mjs --live       # pay the network, freeze, write
+node tools/form-genres/fetch.mjs --validate    # check every record's provenance
+```
+
+The hard rule carries forward from the shape layer: a centroid stays a
+*measure*. It is never read, summarized into "what a news article contains,"
+and written into a prompt. The shape is tacit — a distance, not a spec. The
+moment a fetched corpus becomes a feature list in the talker's prompt, it is a
+checklist again.
+
 ### Checking a claim (CONFIRM/DENY)
 
 Not every turn is a question. "Is Amos Dresser the white minister…?", "but it

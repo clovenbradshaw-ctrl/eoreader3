@@ -24,6 +24,8 @@
     "evo:ingestion": "node evo/experiments/ingestion-quality.js",
     "evo:conformance": "node evo/experiments/conformance-sweep.js",
     "external:read": "node tools/external/read.js",
+    "form-genres": "node tools/form-genres/fetch.mjs",
+    "form-genres:validate": "node tools/form-genres/fetch.mjs --validate",
     "conventions:gen": "node tools/gen-conventions.js",
     "packs:validate": "node tools/validate-packs.mjs",
     "conformance": "node tools/conformance.js"

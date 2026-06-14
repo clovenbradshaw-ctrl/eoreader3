@@ -53,6 +53,8 @@ copyFileSync(join(ROOT, 'embed.js'), join(DIST, 'embed.js'));
 // are injected); the exemplar library it scores against rides alongside.
 copyFileSync(join(ROOT, 'shape.js'), join(DIST, 'shape.js'));
 copyFileSync(join(ROOT, 'exemplars.jsonl'), join(DIST, 'exemplars.jsonl'));
+// the form-genres library rides alongside the voice library, scored separately.
+copyFileSync(join(ROOT, 'form-genres.jsonl'), join(DIST, 'form-genres.jsonl'));
 copyFileSync(join(ROOT, 'styles.css'), join(DIST, 'styles.css'));
 
 const HTML = `<!doctype html>
@@ -103,6 +105,22 @@ const HTML = `<!doctype html>
         } catch (e) { return null; }
       })();
       return p;
+    };
+    let fp = null;
+    window.EOFormLibrary = function () {
+      if (fp) return fp;
+      fp = (async () => {
+        try {
+          if (!window.EOShape) return null;
+          const res = await fetch('form-genres.jsonl');
+          if (!res.ok) return null;
+          const text = await res.text();
+          const embed = (texts) => (window.EOEmbed && window.EOEmbed.embedSentences)
+            ? window.EOEmbed.embedSentences(texts) : null;
+          return await window.EOShape.load(text, embed);
+        } catch (e) { return null; }
+      })();
+      return fp;
     };
   })();
 </script>

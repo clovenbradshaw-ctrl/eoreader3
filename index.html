@@ -150,6 +150,27 @@
       })();
       return p;
     };
+    // The SECOND library: form genres (how a news article / obituary / recipe
+    // LOOKS), kept apart from Cleo's voice on purpose — its discriminative score
+    // pulls competitors from the other GENRES, never from assistant-voice moves.
+    // Same loader, same lazy MiniLM embed, same parity fallback (resolves null
+    // when absent/unreachable). Empty until tools/form-genres/fetch.mjs fills it.
+    let fp = null;
+    window.EOFormLibrary = function () {
+      if (fp) return fp;
+      fp = (async () => {
+        try {
+          if (!window.EOShape) return null;
+          const res = await fetch('form-genres.jsonl');
+          if (!res.ok) return null;
+          const text = await res.text();
+          const embed = (texts) => (window.EOEmbed && window.EOEmbed.embedSentences)
+            ? window.EOEmbed.embedSentences(texts) : null;
+          return await window.EOShape.load(text, embed);
+        } catch (e) { return null; }
+      })();
+      return fp;
+    };
   })();
 </script>
 <script src="store.js"></script>

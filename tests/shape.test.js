@@ -407,6 +407,70 @@ group('pca (§7 proper) — recovers the dominant axis', () => {
     ok(target.axes_to_emphasize.length > 0, 'axis hints are drawn from the library\'s declared poles');
   });
 
+  // ----- the form-genres library (the SECOND library) ---------------------
+  // exemplars.jsonl is Cleo's voice (authored); form-genres.jsonl is output
+  // FORM (fetched, public-domain). They are scored apart on purpose: a form
+  // library's competitors are the other GENRES, never assistant-voice moves.
+
+  group('parseExemplars carries provenance (source / license / retrieved)', () => {
+    const text = [
+      '{"intent":"recipe","response":"Mix and bake.","source":"Farmer 1918, Gutenberg #65061","license":"Public domain","retrieved":"2026-06-14"}',
+      '{"intent":"lookup","response":"Balzac."}',   // voice exemplar: no provenance, defaults to ''
+    ].join('\n');
+    const ex = S.parseExemplars(text);
+    eq(ex.length, 2, 'both records parse');
+    eq(ex[0].source, 'Farmer 1918, Gutenberg #65061', 'source is carried into memory for the audit');
+    eq(ex[0].license, 'Public domain', 'license is carried into memory');
+    eq(ex[0].retrieved, '2026-06-14', 'retrieved date is carried into memory');
+    eq(ex[1].source, '', 'a voice exemplar with no provenance defaults source to empty');
+    eq(ex[1].license, '', 'license defaults to empty when absent');
+  });
+
+  await group('form-genres loads as its OWN library, scored against its own genres', async () => {
+    // A small fixture standing in for the fetched corpus: two GENRES, embedded
+    // by the same fake embedder the rest of the suite uses ([LOOKUP]/[SYNTH] are
+    // just two directions — here they stand for two form clusters).
+    const formJsonl = [
+      '{"intent":"recipe","response":"[LOOKUP] Cream the butter; add flour; bake.","source":"Farmer 1918","license":"Public domain","retrieved":"2026-06-14"}',
+      '{"intent":"recipe","response":"[LOOKUP] Boil the rice; drain; serve.","source":"Beeton 1861","license":"Public domain","retrieved":"2026-06-14"}',
+      '{"intent":"obituary","response":"[SYNTH] He died at his residence, survived by three children.","source":"Chronicling America 1901","license":"Public domain","retrieved":"2026-06-14"}',
+      '{"intent":"obituary","response":"[SYNTH] She passed away after a long illness; services Thursday.","source":"Chronicling America 1899","license":"Public domain","retrieved":"2026-06-14"}',
+    ].join('\n');
+    const formLib = await S.load(formJsonl, fakeEmbed);
+    ok(formLib.ready(), 'the form library loads and embeds its own responses');
+
+    const target = formLib.select({ intent: 'recipe', shapeNote: 'a recipe' });
+    ok(target && target.intent === 'recipe', 'a genre selects its own cluster');
+    ok(target.targetExemplars.every(e => e.intent === 'recipe'), 'targets are all recipe instances');
+    ok(target.competitorExemplars.length > 0, 'competitors exist for the discriminative score');
+    ok(target.competitorExemplars.every(e => e.intent === 'obituary'),
+      'competitors are drawn from the OTHER genre (obituary), never from voice intents');
+
+    // The score is the form degree: a recipe-shaped draft sits in the recipe
+    // basin and OUT of the obituary basin (positive s_t − s_c).
+    const recipeDraftVec = fakeEmbed('[LOOKUP] Sift the sugar; fold; bake.');
+    const scored = formLib.score(recipeDraftVec, target);
+    ok(scored && scored.score > 0, 'a recipe-shaped draft scores positively against its own genre');
+  });
+
+  group('form-genres.jsonl on disk — every record is fair game, provenance complete', () => {
+    const fp = path.join(ROOT, 'form-genres.jsonl');
+    ok(fs.existsSync(fp), 'the form library file exists');
+    const ex = S.parseExemplars(fs.readFileSync(fp, 'utf8'));   // never throws on header-only
+    const ALLOWED = new Set(['news-article', 'obituary', 'recipe', 'encyclopedic-summary', 'plain-report', 'letter']);
+    // Header-only until the fetch runs; once filled, every record must be a real
+    // public-domain / openly-licensed instance with its papers attached.
+    for (const r of ex) {
+      ok(ALLOWED.has(r.intent), 'genre is one of the six form genres: ' + r.intent);
+      ok(r.source && r.source.length > 0, 'record ' + r.id + ' names its source');
+      ok(/public domain|cc by|cc0|cc-by|openly licensed/i.test(r.license), 'record ' + r.id + ' carries an open/PD license: ' + r.license);
+      ok(r.retrieved && /^\d{4}-\d{2}-\d{2}$/.test(r.retrieved), 'record ' + r.id + ' carries a retrieval date');
+      ok(r.response && r.response.length > 0, 'record ' + r.id + ' has form prose');
+    }
+    console.log('  · form-genres.jsonl: ' + ex.length + ' record(s)'
+      + (ex.length === 0 ? ' (header-only — run tools/form-genres/fetch.mjs --live to fill)' : ''));
+  });
+
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
   if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 })();

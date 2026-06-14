@@ -1,0 +1,19 @@
+// form-genres.jsonl — the FORM library (NOT Cleo's voice; that is exemplars.jsonl).
+// Real public-domain / openly-licensed instances of each output genre:
+// news-article, obituary, recipe, encyclopedic-summary, plain-report, letter.
+// The centroid per genre is the learned SHAPE of that form; a draft's output is
+// cosined against it for the form degree. Loaded as its OWN library, scored
+// against its own genres only (news-article vs obituary vs recipe is a real
+// contrast; news-article vs Cleo's "playful" is noise — so the two libraries
+// never share a file).
+//
+// Built by tools/form-genres/fetch.mjs from tools/form-genres/sources.json.
+// Every record carries source + license + retrieved. No vectors are stored:
+// shape.js embeds each response at load through the resident MiniLM and
+// recomputes on an embedder swap, so a centroid is never a thing of record.
+//
+// To populate: allowlist the source hosts (or the proxy n8n.intelechia.com) in
+// the environment's network egress settings, then run:
+//     node tools/form-genres/fetch.mjs --live
+//     node tools/form-genres/fetch.mjs --validate
+// Records are appended below this header by the tool, one JSON object per line.
