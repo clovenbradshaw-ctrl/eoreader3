@@ -1569,6 +1569,30 @@ function App() {
     } catch (e) { return null; }
   };
 
+  // The active referent as a defeasible BINDING (the brief's Phase 1): surface
+  // (the Given), name (the Meant, = hotEntity), a base-rate-calibrated
+  // confidence, and one of the three NUL states. The router reads binding.name
+  // for the route; the tool-query builder reads it to resolve a pronoun before
+  // searching — one resolution, two consumers. When binding_resolution is OFF
+  // resolveBinding returns name-only (confidence null) = exactly hotEntity(), so
+  // every caller below is byte-identical (the parity floor).
+  const hotBinding = (q) => {
+    try {
+      const E = window.EOEngine;
+      if (!E || !E.resolveBinding) return null;
+      return E.resolveBinding(scopeList(), String(q || ''), E.conversationField, { heatFloor: 0 });
+    } catch (e) { return null; }
+  };
+  // Legible-THAT label: "his, from our conversation, Frank." Records THAT the
+  // chat carried it (and the source), never why. Null off-dial / when unbound.
+  const bindingLabel = (b) => {
+    if (!b || b.confidence == null || !b.name) return null;
+    const src = b.via && /^chat-field/.test(b.via) ? 'from our conversation'
+      : b.via === 'document salience' ? 'from the document'
+      : b.via === 'named in the question' ? 'named here' : null;
+    return b.surface && src ? `${b.surface}, ${src}, ${b.name}` : null;
+  };
+
   // RETRACTION — a SEG against the system's own utterance. When a graph-check
   // (CONFIRM intent) finds a proposition unsupported, and a PRIOR assistant
   // turn asserted that same proposition affirmatively, the old turn is the
@@ -3317,7 +3341,23 @@ function App() {
     // already-specific term passes through untouched. Only the force path can
     // carry a non-acquisition message this far, so only it builds the context.
     const ctx = force ? wikiSeedContext() : null;
-    const term = (X.seedQuery && X.seedQuery(q, ctx)) || (X.pickQuery && X.pickQuery(q)) || q;
+    // Phase 3 — build the query from the resolved binding: resolve the surface
+    // pronoun ("his"/"that"/"her") to the field's best guess BEFORE pickQuery, so
+    // "look up his employer" searches "Tom Turner employer", not the word "his".
+    // Spend only on a confident referent (named or a dominant chat figure) — an
+    // ambiguous or document-salience-only guess is left to the offer/hold path
+    // (never a confident wrong search). Gated on binding_resolution: off-dial the
+    // raw string is never rewritten (the parity floor).
+    let qSeed = q;
+    try {
+      const E = window.EOEngine;
+      if (E && E.bindingResolutionEnabled && E.bindingResolutionEnabled() && E.resolveBinding && E.bindingQuery) {
+        const bnd = E.resolveBinding(scopeList(), q, E.conversationField, { heatFloor: 0 });
+        if (bnd && bnd.confidence != null && bnd.state === 'resolved' && bnd.via && bnd.via !== 'document salience' && bnd.surface && bnd.name)
+          qSeed = E.bindingQuery(q, bnd);
+      }
+    } catch (e) { eoWarn('binding query', e); }
+    const term = (X.seedQuery && X.seedQuery(qSeed, ctx)) || (X.pickQuery && X.pickQuery(qSeed)) || qSeed;
     // A vague follow-up ("tell me more", "why?") names no new subject — keep
     // chatting against whatever Wikipedia articles are already in scope rather
     // than pulling a spurious one. The substantive turn did the ingest.
@@ -3921,16 +3961,19 @@ function App() {
     // COST-ORDERED ROUTING (existence → structure → significance). The router is
     // mechanical and cheap; it returns a band. Only the 'escalate' band pays for
     // embedding recall, and only the cheap layers ever DECIDE — the model phrases.
+    // The active-referent binding, resolved once and shared by every router ctx
+    // below (and the trace). Off-dial hotB.name === hotEntity(), so byte-identical.
+    const hotB = hotBinding(q);
     let route;
     if (mode === 'grounded' && scope.length) {
       route = { decision: 'mechanical', confidence: 'forced', reason: 'grounded-mode',
-                primary: window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0] };
+                primary: window.EOEngine.routePrimary(scope, q, { hotEntity: (hotB && hotB.name) || hotEntity() }) || scope[0] };
     } else if (scope.length) {
       // hadReply: repair needs a conversation to repair — any settled assistant
       // reply counts, grounded or not (the trace's "someone's son is mentioned"
       // followed a PLAIN-chat miss, so prevGrounded alone would drop it).
       const hadReply = messages.some(m => m.role === 'assistant' && m.text && !m.typing && !m.loading);
-      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current, hadReply, everGrounded: everGroundedRef.current, hotEntity: hotEntity() });
+      route = window.EOEngine.routeTurn(scope, q, { prevGrounded: lastGroundedRef.current, hadReply, everGrounded: everGroundedRef.current, hotEntity: (hotB && hotB.name) || hotEntity(), hotBinding: hotB });
     } else {
       route = { decision: 'chat', confidence: 'none', reason: 'no-scope' };
     }
@@ -3939,9 +3982,10 @@ function App() {
     // fresh content. Mark the rejected reply (history hygiene), then re-read
     // the question actually under repair instead of retrieving on the complaint.
     if (route.decision === 'repair') {
-      const primary = route.primary || window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
+      const primary = route.primary || window.EOEngine.routePrimary(scope, q, { hotEntity: (hotB && hotB.name) || hotEntity() }) || scope[0];
       AUD('step', 'route', { referencing: true, reason: route.reason, confidence: route.confidence,
-        path: 'repair', primary: primary ? { id: primary.id, name: primary.name, kind: primary.kind } : null });
+        path: 'repair', primary: primary ? { id: primary.id, name: primary.name, kind: primary.kind } : null,
+        binding: bindingLabel(hotB) || undefined });
       markObjected();
       runRepairScope(scope, q, history, route.repair || { kind: 'frustration', content: false }).catch(turnFailed('repair'));
       return;
@@ -4008,7 +4052,8 @@ function App() {
       const useLLM = ready && primary && primary.kind === 'prose';
       AUD('step', 'route', { referencing: true, reason: route.reason, confidence: route.confidence,
         path: useLLM ? 'grounded-llm' : 'mechanical',
-        primary: primary ? { id: primary.id, name: primary.name, kind: primary.kind } : null });
+        primary: primary ? { id: primary.id, name: primary.name, kind: primary.kind } : null,
+        binding: bindingLabel(hotB) || undefined });
       if (useLLM) { runGroundedScope(scope, q, history, semanticHits).catch(turnFailed('grounded')); return; }
       runMechanicalScope(scope, q); return;   // tables, or no model → mechanical pivot / grounded answer
     }
