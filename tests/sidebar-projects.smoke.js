@@ -160,6 +160,40 @@ ok(menu0 && menu0.querySelectorAll('.sb-addmenu-row').length === 1 && /New proje
 
 act(() => root.unmount());
 
+// ---- the new-project modal (replaces window.prompt): name, preview, confirm ----
+const docsById = { 'doc-1': docs[0], 'doc-2': docs[1], 'doc-3': docs[2] };
+const mContainer = W.document.createElement('div'); W.document.body.appendChild(mContainer);
+const mRoot = ReactDOMClient.createRoot(mContainer);
+const created = [];
+act(() => mRoot.render(React.createElement(W.ProjectModal, {
+  seed: { ids: ['doc-1', 'doc-2'], activate: true, fallback: 'Project 3' },
+  docsById, onCreate: (n) => created.push(n), onClose() {},
+})));
+const mtxt = () => mContainer.textContent || '';
+ok(/New project/.test(mtxt()), 'the project modal renders with a title');
+const pinput = mContainer.querySelector('.proj-input');
+ok(pinput && pinput.value === 'Project 3', 'the name field is pre-filled with the suggested name');
+ok(/Starts with 2 sources/.test(mtxt()) && /Alpha\.txt/.test(mtxt()) && /Beta\.csv/.test(mtxt()),
+   'the modal previews the seed documents');
+pinput.value = 'My Project';
+act(() => Simulate.change(pinput));                                   // flush the controlled-input update
+act(() => Simulate.click(mContainer.querySelector('.btn-primary'))); // then Create
+ok(created.length === 1 && created[0] === 'My Project', 'Create commits the typed name via onCreate');
+act(() => mRoot.unmount());
+
+// empty seed → "starts empty" hint; Enter submits the unchanged fallback name
+const m2 = W.document.createElement('div'); W.document.body.appendChild(m2);
+const m2Root = ReactDOMClient.createRoot(m2);
+const created2 = [];
+act(() => m2Root.render(React.createElement(W.ProjectModal, {
+  seed: { ids: [], activate: false, fallback: 'Project 1' },
+  docsById, onCreate: (n) => created2.push(n), onClose() {},
+})));
+ok(/Starts empty/.test(m2.textContent || ''), 'with no seed the modal shows the "starts empty" hint');
+act(() => Simulate.keyDown(m2.querySelector('.proj-input'), { key: 'Enter' }));
+ok(created2.length === 1 && created2[0] === 'Project 1', 'Enter submits the fallback name when left unchanged');
+act(() => m2Root.unmount());
+
 console.log(`\nsidebar-projects: ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFAILURES:\n - ' + fails.join('\n - ')); process.exit(1); }
 process.exit(0);

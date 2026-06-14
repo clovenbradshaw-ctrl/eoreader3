@@ -186,6 +186,8 @@ function App() {
   // the scope; editing the scope while a project is active updates the project.
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
+  // While naming a new project: { ids, activate, fallback } — drives ProjectModal.
+  const [projectDraft, setProjectDraft] = useState(null);
   const [input, setInput] = useState('');
   const [mode, setMode] = useState('auto');
   // The answer-mode control (Auto / Grounded / Creative) in the composer is
@@ -681,22 +683,30 @@ function App() {
     showToast('Project “' + p.name + '” — ' + ids.length + ' source' + (ids.length !== 1 ? 's' : ''));
     if (mobileRef.current) setCollapsed(true);
   };
-  // Create a project around a seed set of docs. The "+" by the Projects label
-  // seeds it from the current scope and makes it active (you're working in it
-  // now); the "New project…" path from a document's file menu just files that
-  // one document and leaves your current scope alone.
-  const createProject = (seedIds, activate) => {
-    const fallback = 'Project ' + (projects.length + 1);
-    const name = ((window.prompt && window.prompt('Name this project', fallback)) || '').trim() || fallback;
+  // Creating a project opens a small naming modal (ProjectModal) — it previews
+  // what the project will contain and lets you confirm or cancel, instead of a
+  // bare window.prompt. The "+" by the Projects label seeds it from the current
+  // scope and makes it active (you're working in it now); the "New project…"
+  // path from a document's file menu seeds it with that one document and leaves
+  // your current scope alone.
+  const openNewProject = (seedIds, activate) => setProjectDraft({
+    ids: (seedIds || []).filter(d => docsById[d]),
+    activate: !!activate,
+    fallback: 'Project ' + (projects.length + 1),
+  });
+  const newProject = () => openNewProject(sources, true);
+  const newProjectWithDoc = (docId) => openNewProject(docId ? [docId] : [], false);
+  const commitNewProject = (name) => {
+    const draft = projectDraft;
+    if (!draft) return;
+    const clean = (name || '').trim() || draft.fallback;
     const id = uid('p');
-    const docIds = (seedIds || []).filter(d => docsById[d]);
-    setProjects(ps => [{ id, name, docIds }, ...ps]);
-    if (activate) setActiveProject(id);
-    showToast('Created project “' + name + '”');
-    return id;
+    const docIds = draft.ids.filter(d => docsById[d]);
+    setProjects(ps => [{ id, name: clean, docIds }, ...ps]);
+    if (draft.activate) setActiveProject(id);
+    showToast('Created project “' + clean + '”');
+    setProjectDraft(null);
   };
-  const newProject = () => createProject(sources, true);
-  const newProjectWithDoc = (docId) => createProject(docId ? [docId] : [], false);
   const deleteProject = (id) => {
     setProjects(ps => ps.filter(p => p.id !== id));
     if (activeProject === id) setActiveProject(null);
@@ -4612,6 +4622,8 @@ function App() {
         <EntityModal doc={d} name={entityModal.name} onCite={flashCitation} onEntity={(n) => setEntityModal({ docId: d.id, name: n })}
           onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />
       ) : null; })()}
+      {projectDraft && <ProjectModal seed={projectDraft} docsById={docsById}
+        onCreate={commitNewProject} onClose={() => setProjectDraft(null)} />}
       {dragOver && <div className="drop-veil"><div className="drop-card"><Icon name="upload" size={26} /> Drop to read</div></div>}
       {ingestStatus && (() => {
         const easing = !!ingestStatus.easing;

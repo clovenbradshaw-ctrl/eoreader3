@@ -229,3 +229,56 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, on
   );
 }
 window.Sidebar = Sidebar;
+
+/* ===== New-project modal — name it, preview what it will hold, confirm ===== */
+function ProjectModal({ seed, docsById, onCreate, onClose }) {
+  const dialogRef = window.useDialog(onClose);
+  const inputRef = React.useRef(null);
+  const [name, setName] = React.useState((seed && seed.fallback) || '');
+  // Focus and select the suggested name so a reader can type straight over it.
+  React.useEffect(() => {
+    const el = inputRef.current;
+    if (el) { try { el.focus(); el.select(); } catch (_) {} }
+  }, []);
+  const ids = ((seed && seed.ids) || []).filter(id => docsById && docsById[id]);
+  const named = ids.map(id => docsById[id]).filter(Boolean);
+  const submit = () => onCreate((name || '').trim() || (seed && seed.fallback) || 'Project');
+  return (
+    <div className="overlay center" onClick={onClose}>
+      <div className="proj-modal" role="dialog" aria-modal="true" aria-label="New project"
+           tabIndex={-1} ref={dialogRef} onClick={(e) => e.stopPropagation()}>
+        <div className="proj-modal-head">
+          <span className="ti"><Icon name="folder" size={17} /></span>
+          <span className="proj-modal-title">New project</span>
+          <div style={{ flex: 1 }} />
+          <button className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={17} /></button>
+        </div>
+        <div className="proj-modal-body">
+          <label className="proj-field">
+            <span className="pf-label">Project name</span>
+            <input ref={inputRef} className="proj-input" value={name}
+                   placeholder={(seed && seed.fallback) || 'Project name'}
+                   onChange={(e) => setName(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }} />
+          </label>
+          {named.length > 0
+            ? <div className="proj-seed">
+                <span className="ps-h">Starts with {named.length} source{named.length !== 1 ? 's' : ''}</span>
+                <div className="ps-list">
+                  {named.slice(0, 8).map(d => (
+                    <span key={d.id} className="ps-chip"><Icon name={d.kind === 'table' ? 'table' : 'doc'} size={12} /> {d.name}</span>
+                  ))}
+                  {named.length > 8 && <span className="ps-more">+{named.length - 8} more</span>}
+                </div>
+              </div>
+            : <div className="proj-seed empty">Starts empty — drag documents onto it, or use a document's folder button to file them in.</div>}
+        </div>
+        <div className="proj-modal-foot">
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={submit}><Icon name="plus" size={14} /> Create project</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+window.ProjectModal = ProjectModal;
