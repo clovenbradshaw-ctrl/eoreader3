@@ -188,6 +188,9 @@ function App() {
   // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
   const [graphAuditOpen, setGraphAuditOpen] = useState(false);
   const [sandboxOpen, setSandboxOpen] = useState(false);
+  // Prompt-flow dashboard: how a turn becomes a model call and the live prompt
+  // it sees (window.EOPromptFlow → PromptFlowDrawer).
+  const [promptFlowOpen, setPromptFlowOpen] = useState(false);
   // Device-local preferences, gathered in the Settings drawer. Theme is
   // 'system' | 'light' | 'dark' (system follows the OS); reduce-motion mutes
   // animation. Both persist with prefs and apply to <html> via the effects below.
@@ -3621,6 +3624,9 @@ function App() {
               <Icon name="book" size={15} /> <span className="tb-pill-lbl">Ingestion</span>
             </button>
           )}
+          <button className="tb-pill tb-pill-adv" onClick={() => setPromptFlowOpen(true)} title="Prompt flow — how a turn becomes a model call and the live prompt it sees; shows whether the shape/editor prompt is fed to this model">
+            <Icon name="send" size={15} /> <span className="tb-pill-lbl">Prompt flow</span>
+          </button>
           <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> <span className="tb-pill-lbl">{enabledRules} rules on</span></button>
           {window.EVO_SANDBOX && <button className="tb-pill tb-pill-adv" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> <span className="tb-pill-lbl">Sandbox</span></button>}
         </header>
@@ -3668,6 +3674,7 @@ function App() {
                       docs={docs} exportIngestion={exportIngestion} exportOutput={exportOutput}
                       onExportIngestion={setExportIngestion} onExportOutput={setExportOutput} />}
       {graphAuditOpen && <GraphAuditDrawer onClose={() => setGraphAuditOpen(false)} onToast={showToast} docs={docs} />}
+      {promptFlowOpen && <PromptFlowDrawer onClose={() => setPromptFlowOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
       {modelOpen && <ModelPopover models={window.MODELS.concat(uploadedModels)} current={model} onPick={pickModel} onClose={() => setModelOpen(false)} anchor={{ left: 16, bottom: 64 }}
                      status={modelStatus} progress={modelProgress} loadText={modelLoadText} onReset={resetModel} onCancel={cancelModel}
                      webgpu={!!(window.EOLLM && window.EOLLM.hasWebGPU && window.EOLLM.hasWebGPU())}
