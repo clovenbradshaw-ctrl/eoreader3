@@ -15,7 +15,7 @@
    The dev flow (python3 -m http.server on the repo root) is untouched.
    ============================================================ */
 import * as esbuild from 'esbuild';
-import { mkdirSync, copyFileSync, writeFileSync } from 'fs';
+import { mkdirSync, copyFileSync, writeFileSync, cpSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -56,6 +56,9 @@ copyFileSync(join(ROOT, 'exemplars.jsonl'), join(DIST, 'exemplars.jsonl'));
 // the form-genres library rides alongside the voice library, scored separately.
 copyFileSync(join(ROOT, 'form-genres.jsonl'), join(DIST, 'form-genres.jsonl'));
 copyFileSync(join(ROOT, 'styles.css'), join(DIST, 'styles.css'));
+// the adapter library stays plain scripts too (each dynamic-imports its model
+// runtime from a CDN on demand), so it is copied verbatim rather than bundled.
+cpSync(join(ROOT, 'adapters'), join(DIST, 'adapters'), { recursive: true });
 
 const HTML = `<!doctype html>
 <html lang="en">
@@ -86,6 +89,18 @@ const HTML = `<!doctype html>
 <!-- optional local model (dynamic-imports WebLLM from a CDN on demand) -->
 <script src="llm.js"></script>
 <script src="embed.js"></script>
+<!-- the adapter library (window.EOAdapters) — plain scripts, models load lazily -->
+<script src="adapters/contract.js"></script>
+<script src="adapters/registry.js"></script>
+<script src="adapters/ocr/tesseract.js"></script>
+<script src="adapters/ocr/trocr.js"></script>
+<script src="adapters/asr/whisper.js"></script>
+<script src="adapters/parse/pdfjs.js"></script>
+<script src="adapters/parse/papaparse.js"></script>
+<script src="adapters/parse/treesitter.js"></script>
+<script src="adapters/layout/docling-lite.js"></script>
+<script src="adapters/embed/minilm.js"></script>
+<script src="adapters/embed/clip.js"></script>
 <!-- the shape layer + its lazily-embedded exemplar library -->
 <script src="shape.js"></script>
 <script>

@@ -123,6 +123,25 @@
       (window.EOEmbed && window.EOEmbed.ready()) ? window.EOEmbed.embedSentences(texts) : null);
   }
 </script>
+<!-- the adapter library (window.EOAdapters): perceptual / parsing / embedding
+     models behind ONE contract, offered to packs by capability and to the user
+     through Settings → Models & adapters. Contract + registry load first, then
+     one plain script per adapter. Each script only REGISTERS its manifest at
+     load (cheap, no network); the underlying model/parser (tesseract.js,
+     transformers.js, pdf.js, tree-sitter) downloads lazily from a CDN
+     index.html already trusts, and only on first actual use. These must load
+     before the UI so the picker can read the registry. -->
+<script src="adapters/contract.js"></script>
+<script src="adapters/registry.js"></script>
+<script src="adapters/ocr/tesseract.js"></script>
+<script src="adapters/ocr/trocr.js"></script>
+<script src="adapters/asr/whisper.js"></script>
+<script src="adapters/parse/pdfjs.js"></script>
+<script src="adapters/parse/papaparse.js"></script>
+<script src="adapters/parse/treesitter.js"></script>
+<script src="adapters/layout/docling-lite.js"></script>
+<script src="adapters/embed/minilm.js"></script>
+<script src="adapters/embed/clip.js"></script>
 <!-- the shape layer (shape-steered generation): the exemplar library + the
      drafting controller, discriminative score, and interpretable axes. -->
 <script src="shape.js"></script>

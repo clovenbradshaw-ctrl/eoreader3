@@ -1,0 +1,32 @@
+{
+  "id": "image-text-embed-clip",
+  "name": "CLIP image+text embeddings",
+  "version": "1.0.0",
+  "category": "embedding",
+  "modality": "image+text",
+  "capability": "image-text-embed",
+  "modelRef": {
+    "runtime": "transformersjs",
+    "model": "Xenova/clip-vit-base-patch32",
+    "version": "3.0.2",
+    "weightsBytes": 157286400
+  },
+  "resources": {
+    "backend": "wasm",
+    "memMB": 180,
+    "expectedLatencyMs": 600
+  },
+  "confidenceSemantics": "deterministic",
+  "failureModes": [
+    "shared-space cosine depends on matched projection heads — verify before relying on the absolute cosine",
+    "weights (~150 MB) fail to download (reported as a failure event)",
+    "unrecognized input kind (reported as a failure event)"
+  ],
+  "output": {
+    "event": "one per input",
+    "payload": "{ vec: Float32Array, dim: 512 }"
+  },
+  "meta": {
+    "dim": 512
+  }
+}

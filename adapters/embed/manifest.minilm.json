@@ -1,0 +1,31 @@
+{
+  "id": "text-embed-minilm",
+  "name": "MiniLM text embeddings",
+  "version": "1.0.0",
+  "category": "embedding",
+  "modality": "text",
+  "capability": "text-embed",
+  "modelRef": {
+    "runtime": "transformersjs",
+    "model": "Xenova/all-MiniLM-L6-v2",
+    "version": "3.x",
+    "weightsBytes": 26214400
+  },
+  "resources": {
+    "backend": "wasm",
+    "memMB": 45,
+    "expectedLatencyMs": 120
+  },
+  "confidenceSemantics": "deterministic",
+  "failureModes": [
+    "window.EOEmbed absent or failed to load (reported as a failure event)",
+    "very long inputs are truncated by the model context (~256 tokens)"
+  ],
+  "output": {
+    "event": "one per input string",
+    "payload": "{ vec: Float32Array, dim: number }"
+  },
+  "meta": {
+    "note": "wraps the resident window.EOEmbed used by retrieval/recall"
+  }
+}

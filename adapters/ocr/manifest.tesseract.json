@@ -1,0 +1,33 @@
+{
+  "id": "ocr-tesseract",
+  "name": "Tesseract OCR",
+  "version": "1.0.0",
+  "category": "perceptual",
+  "modality": "image",
+  "capability": "ocr",
+  "modelRef": {
+    "runtime": "tesseract",
+    "model": "tesseract.js/eng",
+    "version": "5"
+  },
+  "resources": {
+    "backend": "wasm",
+    "memMB": 60,
+    "expectedLatencyMs": 1500
+  },
+  "confidenceSemantics": "heuristic",
+  "failureModes": [
+    "low-confidence words on degraded or low-DPI scans",
+    "no text regions found (returns zero events)",
+    "worker/WASM load failure (reported as a failure event)"
+  ],
+  "output": {
+    "event": "one per detected word",
+    "payload": "{ text: string }"
+  },
+  "meta": {
+    "calibration": "per-word confidence is heuristic — ordinal, not metric",
+    "lang": "eng",
+    "cdn": "https://unpkg.com/tesseract.js@5"
+  }
+}

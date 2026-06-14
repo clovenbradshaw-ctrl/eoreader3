@@ -1,0 +1,32 @@
+{
+  "id": "ocr-trocr-handwritten",
+  "name": "TrOCR (handwritten)",
+  "version": "1.0.0",
+  "category": "perceptual",
+  "modality": "image",
+  "capability": "ocr",
+  "modelRef": {
+    "runtime": "transformersjs",
+    "model": "Xenova/trocr-small-handwritten",
+    "version": "3.0.2",
+    "weightsBytes": 262144000
+  },
+  "resources": {
+    "backend": "webgpu",
+    "memMB": 260,
+    "expectedLatencyMs": 1200
+  },
+  "confidenceSemantics": "heuristic",
+  "failureModes": [
+    "no calibrated confidence — emits a presence flag (1 = text produced, 0 = none)",
+    "weights (~250 MB) fail to download / WebGPU unavailable (reported as a failure event)",
+    "cursive or overlapping handwriting may transcribe poorly"
+  ],
+  "output": {
+    "event": "one per input image",
+    "payload": "{ text: string }"
+  },
+  "meta": {
+    "kind": "handwritten"
+  }
+}

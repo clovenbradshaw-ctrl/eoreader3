@@ -1,0 +1,30 @@
+{
+  "id": "csv-parse-papaparse",
+  "name": "CSV parser (papaparse)",
+  "version": "1.0.0",
+  "category": "parsing",
+  "modality": "table",
+  "capability": "csv-parse",
+  "modelRef": {
+    "runtime": "deterministic",
+    "model": "papaparse",
+    "version": "5.x"
+  },
+  "resources": {
+    "backend": "cpu",
+    "memMB": 10,
+    "expectedLatencyMs": 50
+  },
+  "confidenceSemantics": "deterministic",
+  "failureModes": [
+    "ragged rows (more/fewer fields than the header) — extra fields are dropped, missing are empty",
+    "ambiguous delimiter when papaparse is absent (built-in assumes comma)"
+  ],
+  "output": {
+    "event": "one per data row",
+    "payload": "typed row object (header → value)"
+  },
+  "meta": {
+    "cdn": "https://cdn.jsdelivr.net/npm/papaparse@5"
+  }
+}

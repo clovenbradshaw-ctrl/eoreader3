@@ -1,0 +1,31 @@
+{
+  "id": "doc-layout-docling-lite",
+  "name": "Document layout (docling-lite)",
+  "version": "1.0.0",
+  "category": "perceptual",
+  "modality": "pdf",
+  "capability": "doc-layout",
+  "modelRef": {
+    "runtime": "deterministic",
+    "model": "docling-lite-heuristic",
+    "version": "1.0.0"
+  },
+  "resources": {
+    "backend": "cpu",
+    "memMB": 20,
+    "expectedLatencyMs": 80
+  },
+  "confidenceSemantics": "heuristic",
+  "failureModes": [
+    "heuristic fallback misreads dense multi-column layouts",
+    "cannot detect figures/images without a layout model (inject window.EO_DOCLING for ONNX Docling)",
+    "no input runs (returns zero events)"
+  ],
+  "output": {
+    "event": "one per region",
+    "payload": "{ kind: \"title\"|\"body\"|\"table\"|\"signature\"|\"header\"|\"figure\" }"
+  },
+  "meta": {
+    "heuristic": "region confidence = mean rule strength of member runs (font ratio / digit density / keyword)"
+  }
+}
