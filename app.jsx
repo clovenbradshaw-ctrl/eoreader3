@@ -132,6 +132,11 @@ const INGEST_LABEL = {
   reading: 'Reading the structure',
   projecting: 'Weighing what matters',
   easing: 'Easing memory — almost there',
+  // perceptual ingest: a file becomes text through an adapter before the engine
+  // reads it. First use of a heavy adapter downloads its model from the CDN.
+  transcribing: 'Transcribing audio',
+  recognizing: 'Reading text from the image',
+  extracting: 'Extracting text from the PDF',
 };
 // The three phases of the staged parse, in the medium's own order, shown as a
 // stepper so a long ingest reads as graceful progress rather than a stall.
@@ -820,7 +825,7 @@ function App() {
   // → structure (read) → significance (project), each phase reported and yielded
   // between chunks. The work is the same; it's just sliced so memory rises and
   // falls instead of spiking in one synchronous blast. Slower, but it finishes.
-  const ingest = async (name, text) => {
+  const ingest = async (name, text, opts = {}) => {
     // Dedupe: the same file (same name + identical content) already loaded →
     // focus the existing tab instead of adding a second identical copy.
     const dup = docsRef.current.find(d => d.name === name && d._text === text);
@@ -850,6 +855,11 @@ function App() {
       if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
       showToast('Could not read that file.'); return null;
     }
+    // A file read through a perceptual/parsing adapter (audio→transcript,
+    // image→OCR, PDF→text) carries its provenance onto the doc — which adapter,
+    // its (heuristic) confidence, device/precision — for the audit and so the
+    // doc remembers it was machine-read, not typed.
+    if (opts.provenance) doc._provenance = opts.provenance;
     // Always commit a new document — the user explicitly added it and nothing
     // else will reproduce it. Only the banner / busy flag belong to whichever
     // parse is newest, so a rule re-read that started meanwhile owns the UI.
@@ -861,28 +871,88 @@ function App() {
     setLayout('chat');
     if (doc.kind === 'prose') setExplore(true);
     setTableSpec(null);
-    showToast('Added “' + name + '” · ' + doc.meta);
+    showToast('Added “' + name + '” · ' + doc.meta + (opts.sourceLabel ? ' · ' + opts.sourceLabel : ''));
     if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
     // the parse may have registered friction (or co-witnessed a pending
     // proposal); give the proposer its idle slot
     if (doc.kind === 'prose') maybeProposeConventions();
     return doc;
   };
-  // Read files into memory ONE AT A TIME, then ingest. Serial on purpose: two
-  // big files decoding + parsing at once is exactly the memory spike we're
-  // trying to avoid. The FileReader step is the literal "load into memory" stage.
+  // Read a file as text — the path the app has always used. Kept verbatim so the
+  // formats it already read (.txt/.md/.csv/.tsv) ingest byte-for-byte as before.
+  const readFileText = (f) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result));
+    r.onerror = () => rej(r.error || new Error('read failed'));
+    r.readAsText(f);
+  });
+
+  // A non-text file (audio, image, PDF) becomes text through a perceptual/
+  // parsing ADAPTER before the engine reads it: Whisper for speech, Tesseract/
+  // TrOCR for images, pdf.js for PDFs. EOAdapters picks the adapter by capability
+  // and device; EOIngestAdapters folds its events back into text (a WebVTT
+  // transcript for speech, reading-ordered prose otherwise). The first use of a
+  // heavy adapter downloads its model from the CDN, so the banner goes
+  // indeterminate rather than looking stalled. A failure surfaces as a toast and
+  // skips the file — never throws across the loop.
+  const ingestViaAdapter = async (f, route) => {
+    const A = window.EOAdapters, B = window.EOIngestAdapters;
+    if (!A || !B) { showToast('The adapter library didn’t load — can’t read “' + f.name + '”.'); return null; }
+    const adapter = A.selected(route.capability);
+    if (!adapter) {
+      showToast('No ' + route.capability.toUpperCase().replace('-TEXT', '') + ' adapter can run in this browser yet — “' + f.name + '” needs one.');
+      return null;
+    }
+    const friendly = adapter.manifest.name;
+    const tok = ++ingestTok.current;
+    setBusy(true);
+    setIngestStatus({ phase: 'existence', stage: route.stage, pct: null, name: f.name, big: false });
+    showToast(route.gerund + ' “' + f.name + '” with ' + friendly + ' — first run downloads the model…');
+    let events;
+    try {
+      events = await A.runFor(route.capability, f);
+    } catch (e) {
+      eoWarn('adapter:' + route.capability, e);
+      if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+      showToast('Couldn’t read “' + f.name + '” — ' + ((e && e.message) || 'the adapter failed') + '.');
+      return null;
+    }
+    if (B.allFailed(events)) {
+      if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+      showToast('Couldn’t read “' + f.name + '” — ' + (B.firstError(events) || 'the adapter failed') + '.');
+      return null;
+    }
+    const { text, provenance } = B.eventsToText(route.capability, events);
+    if (!text || !text.trim()) {
+      if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+      showToast('No text found in “' + f.name + '”.');
+      return null;
+    }
+    // Hand the banner back: ingest() owns it from here, re-setting it
+    // synchronously on the normal path (so no flicker) and correctly leaving it
+    // clear if the transcript turns out to be a duplicate (ingest's early
+    // return). The source label and provenance ride onto the toast and the doc.
+    if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+    return ingest(f.name, text, { provenance, sourceLabel: friendly });
+  };
+
+  // Dispatch each added file by type, ONE AT A TIME. Serial on purpose: two big
+  // files decoding/transcribing/parsing at once is exactly the memory spike
+  // we're avoiding. Text keeps the read-as-text path; audio/image/PDF route to
+  // their adapter; anything else declines honestly.
   const handleFiles = async (fileList) => {
     const files = [...fileList];
+    const B = window.EOIngestAdapters;
     for (const f of files) {
+      const route = B ? B.routeFile(f) : { kind: 'text' };
+      if (route.kind === 'adapter') { await ingestViaAdapter(f, route); continue; }
+      if (route.kind === 'unsupported') {
+        showToast('“' + f.name + '” isn’t a file type Cleo can read yet.');
+        continue;
+      }
       let text;
-      try {
-        text = await new Promise((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(String(r.result));
-          r.onerror = () => rej(r.error || new Error('read failed'));
-          r.readAsText(f);
-        });
-      } catch (e) { showToast('Could not read “' + f.name + '”.'); continue; }
+      try { text = await readFileText(f); }
+      catch (e) { showToast('Could not read “' + f.name + '”.'); continue; }
       await ingest(f.name, text);
     }
   };
@@ -4201,7 +4271,9 @@ function App() {
   return (
     <div className="app"
          onDragEnter={onDragEnter} onDragOver={onDragOverApp} onDragLeave={onDragLeaveApp} onDrop={onDropApp}>
-      <input ref={fileRef} type="file" accept=".txt,.md,.csv,.tsv,text/plain" multiple style={{ display: 'none' }}
+      <input ref={fileRef} type="file"
+             accept={(window.EOIngestAdapters && window.EOIngestAdapters.ACCEPT) || '.txt,.md,.csv,.tsv,text/plain'}
+             multiple style={{ display: 'none' }}
              onChange={e => { if (e.target.files.length) handleFiles(e.target.files); e.target.value = ''; }} />
 
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)}

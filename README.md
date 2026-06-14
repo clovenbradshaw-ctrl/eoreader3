@@ -615,6 +615,32 @@ Like CONFIRM/DENY, it's a first-class **mechanical route**: the report is read
 straight off the structure band, every line cited to its span, the model never
 phrasing it. The page keeps its chrome; you just have to ask for it.
 
+### Adding audio, images, and PDFs (the adapter library, wired to upload)
+
+You don't only add text. Drop an **audio file** and it's transcribed; drop an
+**image** and its text is read; drop a **PDF** and its text is extracted — each
+through the adapter library (`window.EOAdapters`, see
+[`adapter-interface-spec.md`](adapter-interface-spec.md)), then ingested as an
+ordinary source the engine grounds and cites like any other. The upload path
+detects the file's modality from its name and MIME type and asks the registry
+for the right adapter by **capability** — `asr` (Whisper, three sizes), `ocr`
+(Tesseract / TrOCR), `pdf-text` (pdf.js) — picked for this device and your
+choice in *Settings → Models & adapters*. The first use of a heavy adapter
+downloads its model from the CDN (the ingest banner goes indeterminate so a
+multi-hundred-MB fetch reads as work, not a stall); a file type with no runnable
+adapter declines honestly rather than reading binary as garbage.
+
+The seam stays honest (`ingest-adapters.js`, `window.EOIngestAdapters`): the
+adapter only emits **events** — ASR segments, OCR words, PDF text runs, each with
+confidence and provenance — and never interprets. Folding those events back into
+the text the reader reads is the pack's job, done here: speech becomes a **WebVTT
+transcript** (so the timecodes engage the transcript reader below), OCR and PDF
+become reading-ordered prose. How the text was produced — which adapter, its
+(heuristic) confidence, device and precision, detected language — rides onto the
+doc as provenance and onto the toast, so a machine-read source remembers it was
+machine-read. Text files (`.txt/.md/.csv/.tsv/.vtt/.srt`) keep the original
+read-as-text path byte-for-byte; the golden parity is unmoved.
+
 ### Transcripts
 
 A transcript declares itself through its own typography — timecode lines
@@ -624,7 +650,9 @@ or Chinese. Timecodes become structure (turn boundaries), never sentence
 content; speaker labels become attribution (each turn's sentences land on
 their voice through the same SIG events quoted speech earns). A council
 meeting reads as voices and turns — who spoke, how much, about whom — rather
-than a soup of stray capitals and timestamps.
+than a soup of stray capitals and timestamps. This is exactly what a dropped
+**audio file** becomes after Whisper: its segments are folded into WebVTT cues,
+so a recording reads as a transcript with no extra step.
 
 ### Thinking depth
 

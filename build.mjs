@@ -59,6 +59,8 @@ copyFileSync(join(ROOT, 'styles.css'), join(DIST, 'styles.css'));
 // the adapter library stays plain scripts too (each dynamic-imports its model
 // runtime from a CDN on demand), so it is copied verbatim rather than bundled.
 cpSync(join(ROOT, 'adapters'), join(DIST, 'adapters'), { recursive: true });
+// the perceptual-ingest bridge is a plain script (pure, no imports) — copied too.
+copyFileSync(join(ROOT, 'ingest-adapters.js'), join(DIST, 'ingest-adapters.js'));
 
 const HTML = `<!doctype html>
 <html lang="en">
@@ -101,6 +103,8 @@ const HTML = `<!doctype html>
 <script src="adapters/layout/docling-lite.js"></script>
 <script src="adapters/embed/minilm.js"></script>
 <script src="adapters/embed/clip.js"></script>
+<!-- the perceptual-ingest bridge (window.EOIngestAdapters) — plain script -->
+<script src="ingest-adapters.js"></script>
 <!-- the shape layer + its lazily-embedded exemplar library -->
 <script src="shape.js"></script>
 <script>
