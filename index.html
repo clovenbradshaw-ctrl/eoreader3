@@ -175,6 +175,13 @@
 </script>
 <script src="store.js"></script>
 <script src="audit.js"></script>
+<!-- the composition layer (window.EOComposition): the turn-scale grounded loop
+     lifted to the scale of a long document. A pure, dependency-injected event
+     log + fold + grain-relative witness + form stamp + monitor; the talker,
+     embedder, retriever and form library are passed in by compose.jsx. Inert
+     until a composition doc is opened — the engine behaves identically without
+     one. -->
+<script src="composition.js"></script>
 <!-- computational grounding: an opt-in, manually-gated second mechanical source
      (Pyodide in a Web Worker) for questions the prose engine structurally can't
      answer — sum a column, count rows, join two CSVs. Off by default; the
@@ -211,6 +218,7 @@
 <script type="text/babel" src="chat.jsx"></script>
 <script type="text/babel" src="reference.jsx"></script>
 <script type="text/babel" src="docview.jsx"></script>
+<script type="text/babel" src="compose.jsx"></script>
 <script type="text/babel" src="rulesets.jsx"></script>
 <script type="text/babel" src="auditview.jsx"></script>
 <!-- EO-MRI: the cognition instrument beside the Glass box — the EO cube's three

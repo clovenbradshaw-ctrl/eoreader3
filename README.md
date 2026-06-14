@@ -460,6 +460,62 @@ and written into a prompt. The shape is tacit — a distance, not a spec. The
 moment a fetched corpus becomes a feature list in the talker's prompt, it is a
 checklist again.
 
+### The composition layer (long-form, grounded documents)
+
+The grounded turn-scale loop, lifted to the scale of a whole composition. The
+**Compose** button (topbar) spins up a long-form document as an *artifact*: a
+revisable **plan** on the left and the drafted **output** on the right, every
+claim bound to evidence, the entire production reviewable as an event log. It is
+not a generator with a longer context window and not a planner-then-drafter
+pipeline with a fixed outline — the model stays one component inside the loop,
+and this is the long-form version of that loop.
+
+Everything is a **log event** on the doc, and the document you see is a **fold**
+of the log (`composition.js` → `window.EOComposition`). State is never stored; it
+is derived by replay — the same Given-Log rule as the turn-scale system. The
+objects are a **Doc**, a **Frame** (the rhetorical problem as an object: thesis,
+reader, goal, constraints, genre — revisable), a tree of **Units** each carrying
+a *job* (direction, not content), **Drafts** (the prose, with the spans it drew
+from), **Stamps** (the computed confidence), **Holes** (an owed unit with a
+*grain*: Figure → a citation, Ground → a context, Pattern → corroborating
+instances), and **Routes** (the monitor's decision). Editing is appending;
+**undo is supersession** (a `REC` that drops its target from the fold).
+
+Every gate is a predicate over a **Confidence vector** with named components —
+`witness`, `form`, `coherence`, `retrieval`, `temporal`, `frame` — never a
+scalar. A component that wasn't measured is `null` (shown as `null`, never zero)
+and never blocks a gate. The **witness** is grain-relative, measured on the
+talker's own prose against the spans it was given (Figure = citation coverage,
+Ground = honest-absence-if-warranted, Pattern = corroboration count, with a
+`grain-mismatch` flag); the **form** is the cosine to the genre centroid
+(`form-genres.jsonl`), null until that library is populated. The talker only
+**phrases** the chunk — it never sees the whole document, the genre prototype as
+words, or any operator vocabulary; the grounding and the stamp are mechanical.
+
+The **monitor** reads each stamp and emits a Route naming the predicate that
+fired (`witness >= 0.4 AND form >= 0.5 …` → `advance`; `witness < 0.4 AND
+retrieval >= 0.5` → `revise`; `witness < 0.4 AND retrieval < 0.5` → `fetch`; …),
+shown in the draft pane and projected to the unit's colour band in the plan tree.
+
+The document side is a **directly-editable canvas**. You can write into it
+yourself; **authorship is tracked per sentence by diff** (not per keystroke —
+the *changes* carry the new author), so the canvas shades every sentence by who
+wrote it, you or the talker, and "who actually wrote this" stays traceable. The
+document is also **queryable by the chat whenever it's open**: a projection
+(`EOComposition.project`) turns the fold into a prose shape the retriever reads
+like any source — the model queries your document at significance level, the
+authorship rides in the projection for the audit, and the talker sees it all as
+just text.
+
+This build lands **phases one and two** (the plan-as-log and the artifact; the
+witness and form stamps at unit scale with the live monitor). The **standing
+operator** and its `coherence` component (phase three), the monitor emitting
+`plan-edit-by-draft` on its own (phase four), and the full bidirectional /
+free-order UX (phase five) are staged, with the architecture set up to receive
+them. With no composition open, eoreader behaves identically to today —
+`tests/composition.test.js` and `tests/compose.smoke.js` pin the layer, and the
+golden parity stays byte-exact. See `docs/composition-layer.md`.
+
 ### Checking a claim (CONFIRM/DENY)
 
 Not every turn is a question. "Is Amos Dresser the white minister…?", "but it

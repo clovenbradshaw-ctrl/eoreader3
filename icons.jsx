@@ -17,6 +17,7 @@ const ICON_PATHS = {
   settings:  '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
   chevron:   '<path d="M6 9l6 6 6-6"/>',
   'chevron-down':  '<path d="M6 9l6 6 6-6"/>',
+  'chevron-up':    '<path d="M18 15l-6-6-6 6"/>',
   'chevron-right': '<path d="M9 6l6 6-6 6"/>',
   alert:     '<path d="M12 3l9 16H3z"/><line x1="12" y1="10" x2="12" y2="14.5"/><line x1="12" y1="17.5" x2="12" y2="17.5"/>',
   info:      '<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12" y2="8"/>',
