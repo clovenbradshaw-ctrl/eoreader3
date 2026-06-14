@@ -567,6 +567,116 @@ function ThinkingBlock({ auditId }) {
   );
 }
 
+/* ── First-load model status — a prominent card with a live countdown ──────
+   The on-device model downloads once on first use, and that wait is the
+   longest, most "is it stuck?" moment in the app. This card makes the load
+   impossible to miss and turns the open-ended wait into a finite, ticking
+   estimate: it watches the download rate and counts the remaining seconds
+   down. Claude (cloud) has no download, so it gets a plain connecting state. */
+function ModelLoadingCard({ msg }) {
+  // Claude runs over the Anthropic API: nothing downloads, there's no GPU
+  // cache, and the load resolves instantly with no progress — so a percentage
+  // bar, a countdown, and a "downloads once… on your GPU" note would all be
+  // flatly wrong. Show a plain connecting state instead, mirroring the popover.
+  if (msg.loadCloud) {
+    return (
+      <div className="model-loading cloud">
+        <div className="ml-head"><span className="ml-spin" aria-hidden="true" /><span className="ml-title">Connecting to {msg.loadName || 'Claude'}…</span></div>
+        <div className="ml-note">Over the Anthropic API — nothing downloads to your device; your key stays in this browser.</div>
+      </div>
+    );
+  }
+  return <ModelDownloadCard msg={msg} />;
+}
+
+// Seconds → a short, human estimate. Coarse on purpose: the download rate
+// wobbles, so a false-precise "47s" would jitter every tick; rounded buckets
+// read as calm and don't pretend to a precision the estimate doesn't have.
+function fmtEta(s) {
+  s = Math.round(s);
+  if (s >= 90) return '~' + Math.round(s / 60) + ' min';
+  if (s >= 45) return '~1 min';
+  if (s <= 3) return 'a few seconds';
+  return '~' + (Math.ceil(s / 5) * 5) + 's';
+}
+
+// The on-device model (wllama on the CPU, or WebLLM on the GPU): it DOES
+// download once and cache, and progress streams 0→1 over that download. We
+// turn the rate into an estimated time remaining and tick it down each second.
+function ModelDownloadCard({ msg }) {
+  const pct = Math.max(0, Math.min(1, msg.loadPct || 0));
+  const cpu = !!msg.loadCpu;
+  const name = msg.loadName || (cpu ? 'on-device model' : 'local model');
+  const [, tick] = React.useReducer(x => x + 1, 0);
+  const startRef = React.useRef(null);     // earliest sample this load: { t, p }
+  const etaRef = React.useRef(null);       // last estimate: { at, secs }
+
+  // Re-estimate on every real progress update. The estimate is anchored to the
+  // average rate since the download began (steadier than an instantaneous rate)
+  // and then smoothed, so the number eases toward the truth instead of jumping.
+  // A progress reset (a stall/retry that drops pct) re-anchors the start sample.
+  React.useEffect(() => {
+    const now = Date.now();
+    if (!startRef.current || pct < startRef.current.p) startRef.current = { t: now, p: pct };
+    const s = startRef.current;
+    const dp = pct - s.p, dt = (now - s.t) / 1000;
+    if (pct > 0 && pct < 1 && dp > 0.02 && dt > 0.75) {
+      const raw = (1 - pct) * (dt / dp);              // remaining ÷ rate, in seconds
+      const prev = etaRef.current ? etaRef.current.secs : raw;
+      etaRef.current = { at: now, secs: prev * 0.55 + raw * 0.45 };
+    }
+  }, [pct]);
+
+  // Tick once a second so the countdown visibly falls between progress updates.
+  React.useEffect(() => {
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // What the countdown reads right now: the last estimate minus the time since
+  // we made it. Three states bracket the estimate — measuring (no rate yet),
+  // counting down, and the post-download tail where pct sits at 100% while the
+  // weights load into memory / compile onto the GPU.
+  let big, small;
+  if (pct >= 0.999) {
+    big = 'Almost ready'; small = cpu ? 'loading into memory' : 'loading onto your GPU';
+  } else if (!etaRef.current) {
+    big = 'Estimating…'; small = 'gauging your connection';
+  } else {
+    const remain = Math.max(0, etaRef.current.secs - (Date.now() - etaRef.current.at) / 1000);
+    if (remain <= 3) { big = 'Almost ready'; small = 'any second now'; }
+    else { big = fmtEta(remain); small = 'estimated time left'; }
+  }
+  const whole = Math.round(pct * 100);
+
+  return (
+    <div className={'model-loading prominent' + (cpu ? ' cpu' : ' gpu')}>
+      <div className="ml-head">
+        <span className="ml-spin" aria-hidden="true" />
+        <span className="ml-title">Loading {name}</span>
+        <span className="ml-badge">First time only</span>
+      </div>
+      <div className="ml-countdown">
+        <span className="ml-cd-val">{big}</span>
+        <span className="ml-cd-lbl">{small}</span>
+      </div>
+      <div className="ml-bar" role="progressbar" aria-label="Model download progress"
+        aria-valuemin={0} aria-valuemax={100} aria-valuenow={whole}>
+        <div className="ml-fill" style={{ width: whole + '%' }} />
+      </div>
+      <div className="ml-meta">
+        <span className="ml-pct">{whole}%</span>
+        {msg.loadText && <span className="ml-status">{msg.loadText}</span>}
+      </div>
+      <div className="ml-note">
+        {cpu
+          ? 'Runs entirely on your CPU (no GPU needed) — downloads once, then cached on your device.'
+          : 'Runs on your GPU — downloads once, then cached on your device.'}
+      </div>
+    </div>
+  );
+}
+
 /* ── "Exact mechanical reading" disclosure ────────────────────────────────
    The deterministic reading (the cast-list count, the best mechanical answer)
    no longer fronts a document answer — the model phrases it with citations —
@@ -724,7 +834,7 @@ class MessageBoundary extends React.Component {
   }
 }
 
-function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork }) {
+function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork, onPromote }) {
   if (msg.role === 'user') {
     return (
       <div className="msg-row user">
@@ -755,34 +865,7 @@ function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onO
             onOpen={onOpenDoc || null} />
         )}
         {msg.loading
-          ? <div className="model-loading">
-              {msg.loadCloud
-                // Claude runs over the Anthropic API: nothing downloads, there's no
-                // GPU cache, and the load resolves instantly with no progress — so
-                // a percentage bar and "downloads once… on your GPU" note would be
-                // flatly wrong (and read as "it's downloading the model"). Show a
-                // plain connecting state instead, mirroring the model popover.
-                ? <React.Fragment>
-                    <div className="ml-row"><span className="ml-spin" /> Connecting to {msg.loadName || 'Claude'}…</div>
-                    <div className="ml-note">Over the Anthropic API — nothing downloads to your device; your key stays in this browser.</div>
-                  </React.Fragment>
-                // The on-device CPU model (wllama): it DOES download once and cache,
-                // but it runs on the CPU via WebAssembly, not the GPU — so the note
-                // says so. The progress bar is the same download progress.
-                : msg.loadCpu
-                ? <React.Fragment>
-                    <div className="ml-row"><span className="ml-spin" /> Loading {msg.loadName || 'on-device model'} on the CPU… <b>{Math.round((msg.loadPct || 0) * 100)}%</b></div>
-                    <div className="ml-bar"><div className="ml-fill" style={{ width: Math.round((msg.loadPct || 0) * 100) + '%' }} /></div>
-                    {msg.loadText && <div className="ml-status">{msg.loadText}</div>}
-                    <div className="ml-note">First time only — runs entirely on your CPU (no GPU needed), downloads once, then cached on your device.</div>
-                  </React.Fragment>
-                : <React.Fragment>
-                    <div className="ml-row"><span className="ml-spin" /> Loading {msg.loadName || 'local model'}… <b>{Math.round((msg.loadPct || 0) * 100)}%</b></div>
-                    <div className="ml-bar"><div className="ml-fill" style={{ width: Math.round((msg.loadPct || 0) * 100) + '%' }} /></div>
-                    {msg.loadText && <div className="ml-status">{msg.loadText}</div>}
-                    <div className="ml-note">First time only — the model downloads once, then runs on your GPU and is cached.</div>
-                  </React.Fragment>}
-            </div>
+          ? <ModelLoadingCard msg={msg} />
           : msg.typing ? <div className="typing"><span /><span /><span /></div>
           : <React.Fragment>
               {msg.interrupted && !(msg.text && String(msg.text).trim())
@@ -821,6 +904,7 @@ function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onO
           <div className="msg-actions">
             <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer|absent):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
             {onFork && <button title="Fork from here — copy this conversation up to this reply into a new chat" onClick={onFork}><Icon name="fork" size={15} /></button>}
+            {onPromote && msg.text && <button title="Open as a document — turn this answer into an editable, grounded composition you can revise and query" onClick={onPromote}><Icon name="edit" size={15} /></button>}
             <button title="Good answer"><Icon name="thumbsup" size={15} /></button>
           </div>
         )}
@@ -941,7 +1025,7 @@ function Hero({ composerProps, onAttach, onExample, onPaste, dragOver }) {
   );
 }
 
-function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork }) {
+function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPrompts, showGrounding, onConfirmWiki, onDismissWiki, onOpenDoc, onApplyTableView, onSaveTableView, onQuickReply, onFork, onPromote }) {
   const streamRef = React.useRef(null);
   React.useEffect(() => { const el = streamRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages]);
   // Only offer the export once a turn has actually been recorded.
@@ -955,7 +1039,8 @@ function ChatPane({ messages, onCite, composerProps, narrow, wide, onExportPromp
             raw={m.role === 'assistant' ? m.text : null}>
             <Message msg={m} onCite={onCite} showGrounding={showGrounding} onConfirmWiki={onConfirmWiki} onDismissWiki={onDismissWiki} onOpenDoc={onOpenDoc}
               onApplyTableView={onApplyTableView} onSaveTableView={onSaveTableView} onQuickReply={onQuickReply}
-              onFork={onFork ? () => onFork(i) : null} />
+              onFork={onFork ? () => onFork(i) : null}
+              onPromote={onPromote && m.role === 'assistant' ? () => onPromote(i) : null} />
           </MessageBoundary>
         ))}</div>
       </div>

@@ -1,0 +1,38 @@
+{
+  "id": "code-ast-treesitter",
+  "name": "Code AST (tree-sitter)",
+  "version": "1.0.0",
+  "category": "parsing",
+  "modality": "code",
+  "capability": "code-ast",
+  "modelRef": {
+    "runtime": "deterministic",
+    "model": "web-tree-sitter",
+    "version": "0.x"
+  },
+  "resources": {
+    "backend": "wasm",
+    "memMB": 40,
+    "expectedLatencyMs": 100
+  },
+  "confidenceSemantics": "deterministic",
+  "failureModes": [
+    "unsupported language tag (reported as a failure event)",
+    "grammar WASM fails to download (reported as a failure event)",
+    "syntactically broken source still parses, with ERROR nodes in the tree"
+  ],
+  "output": {
+    "event": "one per top-level node",
+    "payload": "{ type: string, text: string, identifiers: string[] }"
+  },
+  "meta": {
+    "grammars": {
+      "javascript": "https://tree-sitter.github.io/tree-sitter-javascript.wasm",
+      "python": "https://tree-sitter.github.io/tree-sitter-python.wasm"
+    },
+    "languages": [
+      "javascript",
+      "python"
+    ]
+  }
+}

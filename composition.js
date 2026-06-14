@@ -565,6 +565,81 @@
     return [doc, frame];
   }
 
+  // ============================================================ seed-from-prose
+  // Turn an existing piece of prose — most usefully a chat answer — into a
+  // composition the user can edit, audit, and query. Each paragraph becomes a
+  // unit drafted by the talker (author 'talker', so the canvas marks it as not
+  // yours until you touch it); citation tokens become the draft's source_events
+  // (the evidence link survives the move); markup is flattened so the canvas
+  // reads as a document, not as raw Markdown. This is the one-click on-ramp:
+  // you don't have to plan-then-draft from an empty frame to "start writing" —
+  // you promote something already written and take it from there.
+  function parseCites(text) {
+    const sources = [];
+    const clean = String(text == null ? '' : text)
+      .replace(/\{\{cite:([^:}]+):(\d+)\}\}/g, (_m, docId, idx) => { sources.push({ docId, idx: parseInt(idx, 10) }); return ''; })
+      .replace(/\{\{(?:void|infer|absent):[^}]*\}\}/g, '')
+      .replace(/\s+([.,;:])/g, '$1');
+    return { sources, clean };
+  }
+  function deMarkdown(s) {
+    return String(s == null ? '' : s)
+      .replace(/^#{1,6}\s+/gm, '')               // heading markers
+      .replace(/^>\s?/gm, '')                     // blockquote markers
+      .replace(/^[-*+]\s+/gm, '• ')               // bullets → •
+      .replace(/\*\*([^*]+)\*\*/g, '$1')          // bold
+      .replace(/(^|[^*])\*([^*]+)\*/g, '$1$2')    // italics *
+      .replace(/_([^_]+)_/g, '$1')                // italics _
+      .replace(/`([^`]+)`/g, '$1')                // inline code
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')    // links → label
+      .replace(/[ \t]+\n/g, '\n')
+      .trim();
+  }
+  function jobFromProse(prose) {
+    const first = splitSentences(prose)[0] || prose;
+    const words = first.split(/\s+/).filter(Boolean);
+    const head = words.slice(0, 9).join(' ');
+    return head.length < first.length ? head + '…' : head;
+  }
+  // Split prose into unit seeds. A lone heading line labels the unit that
+  // follows (becomes its job); other blocks become units in their own right.
+  function splitIntoUnits(text) {
+    const blocks = String(text == null ? '' : text).split(/\n{2,}/).map(b => b.trim()).filter(Boolean);
+    const units = [];
+    let pendingHeading = null;
+    for (const b of blocks) {
+      if (/^#{1,6}\s+\S/.test(b) && !/\n/.test(b)) { pendingHeading = deMarkdown(b); continue; }
+      const { sources, clean } = parseCites(b);
+      const prose = deMarkdown(clean);
+      if (!prose) continue;
+      units.push({ job: pendingHeading || jobFromProse(prose), prose, sources });
+      pendingHeading = null;
+    }
+    if (!units.length) {
+      const { sources, clean } = parseCites(text);
+      const prose = deMarkdown(clean);
+      if (prose) units.push({ job: jobFromProse(prose), prose, sources });
+    }
+    return units;
+  }
+  function seedFromProse(opts) {
+    const o = opts || {};
+    const seeded = newDoc({ thesis_or_question: o.thesis || '', genre: o.genre || 'plain-report', reader: o.reader || '', goal: o.goal || '' });
+    const doc = seeded[0];
+    const events = seeded.slice();
+    splitIntoUnits(o.text || '').forEach((u, i) => {
+      const unit = make.unit({ doc_id: doc.id, job: u.job, order: i });
+      const draft = make.draft({
+        doc_id: doc.id, unit_id: unit.id, prose: u.prose,
+        author: 'talker',
+        provenance: splitSentences(u.prose).map(t => ({ text: t, author: 'talker' })),
+        source_events: u.sources || [],
+      });
+      events.push(unit, draft);
+    });
+    return events;
+  }
+
   // The assembled prose, in tree order — the draft pane's straight-through read,
   // and the input to a full reread / doc-level stamp (phase five).
   function assemble(folded) {
@@ -669,6 +744,7 @@
     generateUnit, buildTalkerPrompt, retrievalDegree,
     newDoc, assemble,
     diffProvenance, authorship, project, projectFold,
+    seedFromProse, splitIntoUnits, deMarkdown, parseCites,
     contentTokens, splitSentences, cosineSafe,
   };
 })();

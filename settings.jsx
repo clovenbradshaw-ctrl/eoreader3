@@ -22,9 +22,114 @@ function applyTheme(theme) {
 }
 window.EOTheme = { apply: applyTheme };
 
+/* ============================================================ Models & adapters
+   The user-facing model picker for the perceptual/parsing adapter library
+   (window.EOAdapters). It mirrors the local-LLM picker's visual language and its
+   disclosure-of-bytes pattern: each option shows its backend, the download it
+   implies, and its rough latency, and an adapter that can't run on this device's
+   backend (e.g. WebGPU required, none present) renders disabled with the reason.
+
+   Capabilities are DISCOVERED from the registry, never enumerated here — add an
+   adapter and its capability appears in this list on its own. Selecting an
+   option writes localStorage (eo.adapters.preferred.<capability>) and fires the
+   eo.adapters.changed event the registry's selected() reads.
+   ============================================================ */
+function fmtAdapterBytes(n) {
+  if (!n || !isFinite(n)) return '';
+  if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+  return Math.round(n / (1024 * 1024)) + ' MB';
+}
+// "ocr" → "Ocr", "image-text-embed" → "Image Text Embed". Derived, not enumerated.
+function humanizeCapability(cap) {
+  return String(cap || '').split('-').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+}
+// The disclosure line beside each adapter: backend · download/footprint · latency.
+function adapterResourceLabel(m) {
+  const r = (m && m.resources) || {};
+  const bits = [];
+  if (r.backend) bits.push(r.backend);
+  const wb = m.modelRef && m.modelRef.weightsBytes;
+  if (wb) bits.push('~' + fmtAdapterBytes(wb) + ' download');
+  else if (r.memMB) bits.push('~' + r.memMB + ' MB');
+  if (r.expectedLatencyMs) bits.push(r.expectedLatencyMs >= 1000 ? '~' + (r.expectedLatencyMs / 1000).toFixed(1) + 's' : '~' + r.expectedLatencyMs + 'ms');
+  return bits.join(' · ');
+}
+
+function ModelsAdaptersSection() {
+  const A = window.EOAdapters;
+  // Re-render whenever a selection or the profile changes (the registry fires
+  // this event from setPreferred/setProfile).
+  const [, setTick] = React.useState(0);
+  React.useEffect(() => {
+    if (!A) return undefined;
+    const h = () => setTick(t => t + 1);
+    window.addEventListener('eo.adapters.changed', h);
+    return () => window.removeEventListener('eo.adapters.changed', h);
+  }, []);
+  if (!A || typeof A.capabilities !== 'function') return null;
+  const caps = A.capabilities();
+  if (!caps.length) return null;
+
+  const PROFILES = [
+    { id: 'browser', label: 'Browser', sub: 'minimum' },
+    { id: 'desktop', label: 'Desktop', sub: 'recommended' },
+    { id: 'maximum', label: 'Maximum', sub: 'quality' },
+  ];
+  const profile = A.profile();
+
+  return (
+    <section className="set-section">
+      <h3 className="set-h">Models &amp; adapters</h3>
+
+      <div className="set-row set-row-col">
+        <div className="set-row-main">
+          <div className="set-label">Performance profile</div>
+          <div className="set-sub">A hint for which model to use per task when you haven’t picked one. <b>Browser</b> favors the smallest model everywhere, <b>Desktop</b> a balanced middle, <b>Maximum</b> the heaviest available.</div>
+        </div>
+        <div className="set-seg" role="group" aria-label="Performance profile">
+          {PROFILES.map(p => (
+            <button key={p.id} className={profile === p.id ? 'on' : ''}
+                    aria-pressed={profile === p.id} title={p.sub}
+                    onClick={() => A.setProfile(p.id)}>{p.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {caps.map(cap => {
+        const lst = A.byCapability(cap);
+        const sel = A.selected(cap);
+        const prefId = A.preferred(cap) || '';
+        const modality = lst[0] && lst[0].manifest.modality;
+        return (
+          <div className="set-row set-row-col" key={cap}>
+            <div className="set-row-main">
+              <div className="set-label">{humanizeCapability(cap)}{modality ? <span className="set-cap-mod">{modality}</span> : null}</div>
+              <div className="set-sub">{lst.length} adapter{lst.length === 1 ? '' : 's'} · using <b>{sel ? sel.manifest.name : 'none available on this device'}</b></div>
+            </div>
+            <select className="set-select" value={prefId} aria-label={humanizeCapability(cap) + ' adapter'}
+                    onChange={e => A.setPreferred(cap, e.target.value || null)}>
+              <option value="">Auto{sel ? ' — ' + sel.manifest.name : ''}</option>
+              {lst.map(a => {
+                const can = A.canRun(a);
+                return (
+                  <option key={a.manifest.id} value={a.manifest.id} disabled={!can.ok}>
+                    {a.manifest.name} — {adapterResourceLabel(a.manifest)}{can.ok ? '' : ' · ' + can.reason}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                          pythonEnabled, onPythonEnabled, pythonAvailable,
                          groundingInfo, onGroundingInfo,
+                         showCitations, onShowCitations,
+                         tools, hiddenTools, onToggleTool,
                          showModeToggle, onShowModeToggle, wikiMode, onWikiMode,
                          models, defaultModelId, onDefaultModel, autoModel,
                          fallbackModelIds, onFallbackModelIds,
@@ -122,6 +227,27 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
             </div>
           </section>
 
+          {Array.isArray(tools) && tools.length > 0 && onToggleTool && (
+            <section className="set-section">
+              <h3 className="set-h">Tools</h3>
+              <div className="set-sub">The tools in the workspace toolbar. Turn one off to drop its pill from the toolbar — the tool and anything it has recorded stay, and you can turn it back on here anytime.</div>
+              {tools.map(t => {
+                const visible = !(hiddenTools || []).includes(t.id);
+                return (
+                  <div className="set-row" key={t.id}>
+                    <div className="set-row-main">
+                      <div className="set-label">{t.label}</div>
+                      <div className="set-sub">{t.sub}</div>
+                    </div>
+                    <button className={'switch' + (visible ? ' on' : '')} role="switch"
+                            aria-checked={visible} aria-label={'Show ' + t.label + ' in the toolbar'}
+                            onClick={() => onToggleTool(t.id)} />
+                  </div>
+                );
+              })}
+            </section>
+          )}
+
           {Array.isArray(models) && models.length > 0 && onDefaultModel && (
             <section className="set-section">
               <h3 className="set-h">Model</h3>
@@ -169,6 +295,8 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
             </section>
           )}
 
+          <ModelsAdaptersSection />
+
           {pythonAvailable && (
             <section className="set-section">
               <h3 className="set-h">Computation</h3>
@@ -206,6 +334,16 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
               <button className={'switch' + (groundingInfo !== false ? ' on' : '')} role="switch"
                       aria-checked={groundingInfo !== false} aria-label="Grounding details"
                       onClick={() => onGroundingInfo(groundingInfo === false)} />
+            </div>
+
+            <div className="set-row">
+              <div className="set-row-main">
+                <div className="set-label">Citation chips</div>
+                <div className="set-sub">Show the inline footnote chips that mark where each claim came from — the “s12” reference, the inferred-link chip, the ⊥ absence mark. Off hides them in the answer for cleaner reading; the grounding badge and the glass-box disclosures beneath each answer (the mechanical reading, the worked math) keep their citations, so nothing is lost.</div>
+              </div>
+              <button className={'switch' + (showCitations !== false ? ' on' : '')} role="switch"
+                      aria-checked={showCitations !== false} aria-label="Citation chips"
+                      onClick={() => onShowCitations(showCitations === false)} />
             </div>
           </section>
 

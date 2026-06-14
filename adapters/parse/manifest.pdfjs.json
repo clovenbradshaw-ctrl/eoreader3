@@ -1,0 +1,31 @@
+{
+  "id": "pdf-text-pdfjs",
+  "name": "PDF text (pdf.js)",
+  "version": "1.0.0",
+  "category": "parsing",
+  "modality": "pdf",
+  "capability": "pdf-text",
+  "modelRef": {
+    "runtime": "deterministic",
+    "model": "pdfjs-dist",
+    "version": "4.x"
+  },
+  "resources": {
+    "backend": "cpu",
+    "memMB": 30,
+    "expectedLatencyMs": 200
+  },
+  "confidenceSemantics": "deterministic",
+  "failureModes": [
+    "scanned/image-only PDFs carry no text layer (use the OCR adapter instead)",
+    "built-in fallback reads UNCOMPRESSED content streams only — compressed (FlateDecode) PDFs need the pdf.js path",
+    "malformed PDF binary (reported as a failure event)"
+  ],
+  "output": {
+    "event": "one per text run",
+    "payload": "{ text: string, fontSize: number, fontName: string }"
+  },
+  "meta": {
+    "cdn": "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76"
+  }
+}

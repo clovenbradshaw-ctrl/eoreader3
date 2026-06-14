@@ -1,0 +1,33 @@
+{
+  "id": "asr-whisper-base",
+  "name": "Whisper base",
+  "version": "1.0.0",
+  "category": "perceptual",
+  "modality": "audio",
+  "capability": "asr",
+  "modelRef": {
+    "runtime": "transformersjs",
+    "model": "Xenova/whisper-base",
+    "version": "3.0.2",
+    "weightsBytes": 152043520
+  },
+  "resources": {
+    "backend": "wasm",
+    "memMB": 170,
+    "expectedLatencyMs": 2200
+  },
+  "confidenceSemantics": "heuristic",
+  "failureModes": [
+    "no calibrated confidence — derived from avg_logprob when present, else a presence flag",
+    "language auto-detect can be wrong on short or noisy clips",
+    "weights fail to download / backend unavailable (reported as a failure event)"
+  ],
+  "output": {
+    "event": "one per segment",
+    "payload": "{ text: string, language: string }"
+  },
+  "meta": {
+    "sampleRateHz": 16000,
+    "size": "base"
+  }
+}

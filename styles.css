@@ -357,6 +357,14 @@ ol.md-list { list-style: decimal; }
    Solid-but-muted: this IS evidence, not a strike-through. */
 .cite.absent { color: #5b6470; background: #eef0f3; border: 1px solid #d4d8de; cursor: help; }
 .cite.absent:hover { border-color: #5b6470; }
+/* The reader can hide the inline footnote chips for cleaner prose (Settings →
+   Answers). It's purely visual — the marker text is untouched, so a copied reply
+   reads the same. Two things stay on principle, mirroring "Grounding details":
+   the glass-box disclosures (.mech — the mechanical reading, the worked math)
+   keep their citations, since hiding chrome must never touch the trace; and void
+   chips stay, because a void renders the flagged WORD itself, not a reference. */
+:root.hide-citations .msg-asst .cite:not(.void) { display: none; }
+:root.hide-citations .msg-asst .mech .cite { display: inline; }
 /* a retracted reply — a later graph-check failed a claim it made; the note
    outranks whatever badge the answer originally earned */
 .retract-note {
@@ -1046,6 +1054,12 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
   font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums;
   display: inline-flex; align-items: center; justify-content: center;
 }
+/* the modality tag beside a capability label in Models & adapters */
+.set-cap-mod {
+  margin-left: 7px; font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  color: var(--text-3); background: var(--bg-subtle);
+  padding: 1px 6px; border-radius: var(--r-pill); vertical-align: middle;
+}
 
 /* author / import panel */
 .author-sec { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 20px 2px 8px; }
@@ -1086,16 +1100,53 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
 .drop-card { display: flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 600; color: var(--accent); background: var(--bg); border: 2px dashed var(--accent); border-radius: var(--r-lg); padding: 22px 32px; box-shadow: var(--sh-lg); }
 .ent-pill .n { font-family: var(--mono); font-size: 10px; color: var(--text-3); margin-left: 5px; }
 
-/* in-chat model loading */
+/* in-chat model loading — the first-load wait, made prominent with a live
+   countdown so a long one-time download reads as finite, not stuck. Claude
+   (cloud) keeps the plain `.cloud` connecting row; the on-device download gets
+   the full `.prominent` card. */
 .model-loading { padding: 4px 0 2px; }
-.model-loading .ml-row { font-size: 13.5px; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
-.model-loading .ml-row b { color: var(--evidence); font-family: var(--mono); }
-.model-loading .ml-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--evidence-tint-2); border-top-color: var(--evidence); animation: mlspin .7s linear infinite; flex-shrink: 0; }
+.model-loading .ml-head { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--text-2); }
+.model-loading .ml-title { font-weight: 600; color: var(--text); }
+.model-loading.cloud .ml-title { font-weight: 500; color: var(--text-2); }
+.model-loading .ml-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--evidence-tint-2); border-top-color: var(--evidence); animation: mlspin .7s linear infinite; flex-shrink: 0; }
 @keyframes mlspin { to { transform: rotate(360deg); } }
-.model-loading .ml-bar { height: 5px; background: var(--bg-subtle); border-radius: 999px; margin: 9px 0 6px; overflow: hidden; }
-.model-loading .ml-fill { height: 100%; background: var(--evidence); border-radius: 999px; transition: width .25s; }
-.model-loading .ml-status { font-family: var(--mono); font-size: 11px; color: var(--text-2); margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-loading .ml-note { font-size: 11.5px; color: var(--text-3); }
+.model-loading .ml-note { font-size: 11.5px; line-height: 1.5; color: var(--text-3); }
+.model-loading.cloud .ml-note { margin-top: 6px; }
+
+/* the prominent card: a bordered, tinted panel that stands out from the reply
+   stream, carrying the evidence (grounding) accent it shares with citations. */
+.model-loading.prominent {
+  padding: 15px 17px; margin: 2px 0;
+  border: 1px solid var(--evidence-tint-2); border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--evidence-tint), var(--bg) 135%);
+  box-shadow: var(--sh-sm);
+}
+.model-loading .ml-badge {
+  margin-left: auto; flex-shrink: 0; font-size: 10px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--evidence-ink);
+  background: var(--evidence-tint-2); border-radius: var(--r-pill); padding: 3px 9px;
+}
+
+/* the countdown — the star of the card: a large, calm value over a quiet label */
+.model-loading .ml-countdown { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 13px 0 10px; }
+.model-loading .ml-cd-val { font-family: var(--mono); font-size: 25px; font-weight: 600; line-height: 1; letter-spacing: -.01em; color: var(--evidence); }
+.model-loading .ml-cd-lbl { font-size: 12px; color: var(--text-3); }
+
+.model-loading .ml-bar { height: 8px; background: var(--bg-subtle); border-radius: 999px; overflow: hidden; }
+.model-loading .ml-fill { height: 100%; background: var(--evidence); border-radius: 999px; transition: width .3s cubic-bezier(.2,.8,.2,1); }
+/* a soft travelling sheen on the fill so a slow-but-moving download reads as
+   alive, not stuck (shares the ingest banner's `ibsheen` keyframes). */
+.model-loading.prominent .ml-fill { position: relative; overflow: hidden; }
+.model-loading.prominent .ml-fill::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,.5) 50%, transparent 80%);
+  background-size: 220% 100%; animation: ibsheen 1.6s linear infinite;
+}
+
+.model-loading .ml-meta { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.model-loading .ml-pct { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--evidence-ink); flex-shrink: 0; }
+.model-loading .ml-status { font-family: var(--mono); font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-loading .ml-meta + .ml-note { margin-top: 7px; }
 
 /* staged-ingest progress banner (existence → structure → significance) */
 .ingest-banner {
@@ -2007,6 +2058,10 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 /* the plan tree */
 .cmp-tree { flex: 1; overflow: auto; padding: 8px; }
 .cmp-empty { color: var(--text-3); font-size: 13px; line-height: 1.6; padding: 18px 14px; }
+/* the outline forming live, as the talker streams it */
+.cmp-outlining { padding: 12px 14px; }
+.cmp-outlining-h { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 8px; }
+.cmp-outlining-body { font-family: var(--serif); font-size: 13.5px; line-height: 1.7; color: var(--text-2); white-space: pre-wrap; margin: 0; }
 .cmp-node-wrap { }
 .cmp-node { display: flex; align-items: stretch; gap: 8px; padding: 7px 8px; border-radius: var(--r-sm);
   margin-bottom: 4px; cursor: pointer; border: 1px solid transparent; background: var(--bg); }
@@ -2063,23 +2118,32 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .cmp-byline { float: right; font-family: var(--mono); font-size: 9.5px; letter-spacing: .03em; padding: 0 6px; border-radius: var(--r-pill); }
 .cmp-byline.cmp-by-user { color: var(--accent); background: var(--accent-tint); }
 .cmp-byline.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); }
-/* per-sentence provenance shading — who wrote each sentence */
-.cmp-sent { transition: background .15s; }
-.cmp-by-user { background: var(--accent-tint); box-shadow: inset 0 -1px 0 var(--accent); border-radius: 2px; }
-:root[data-theme="dark"] .cmp-by-user { background: var(--accent-tint-2); }
-.cmp-by-talker { }
+/* per-run provenance — your prose carries a subtle underline; every run ends
+   with an inline author chip ([you] accented, talker muted) that brightens on
+   hover, so who wrote each stretch is legible right in the flow */
+.cmp-run { transition: box-shadow .15s; }
+.cmp-run.cmp-by-user { box-shadow: inset 0 -2px 0 var(--accent-tint); }
+.cmp-chip { font-family: var(--mono); font-size: 8.5px; font-weight: 600; letter-spacing: .04em;
+  vertical-align: super; line-height: 0; margin: 0 3px 0 1px; padding: 2px 5px; border-radius: var(--r-pill);
+  opacity: .55; transition: opacity .12s; cursor: default; user-select: none; }
+.cmp-prose:hover .cmp-chip { opacity: 1; }
+.cmp-chip.cmp-by-user { color: var(--accent); background: var(--accent-tint); opacity: .9; }
+.cmp-chip.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); }
 /* the legend in the pane header */
 .cmp-legend { margin-left: auto; display: inline-flex; gap: 6px; text-transform: none; letter-spacing: 0; }
 .cmp-leg { font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: var(--r-pill); }
-.cmp-leg.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); box-shadow: none; }
-.cmp-leg.cmp-by-user { color: var(--accent); }
+.cmp-leg.cmp-by-talker { color: var(--text-3); background: var(--bg-subtle); }
+.cmp-leg.cmp-by-user { color: var(--accent); background: var(--accent-tint); }
 .cmp-card-job { font-size: 10.5px; color: var(--text-3); font-weight: 600; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; opacity: 0; transition: opacity .12s; }
 .cmp-card:hover .cmp-card-job, .cmp-card.sel .cmp-card-job { opacity: 1; }
 .cmp-card-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 .cmp-prose { font-family: var(--serif); font-size: 15px; line-height: 1.7; color: var(--paper-ink); white-space: pre-wrap; }
 .cmp-prose.streaming { color: var(--text-2); }
-.cmp-prose-edit { font-family: var(--serif); font-size: 15px; line-height: 1.6; width: 100%; min-height: 90px;
-  border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 8px; background: var(--bg); color: var(--text); resize: vertical; }
+/* editing is seamless — same typography as the prose it replaces, no heavy
+   chrome, just a faint focus ring so the document still reads as a document */
+.cmp-prose-edit { font-family: var(--serif); font-size: 15px; line-height: 1.7; width: 100%; min-height: 64px;
+  border: none; border-radius: var(--r-sm); padding: 4px 6px; margin: -4px -6px; background: var(--bg);
+  color: var(--text); resize: vertical; outline: none; box-shadow: 0 0 0 2px var(--accent-tint); }
 .cmp-owe { font-size: 13px; color: var(--text-2); background: var(--void-bg); border: 1px dashed var(--void-bd);
   border-radius: var(--r-sm); padding: 9px 11px; line-height: 1.5; }
 .cmp-caret { display: inline-block; width: 7px; height: 1.05em; background: var(--accent); margin-left: 1px;
