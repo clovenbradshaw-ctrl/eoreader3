@@ -100,6 +100,9 @@ const RULESETS = [
   { id: 'site-entity-cell', group: 'Parsing', phase: 'extraction', name: 'Entity Cell (Site face)', glyph: '⊞',
     layer: 'existence', value: 1, mass: 4, src: 'add-on', installed: false, enabled: false, locked: false, live: true,
     desc: 'Names the Site face’s (Existence, Figure) cell Entity — its proper name among the nine generated cells; the subtypes thing/person/place/org live beneath it, never in a site slot — and corrects the SIG/NUL Object coordinate: a stall or an unattributed quote reads Ground and lands on Void instead of defaulting into Entity. Off ⇒ today’s grid (cell labeled “Thing”), byte-identical.' },
+  { id: 'distance-gravity', group: 'Parsing', phase: 'extraction', name: 'Distance Gravity (ACT-R)', glyph: '∝',
+    layer: 'significance', value: 1, mass: 4, src: 'add-on', installed: false, enabled: false, locked: false, live: true,
+    desc: 'Swaps the geometric clock (mass_weight × surface_mass + momentum) for a power law of recency over TOKEN distance: a candidate’s pull is Σ 1/(d+k)^α, d = cursor − each past surface mention (Anderson & Schooler 1991 — the memory that reads a power-law world matches it). Heavy-and-far vs light-and-near then falls out of the law instead of out of mass_weight, and a 60-word sentence ages the field more than a 5-word one (token distance, not the segmenter’s period count). The collision law (δ, floor, stall) is unchanged. Off ships today’s bindings byte-identical; takes effect on the next parse.' },
 
   // ── Chatting & grounding (chat) ──
   { id: 'auditor', group: 'Chatting & grounding', phase: 'chat', name: 'Grounded Auditor', glyph: '✓',
@@ -179,9 +182,15 @@ const RULESETS = [
   { id: 'pronoun-floor', group: 'Medium constants', phase: 'medium', name: 'Pronoun Floor', glyph: '⊥p',
     layer: 'significance', value: 0.1, mass: '∞', src: 'medium constant', installed: true, enabled: true, locked: false, live: true,
     desc: 'Absolute floor on a winning pronoun-resolution score. Below it, nothing is warm enough to claim the pronoun and it resolves to the void rather than binding the best cold candidate. Companion to δ, giving the binder its right to say “I don’t know.”' },
-  { id: 'eva-energy', group: 'Medium constants', phase: 'medium', name: 'Reading Energy', glyph: 'E', 
+  { id: 'eva-energy', group: 'Medium constants', phase: 'medium', name: 'Reading Energy', glyph: 'E',
     layer: 'significance', value: 1.0, mass: '∞', src: 'medium constant', installed: true, enabled: true, locked: true,
     desc: 'Energy each reading act carries. A reader’s attention deposit distributes exactly this much across a stall’s candidates — a flat (torn) read is physically inert.' },
+  { id: 'gravity-alpha', group: 'Medium constants', phase: 'medium', name: 'Gravity Exponent α', glyph: 'α',
+    layer: 'significance', value: 0.5, mass: '∞', src: 'medium constant', installed: true, enabled: true, locked: false, live: true,
+    desc: 'Power-law exponent for Distance Gravity (only live when that rule is on). Inverse-square (α=2) is flux through a sphere in three dimensions; text is one-dimensional, so the empirically fitted human value is ≈0.5.' },
+  { id: 'gravity-offset', group: 'Medium constants', phase: 'medium', name: 'Gravity Offset k', glyph: 'k',
+    layer: 'structure', value: 20, mass: '∞', src: 'medium constant', installed: true, enabled: true, locked: false, live: true,
+    desc: 'Softening offset (in tokens) for Distance Gravity (only live when that rule is on): pull = Σ 1/(d+k)^α. Keeps an intra-sentence mention from near-infinite pull; about a typical sentence length.' },
 ];
 
 const RULE_GROUPS = ['Languages', 'Parsing', 'Chatting & grounding', 'Thinking depth', 'Medium constants'];

@@ -1,8 +1,15 @@
 # Distance-based gravity — retiring the geometric clock
 
-*Design note / work-item spec. Not yet built — captured here so the portrait
-expansion lands first, then this replaces how pull is computed. Parity-breaking
-by design: a deliberate golden recapture, not an additive change.*
+*Design note / work-item spec.*
+
+**Status (built, behind a rule).** WI-0…WI-3 are built: the kernel ships as
+`EOEngine.gravityPull`, token offsets are carried at parse, and the binder
+consumes the law when the **`distance_gravity`** rule is on (OFF by default —
+the parity floor, byte-identical, 202/202 golden snapshots unchanged). WI-3, the
+A/B harness, is `evo/experiments/distance-gravity-ab.js` (`npm run evo:distance`).
+WI-4 (the default-flip + golden recapture) is **gated and NOT taken**: the read
+returned **HOLD** — see *Measured*, below. So this is no longer parity-breaking;
+it is an available, switchable law plus the instrument that judges it.
 
 ---
 
@@ -195,3 +202,62 @@ fixtures and compare.
 - Run `npm test` and `node tests/parity.js` before every push. WI-0: both clean.
   WI-1..2: parity is *expected* to differ and is recaptured under WI-4, never
   silently.
+
+  How it actually landed: WI-1..2 are gated behind the `distance_gravity` rule
+  (OFF by default), so they did **not** break parity — `npm test` and
+  `node tests/parity.js` are both clean (202/202). The rule, not a golden
+  recapture, is what keeps the floor; WI-4 would flip the default only on a win.
+
+---
+
+## Measured — the read, and what it found (WI-3)
+
+`npm run evo:distance` runs both laws over the annotated fixtures
+(`evo/fixtures/binding`, `evo/fixtures/stalls`) and sweeps α ∈ {0.5, 0.7, 1, 1.5}
+× k ∈ {5, 10, 20, 50}. The collision law (δ, floor, NUL) is identical under both;
+only the pull magnitude differs.
+
+```
+baseline (geometric):       binding 69% (11/16)   stall 67% (4/6)   total 15/22
+distance law (best, α=.5,k=5): binding 56% ( 9/16)   stall 100% (6/6)  total 15/22
+```
+
+**Total correctness is conserved at 15/22 across the entire (α,k) grid.** The
+distance law is *not* inert — it repairs exactly the honest stalls the geometric
+clock mishandles, including the steward over-stall this note never anticipated:
+"she" before *"Then tell them the grain is theirs"* flips from a δ-gate stall to a
+bind on Princess Mary. But every stall it wins, it pays for with a binding it
+loses (e.g. the same scene's *"Then we shall have to find another way"* slips off
+Calloway). The recency law **slides errors along a tradeoff curve; it does not
+reduce them.**
+
+So WI-4's gate ("binds at least as accurately *and* stalls in more honest places")
+is **not met** — the geometric clock stays the default. This is the record of why,
+exactly as WI-4 asks.
+
+### Why — and where the real lever is
+
+The residual errors are not recency errors, which is why no pull law moves them.
+Trace the steward misses and they are **sign (gender) errors**: "Dron" is a
+gender-ambiguous name, so the first momentum-dominant `"she"` bind captures it and
+then *records the wrong gender* (`Dron → f`, basis "pronoun binding is gender
+evidence"). That bootstrap leaves the sign exclusion inert for every later `"she"`,
+and mass/recency — under either law — then decides what gender should have. The
+text's own cure sits unread one sentence in: *"the old steward stood with **his**
+cap in **his** hands"* is observed evidence that the steward is a he.
+
+Reading that possessive determiner as gender evidence was prototyped and
+**deliberately not shipped here**: in the greedy single-pass reader the possessor
+is unreachable at that point — "Dron" is still typed a `thing` (it only earns
+person-type later, by speaking), and the document title competes as a capitalized
+candidate, so an honest reader *stalls*. The repair needs the whole-field view —
+which entities turned out to be persons, which were headings — that the
+**deep-read enrichment pass** (`enrich.js`, `docs/deep-read-enrichment.md`)
+already has by construction. That is the next read-gated build:
+
+> **Possessive-gender repair (enrichment).** In the second, whole-graph pass,
+> read narration possessives (`his/her` + non-kin noun) as observed gender for
+> their possessor, resolved against the *settled* person inventory, observed
+> evidence outranking a prior pronoun-bind guess (the surface/inferred split the
+> binder already keeps for mass). Gate it on this same battery: it must raise
+> *total* correctness, not trade one error for another.
