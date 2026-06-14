@@ -579,6 +579,31 @@ const READING_RULES = {
     value: 0.1, mass: Infinity, layer: 'significance', src: 'medium-constant', module: 'core',
     desc: 'Absolute floor on the winning pronoun-resolution score. Below it, no site is warm enough to claim the pronoun and it resolves to the void rather than binding the best cold candidate. The companion to the δ dominance gate (inertia_delta), applied to pronoun binding — the one reader that previously always picked a winner. Holding beats inventing.',
   },
+  // ── Distance-based gravity (ACT-R power-law recency) — OFF by default ──
+  // An alternative to the geometric clock (score = surface_mass × mass_weight +
+  // momentum). When ON, a candidate's pull is summed over its SURFACE mention
+  // positions measured in TOKENS: pull = Σ 1/(d+k)^α, d = cursor − mention
+  // (Anderson & Schooler 1991 — human retrieval follows a power law of recency,
+  // not exponential decay; the environment is power-law, so the memory that
+  // reads it matches). Heavy-and-far vs light-and-near then falls out of the
+  // law instead of out of mass_weight, and a 60-word sentence ages the field
+  // more than a 5-word one (token distance, not the segmenter's period count).
+  // The collision law (δ dominance, the floor, NUL) is unchanged — this swaps
+  // only HOW pull is computed. OFF ships today's bindings byte-identical (the
+  // parity floor); takes effect on the next parse; flip the default after the
+  // A/B harness (evo/experiments/distance-gravity-ab.js) shows the win.
+  distance_gravity: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Master switch for the distance-based gravity law (ACT-R power-law recency). When off (default) a pronoun candidate\'s pull is surface_mass × mass_weight + momentum (the geometric clock); when on it is Σ 1/(d+k)^α over the candidate\'s surface mention positions in tokens, with d the token distance back from the reading cursor. Heavy-and-far vs light-and-near becomes one computation instead of a hand-tuned mass_weight. The collision law (δ, floor, stall) is untouched. Parity-safe: off is byte-identical, and the switch takes effect on the next parse (bindings are decided at extraction).',
+  },
+  gravity_alpha: {
+    value: 0.5, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Power-law exponent α for distance gravity (read only when distance_gravity is on). Inverse-square (α=2) is flux through a sphere in three dimensions; text is one-dimensional, so the empirically fitted human value (Anderson & Schooler 1991) is ≈0.5. Anything in [0.5, 1] is defensible — the fixtures decide.',
+  },
+  gravity_offset: {
+    value: 20, mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Softening offset k in tokens for distance gravity (read only when distance_gravity is on): pull = Σ 1/(d+k)^α. Raw 1/d explodes as d→0 (an intra-sentence mention would get near-infinite pull); k ≈ a typical sentence length keeps it finite.',
+  },
   pronoun_lead_disqualify: {
     value: ['his','her','their','its','our','my','your','this','that','these','those','another','other','every','all','some','any','many','much','few','more','most','less'],
     mass: 1, layer: 'existence', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
@@ -3258,6 +3283,12 @@ let DELTA = READING_RULES.inertia_delta.value;
 const QUOTE_W = () => READING_RULES.quote_interior_coupling.value;
 const ANAPHORA_W = () => READING_RULES.anaphora_coupling.value;
 const PRONOUN_FLOOR = () => READING_RULES.pronoun_resolution_floor.value;
+// Distance-based gravity (ACT-R) — read live so a re-parse applies a retune.
+// DISTANCE_GRAVITY is the switch (OFF ⇒ the geometric clock, byte-identical);
+// α and k are the power law's exponent and its softening offset in tokens.
+const DISTANCE_GRAVITY = () => { const v = READING_RULES.distance_gravity.value; return v === true || v === 1; };
+const GRAVITY_ALPHA = () => READING_RULES.gravity_alpha.value;
+const GRAVITY_OFFSET = () => READING_RULES.gravity_offset.value;
 const PRONOUN_LEAD_SET = new Set(READING_RULES.pronoun_lead_disqualify.value);
 // First/second-person pronouns are deictic: they resolve by speech
 // context (who is speaking to whom), not by narrative momentum. Binding
@@ -4397,6 +4428,15 @@ async function extractEoGraph(text, onProgress) {
   let nextSignalId = 0;
   let currentSentIdx = 0;
   let currentSentText = '';
+  // WI-0 (distance gravity): a token cursor parallel to the sentence cursor.
+  // cursorTokens = tokens BEFORE the current sentence, so a mention recorded
+  // now sits at cursorTokens and the gap back to a past mention is the token
+  // length of the text between them — the medium's own geometry rather than the
+  // segmenter's period count. Advanced at the top of processSentence (so a
+  // chrome early-return still moves it). Only READ when distance_gravity is on.
+  let cursorTokens = 0;
+  let prevSentenceTokens = 0;
+  const tokenLenOf = (t) => { const s = String(t || '').trim(); return s ? s.split(/\s+/).length : 0; };
   const SIGNAL_MASS_THRESHOLD = 3;     // mass at which a signal auto-collapses
   const SIGNAL_MOMENTUM_FLOOR = 0.05;  // below this and dead, signal is GC'd
 
@@ -4465,7 +4505,7 @@ async function extractEoGraph(text, onProgress) {
     noteSight(key, si);
     let cur = sites.get(key);
     if (!cur) {
-      cur = { name: surface, type, gender: genderFromName(surface), mass: 0, surfaceMass: 0, momentum: 0, tokens: tokenSetOf(surface), referent_id: mintReferent(), forms: new Map() };
+      cur = { name: surface, type, gender: genderFromName(surface), mass: 0, surfaceMass: 0, momentum: 0, tokens: tokenSetOf(surface), referent_id: mintReferent(), forms: new Map(), surfacePositions: [] };
     }
     // surfaceMass tracks weight earned from the NAME appearing on the page —
     // the honest evidence. Pronoun bindings add to mass but never here, so
@@ -4474,6 +4514,10 @@ async function extractEoGraph(text, onProgress) {
     cur.mass += weight;
     cur.surfaceMass = (cur.surfaceMass || 0) + weight;
     cur.momentum = cur.momentum * GAMMA + weight;
+    // WI-0: record this SURFACE (name) mention's token position for the distance
+    // law. Guarded by the switch so an off session does zero new allocation
+    // (bindings are decided at parse, so a fresh parse rebuilds these when on).
+    if (DISTANCE_GRAVITY()) (cur.surfacePositions || (cur.surfacePositions = [])).push({ pos: cursorTokens, w: weight });
     bumpForm(cur, surface);
     noteFullForm(cur, surface);
     // Type is sticky after first assignment. Compromise NER produces
@@ -4559,7 +4603,7 @@ async function extractEoGraph(text, onProgress) {
       }
     }
     // Fall through to standard activation-based resolution against real referents
-    const result = resolveByActivation(pronoun, sites);
+    const result = resolveByActivation(pronoun, sites, cursorTokens);
     // Fix 2 — the binder's right to say "I don't know". A contested or
     // below-floor pull resolves to the void, not the best wrong answer.
     // Logged as a NUL (open signal); it deposits nothing. Same δ dominance
@@ -4670,6 +4714,11 @@ async function extractEoGraph(text, onProgress) {
     const sentMeta = { sentence_idx: i };
     currentSentIdx = i;
     currentSentText = sentText;
+    // WI-0: advance the token cursor by the PREVIOUS sentence's length, before
+    // any early return, so chrome/gated sentences still consume textual space.
+    // During this sentence, cursorTokens = Σ token-lengths of sentences 0…i-1.
+    cursorTokens += prevSentenceTokens;
+    prevSentenceTokens = tokenLenOf(sentText);
 
     // Decay all momentum at start of sentence (one tick of time)
     for (const [k, v] of sites) {
@@ -5324,7 +5373,7 @@ async function extractEoGraph(text, onProgress) {
         kinSeen.add(poss + ':' + kin);
         let hint = null, localStalled = false;
         if (localPersons.size) {
-          const r = resolveByActivation(poss, localPersons);
+          const r = resolveByActivation(poss, localPersons, cursorTokens);
           if (r && r.key) {
             hint = r;
             // a binding is an inferred mention: warm at the anaphora coupling,
@@ -6267,9 +6316,33 @@ function pickCanonicalDeterministic(forms, firstSeq) {
 
 // Pronoun resolution under physics: pronouns have no substantive token
 // of their own, so they bind by type (person pronoun → person sites).
-// The pull strength is the site's momentum (recent activity in working
-// memory). Highest-momentum matching site absorbs the pronoun.
-function resolveByActivation(pronoun, sites) {
+// ── Distance-based gravity kernel (ACT-R activation; Anderson & Schooler 1991) ──
+// Pull on a site from its past SURFACE mentions: a power law of recency over
+// TOKEN distance, summed. Pure — a function of (positions, cursor, rules) only,
+// with no sequential state, so two calls at the same cursor are identical and a
+// mention ahead of the cursor (d<0) never contributes. This is the stateless
+// twin of the geometric momentum clock: where momentum must be replayed
+// event-by-event, pull reads straight off the mention positions in the log.
+function gravityPull(positions, cursor, alpha, offset) {
+  if (!positions || !positions.length) return 0;
+  const a = alpha != null ? alpha : 0.5;
+  const k = offset != null ? offset : 20;
+  let sum = 0;
+  for (const p of positions) {
+    const pos = (p && p.pos != null) ? p.pos : p;
+    const w = (p && p.w != null) ? p.w : 1;
+    const d = cursor - pos;
+    if (d < 0) continue;
+    sum += w / Math.pow(d + k, a);
+  }
+  return sum;
+}
+
+// The pull strength is the site's momentum (recent activity in working memory),
+// OR — when the distance_gravity rule is on — the ACT-R distance law above over
+// the site's surface mention positions. Highest-pull matching site absorbs the
+// pronoun. `cursor` is the reader's "now" in tokens (used only by the distance law).
+function resolveByActivation(pronoun, sites, cursor) {
   const lower = String(pronoun).toLowerCase();
   const needFemale = FEMALE_PRONOUNS.has(lower);
   const needMale = MALE_PRONOUNS.has(lower);
@@ -6298,6 +6371,14 @@ function resolveByActivation(pronoun, sites) {
   // Same sign repels: a confirmed-opposite-gender site is dropped from the
   // field entirely before any magnitude is compared. This must run BEFORE
   // step 2 — proportion is built on the poles, not the other way round.
+  // PROPORTION magnitude source: the geometric clock by default, or the ACT-R
+  // distance law when distance_gravity is on (read live, so a re-parse picks it
+  // up). The cursor is the reader's "now" in tokens; with no cursor (older
+  // callers) it degrades to 0, and the geometric clock is unaffected regardless.
+  const useDistanceGravity = DISTANCE_GRAVITY();
+  const gAlpha = useDistanceGravity ? GRAVITY_ALPHA() : 0;
+  const gOffset = useDistanceGravity ? GRAVITY_OFFSET() : 0;
+  const cursorTok = cursor != null ? cursor : 0;
   const elig = [];
   for (const [k, v] of sites) {
     // type charge. A gendered/person pronoun binds only persons — UNCHANGED, so
@@ -6310,8 +6391,16 @@ function resolveByActivation(pronoun, sites) {
     if (needPerson && v.type !== 'person' && !(neutralPerson && v.type === 'thing' && looksLikePerson(v.name))) continue;
     if (needFemale && v.gender === 'm') continue;         // sign exclusion
     if (needMale && v.gender === 'f') continue;           // sign exclusion
-    const surfaceMass = v.surfaceMass != null ? v.surfaceMass : v.mass;
-    let score = surfaceMass * MASS_WEIGHT + v.momentum;
+    let score;
+    if (useDistanceGravity) {
+      // The distance law: pull summed over this site's surface mention positions
+      // in tokens. Surface only — inferred (pronoun-bound) mentions are not in
+      // surfacePositions, the same anti-bootstrap discipline surfaceMass keeps.
+      score = gravityPull(v.surfacePositions, cursorTok, gAlpha, gOffset);
+    } else {
+      const surfaceMass = v.surfaceMass != null ? v.surfaceMass : v.mass;
+      score = surfaceMass * MASS_WEIGHT + v.momentum;
+    }
     if (neutralPerson && v.type !== 'person') score -= 0.001;   // a real person wins ties
     if (preferNonPerson && v.type === 'person') score -= 0.15;
     elig.push({ key: k, v, score });
@@ -7268,6 +7357,9 @@ function projectGraph(events, frame = {}) {
     'singular-they': 'singular_they',
     'relation-gate': 'relation_gate',
     'site-entity-cell': 'site_entity_cell',
+    'distance-gravity': 'distance_gravity',
+    'gravity-alpha': 'gravity_alpha',
+    'gravity-offset': 'gravity_offset',
   };
 
   /* ---------- Thinking depth: the effort dial's tunable budget ----------
@@ -11203,6 +11295,7 @@ function projectGraph(events, frame = {}) {
   // applyRules coerces card values through Number(), so an installed card
   // arrives as 1; the seed is boolean false. Either truthy form means ON.
   function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
+  function distanceGravityEnabled() { return DISTANCE_GRAVITY(); }
 
   // RG_STOP / RG_PRONOUN_RE / RG_ATTRIB are the relation_gate_* conventions,
   // built in rebuildLangSets (auxiliary verbs reuse AUX_VERBS_RE).
@@ -12089,6 +12182,10 @@ function projectGraph(events, frame = {}) {
     // from the claim's OWN cited span, never an exemplar library)
     relationGateEnabled, checkRelations, checkRelationsScope,
     bindClaimKeys, bindClaimKeysScope, groundingEnvelope,
+    // distance-based gravity (distance_gravity rule, OFF by default — the parity
+    // floor): the pure ACT-R power-law recency kernel and its switch, for the
+    // A/B harness and tests. gravityPull(positions, cursor, α, k) is stateless.
+    distanceGravityEnabled, gravityPull,
     // definitional asks answered from the graph's own assertions
     answerDefine, defineAssertions, isDefinitionalAsk,
     // kin asks answered from possessive-kin resolutions ("whose son…?"), the
