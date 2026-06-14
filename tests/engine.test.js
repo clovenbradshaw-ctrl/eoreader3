@@ -329,6 +329,40 @@ group('bindCitations — mechanical binding', () => {
   ok(!bad.audit.grounded, 'an unsupported answer is NOT marked grounded');
 });
 
+// REGRESSION (formatting): a model draft is Markdown — an intro line followed by
+// a numbered list. The binders used to splitDraft → map → join(' '), reflowing
+// the whole reply onto a single line; the renderer then showed list items 2..n
+// swallowed into item 1 (the reported "formatting messed up"). Binding must keep
+// the newline scaffold so each item stays its own list line.
+await group('binders keep block structure (Markdown lists survive binding)', async () => {
+  const rel = await E.parseDocument('rel.txt', [
+    'The relational model organizes data into relations.',
+    'First normal form requires each tuple to hold only atomic values.',
+    'Second normal form requires every non-key attribute to depend on the whole key.',
+    'Third normal form removes transitive dependencies among attributes.',
+  ].join('\n\n'), 'rel');
+  const draft = [
+    'The model rests on three normal forms:',
+    '',
+    '1. First normal form requires atomic values.',
+    '2. Second normal form requires full-key dependence.',
+    '3. Third normal form removes transitive dependencies.',
+  ].join('\n');
+  const cases = [
+    ['bindCitations',             E.bindCitations(rel, draft, 'normal forms', 'factual')],
+    ['bindCitationsScope (2 src)', E.bindCitationsScope([rel, voss], draft, 'normal forms', 'factual')],
+    ['bindClaimKeys',            E.bindClaimKeys(rel, draft, 'normal forms', 'factual')],
+    ['groundTalkerOutput',       E.groundTalkerOutput(rel, draft, [])],
+  ];
+  for (const [name, bound] of cases) {
+    const lines = bound.text.split('\n');
+    const itemLines = lines.filter(l => /^\d+\.\s/.test(l)).length;
+    ok(bound.text.includes('\n'), name + ' — newlines survive binding (not reflowed to one line)');
+    eq(itemLines, 3, name + ' — all three numbered items stay on their own lines');
+    ok(!/^\d+\./.test(lines[0]) && /forms:/.test(lines[0]), name + ' — the intro stays on the first line, ahead of the list');
+  }
+});
+
 // Cost-ordered router + hybrid recall: the conversation layer obeying the same
 // cheap-reader-first law the entity layer does. routeTurn is sync; retrieveHybrid
 // is async and, with no window.EOEmbed in the Node harness, MUST degrade to a
