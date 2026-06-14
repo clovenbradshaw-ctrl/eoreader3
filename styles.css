@@ -382,6 +382,9 @@ ol.md-list { list-style: decimal; }
 .audit-chip .no { color: var(--text-3); }
 .audit-chip .sep { color: #cdd0d6; }
 .audit-chip.clean, .audit-chip.computed { background: var(--good-bg); border-color: var(--good-bd); }
+/* verbatim: a direct quote from the source — faithful by construction, so it
+   reads as good (green), like a clean grounded answer. */
+.audit-chip.verbatim { background: var(--good-bg); border-color: var(--good-bd); }
 .audit-chip.notes { background: var(--warn-bg); border-color: var(--warn-bd); }
 .audit-chip.warn  { background: var(--bad-bg);  border-color: var(--bad-bd); }
 /* held: related lines were found but don't cover the question — shown and cited,
@@ -565,6 +568,7 @@ ol.md-list { list-style: decimal; }
   color: var(--text-2); font-weight: 500; display: flex; align-items: center; gap: 5px;
 }
 .mode-seg button.on { background: var(--bg); color: var(--text); box-shadow: var(--sh-sm); font-weight: 600; }
+.mode-seg button.on.verbatim { color: #2f6f7d; }
 .mode-seg button.on.grounded { color: var(--evidence); }
 .mode-seg button.on.creative { color: #6b4fa0; }
 

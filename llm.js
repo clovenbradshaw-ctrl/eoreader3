@@ -1045,17 +1045,24 @@
       // understanding, usually right, sometimes wrong; spans win conflicts.
       // One prompt replaces six near-duplicates, with NO length
       // prescriptions — the model answers as it sees fit; depth scales
-      // max_tokens (the real bound) and nothing else. The faithfulness
-      // contract survives: nothing beyond what was handed over, and no
-      // model-written citation markers — binding stays mechanical. What it
-      // no longer carries (Brief 2) is the absence ORDER — the talker is not
-      // told to "say the document doesn't say"; low witness rides the stamp
-      // (WI-7), so absence is a measurement the system reports, never a
-      // sentence the talker speaks. Span trust is graded, not flat: the
-      // passages are witnessed evidence, with coverage tracked for the talker
-      // rather than asserted by it. The one summary-specific line is the
-      // degeneracy guard (don't hand back a single span as the summary),
-      // which is faithfulness, not length.
+      // max_tokens (the real bound) and nothing else. Faithfulness is now a
+      // STAMP, not a gag (the "stamp, not gate" move): for what the document
+      // covers, the span is the truth here and outside knowledge never
+      // overrides it; but a question the passages simply don't touch is
+      // answered plainly rather than stonewalled — the talker is no longer
+      // ordered to source ONLY from the spans, because that floor turned a
+      // synonym or an aside into a confident "the document is silent." What
+      // the document didn't witness is flagged MECHANICALLY (inventedTerms /
+      // the residual absence flag / the WI-7 witness degree), so the talker
+      // needn't hedge about sourcing — the stamp tells that truth, never the
+      // talker's voice. What it no longer carries (Brief 2) is the absence
+      // ORDER — the talker is not told to "say the document doesn't say"; low
+      // witness rides the stamp (WI-7), so absence is a measurement the system
+      // reports, never a sentence the talker speaks. Span trust is graded, not
+      // flat: the passages are witnessed evidence, with coverage tracked for
+      // the talker rather than asserted by it. The one summary-specific line
+      // is the degeneracy guard (don't hand back a single span as the
+      // summary), which is faithfulness, not length.
       const lines = [
         'You\'re Cleo, a helpful assistant running locally in the user\'s browser. You\'re in the middle of a conversation with them about a document you\'ve been reading together.',
         '',
@@ -1065,9 +1072,9 @@
         '',
         'Write in your own voice — say it the way it wants to be said. You are not handed a template or told how sure to sound; just answer well from what is here.',
         '',
-        'If a span and a note disagree, the span wins. If a span contains a name, date, or title that answers the question, use it directly — don\'t echo the question\'s wording back. Don\'t add facts that are in neither the spans nor your notes. Answer from what you were handed — you have these passages, not the whole document.',
+        'If a span and a note disagree, the span wins. If a span contains a name, date, or title that answers the question, use it directly — don\'t echo the question\'s wording back. When a fact is in neither the spans nor your notes, the document hasn\'t witnessed it — the system flags that for you, mechanically, so you don\'t have to vouch for it or warn about it yourself.',
         '',
-        'Source ONLY from the spans and your notes. If you recognize the work from elsewhere — its title, its author, what it\'s "about" in the world — set that aside; what the spans show is the document\'s truth here. Read them for the name, date, or detail the question asks before drawing any conclusion.',
+        'For anything the document does cover, what the spans show is its truth here — don\'t override a span with outside knowledge. But don\'t stonewall a question the passages simply don\'t touch: if you know the answer, give it plainly rather than refusing, and let the automatic flag mark what the document didn\'t witness. Read the spans for the name, date, or detail the question asks before drawing any conclusion.',
       ];
       if (task === 'summary') {
         lines.push('');

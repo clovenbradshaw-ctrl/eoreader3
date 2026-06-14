@@ -387,7 +387,13 @@ function App() {
         if (Array.isArray(prefs.projects)) { setProjects(prefs.projects); bumpUid(prefs.projects.map(p => p.id)); }
         if (prefs.activeProject) setActiveProject(prefs.activeProject);
         if (prefs.mode) setMode(prefs.mode);
-        if (typeof prefs.showModeToggle === 'boolean') setShowModeToggle(prefs.showModeToggle);
+        // The Auto · Verbatim · Grounded · Creative toggle was hidden by default
+        // (an earlier Settings opt-in). Verbatim is new, so surface the toggle
+        // ONCE for everyone — honor a stored choice only after the user has seen
+        // the new set (the modesV2 marker). After that first un-hide their pref
+        // sticks (they can hide it again under Settings → Answers).
+        if (prefs.modesV2 && typeof prefs.showModeToggle === 'boolean') setShowModeToggle(prefs.showModeToggle);
+        else setShowModeToggle(true);
         if (typeof prefs.splitRatio === 'number') setSplitRatio(prefs.splitRatio);
         if (typeof prefs.explore === 'boolean') setExplore(prefs.explore);
         if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
@@ -463,7 +469,7 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
+    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews });
   }, [rules, langModes, model, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, pythonEnabled, smartParse, savedViews]);
   // Hiding the answer-mode control means every turn runs on Auto: hold `mode`
   // there whenever the toggle is off, so a 'grounded'/'creative' left in prefs
@@ -1465,6 +1471,59 @@ function App() {
     if (plan.cites && plan.cites.length) setTimeout(() => flashCitation(plan.cites[0].docId, plan.cites[0].idx), 380);
     depositSettled(scope, q, plan.cites);
     AUD('end', { engine: 'mechanical', text: plan.text, audit: plan.audit, cites: plan.cites || [], tableSpec: plan.tableSpec || null });
+    setBusy(false);
+  };
+
+  // VERBATIM — quote the matching passage(s) straight from the document, word
+  // for word. The literal counterpart to Grounded: the same question yields a
+  // direct quote here and a synthesis there. Pure retrieval — no model, no
+  // synthesis pass — so it never reaches the echo-veto and never hangs; an echo
+  // IS the goal. What it can't find, it says plainly. Citations point at each
+  // quoted line. No form-library deposit (we never learn shape from a quote).
+  const runVerbatimScope = (scope, q) => {
+    let intent = null;
+    try { intent = window.EOEngine.classifyIntent(q); } catch (e) {}
+    AUD('step', 'intent', { intent });
+    const primary = window.EOEngine.routePrimary(scope, q, { hotEntity: hotEntity() }) || scope[0];
+    let hits = [];
+    try { hits = window.EOEngine.retrieveScope(scope, q, 6) || []; } catch (e) { eoWarn('verbatim-retrieve', e); }
+    AUD('step', 'retrieve', { k: 6, engine: 'verbatim', hits: auditHits(scope, q, 6) });
+    let spans = [];
+    try { spans = hits.length ? (window.EOEngine.partsFromHits(scope, hits).spans || []) : []; } catch (e) { eoWarn('verbatim-parts', e); }
+    // De-dupe by (docId, idx) and keep only the few most relevant passages — a
+    // quote, not a document dump.
+    const seen = new Set();
+    const top = [];
+    for (const s of spans) {
+      const key = s.docId + ':' + s.idx;
+      if (seen.has(key) || !(s.text && String(s.text).trim())) continue;
+      seen.add(key); top.push(s);
+      if (top.length >= 3) break;
+    }
+    if (!top.length) {
+      const dn = (primary && primary.name) || 'the document';
+      const msg = 'I couldn’t find a passage in “' + dn + '” matching that to quote. Try different words, or point me at the section you want quoted.';
+      const naudit = { grounded: false, covers: null, note: 'Verbatim mode quotes passages straight from the document — nothing here matched this to quote.' };
+      AUD('step', 'route', { path: 'verbatim', referencing: true, found: 0 });
+      lastGroundedRef.current = false;
+      replaceLast({ role: 'assistant', text: msg, mode: 'verbatim', audit: naudit });
+      AUD('end', { engine: 'verbatim', text: msg, audit: naudit, cites: [] });
+      setBusy(false);
+      return;
+    }
+    const cites = top.map(s => ({ docId: s.docId, idx: s.idx }));
+    // Each passage quoted exactly, with its citation chip right after it. A span
+    // may carry newlines (which would break a single markdown blockquote), so it
+    // is wrapped in quotation marks — the words are preserved verbatim.
+    const body = top.map(s => '“' + String(s.text).trim() + '” {{cite:' + s.docId + ':' + s.idx + ':s' + s.idx + '}}').join('\n\n');
+    const audit = { status: 'verbatim', grounded: true, covers: top.length + '/' + top.length, stable: true,
+      note: 'Quoted directly from the document — these are the passages themselves, word for word, not a synthesis. Each citation points to the line it came from.' };
+    AUD('step', 'route', { path: 'verbatim', referencing: true, found: top.length });
+    lastGroundedRef.current = true; everGroundedRef.current = true;
+    replaceLast({ role: 'assistant', text: body, audit, mode: 'verbatim' });
+    setTimeout(() => flashCitation(cites[0].docId, cites[0].idx), 380);
+    try { depositSettled(scope, q, cites); } catch (e) { eoWarn('verbatim-deposit', e); }
+    AUD('end', { engine: 'verbatim', text: body, audit, cites });
     setBusy(false);
   };
 
@@ -2634,16 +2693,33 @@ function App() {
             if (genStale(myGen)) return;              // stopped during the stricter retry — stand down
             retry = window.EOEngine.dedupeSentences(retry);
           } catch (e) { if (window.EOLLM.isAbort(e) || genStale(myGen)) return; retry = ''; }
-          // If the retry still echoes (or came back empty), the model can't do
-          // this turn — refuse honestly rather than substitute a mechanical
-          // portrait. The portrait would land as if it were the model's reply.
-          if (!retry || retry.trim().length < 3 || echoesASpan(scope, q, retry)) {
-            AUD('step', 'veto', { decision: 'refused', reason: 'retry still echoed — refusing rather than serving a mechanical stand-in' });
-            refuseModel('echo_after_retry',
-              'I drafted, retried under a stricter rule, and both attempts just echoed a single passage instead of synthesizing — the model can’t do this turn. I’d rather say so than substitute a fallback. Try a more specific question, or point me at the line you want me to read.');
+          if (retry && retry.trim().length >= 3 && !echoesASpan(scope, q, retry)) {
+            full = retry;   // the retry synthesized — fall through and bind it like any draft
+          } else {
+            // STAMP, NOT GATE: the model can only stay close to a single passage.
+            // The old move refused outright — a dead end the reader reads as "you
+            // won't answer," and the exact thing that hangs an explicit "quote this"
+            // ask. Instead serve the closest draft as a near-verbatim answer with an
+            // honest caveat: a quote-shaped ask gets the passage it wanted, and the
+            // stamp says it's quoted more than synthesized (Verbatim mode is the place
+            // to ask for this on purpose). status 'warn' keeps it OUT of the form-
+            // library deposit — we never learn shape from an echo. Refuse only when
+            // there is genuinely nothing bindable to stand behind.
+            const draft = (retry && retry.trim().length >= 3) ? retry : full;
+            let nb = null;
+            try { nb = window.EOEngine.bindCitationsScope(scope, draft, q, intent, { hotEntity: hotEntity() }); } catch (e) { eoWarn('near-verbatim-bind', e); }
+            if (nb && nb.audit && nb.audit.grounded) {
+              AUD('step', 'veto', { decision: 'model-caveat', reason: 'near-verbatim — stays close to a single passage; served with a caveat, not refused' });
+              settle({ text: nb.text, cites: nb.cites,
+                audit: { ...nb.audit, status: 'warn',
+                  note: 'This stays very close to a single passage — quoted more than synthesized. Switch to Verbatim mode for a clean direct quote, or ask something narrower for a fresh synthesis.' } },
+                'model (near-verbatim)');
+            } else if (!residualAnswer('echo-after-retry', draft)) {
+              fallbackMechOrRefuse('echo_after_retry',
+                'I drafted and retried, but both passes only echoed a single passage and I couldn’t bind it as a clean quote. Try Verbatim mode for a direct quote, or point me at the line you want me to read.');
+            }
             return;
           }
-          full = retry;   // retry produced a real answer; fall through to bind it
         }
         // WI-5 — CONVERGENCE STOP (the DEF→EVA→REC loop). Re-retrieve on the
         // uncovered gap and re-pass until the bound-claim set stops growing
@@ -3466,6 +3542,23 @@ function App() {
       replaceLast({ role: 'assistant', text: reply, audit: null, wikiOffer: clickable });
       AUD('end', { engine: 'reference', text: reply, audit: null, reason: (res && res.status) || 'offered' });
       setBusy(false);
+      return;
+    }
+
+    // VERBATIM: quote the matching passage(s) straight from the document, word
+    // for word — no model, no synthesis, never the echo-veto refusal. The literal
+    // counterpart to Grounded; the toggle's "give me the source, not a paraphrase"
+    // setting. Runs ahead of the model load (it needs no model), but needs a
+    // document in scope to quote from.
+    if (mode === 'verbatim') {
+      if (!scope.length) {
+        const msg = 'Verbatim mode quotes passages straight from a document — open or pick a source first, then tell me what to quote.';
+        AUD('step', 'route', { path: 'verbatim', referencing: false, blocked: 'no-scope' });
+        replaceLast({ role: 'assistant', text: msg, audit: null, mode: 'verbatim' });
+        AUD('end', { engine: 'none', text: msg, audit: null, reason: 'verbatim-needs-doc' });
+        setBusy(false); return;
+      }
+      try { runVerbatimScope(scope, q); } catch (e) { turnFailed('verbatim')(e); }
       return;
     }
 
