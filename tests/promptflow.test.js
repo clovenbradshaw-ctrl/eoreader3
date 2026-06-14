@@ -66,10 +66,14 @@ group('prompts are read LIVE from llm.js (not duplicated)', () => {
   eq(creative.text, LLM.systemFor('creative', 'qa', false, 1), 'creative text === live systemFor(creative)');
   ok(/compose freely/i.test(creative.text), 'creative prompt is the free-composition one');
 
+  // Brief 2 (+ form-as-stamp patch): there is no shape prompt at all. The form
+  // is a measured stamp (shape.js), never a prompt — so the entry is declared,
+  // not a live model prompt.
   const shape = PF.promptById('shape');
-  const liveShape = Array.isArray(LLM.SHAPE_SYSTEM) ? LLM.SHAPE_SYSTEM.join('\n') : String(LLM.SHAPE_SYSTEM);
-  eq(shape.text, liveShape, 'shape system text === live SHAPE_SYSTEM');
-  ok(/editor/i.test(shape.text), 'shape prompt is the editor / director\'s-note one');
+  ok(shape.live === false, 'the shape entry is declared (no live model prompt — form is a measured stamp)');
+  ok(/dissolved/i.test(shape.blurb) && /centroid|stamp/i.test(shape.blurb), 'the shape entry describes the dissolved shape pass / form-as-stamp');
+  ok(!/FORM_LIBRARY/.test(String(LLM.FORM_LIBRARY)) && LLM.FORM_LIBRARY === undefined, 'there is no FORM_LIBRARY of prompt strings on EOLLM');
+  ok(typeof LLM.formFor !== 'function', 'there is no formFor prompt-cue helper on EOLLM');
 });
 
 group('conditional variants resolve live and actually add lines', () => {
@@ -92,45 +96,42 @@ group('live parameters mirror EOLLM', () => {
   eq(byId.RECENT_TURNS.value, LLM.RECENT_TURNS, 'RECENT_TURNS mirrors EOLLM');
 });
 
-group('the shape-pass verdict tracks modelTier (the headline question)', () => {
-  // api / capable → the shape prompt IS fed to the model.
-  const api = PF.shape('anthropic:claude-opus-4-8');
-  eq(api.gating.tier, 'api', 'Claude is the api tier');
-  eq(api.gating.active, true, 'shape pass is active (fed to the model) on the api tier');
-
-  const capable = PF.shape('wllama:llama32-3b');
-  eq(capable.gating.tier, 'capable', '3B CPU model is capable');
-  eq(capable.gating.active, true, 'shape pass is active on the capable tier');
-
-  // small → the shape prompt is SKIPPED (the user's specific question).
-  const small = PF.shape('wllama:smollm2-135m');
-  eq(small.gating.tier, 'small', '135M CPU model is small');
-  eq(small.gating.active, false, 'shape pass is SKIPPED (not fed) on the small tier');
-  ok(small.gating.skipReasons.some((r) => r.id === 'small-tier'), 'the small-tier skip reason is named');
-  ok(/runGroundedSmall|join/i.test(small.gating.skipReasons.find((r) => r.id === 'small-tier').meaning), 'it explains the join-only replacement');
-  ok(/composes the answer directly/i.test(small.gating.whenInactive) || /omits the editor/i.test(small.gating.whenInactive), 'it explains what an empty note means downstream');
-});
-
-group("the shape note is shown landing IN the next prompt (fed-in proof)", () => {
+group('the shape pass is dissolved — no model call on any tier (the headline)', () => {
+  // Brief 2: there is no shape-pass model call. The old per-tier "is it fed?"
+  // verdict is gone; the verdict is fixed — dissolved — regardless of tier.
+  for (const key of ['anthropic:claude-opus-4-8', 'wllama:llama32-3b', 'wllama:smollm2-135m']) {
+    const sh = PF.shape(key);
+    eq(sh.dissolved, true, key + ': the shape pass is reported dissolved');
+    eq(sh.gating.modelCall, false, key + ': no shape-pass model call');
+    eq(sh.gating.active, false, key + ': never active — there is no model call to be active');
+  }
+  // Its three jobs, three holders.
   const sh = PF.shape('anthropic:claude-opus-4-8');
-  ok(sh.system.live && /editor/i.test(sh.system.text), 'the live SHAPE_SYSTEM is carried');
-  ok(sh.lands.live, 'buildUserContent rendered a sample answer-pass user message');
-  ok(sh.lands.sampleUserMessage.includes(sh.lands.noteMarker), 'the sample user message contains the editor\'s-note marker');
-  ok(sh.lands.sampleUserMessage.includes(sh.lands.sampleNote), 'the editor\'s note text is injected into the user message');
-  // It must land LAST — just before the trailing "Answer the user's question".
-  const noteAt = sh.lands.sampleUserMessage.indexOf(sh.lands.noteMarker);
-  const answerAt = sh.lands.sampleUserMessage.lastIndexOf('Answer the user');
-  ok(noteAt > 0 && answerAt > noteAt, 'the note lands last, just before "Answer the user\'s question"');
+  ok(/router/i.test(sh.move.holder) && /classifyIntent/i.test(sh.move.source), 'the MOVE is held by the router (classifyIntent)');
+  ok(/centroid|stamp/i.test(sh.form.holder) && /formDegree/.test(sh.form.source), 'the FORM is a per-genre centroid measured on the output (a stamp)');
+  ok(/witness|stamp/i.test(sh.confidence.holder) && /WI-7|truthfulness/i.test(sh.confidence.source), 'the CONFIDENCE is held by the witness stamp (WI-7)');
 });
 
-group('flows bind to live prompts; shape-pass usage is correct', () => {
+group('the talker writes voice-only — the form is NOT in the prompt (proof)', () => {
+  const sh = PF.shape('anthropic:claude-opus-4-8');
+  ok(sh.lands.live, 'buildUserContent rendered a sample answer-pass user message');
+  ok(sh.lands.voiceOnly === true && sh.lands.noteMarker === null, 'there is no form/how-to-answer marker to inject');
+  // The sample is a real grounded answer-pass message; it must carry the spans
+  // and the question but NO how-to-answer / form block of any kind.
+  ok(/quoted exactly/.test(sh.lands.sampleUserMessage), 'the sample carries the spans');
+  ok(!/How to lay this answer out/i.test(sh.lands.sampleUserMessage), 'no "how to lay this answer out" block');
+  ok(!/Editor's note/i.test(sh.lands.sampleUserMessage) && !/form only/i.test(sh.lands.sampleUserMessage), 'no editor\'s-note or form block at all — the talker writes voice-only');
+});
+
+group('flows bind to live prompts; the shape pass is gone', () => {
   const flows = {};
   for (const f of PF.flows()) flows[f.id] = f;
-  ok(flows['grounded-llm'].usesShapePass === true, 'grounded-llm uses the shape pass');
+  ok(flows['grounded-llm'].usesShapePass === false, 'grounded-llm no longer uses a shape pass (dissolved)');
+  ok(!flows['grounded-llm'].calls.some((c) => c.id === 'shape'), 'there is no shape-pass call in the grounded flow');
   ok(flows['plain-chat'].usesShapePass === false, 'plain-chat does not use the shape pass');
   ok(flows['creative'].usesShapePass === false, 'creative does not use the shape pass');
   ok(flows['mechanical'].calls.length === 0, 'mechanical makes zero model calls');
-  // The grounded flow's answer call resolves to the live grounded prompt.
+  // The grounded flow's single model call (the answer pass) binds the live grounded prompt.
   const answer = flows['grounded-llm'].calls.find((c) => c.id === 'answer');
   ok(answer.promptResolved && answer.promptResolved.text === LLM.systemFor('auto', 'qa', true, 1), 'the grounded answer call binds the live grounded prompt');
 });
@@ -139,7 +140,7 @@ group('drift() is clean against the real llm.js', () => {
   const d = PF.drift();
   ok(d.ok === true, 'no drift errors against the live code');
   eq(d.issues.filter((i) => i.level === 'error').length, 0, 'zero error-level drift issues');
-  ok(d.checked >= 4, 'the drift check actually exercised the live prompts');
+  ok(d.checked >= 3, 'the drift check actually exercised the live prompts (grounded / plain / creative; the shape pass is no longer a live prompt)');
 });
 
 group('the registry degrades safely when EOLLM is absent', () => {
@@ -154,7 +155,10 @@ group('the registry degrades safely when EOLLM is absent', () => {
   ok(!threw, 'snapshot() does not throw without EOLLM');
   ok(snap && snap.eollm === false, 'snapshot reports EOLLM missing');
   ok(snap.drift.ok === false, 'drift flags the missing engine');
-  ok(snap.shape.gating.active === null, 'the shape verdict is indeterminate (not a false yes) with no engine');
+  // Brief 2: the shape pass is dissolved as a structural fact, so the verdict
+  // holds even with no engine — there is no model call to be "active".
+  ok(snap.shape.dissolved === true, 'the shape pass reports dissolved even with no engine');
+  ok(snap.shape.gating.active === false, 'never a false "yes" — there is no shape-pass model call');
 });
 
 console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

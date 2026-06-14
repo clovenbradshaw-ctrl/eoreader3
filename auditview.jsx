@@ -232,18 +232,29 @@ function AuditStep({ s }) {
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }
 
-// WI-7 — the per-turn truthfulness chip: bound / void / unbound and coverage.
+// WI-7 — the per-turn truthfulness chip: bound / void / unbound and TWO degrees.
 // Unbound must be 0 (WI-2/WI-3/WI-4); a non-zero value is the dominant term and
-// is shown in alarm. Reads turn.final.truth (attached by EOAudit.end).
-function TruthChip({ truth }) {
+// is shown in alarm. The two graded stamps sit side by side, same shape: the
+// WITNESS degree (truth.degree) — how much of the talker's content a span backs
+// — and the FORM degree (form.degree, Brief 2) — how much the output looks like
+// the KIND of answer it should be (cosine vs the genre centroid). Both approach
+// 1 from below and never reach it. Reads turn.final.truth and turn.final.form.
+function TruthChip({ truth, form }) {
   if (!truth) return null;
-  const cov = truth.coverage != null ? Math.round(truth.coverage * 100) + '%' : (truth.covers || '—');
+  // The witness degree is the headline measure; coverage (a count ratio) is the
+  // fallback for an older turn recorded before the degree existed.
+  const deg = truth.degree != null ? Math.round(truth.degree * 100) + '%'
+    : (truth.coverage != null ? Math.round(truth.coverage * 100) + '%' : (truth.covers || '—'));
+  const fdeg = form && form.degree != null ? Math.round(form.degree * 100) + '%' : null;
   return (
-    <span className="aud-truth" title="truthfulness: bound claims / explicit voids / unbound assertions (unbound must be 0)">
+    <span className="aud-truth" title={'truthfulness: bound claims / explicit voids / unbound assertions (unbound must be 0); witness degree = '
+      + (truth.degree != null ? Math.round(truth.degree * 100) + '% of the answer’s content is witnessed by a span' : 'n/a')
+      + (fdeg ? '; form degree = ' + fdeg + ' (cosine to the ' + (form.move || 'genre') + ' centroid — how much it looks like the right kind of answer)' : '')}>
       <span className="aud-truth-b">{truth.bound}✓</span>
       {truth.voids ? <span className="aud-truth-v"> {truth.voids}⟨⟩</span> : null}
       <span className={truth.unbound ? 'aud-truth-u bad' : 'aud-truth-u'}> {truth.unbound}⊥</span>
-      <span className="aud-truth-c"> · {cov}</span>
+      <span className="aud-truth-c"> · {deg} witnessed</span>
+      {fdeg && <span className="aud-truth-c"> · {fdeg} form{form.revised ? ' ↻' : ''}</span>}
     </span>
   );
 }
@@ -254,22 +265,40 @@ function TruthChip({ truth }) {
 //   • unbound total — the dominant term; must be 0 (WI-2/WI-3/WI-4).
 //   • L1 carry-forward — turns whose model history carried a prior turn's
 //     unverified tokens; must be 0 (WI-1).
-//   • the coverage trace — the approximation, rising toward 1 (the asymptote),
-//     shown per turn so you can watch it climb and never silently drop.
+//   • the witness-degree trace — the approximation, rising toward 1 (the
+//     asymptote), shown per turn so you can watch it climb and never silently
+//     drop. The session degree is content-weighted: how much of everything the
+//     talker has said this session is witnessed by a span.
 function TruthSummary({ turns }) {
   const done = (turns || []).filter(t => t.done && t.final && t.final.truth);
   if (!done.length) return null;
-  let unbound = 0, voids = 0, bound = 0;
-  for (const t of done) { unbound += t.final.truth.unbound || 0; voids += t.final.truth.voids || 0; bound += t.final.truth.bound || 0; }
+  let unbound = 0, voids = 0, bound = 0, wit = 0, contentTot = 0;
+  for (const t of done) {
+    const tr = t.final.truth;
+    unbound += tr.unbound || 0; voids += tr.voids || 0; bound += tr.bound || 0;
+    wit += tr.witnessed || 0; contentTot += tr.witnessContent || 0;
+  }
   const l1 = (turns || []).reduce((n, t) => n + ((t.l1Violations && t.l1Violations.length) || 0), 0);
-  const series = done.map(t => t.final.truth.coverage).filter(c => c != null);
-  const mean = series.length ? series.reduce((a, b) => a + b, 0) / series.length : null;
+  // The per-turn witness degree (the graded stamp), falling back to coverage for
+  // turns recorded before the degree existed.
+  const degOf = (tr) => (tr.degree != null ? tr.degree : tr.coverage);
+  // The session degree is content-weighted (not a mean of means): the share of
+  // ALL the talker's content this session that a span witnesses. This is the
+  // value that climbs toward the asymptote and must never silently regress.
+  const sessionDeg = contentTot ? wit / contentTot : null;
+  // The session FORM degree (Brief 2): the mean of the per-turn form stamps that
+  // were actually measured (embedder-gated, so many turns carry none). Same shape
+  // as the witness degree — a value approached from below, never reaching 1
+  // (matching the centroid exactly would be the average, the death of a particular
+  // answer).
+  const formDegs = done.map(t => t.final.form && t.final.form.degree).filter(d => d != null);
+  const sessionForm = formDegs.length ? formDegs.reduce((a, b) => a + b, 0) / formDegs.length : null;
   const honest = unbound === 0 && l1 === 0;
   return (
     <div className={'aud-truth-sum' + (honest ? '' : ' bad')}>
       <div className="aud-truth-sum-head">
         <b>Truthfulness</b>
-        <span className="aud-dim"> — approaching from below, never regressing</span>
+        <span className="aud-dim"> — witness approaching from below, never regressing</span>
         <span className="aud-grow" />
         <span className={honest ? 'aud-truth-verdict ok' : 'aud-truth-verdict bad'}>{honest ? 'truthful so far ✓' : 'regression ⚠'}</span>
       </div>
@@ -277,15 +306,16 @@ function TruthSummary({ turns }) {
         <span><b className={unbound ? 'aud-void' : ''}>{unbound}</b> unbound <span className="aud-dim">(must be 0)</span></span>
         <span><b className={l1 ? 'aud-void' : ''}>{l1}</b> L1 carry-forward <span className="aud-dim">(must be 0)</span></span>
         <span><b>{bound}</b> bound · <b>{voids}</b> voids</span>
-        {mean != null && <span>coverage <b>{Math.round(mean * 100)}%</b> <span className="aud-dim">mean</span></span>}
+        {sessionDeg != null && <span>witness <b>{Math.round(sessionDeg * 100)}%</b> <span className="aud-dim">of content this session</span></span>}
+        {sessionForm != null && <span>form <b>{Math.round(sessionForm * 100)}%</b> <span className="aud-dim">looks-like-the-kind ({formDegs.length})</span></span>}
       </div>
-      {series.length > 1 && (
-        <div className="aud-truth-trace" title="per-turn coverage — the approximation rising toward the asymptote">
+      {done.length > 1 && (
+        <div className="aud-truth-trace" title="per-turn witness degree — the approximation rising toward the asymptote, never reaching 1">
           {done.map((t, i) => {
-            const c = t.final.truth.coverage;
+            const c = degOf(t.final.truth);
             const h = c == null ? 2 : Math.max(2, Math.round(c * 22));
             const u = (t.final.truth.unbound || 0) > 0 || (t.l1Violations && t.l1Violations.length);
-            return <span key={i} className={'aud-truth-bar' + (u ? ' bad' : '')} style={{ height: h + 'px' }} title={'turn ' + (i + 1) + (c == null ? '' : ' · ' + Math.round(c * 100) + '%') + (u ? ' · violation' : '')} />;
+            return <span key={i} className={'aud-truth-bar' + (u ? ' bad' : '')} style={{ height: h + 'px' }} title={'turn ' + (i + 1) + (c == null ? '' : ' · ' + Math.round(c * 100) + '% witnessed') + (u ? ' · violation' : '')} />;
           })}
         </div>
       )}
@@ -320,7 +350,7 @@ function AuditTurn({ turn }) {
         {(turn.l1Violations && turn.l1Violations.length)
           ? <span className="aud-badge error" title="a prior non-clean turn carried its unverified tokens into this turn's model history (L1 violation)">⚠ L1</span>
           : null}
-        {turn.final && turn.final.truth && <TruthChip truth={turn.final.truth} />}
+        {turn.final && turn.final.truth && <TruthChip truth={turn.final.truth} form={turn.final.form} />}
         {badge}
         {turn.ms != null && <span className="aud-ms">{turn.ms}ms</span>}
       </button>

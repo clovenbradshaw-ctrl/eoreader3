@@ -193,6 +193,49 @@ group('pca (§7 proper) — recovers the dominant axis', () => {
     ok(lib.score([0, 1, 0], target).score < 0, 'a synthesis-shaped draft scores negative against the lookup target');
   });
 
+  // Brief 2 patch — form as a STAMP measured against the per-genre centroid (a
+  // cosine on the OUTPUT, after it is written), with the REC update path that
+  // lets the prototype move. The talker is never handed a form; this only ever
+  // measures and, optionally, names what is off (structural axes, not the vector).
+  await group('form degree — cosine vs the genre centroid, drift diagnosis, REC deposit', async () => {
+    const lib = S.createLibrary(S.parseExemplars([
+      // same-genre exemplars over varying subjects → their centroid is the prototype
+      '{"id":"L1","intent":"lookup","response":"[LOOKUP] one"}',
+      '{"id":"L2","intent":"lookup","response":"[LOOKUP2] two"}',
+      '{"id":"S1","intent":"synthesis","response":"[SYNTH] a long developed reading that unfolds"}',
+    ].join('\n')), { embed: fakeEmbed });
+    await lib.load();
+
+    ok(lib.genreCentroid('lookup'), 'a genre centroid is built from the intent cluster (the prototype)');
+    const near = lib.formDegree('lookup', vecForText('[LOOKUP] a fresh lookup'));
+    const far = lib.formDegree('lookup', vecForText('[SYNTH] a synthesis'));
+    ok(near > far, `in-genre output scores higher than out-of-genre (${near} > ${far})`);
+    ok(near <= 1 && near >= 0 && far >= 0, 'the degree is clamped to [0,1]');
+    eq(lib.formDegree('nope', [1, 0, 0]), null, 'an unknown genre has no centroid ⇒ null degree');
+
+    // "too far" is data-derived: < 3 exemplars ⇒ no floor (retry stays off)
+    eq(lib.formFloor('lookup'), null, 'too few exemplars ⇒ no floor (the retry does not fire on noise)');
+    const lib3 = S.createLibrary(S.parseExemplars([
+      '{"id":"A","intent":"lookup","response":"[LOOKUP] a"}',
+      '{"id":"B","intent":"lookup","response":"[LOOKUP] b"}',
+      '{"id":"C","intent":"lookup","response":"[LOOKUP2] c"}',
+    ].join('\n')), { embed: fakeEmbed });
+    await lib3.load();
+    const fl = lib3.formFloor('lookup');
+    ok(fl != null && fl >= 0 && fl <= 1, 'with enough exemplars the floor is a data-derived value in [0,1] (got ' + fl + ')');
+
+    // the structural diagnosis UNDER the cosine — names what is off, from text axes
+    const drift = lib.formDrift('lookup', 'A long rambling hedged answer that might, perhaps, go on and on across many clauses and more clauses besides.');
+    ok(drift && typeof drift.instruction === 'string' && drift.instruction.length > 0, 'formDrift names what is off (a natural-language instruction, not the centroid)');
+
+    // REC — a deposit moves the prototype toward the deposited shape.
+    const dep = [0, 0, 1];
+    const before = S.cosine(lib.genreCentroid('lookup'), dep);
+    lib.depositForm('lookup', dep, 'a new good lookup', 1);
+    const after = S.cosine(lib.genreCentroid('lookup'), dep);
+    ok(after > before, `after a deposit the centroid sits closer to the deposited shape — REC moved the prototype (${after} > ${before})`);
+  });
+
   // §9 — prompt → archetype matching + length-derived token budget.
   function promptLib() {
     const exemplars = S.parseExemplars([

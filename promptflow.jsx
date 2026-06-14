@@ -13,9 +13,10 @@
                    inspector inline.
      • Prompts   — the live system-prompt inventory + conditional variants + the
                    live assembly parameters.
-     • Shape pass— the editor's director's-note: its live prompt, where its note
-                   lands in the NEXT prompt, and — for the CURRENT model — whether
-                   that note is actually fed to the model or skipped, and why.
+     • Shape pass— the DISSOLVED shape pass: its three jobs and who now holds
+                   each (move → router, form → a per-genre centroid measured on
+                   the output, confidence → the witness stamp), and proof the
+                   talker writes voice-only (no form in the prompt at all).
      • Activity  — what actually fired, read from the glass box (read-only).
 
    Reads window.EOPromptFlow (+ window.EOAudit through it). Renders nothing the
@@ -224,77 +225,48 @@ function PfPromptsTab({ snap, onToast }) {
   );
 }
 
-// The Shape pass tab — the user's headline question: is the director's note
-// actually fed to the model, for the model selected right now?
-function PfShapeTab({ snap, mlcKey, modelReady, onToast }) {
+// The Shape pass tab — the headline is now that the shape pass is DISSOLVED.
+// There is no blind per-turn model call deciding how to answer; its three jobs
+// went to the three things that own them: move → router, form → a per-genre
+// centroid measured on the OUTPUT (a stamp, never in the prompt), confidence →
+// the witness stamp. This renders those holders and proves the form is NOT in
+// the prompt (the answer-pass message is voice-only).
+function PfShapeTab({ snap }) {
   const sh = snap.shape;
-  const g = sh.gating;
-  // active (tier-based) AND a model is loaded ⇒ the note is genuinely sent.
-  const verdict = g.active == null ? 'unknown' : (g.active ? (modelReady ? 'fed' : 'fed-when-loaded') : 'skipped');
-  const V = {
-    fed: { cls: 'on', icon: 'check', head: 'Fed to the model', sub: 'On this model the shape pass runs as a first call, and its note is injected into the answer pass’s user message.' },
-    'fed-when-loaded': { cls: 'wait', icon: 'activity', head: 'Will be fed — once a model is loaded', sub: 'This model’s tier keeps the shape pass; no call fires at all until the model finishes loading.' },
-    skipped: { cls: 'off', icon: 'x', head: 'NOT fed — skipped on this model', sub: 'The small tier skips the shape pass entirely and takes the join-only path instead.' },
-    unknown: { cls: 'unk', icon: 'info', head: 'Indeterminate', sub: 'No model is selected, so the tier — and therefore the verdict — can’t be read.' },
-  }[verdict];
   return (
     <div className="pf-shape-tab">
-      <div className={'pf-verdict pf-verdict-' + V.cls}>
-        <Icon name={V.icon} size={20} />
+      <div className="pf-verdict pf-verdict-off">
+        <Icon name="x" size={20} />
         <div className="pf-verdict-txt">
-          <div className="pf-verdict-head">Shape pass: {V.head}</div>
-          <div className="pf-verdict-sub">{V.sub}</div>
-          <div className="pf-verdict-meta">
-            model <code>{g.model || '(none selected)'}</code> · tier <b className={'pf-tier pf-tier-' + (g.tier || 'unknown')}>{g.tier || 'unknown'}</b>
-            {g.tier != null && <span className="pf-dim"> · verdict from <code>EOLLM.modelTier()</code>, live</span>}
-          </div>
+          <div className="pf-verdict-head">Shape pass: dissolved</div>
+          <div className="pf-verdict-sub">No blind per-turn model call decides how to answer. The three jobs the old editor welded together were split out to the three things that can actually do them.</div>
         </div>
       </div>
 
-      <p className="pf-lead">Before Cleo answers a grounded turn, an <b>editor</b> hands it a one-breath director’s note — what the user is after, what register fits, what a bad answer looks like. It is a <b>separate model call</b>; its note then rides into the <b>next</b> prompt. It never answers and never states document facts.</p>
+      <p className="pf-lead">The old shape pass was an editor model that — seeing the title but never the spans — emitted a note mixing three jobs, leaking world knowledge and confidence into a paragraph meant to be about layout. It is <b>dissolved</b>. The FORM is not handed to the talker either: it is a per-genre centroid the OUTPUT is measured against, after — a stamp, the same shape as the witness degree.</p>
 
       <div className="pf-twocall">
-        <div className={'pf-tc pf-tc-shape' + (g.active === false ? ' pf-tc-off' : '')}>
-          <div className="pf-tc-h"><span className="pf-tc-n">1</span> Shape pass {g.active === false ? <span className="pf-badge pf-badge-off">skipped</span> : <span className="pf-badge pf-badge-on">runs</span>}</div>
-          <div className="pf-tc-b">system = <b>SHAPE_SYSTEM</b><br />sees the question, recent turns, doc title — <i>never</i> the spans/notes<br />→ produces an editor’s note</div>
-        </div>
-        <span className="pf-tc-arrow" title="the note becomes input to the answer pass">note ↓</span>
-        <div className="pf-tc pf-tc-answer">
-          <div className="pf-tc-h"><span className="pf-tc-n">2</span> Answer pass</div>
-          <div className="pf-tc-b">system = <b>grounded</b><br />user message = spans + notes + <b>the editor’s note (last)</b><br />→ the grounded answer</div>
-        </div>
-      </div>
-
-      <div className="pf-k pf-section-k">the editor’s prompt <PfLiveTag live={sh.system.live} /></div>
-      <pre className="pf-pre">{sh.system.text}</pre>
-
-      <div className="pf-k pf-section-k">where the note lands in the NEXT prompt <span className="pf-dim">(live sample from <code>buildUserContent</code>)</span></div>
-      <p className="pf-dim pf-pad">This is a real answer-pass user message built with a sample note. When the shape pass is active, this is the proof it is fed in — the note sits last, just before the question:</p>
-      <pre className="pf-pre pf-pre-sample">{renderSample(sh.lands)}</pre>
-
-      <div className="pf-k pf-section-k">when the note is NOT fed in</div>
-      <div className="pf-meaning">{g.whenInactive}</div>
-      <ul className="pf-skips">
-        {g.skipReasons.map(r => (
-          <li key={r.id} className={g.tier === 'small' && r.id === 'small-tier' ? 'pf-skip-now' : ''}>
-            <b>{r.when}</b> <span className="pf-skip-src">{r.source}</span>
-            <div className="pf-skip-mean">{r.meaning}</div>
-          </li>
+        {[['MOVE', sh.move], ['FORM', sh.form], ['CONFIDENCE', sh.confidence]].map(([k, h]) => (
+          <div key={k} className="pf-tc">
+            <div className="pf-tc-h">{k} → <b>{h.holder}</b></div>
+            <div className="pf-tc-b"><code>{h.source}</code><br />{h.note}</div>
+          </div>
         ))}
-      </ul>
-
-      <div className="pf-shape-usage">
-        <div><span className="pf-k">used by</span> {g.usedBy.join('; ')}</div>
-        <div><span className="pf-k">never used by</span> {g.skippedBy.join('')}</div>
       </div>
+
+      <div className="pf-k pf-section-k">the talker writes VOICE-ONLY <PfLiveTag live={sh.lands.live} /> <span className="pf-dim">(live sample from <code>buildUserContent</code>)</span></div>
+      <p className="pf-dim pf-pad">A real answer-pass user message: there is no how-to-answer block in it. The form never enters the prompt — it is measured on the output afterward, and the centroid is never unfolded into words:</p>
+      <pre className="pf-pre pf-pre-sample">{renderSample(sh.lands)}</pre>
     </div>
   );
 }
 
-// Highlight the editor's-note block inside the sample user message so the eye
-// lands on exactly the part the shape pass injects.
+// Highlight a marker block inside the sample user message, when there is one.
+// Brief 2 patch: the answer-pass message is voice-only, so there is no marker —
+// the sample renders plain, which is the proof.
 function renderSample(lands) {
   const text = lands.sampleUserMessage || '';
+  if (!lands.noteMarker) return text;
   const i = text.indexOf(lands.noteMarker);
   if (i < 0) return text;
   // mark from the note marker to the trailing "Answer the user's question"
@@ -329,9 +301,7 @@ function PfActivityTab({ snap }) {
             <span className="pf-dim">{t.id}</span>
           </div>
           <div className="pf-act-calls">
-            {t.shape && (t.shape.skipped
-              ? <span className="pf-act-call pf-act-call-off">shape · skipped{t.shape.tier ? ' (' + t.shape.tier + ')' : ''}</span>
-              : <span className="pf-act-call pf-act-call-shape">shape{t.shape.hasNote ? ' · note' : ' · empty'}</span>)}
+            {t.shape && <span className="pf-act-call pf-act-call-shape">form{t.shape.move ? ' · ' + t.shape.move : ''}{t.shape.generated === false ? ' · looked up' : ''}</span>}
             {t.llmCalls.length
               ? t.llmCalls.map((c, i) => <span key={i} className="pf-act-call">{c.skipped ? 'skipped' : c.mode}{c.systemChars != null ? ' · sys ' + c.systemChars + 'c' : ''}</span>)
               : <span className="pf-act-call pf-act-call-mech">no model call (mechanical)</span>}
@@ -377,7 +347,7 @@ function PromptFlowDrawer({ onClose, onToast, mlcKey, modelReady }) {
     if (!snap) return <div className="pf-empty"><Icon name="alert" size={22} /><p>The prompt registry (window.EOPromptFlow) isn’t loaded.</p></div>;
     if (tab === 'flow') return <PfFlowTab snap={snap} sel={sel} onSel={setSel} onToast={onToast} />;
     if (tab === 'prompts') return <PfPromptsTab snap={snap} onToast={onToast} />;
-    if (tab === 'shape') return <PfShapeTab snap={snap} mlcKey={mlcKey} modelReady={modelReady} onToast={onToast} />;
+    if (tab === 'shape') return <PfShapeTab snap={snap} />;
     if (tab === 'activity') return <PfActivityTab snap={snap} />;
     return null;
   };
@@ -398,7 +368,7 @@ function PromptFlowDrawer({ onClose, onToast, mlcKey, modelReady }) {
         <div className="drawer-tabs">
           <button className={'drawer-tab' + (tab === 'flow' ? ' on' : '')} onClick={() => setTab('flow')}>Flow</button>
           <button className={'drawer-tab' + (tab === 'prompts' ? ' on' : '')} onClick={() => setTab('prompts')}>Prompts{snap ? ' · ' + snap.prompts.length : ''}</button>
-          <button className={'drawer-tab' + (tab === 'shape' ? ' on' : '')} onClick={() => setTab('shape')} title="Is the shape/editor prompt actually fed to the model?">Shape pass</button>
+          <button className={'drawer-tab' + (tab === 'shape' ? ' on' : '')} onClick={() => setTab('shape')} title="The dissolved shape pass: move → router, form → library, confidence → stamp">Shape pass</button>
           <button className={'drawer-tab' + (tab === 'activity' ? ' on' : '')} onClick={() => setTab('activity')}>Activity{actCount ? ' · ' + actCount : ''}</button>
         </div>
         <div className="drawer-body pf-body">

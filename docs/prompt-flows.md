@@ -94,17 +94,34 @@ along.
 
 - **Runner**: `runGroundedScope` (app.jsx:1905)
 - **Reached when**: route decision is `mechanical` AND primary is `prose` AND model is ready
-- **Stage 1 — shape pass**:
-  - `EOLLM.shapePass({ mlcKey, question, history, docTitle, metaHint })` (llm.js:1186)
-  - System prompt: `SHAPE_SYSTEM` (llm.js:1166), examples-driven editor's-note format
-  - User content: doc title + bibliographic-header hint + last 4 turns + question
-  - Sampling: `temperature: 0.3`, `maxTokens: 90`
-  - Output: 2–4 sentences describing the *move*, never facts
-  - Returns `''` on failure (the answer stage proceeds without a note)
-- **Stage 2 — answer pass**:
-  - `EOLLM.phrase` (llm.js:1389)
-  - System prompt: grounded, llm.js:1017 (with a summary-specific line at 1032 and a relation-gate variant at 1041)
-  - User content: assembled by `buildUserContent` (llm.js:1232) — question, doc title, spans (quoted verbatim with `[s##]` tags), notes prose, **editor's note last** (llm.js:1254), then a repeated "Answer the user's question: …"
+- **Stage 1 — the shape pass is DISSOLVED (Brief 2).** There is no blind
+  per-turn model call deciding how to answer. Its three jobs went to the three
+  things that own them: the **move** is the router's intent (`classifyIntent`,
+  upstream), the **form** is a per-genre embedding centroid the *output* is
+  measured against afterward (a stamp — `shape.js · formDegree` — never a prompt
+  input), and the **confidence** reads off the witness stamp (WI-7). `shapeFor`
+  now returns `''`; the talker writes voice-only.
+- **The one model call — the answer pass**:
+  - `EOLLM.phrase` (llm.js)
+  - System prompt: grounded, voice-only (Brief 2) — span trust is graded
+    ("witnessed evidence", coverage tracked for the talker, not a flat "trust
+    them"); there is **no absence-order** ("say the document doesn't say" was
+    removed — low witness rides the stamp); and no how-to-answer / form / "how
+    sure to sound" instruction. Summary-specific degeneracy line + relation-gate
+    variant still apply.
+  - User content: assembled by `buildUserContent` — question, doc title, spans
+    (verbatim `[s##]` tags), notes prose, then the closing "Answer the user's
+    question: …". **No editor's-note / form block** (the talker writes
+    voice-only).
+- **The FORM pass (after the draft, before binding).** The draft is embedded and
+  cosined against the genre centroid (`formDegree`). When it sits more than a
+  genre-σ below the prototype (`formFloor`, data-derived) and the embedder +
+  exemplar library are warm, ONE structural-drift correction runs
+  (`formDrift` → `decomposeDrift`/`revisionInstruction`, named axes — length,
+  commitment, prose-vs-list, warmth — **never the centroid**); the more-in-shape
+  draft wins. The final degree rides as a second stamp beside the witness degree;
+  a clean grounded output is deposited back (`depositForm`, REC) so the centroid
+  learns. Embedder-gated: a no-op (no stamp, no retry) when the embedder is cold.
 - **Context tiers** (chosen at app.jsx:1884–1943):
   1. summary/who intent → `contextScope` curated blob
   2. recovered embedding hits → `partsFromHits(semanticHits)`
@@ -255,7 +272,12 @@ browser. Use any supplied passages as raw material to compose freely.
 Do not add citation markers.
 ```
 
-### C.4 Shape-pass system prompt — `SHAPE_SYSTEM`, llm.js:1166
+### C.4 Shape-pass system prompt — REMOVED (Brief 2; see §J)
+
+> **Dissolved.** `SHAPE_SYSTEM` and the `shapePass` model call no longer exist.
+> The prompt below is kept only as a record of what was removed. The move is the
+> router's intent, the form is a measured centroid stamp (`shape.js`), and the
+> confidence is the witness stamp — none of them a prompt. See §J and B.3.
 
 ```
 You are the editor sitting beside Cleo, a local assistant that answers
@@ -361,12 +383,16 @@ matters — the first match settles the turn.
 a reply, but the model came back empty / failed audit" message.
 
 **The unbound lane is the dominant truthfulness term.** Keeping a draft
-that bound to no passage is the one dishonest move (it overstates binding
-status), so WI-4 removed the kept-unbound path entirely: an unbound draft
-now becomes the *residual* (an explicit void on the absent target plus the
-bound subject material, settled as `status: 'residual'` — a success), or
-the mechanical reading, or an honest refusal. The per-turn unbound count
-(glass box, §I) is therefore 0 by construction.
+that bound to no passage *as a clean assertion* is the one dishonest move
+(it overstates binding status). WI-4 does not discard the draft and speak
+the mechanical reading in its place — that was the inversion. Instead the
+talker's own sentence is **served as the residual**: its unsupported terms
+struck (`{{void:…}}`), the absent target flagged (`{{absent:…}}`), settled
+`status: 'residual'` (grounded, a success) with the witness degree (§I)
+reading low so the gap is visible *without the talker asserting silence*.
+The mechanical reading rides as click-to-view evidence, never as the reply;
+an honest refusal is reserved for when the model produced no prose to stamp.
+The per-turn unbound count (glass box, §I) is therefore 0 by construction.
 
 ## F. History wrapping (`epistemicTag`)
 
@@ -497,27 +523,126 @@ convergence under a standing revision channel, not arrival.
 
 **The instrument (WI-7).** `EOAudit.truthfulness(final)` (audit.js)
 attaches a `truth` block to every settled turn — `{ bound, voids,
-unbound, coverage }` — computed uniformly in `end()`, so grounded, chat,
-mechanical, residual, repair and compute turns are all measured. The glass
-box (auditview.jsx) surfaces it:
+unbound, coverage, degree, witnessed, witnessContent, witness }` —
+computed uniformly in `end()`, so grounded, chat, mechanical, residual,
+repair and compute turns are all measured. The glass box (auditview.jsx)
+surfaces it:
 
-- a per-turn chip `N✓ M⟨⟩ K⊥ · coverage%` (unbound `K` shown in alarm if
-  ever non-zero);
+- a per-turn chip `N✓ M⟨⟩ K⊥ · D% witnessed` (unbound `K` shown in alarm
+  if ever non-zero);
 - a ⚠ L1 badge when a turn's assembled history carried a prior turn's
   unverified tokens (`turn.l1Violations`);
 - a per-session summary (`TruthSummary`): unbound total (must be 0), L1
-  carry-forward (must be 0), and the coverage trace — the approximation
-  climbing toward the asymptote.
+  carry-forward (must be 0), and the witness-degree trace — the
+  approximation climbing toward the asymptote.
 
-**EO mapping.** DEF defines binding (the grounding criterion); EVA tests
-each claim against it (the binder, the vetoes, `coverageGaps`); REC
-restructures when EVA cannot conclude (gap-retrieve, the convergence loop,
-the residual). Coverage is the approximation, complete binding the
-asymptote, defeasibility what keeps it open.
+**The witness DEGREE (the asymptote, re-attached).** A stamp that says
+verified / not-verified is still arithmetic, just relocated; to leave the
+floor the stamp has to carry *degree*. `witnessOnProse` (audit.js) measures,
+on the talker's **own** settled prose, the fraction of each sentence's
+content tokens that a span witnesses: a sentence that bound to a span
+witnesses its content; a `{{void:…}}`/`{{absent:…}}` subtracts what the page
+could not carry; an unbound sentence witnesses nothing. The turn `degree` is
+the content-weighted mean; the session degree is `Σwitnessed / Σcontent`
+across turns. Any standing void or unbound sentence holds it strictly below
+1 — approached from below, never reached. This is the quantity the asymptote
+attaches to: degree of witness on what was *said*, not a literal string
+match (the floor the earlier framing was stuck on).
 
-**Parity floor.** None of WI-1…WI-7 alters a goldened engine function
-(`retrieve` / `context` / `answer` text·audit·cites / `inventedTerms` /
-`bindCitations`). Every change lives in the talker/orchestration layer
-(app.jsx), the LLM layer (llm.js: `modelTier`), or read-only
-instrumentation (audit.js, auditview.jsx). `tests/parity.js` stays
-bit-exact by construction.
+**The type gate (DEF — the fourth NUL state).** The veto used to decide
+"is this capitalized span a referent the page should carry?" with
+`body.includes(token)`, an existence-layer operator doing significance-layer
+work: a sentence-initial "Give"/"Based"/"Sure"/"What's" was harvested as a
+name, failed the substring test, fell into antimatter, and annihilated the
+turn. `nonReferentialCaps` (engine.js) now classifies each capitalized token
+by **shape** (compromise POS in context) before the presence test. A
+*referent* is a nominal (Noun/ProperNoun, not a Pronoun); a *structural*
+token (connective, discourse adverb) or *pragmatic* one (imperative verb,
+interrogative, interjection, contraction) is **not truth-apt** — the fourth
+NUL state (present / absent / never-set are the other three) — and can never
+reach antimatter or be struck as invented. Derived, never enumerated: the
+same surface flips by role ("Give me the gist" ⇒ dropped vs "The Give was
+generous" ⇒ kept), which no word list can do. `referents` / `referentsScope`
+/ `inventedTerms` all gate this way.
+
+**EO mapping.** DEF defines what is even truth-apt (the type gate) and the
+binding criterion; EVA tests each claim against it (the binder, the vetoes
+— now *stamps*, `coverageGaps`); REC restructures when EVA cannot conclude
+(gap-retrieve, the convergence loop, the residual). The witness degree is
+the approximation, complete witness the asymptote, defeasibility what keeps
+it open.
+
+**The grounder never speaks in the talker's place.** The veto stamps; it no
+longer gates-and-substitutes. A mis-classified token becomes a `{{void:…}}`
+flag on the talker's own sentence (served, read), not a discard. The WI-4
+residual attaches a registered-absence flag to the talker's sentence rather
+than prepending the mechanical reading as a body; `runGroundedSmall` serves
+the talker's flagged rephrase rather than the mechanical text when join-only
+breaks; and the mechanical reading rides as click-to-view **evidence** (the
+glass box), never as the reply. No raw span or mechanical reading is ever
+the chat reply in the grounded path.
+
+**Parity floor.** The type gate edits goldened engine functions *on
+purpose* (`referents` / `referentsScope` / `inventedTerms`) — that freeze
+was exactly why the defect was unreachable. The change is parity-safe on the
+*old* fixtures (a real name, present or absent, is unchanged; only
+non-nominals drop) and `tests/parity.js` is re-goldened with **corrected
+fixtures** that pin the new invariant: a sentence-initial "Give" produces no
+antimatter referent and "Based"/"Sure"/"What's" are never struck invented,
+with none of those words in any list. The instrument additions (WI-7 degree)
+and the orchestration changes live in audit.js / auditview.jsx / app.jsx.
+`tests/typegate.test.js` is the behavioral pin.
+
+## J. The floor stops talking (Brief 2 — the prompt layer + the form stamp)
+
+Brief 1 made the *engine* stamp-not-gate. Brief 2 takes absence, span-trust,
+and "how to answer" out of the talker's voice and onto stamps too.
+
+**Absence is a measurement, not a sentence.** The grounded prompt's
+absence-order ("if neither covers the question, say plainly that the document
+doesn't say") is *removed*, not softened — leaving it in would move the refusal
+out of the audit trail and into the talker's fluent voice, which is worse. Low
+witness is carried by the WI-7 degree (Brief 1); the talker stays on what it
+has and the stamp shows the gap. A retrieval miss now shows as low witness, not
+a confident absence claim.
+
+**Span trust is graded.** "Spans — exact sentences… Trust them; lean on them"
+became witness language: the passages are *witnessed evidence*, and how fully
+they cover the question is tracked *for* the talker, so it leans on them because
+they are witnessed, not because the prompt commands trust.
+
+**The shape pass is dissolved; form is a second stamp.** The blind per-turn
+`shapePass` model call (which saw the title but not the spans, and leaked world
+knowledge + confidence into a paragraph about layout) is gone. Its three jobs:
+- **move** → the router's intent (`classifyIntent`), mechanical and auditable;
+- **form** → a per-genre embedding **centroid** the *output* is cosined against,
+  after (`shape.js · formDegree`): "does this look like the KIND of answer it
+  should be?" The centroid is the *average* of many same-genre, subject-varying
+  exemplars (`byIntent` → `centroid`), so the subjects cancel and the shared
+  shape survives — a prototype, neither one exemplar nor a checklist. It rides
+  as a stamp beside the witness degree, climbs toward 1 from below (matching the
+  centroid exactly would be the average — the death of a particular answer), and
+  **learns**: a clean grounded output is deposited (`depositForm`, REC) so the
+  prototype tracks the actual distribution of good answers, bounded per genre.
+  When an output sits more than a genre-σ below the prototype (`formFloor`,
+  data-derived, never a magic number) a single structural-drift correction runs
+  (`formDrift` → named axes, **never the centroid**) — the build's one decision:
+  **form degree drives a bounded retry, not just a grade** (the new-answer
+  signal "right words, wrong kind of answer"), with a *reason* underneath the
+  cosine so it is never a retry wired to a bare number.
+- **confidence** → the witness stamp (WI-7); "one line, no hedging" no longer
+  exists as an instruction — confidence comes *up* from the evidence, not *down*
+  from a note.
+
+**The hard rule.** The centroid stays a vector measured against and updated; it
+is never unfolded into a feature list the talker is handed. The felt sense stays
+tacit — a distance and a pull, never words in a prompt. (`shape.js` holds the
+centroid; nothing reads it into text.) The retry's instruction comes from
+hand-labeled structural axes, a separate object from the centroid.
+
+**No new lists.** The move reuses the router; the form is a vector centroid; the
+drift instruction is labeled axes. Nothing here enumerates words, phrases, or
+absence-synonyms. The talker prompt is voice-only and carries no title, entity,
+or confidence cue. `tests/shape.test.js` pins the centroid / degree / floor /
+drift / REC; `tests/llm.test.js` + `tests/promptflow.test.js` pin the
+voice-only prompt and the dissolved pass.

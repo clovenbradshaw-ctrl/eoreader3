@@ -514,7 +514,78 @@
       return discriminativeScore(vec, targetShape);
     }
 
-    const self = { load, ready, readyPrompts, select, score, matchPrompt, byIntent, exemplars: lib };
+    /* ---- form as a STAMP measured against the genre prototype (Brief 2 patch) ----
+       The FORM is NOT a template handed to the talker — that would be steering. It
+       is a per-genre CENTROID the OUTPUT is measured against, after it is written.
+       genreCentroid(move) is the prototype: the weighted mean of every same-genre
+       exemplar's response embedding, so the subjects cancel and the shared SHAPE
+       is what survives the averaging. A prototype is what is left when the
+       specifics wash out — neither one favorite example (a memory) nor a checklist
+       (a definition). It stays a vector; it is never unfolded into words. */
+    const FORM_CAP = 24;   // learned deposits kept per genre — the prototype keeps moving, bounded
+    function genreCentroid(move) {
+      if (!embedded) return null;
+      const ex = byIntent(String(move || '')).filter(e => e.responseVec);
+      if (!ex.length) return null;
+      return centroid(ex.map(e => e.responseVec), ex.map(e => e.weight || 1));
+    }
+    // The form DEGREE: cosine of the output against the genre prototype, clamped
+    // to [0,1] (a negative cosine just means "nothing like this genre"). This is
+    // the smoke alarm — how much the output looks like the KIND of thing it is
+    // meant to be — never a reason. It never reaches 1: an output that matched the
+    // centroid exactly would be the average, the death of a particular answer.
+    // Null when the library is degraded or the genre has no exemplars.
+    function formDegree(move, vec) {
+      const c = genreCentroid(move);
+      if (!c || !vec) return null;
+      const d = cosine(vec, c);
+      return d > 1 ? 1 : (d < 0 ? 0 : d);
+    }
+    // The structural diagnosis UNDER the cosine — what is off, in NAMED axes
+    // (length, commitment, list-vs-prose, warmth), measured from the draft TEXT
+    // against the genre's exemplar texts. The cosine is the smoke alarm; this is
+    // the smell of smoke that says where. It is hand-labeled structure, NOT the
+    // centroid unfolded — the prototype stays a vector, the instruction comes from
+    // the axes — so wiring a retry to it never reads the felt sense into a spec.
+    function formDrift(move, draftText) {
+      const ex = byIntent(String(move || ''));
+      if (!ex.length) return null;
+      return revisionInstruction(draftText, ex.map(e => e.response));
+    }
+    // "Too far" is DATA-DERIVED, never a magic threshold: the genre's own
+    // exemplars sit some typical distance from their centroid, and an output more
+    // than one σ below that typical fit is the one worth a correction. Returns
+    // null when there are too few exemplars to derive a floor (so the retry stays
+    // off rather than firing on noise).
+    function formFloor(move) {
+      const c = genreCentroid(move);
+      const ex = byIntent(String(move || '')).filter(e => e.responseVec);
+      if (!c || ex.length < 3) return null;
+      const sims = ex.map(e => cosine(e.responseVec, c));
+      const mean = sims.reduce((a, b) => a + b, 0) / sims.length;
+      const variance = sims.reduce((a, b) => a + (b - mean) * (b - mean), 0) / sims.length;
+      return Math.max(0, mean - Math.sqrt(variance));
+    }
+    // REC — the prototype LEARNS. A good output (well-witnessed) is deposited so
+    // the centroid moves toward it; the felt sense updates from the cases it would
+    // otherwise keep scoring as malformed, or it is a frozen rule in a felt-sense
+    // costume. Bounded per genre (oldest learned deposit drops) so it keeps moving
+    // without unbounded growth. The deposit is a vector (+ its text, for the drift
+    // axes); it is never read back into any prompt.
+    function depositForm(move, vec, response, weight) {
+      if (!embedded || !vec) return false;
+      const intent = String(move || '');
+      lib.push({ id: 'learned-' + intent + '-' + Date.now().toString(36), intent,
+        shape_tags: [], anchor_axes: [], user_turn: '', context_sketch: '',
+        response: String(response || ''), notes: 'learned', weight: typeof weight === 'number' ? weight : 1,
+        responseVec: vec, learned: true });
+      const learned = lib.filter(e => e.learned && e.intent === intent);
+      if (learned.length > FORM_CAP) { const i = lib.indexOf(learned[0]); if (i >= 0) lib.splice(i, 1); }
+      return true;
+    }
+
+    const self = { load, ready, readyPrompts, select, score, matchPrompt, byIntent, exemplars: lib,
+      genreCentroid, formDegree, formFloor, formDrift, depositForm };
     return self;
   }
 
