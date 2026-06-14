@@ -7,6 +7,7 @@ import '../engine.js';
 import '../store.js';
 import '../audit.js';
 import '../composition.js';
+import '../addressee.js';
 import '../pyodide.js';
 import '../compute.js';
 import '../enrich.js';

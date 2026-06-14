@@ -1,8 +1,10 @@
 /* Mount the composition artifact (compose.jsx → window.CompositionView) through
    jsdom — the same way the markdown / message-boundary checks render the real
-   client components — so the two-pane view, the plan tree, the confidence bars
-   and the action surface are proven to render without a hook or runtime error,
-   which the pure composition.test.js (the fold/witness/monitor) cannot catch.
+   client components — so the clean Google-Docs surface AND the (toggled) plan
+   tree / confidence bars / action surface are proven to render without a hook or
+   runtime error, which the pure composition.test.js (the fold/witness/monitor)
+   cannot catch. Quill is not loaded here, so the editor exercises its textarea
+   fallback — exactly the degraded path the surface must hold.
 
    Run with `node tests/compose.smoke.js`. */
 'use strict';
@@ -45,6 +47,7 @@ const W = window;
 
 let pass = 0, fail = 0; const fails = [];
 function ok(cond, msg) { if (cond) { pass++; } else { fail++; fails.push(msg); console.error('  ✗ ' + msg); } }
+function click(el) { TestUtils.act(() => { el.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); }); }
 
 ok(typeof W.CompositionView === 'function', 'compose.jsx published window.CompositionView');
 ok(typeof W.EOComposition === 'object', 'composition.js published window.EOComposition');
@@ -53,7 +56,8 @@ const container = window.document.getElementById('root');
 const root = ReactDOMClient.createRoot(container);
 const model = { name: 'Test model', mlc: 'test:model' };
 
-// (1) an EMPTY composition doc — proves the frame editor and empty states render
+// (1) an EMPTY composition doc — the clean Google-Docs surface is the default;
+// the plan/grounding/confidence framework is one ⚙ toggle away.
 let appended = [];
 const emptyLog = W.EOComposition.newDoc({ genre: 'plain-report' });
 const emptyDoc = { id: emptyLog[0].id, name: 'Untitled', kind: 'composition', _events: emptyLog, frame_id: emptyLog[1].id };
@@ -67,10 +71,21 @@ try {
 } catch (e) { threw = e; }
 ok(!threw, 'an empty composition renders without throwing' + (threw ? ' — ' + threw.message : ''));
 let html = container.innerHTML;
-ok(/Plan/.test(html) && /Document/.test(html), 'both panes render (Plan / Document headers)');
-ok(/Set the thesis or question/.test(html) || /cmp-frame/.test(html), 'the frame editor renders');
+ok(/cmp-clean\b/.test(html), 'the clean Google-Docs surface is the default view');
+ok(!!container.querySelector('.cmp-clean-thesis'), 'the topic field renders on the clean surface');
+ok(/✍ Write/.test(html), 'the Write action renders on the clean surface');
+ok(!!container.querySelector('.cmp-clean-frame-toggle'), 'the ⚙ Framework toggle renders');
+ok(/Set what this document is about/.test(html), 'the empty clean surface shows its prompt');
+ok(!/cmp-split/.test(html), 'the framework two-pane view is hidden by default');
+
+// toggling ⚙ Framework reveals the plan / frame editor / action surface
+click(container.querySelector('.cmp-clean-frame-toggle'));
+html = container.innerHTML;
+ok(/Plan/.test(html) && /Document/.test(html), 'the framework view shows both panes (Plan / Document)');
+ok(/Set the thesis or question/.test(html) || /cmp-frame/.test(html), 'the frame editor renders in the framework view');
 ok(/No plan yet/.test(html), 'the empty plan shows its prompt');
 ok(/Write it/.test(html) && /Outline only/.test(html) && /\+ Unit/.test(html), 'the doc action surface renders (Write / Outline / + Unit)');
+ok(!!container.querySelector('.cmp-readview'), 'the framework view offers a way back to the reading surface');
 
 // (2) a POPULATED fold — a unit, drafted by the talker, lightly edited by the
 // user so authorship is mixed; stamped figure-grounded / advance.
@@ -87,6 +102,9 @@ const stamp = C.make.stamp({ doc_id: doc.id, unit_id: u.id, draft_id: draft.id, 
   confidence: C.confidence({ witness: 0.72, retrieval: 0.8 }) });
 const route = C.make.route({ doc_id: doc.id, unit_id: u.id, decision: 'advance', predicate: 'witness >= 0.4 AND form >= 0.5 AND (coherence null OR >= 0.5)', triggered_by: C.confidence({ witness: 0.72 }) });
 const fullDoc = { id: doc.id, name: 'Evictions', kind: 'composition', _events: [doc, frame, u, draft, stamp, route], frame_id: frame.id };
+// reset the tree so the empty-doc's framework toggle doesn't leak as component
+// state into this render — a fresh instance starts on the clean surface again
+TestUtils.act(() => { root.render(null); });
 threw = null;
 try {
   TestUtils.act(() => {
@@ -95,18 +113,29 @@ try {
 } catch (e) { threw = e; }
 ok(!threw, 'a populated composition renders without throwing' + (threw ? ' — ' + threw.message : ''));
 html = container.innerHTML;
+// the clean surface shows the assembled body in the editor (textarea fallback,
+// since Quill isn't loaded in jsdom) and offers to continue writing
+const ta = container.querySelector('.cmp-doc-ta');
+ok(!!ta && /The city recorded twelve thousand filings/.test(ta.value || ''), 'the assembled document renders in the clean editor');
+ok(/✍ Continue/.test(html), 'with content, the clean action becomes Continue');
+
+// toggle to the framework view for the audit
+click(container.querySelector('.cmp-clean-frame-toggle'));
+html = container.innerHTML;
 ok(/report the count/.test(html), 'the unit job renders in the plan tree');
 ok(/The city recorded twelve thousand filings/.test(html), 'the drafted prose renders in the document pane');
-// authorship is ALWAYS visible (the canvas) — shaded runs + inline chips
-ok(/cmp-by-talker/.test(html) && /cmp-by-user/.test(html), 'authorship runs are shaded (talker vs you)');
-ok(/cmp-chip/.test(html) && />you</.test(html) && />talker</.test(html), 'inline author chips render in the flow ([you] / talker)');
+// authorship runs are shaded; only the user's run carries a chip now — the
+// model's grounded prose reads clean (no "talker" chip)
+ok(/cmp-by-talker/.test(html) && /cmp-by-user/.test(html), 'authorship runs are shaded (your edits vs the grounded draft)');
+ok(/cmp-chip cmp-by-user/.test(html) && />you</.test(html), 'your edit carries a "you" chip in the flow');
+ok(!/cmp-chip cmp-by-talker/.test(html), "the model's grounded prose carries no 'talker' chip");
 ok(/sentences yours/.test(html), 'the authorship summary renders (you wrote N of M)');
 ok(/band-advance/.test(html), 'the monitor route colours the band (advance)');
 
 // clicking the card (not the prose) selects → reveals the unit's full audit
 const card = container.querySelector('#cmp-card-' + u.id);
 ok(!!card, 'the unit is a paragraph in the document canvas');
-TestUtils.act(() => { card.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+click(card);
 html = container.innerHTML;
 ok(/figure-grounded/.test(html), 'selecting reveals the witness tag as a word');
 ok(/witness/.test(html) && /coherence/.test(html), 'selecting reveals the full confidence vector (all six components labelled)');
@@ -115,7 +144,7 @@ ok(/null/.test(html), 'an unmeasured component renders as null, not zero');
 // clicking the prose itself turns that paragraph into a seamless inline editor
 const proseEl = container.querySelector('#cmp-card-' + u.id + ' .cmp-prose');
 ok(!!proseEl, 'the prose is present to click into');
-TestUtils.act(() => { proseEl.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+click(proseEl);
 ok(!!container.querySelector('.cmp-prose-edit'), 'clicking the prose opens an inline editor (click anywhere and type)');
 
 // (3) the projection — proves the composition is queryable as a prose shape,

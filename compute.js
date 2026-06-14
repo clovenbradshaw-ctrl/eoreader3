@@ -98,6 +98,31 @@
     // converting a stray "x" never turns prose into a bogus calculation.)
     t = t.replace(/[×✕✖]/g, '*').replace(/÷/g, '/').replace(/·/g, '*');
     t = t.replace(/(\d)\s*[xX]\s*(?=\d)/g, '$1*');
+    // The same in words. "17 multiplied by 24", "5 times 6", "100 minus 7",
+    // "200 divided by 4", "2 to the power of 10", "9 squared" — natural language
+    // is how most people ask for a sum in chat, and without this every one of
+    // them drops to the model, which then does the arithmetic itself (and can
+    // get it wrong). We rewrite the operator words; the prose gate and evaluator
+    // downstream still reject anything that isn't real math, so a stray word
+    // ("I said it 5 times") never turns into a bogus calculation.
+    //   · powers first, before "to"/"the" can be read as connectors
+    t = t.replace(/\bto\s+the\s+(\d+)(?:st|nd|rd|th)\s+power\b/gi, '^$1');     // "2 to the 10th power"
+    t = t.replace(/\b(?:raised\s+)?to\s+the\s+power(?:\s+of)?\b/gi, '^');      // "2 (raised) to the power (of) 10"
+    t = t.replace(/\b(\d+(?:\.\d+)?)\s+squared\b/gi, '($1)^2');
+    t = t.replace(/\b(\d+(?:\.\d+)?)\s+cubed\b/gi, '($1)^3');
+    //   · imperative phrasings put the verb first; subtract/divide are order-
+    //     sensitive, so the operand swap matters ("subtract 3 from 10" → 10-3)
+    t = t.replace(/\bmultiply\s+(\d[\d,.]*)\s+by\s+/gi, '$1 * ');
+    t = t.replace(/\bdivide\s+(\d[\d,.]*)\s+by\s+/gi, '$1 / ');
+    t = t.replace(/\badd\s+(\d[\d,.]*)\s+(?:and|to|plus)\s+/gi, '$1 + ');
+    t = t.replace(/\bsubtract\s+(\d[\d,.]*)\s+from\s+(\d[\d,.]*)/gi, '$2 - $1');
+    //   · infix operator words
+    t = t.replace(/\bmultiplied\s+by\b/gi, '*');
+    t = t.replace(/\bdivided\s+by\b/gi, '/');
+    t = t.replace(/\btimes\b/gi, '*');
+    t = t.replace(/\bplus\b/gi, '+');
+    t = t.replace(/\bminus\b/gi, '-');
+    t = t.replace(/\bpercent\b/gi, '%');
     t = t.replace(/(\d+(?:\.\d+)?)\s*%\s*of\s+/gi, '($1/100)*');
     t = t.replace(/(\d+(?:\.\d+)?)\s*%/g, '($1/100)');
     return t.trim();
@@ -109,9 +134,26 @@
   function unwrap(q) {
     let s = String(q || '').trim();
     let explicit = false;
-    const trig = /^(=|calc|calculate|compute|evaluate|eval)\s*[:=]?\s*/i.exec(s);
+    // The word triggers carry a (?![a-z]) guard so a short alternative can't
+    // win as a prefix of a longer one ("calc" inside "calculate", leaving a
+    // stray "ulate ..." that fails to evaluate) — the trigger must be a whole word.
+    const trig = /^(?:=|(?:calculate|calc|compute|evaluate|eval)(?![a-z]))\s*[:=]?\s*/i.exec(s);
     if (trig) { explicit = true; s = s.slice(trig[0].length); }
+    // A math turn often carries a trailing instruction ("What is 17 × 24? Show
+    // your reasoning step by step."). The "?" ends the sum — keep only what
+    // precedes it, so the request to "show your work" doesn't drag the whole
+    // turn off the calculator and onto the model. (The worked-math panel IS the
+    // shown reasoning, deterministically.)
+    const qm = s.indexOf('?');
+    if (qm >= 0) s = s.slice(0, qm);
     s = s.replace(/^(what(?:'s| is| are)?|whats|how much is|how many is)\s+/i, '');
+    // Same idea when there was no "?" to cut at ("17 times 24, show your work",
+    // "5 * 5 please"): drop a trailing instruction clause. None of these words
+    // are math.js functions, so removing the tail can't truncate a real sum.
+    s = s.replace(/[\s,.;:-]+\b(?:please|thx|thanks?(?:\s+you)?|show(?:\s+me)?(?:\s+(?:your|the))?\s+(?:work|working|reasoning|steps?|math)|step[\s-]?by[\s-]?step|explain|in\s+detail)\b.*$/i, '');
+    // "5 + 5 =", "5 + 5 = ?", "5 plus 5 equals (what)" — the trailing "= ?"/
+    // "equals" is the prompt for the answer, not part of the sum. Drop it.
+    s = s.replace(/[\s,.;:]*(?:=+|equals?(?:\s+to)?)(?:\s+what)?\s*$/i, '');
     s = s.replace(/\s*\?+\s*$/, '');             // trailing question marks
     s = s.replace(/(\D)\s*[.!]+\s*$/, '$1');     // trailing . or ! — but not "5!" (factorial)
     return { expr: s.trim(), explicit };

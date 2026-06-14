@@ -19,12 +19,21 @@
      model weights (Hugging Face). Pre-connecting shaves the first-load handshake. -->
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
 <link rel="preconnect" href="https://huggingface.co" crossorigin />
+<!-- esm.run serves the WebLLM runtime (llm.js imports it on first GPU load).
+     Preconnecting it warms the DNS+TLS handshake so a slow/VPN'd first load
+     doesn't pay it serially when the import begins (see EOLLM.primePump). -->
+<link rel="preconnect" href="https://esm.run" crossorigin />
 <!-- NOTE: the on-device CPU model (wllama / llama.cpp in WebAssembly) runs
      single-threaded out of the box. To unlock multi-threaded CPU inference it
      needs SharedArrayBuffer, which requires cross-origin isolation — serve the
      app with `Cross-Origin-Opener-Policy: same-origin` and
      `Cross-Origin-Embedder-Policy: require-corp`. Absent those headers it simply
      falls back to single-thread; nothing breaks. -->
+<!-- Quill — the rich-text editor behind the composition surface (Google-Docs
+     feel: a toolbar + markdown shortcuts). Pinned to an exact version; loaded
+     before styles.css so the app's theme can override the snow stylesheet. The
+     editor degrades to a plain textarea wherever window.Quill is absent. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" />
 <link rel="stylesheet" href="styles.css" />
 <!-- Theme, before first paint. Reads the persisted UI prefs (the same
      localStorage key store.js writes) and pins <html data-theme> so the
@@ -65,9 +74,34 @@
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
+<!-- Quill (window.Quill) + its markdown-shortcuts module (window.QuillMarkdown),
+     the rich-text editor for the composition surface. Pinned to exact versions;
+     library code only, no document data leaves the browser. compose.jsx uses it
+     when present and falls back to a textarea when it isn't. -->
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/quilljs-markdown@1.2.0/dist/quilljs-markdown.js"></script>
+
 <!-- engine (plain scripts; expose window.EOEngine / window.EOLLM / window.EOStore / window.EOAudit / window.EOPython / window.EOCompute) -->
 <script src="engine.js"></script>
 <script src="llm.js"></script>
+<!-- Self-hosting a WebLLM model from a single zip (window.EO_WEBLLM_SELFHOST):
+     map a model key → a .zip of its weights on your own bucket. The app then
+     streams that ONE resumable download, unzips it into a Cache, and sw.js
+     serves the files to WebLLM — instead of ~30 separate shard requests that a
+     slow/VPN'd link keeps stalling on. Any failure falls back to the normal
+     Hugging Face load, so it can only help. The bucket must send open CORS
+     (access-control-allow-origin) and the app must be served over https (a
+     service worker needs it). Off by default — it routes ALL loads of that
+     model through the single-stream + main-thread path, which a fast connection
+     doesn't need — so uncomment to enable for your deployment:
+<script>
+  window.EO_WEBLLM_SELFHOST = {
+    'Llama-3.2-3B-Instruct-q4f16_1-MLC':
+      'https://storage.googleapis.com/intelechia-content/Llama-3.2-3B-Instruct-q4f16_1-MLC.zip',
+  };
+</script>
+-->
+
 <!-- the conventions graph: everything human-language-specific, as an
      eo-operation log (see the CONVENTIONS GRAPH note in engine.js). Loaded
      opportunistically; absent/unreachable (file://) the engine's seeds apply
@@ -205,6 +239,14 @@
      until a composition doc is opened — the engine behaves identically without
      one. -->
 <script src="composition.js"></script>
+<!-- the addressee field (window.EOAddressee): the SECOND person. A chat-scoped
+     overlay over the reader's own reading that marks, per span/entity/claim, what
+     the EXCHANGE has established the person has of it (the conversational common
+     ground), with a false-belief-separated Meant-Graph for what the person
+     believes. Pure and dependency-injected (the decay γ and resolveBinding are
+     passed in by app.jsx). Inert until addressee_field is ON — the engine and the
+     chat field behave identically without it (the parity floor). -->
+<script src="addressee.js"></script>
 <!-- computational grounding: an opt-in, manually-gated second mechanical source
      (Pyodide in a Web Worker) for questions the prose engine structurally can't
      answer — sum a column, count rows, join two CSVs. Off by default; the

@@ -2252,6 +2252,54 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
   .cmp-plan { width: auto; border-right: 0; border-bottom: 1px solid var(--border); max-height: 45%; }
 }
 
+/* ---- the Google-Docs surface (compose.jsx clean view) -------------------
+   The default composition view: one flowing document, streaming while the model
+   writes and an editor at rest. The plan/grounding/confidence framework lives
+   behind the ⚙ toggle (the two-pane view above). */
+.cmp-clean { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--paper); }
+.cmp-clean-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border); background: var(--bg); }
+.cmp-clean-thesis { flex: 1; min-width: 0; font-family: var(--sans); font-size: 14px; font-weight: 600; color: var(--text);
+  background: transparent; border: 1px solid transparent; border-radius: var(--r-sm); padding: 6px 8px; }
+.cmp-clean-thesis::placeholder { color: var(--text-3); font-weight: 500; }
+.cmp-clean-thesis:hover:not(:disabled) { border-color: var(--border); }
+.cmp-clean-thesis:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); background: var(--bg); }
+.cmp-clean-tools { flex: none; display: flex; align-items: center; gap: 6px; }
+.cmp-clean-tools .cmp-busy { margin-left: 0; }
+.cmp-clean-frame-toggle { font-size: 12px; font-family: var(--sans); color: var(--text-2); background: transparent;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm); padding: 5px 10px; cursor: pointer; }
+.cmp-clean-frame-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.cmp-readview { margin-left: 4px; }
+
+.cmp-clean-scroll { flex: 1; overflow: auto; min-height: 0; }
+.cmp-clean-doc { width: 100%; max-width: 760px; margin: 0 auto; padding: 28px 28px 120px; }
+.cmp-clean-empty { max-width: 620px; margin: 8vh auto 0; padding: 0 28px; color: var(--text-2); font-size: 15px; line-height: 1.7; }
+.cmp-clean-empty p { margin: 0 0 12px; }
+
+/* the streaming, read-only view — prose as it renders and reworks itself */
+.cmp-stream { font-family: var(--serif); font-size: 16px; line-height: 1.75; color: var(--paper-ink); }
+.cmp-stream-body > :first-child { margin-top: 0; }
+.cmp-stream p, .cmp-stream li { margin: 0 0 1em; }
+.cmp-stream h1, .cmp-stream h2, .cmp-stream h3 { font-family: var(--sans); line-height: 1.3; margin: 1.4em 0 .5em; }
+.cmp-stream-live { color: var(--text-2); margin-top: 1em; }
+.cmp-stream-plan { color: var(--text-2); font-family: var(--sans); font-size: 13.5px; }
+
+/* the textarea fallback (wherever Quill isn't loaded) */
+.cmp-doc-ta { width: 100%; min-height: 60vh; resize: vertical; font-family: var(--serif); font-size: 16px; line-height: 1.75;
+  color: var(--paper-ink); background: transparent; border: 0; outline: 0; }
+
+/* Quill host — pare the snow chrome back to a clean Google-Docs feel */
+.cmp-quill-host { display: flex; flex-direction: column; min-height: 60vh; }
+.cmp-clean-doc .ql-toolbar.ql-snow { border: 0; border-bottom: 1px solid var(--border); padding: 0 0 8px; margin-bottom: 18px; }
+.cmp-clean-doc .ql-container.ql-snow { border: 0; font-family: var(--serif); }
+.cmp-clean-doc .ql-editor { padding: 0; font-size: 16px; line-height: 1.75; color: var(--paper-ink); min-height: 55vh; }
+.cmp-clean-doc .ql-editor.ql-blank::before { left: 0; right: 0; color: var(--text-3); font-style: normal; }
+.cmp-clean-doc .ql-editor h1, .cmp-clean-doc .ql-editor h2, .cmp-clean-doc .ql-editor h3 { font-family: var(--sans); }
+
+@media (max-width: 720px) {
+  .cmp-clean-doc { padding: 20px 16px 100px; }
+}
+
 /* ============================================================ EO-MRI
    The cognition instrument (eomri.jsx), beside the Glass box: a large,
    self-contained dark canvas in a centered overlay. The instrument carries
