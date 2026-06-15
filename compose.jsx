@@ -67,12 +67,35 @@ function cmpMdToHtml(text) {
   }).join('');
 }
 
+/* SHOW-BUT-FLAG (compose): reader-facing labels + tooltips for the per-unit floor
+   flags. The draft is always shown; a flag only names WHICH floor a kept draft
+   missed — the stamp-level counterpart to the chat path's inline ⚠ mark. */
+const CMP_FLAG_LABEL = {
+  'unverified': '⚠ unverified', 'weak-retrieval': 'weak retrieval', 'incoherent': 'incoherent',
+  'off-form': 'off-form', 'off-voice': 'off-voice',
+  'confab': '⚠ confabulation', 'grain-mismatch': 'grain mismatch', 'overreach': '⚠ overreach',
+};
+const CMP_FLAG_TIP = {
+  'unverified': 'Witness below the floor — little of this is carried by a source line. Shown as written; treat it as unverified.',
+  'weak-retrieval': 'The retriever found thin material for this unit.',
+  'incoherent': 'Low coherence with the rest of the document.',
+  'off-form': 'Drifts from the target genre/form.',
+  'off-voice': 'Drifts from the target voice.',
+  'confab': 'Reads as confabulation — no source span carries it. Shown, not dropped.',
+  'grain-mismatch': 'The draft asserts the wrong shape for this unit (e.g. a positive claim where an absence was owed).',
+  'overreach': 'Names a term absent from every source (the faithfulness veto). Shown struck/flagged.',
+};
+
 /* A single Confidence vector, as a row of labelled bars. A component that was
    not measured is shown as `null` — never a zero-height bar, which would read as
    "measured, and zero". The one place a scalar appears is the colour band; the
-   predicate that produced it travels on the route (shown on hover). */
+   predicate that produced it travels on the route (shown on hover). The floor
+   FLAGS sit below the tag: the per-unit faults the stamp already had the data
+   for (composition.floorFlags) but used to discard — drawn, never gating. */
 function ConfBars({ confidence, tag, rescued }) {
   const c = confidence || {};
+  const flags = (typeof window !== 'undefined' && window.EOComposition && window.EOComposition.floorFlags)
+    ? window.EOComposition.floorFlags(confidence, tag) : [];
   return (
     <div className="cmp-conf">
       {CMP_COMPONENTS.map(([k, gloss]) => {
@@ -91,6 +114,13 @@ function ConfBars({ confidence, tag, rescued }) {
         );
       })}
       {tag && <div className={'cmp-tag cmp-tag-' + tag}>{tag}{rescued && <span className="cmp-tag-rescued" title="Grounded by mechanical re-citation: the token-overlap witness read low, so each sentence was re-bound to a real source line after drafting (engine.groundTalkerOutput).">· re-cited</span>}</div>}
+      {flags.length > 0 && (
+        <div className="cmp-flags">
+          {flags.map(f => (
+            <span key={f} className={'cmp-flag cmp-flag-' + f} title={CMP_FLAG_TIP[f] || f}>{CMP_FLAG_LABEL[f] || f}</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

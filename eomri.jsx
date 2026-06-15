@@ -927,7 +927,7 @@ function eomriSentences(turn, hitsByIdx) {
   const T = String(final.text || '');
   if (!T.trim()) return [];
   const OPEN = '', CLOSE = '', markers = [];
-  const neutral = T.replace(/\{\{(cite|infer|void|absent):([^}]*)\}\}/g, (m, kind, payload) => {
+  const neutral = T.replace(/\{\{(cite|infer|void|absent|unbound):([^}]*)\}\}/g, (m, kind, payload) => {
     const i = markers.length; markers.push({ kind: kind, payload: payload }); return ' ' + OPEN + i + CLOSE + ' ';
   });
   const hasMarkers = markers.some(k => k.kind === 'cite' || k.kind === 'infer');

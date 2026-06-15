@@ -1442,7 +1442,7 @@ function App() {
   const patchLast = (patch) => setMessages(m => { const c = m.slice(); c[c.length - 1] = { ...c[c.length - 1], ...patch }; return c; });
 
   // strip citation/void markup so prior turns read as plain text in history
-  const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void|infer|absent):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
+  const stripMarkup = (s) => String(s).replace(/\{\{(?:cite|void|infer|absent|unbound):[^}]*\}\}/g, '').replace(/\s+([.,;:])/g, '$1').trim();
   // HISTORY HYGIENE: a prior turn that was vetoed, went out ungrounded, or
   // earned a warn badge re-enters the history WEARING that badge — never as
   // clean assistant text the model will defend. Handed its own unverified
@@ -3355,9 +3355,15 @@ function App() {
         const fullForChecks = gateOn ? full.replace(/\[s(?:\d+|\?)\]/g, ' ') : full;
         const perDoc = scope.map(d => new Set(window.EOEngine.inventedTerms(d, fullForChecks)));
         const invented = perDoc.length ? [...perDoc[0]].filter(t => perDoc.every(s => s.has(t))) : [];
+        // flagUnbound: SHOW-BUT-FLAG at the claim level. A clause that binds to no
+        // line is served wrapped in {{unbound:…}} (a visible "unverified" mark)
+        // rather than sitting unmarked inside a "grounded" answer — so a partly-
+        // confabulated multi-clause reply shows WHICH clause has no support. Pure
+        // metadata: grounded / covers / cites are unchanged, nothing is withheld.
         let bound = (gateOn && window.EOEngine.bindClaimKeysScope)
-          ? window.EOEngine.bindClaimKeysScope(scope, full, q, intent, { hotEntity: hotEntity() })
-          : window.EOEngine.bindCitationsScope(scope, full, q, intent, { hotEntity: hotEntity() });
+          ? window.EOEngine.bindClaimKeysScope(scope, full, q, intent, { hotEntity: hotEntity(), flagUnbound: true })
+          : window.EOEngine.bindCitationsScope(scope, full, q, intent, { hotEntity: hotEntity(), flagUnbound: true });
+        const unboundN = (String((bound && bound.text) || '').match(/\{\{unbound:/g) || []).length;
         // KIN-SUBJECT VETO (every depth — binding is not correctness): a
         // claim can bind cleanly to a kin sentence ("…his son served as
         // Director…") while hanging the kin's role on the POSSESSOR — the
@@ -3494,6 +3500,17 @@ function App() {
               note: `Phrased by the model and grounded in the passages, but it named ${list} — which the document doesn’t contain, shown struck as unverified.` } };
           AUD('step', 'veto', { decision: 'model-caveat', invented, boundGrounded: true, boundCovers: bound.audit.covers });
           settle(caveated, 'model + caveat');
+        } else if (unboundN > 0) {
+          // SHOW-BUT-FLAG: the answer bound overall, but one or more clauses found
+          // no supporting line. Serve it in full — those clauses already carry an
+          // inline {{unbound:…}} mark — and downgrade the badge to an honest caveat
+          // so a partly-grounded reply never wears a clean badge over an unverified
+          // clause. Nothing is withheld; the mechanical reading rides as evidence.
+          const flagged = { ...bound, audit: { ...bound.audit, status: 'warn',
+            note: `Phrased by the model and bound to the passages, but ${unboundN} clause${unboundN === 1 ? '' : 's'} found no supporting line — served in full with ${unboundN === 1 ? 'it' : 'them'} flagged inline as unverified.`
+              + (bound.audit && bound.audit.note ? ' ' + bound.audit.note : '') } };
+          AUD('step', 'veto', { decision: 'model-flagged', reason: 'unbound-clauses', unbound: unboundN, boundGrounded: true, boundCovers: bound.audit.covers });
+          settle(flagged, 'model + claim-level flag');
         } else {
           AUD('step', 'veto', { decision: 'model', invented: [], boundGrounded: true, boundCovers: bound.audit.covers });
           settle(bound, 'model + mechanical cite');

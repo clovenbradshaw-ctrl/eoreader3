@@ -25,6 +25,7 @@ function stripForView(s) {
       return '⟨' + t + '⟩';
     })
     .replace(/\{\{absent:[^}]*\}\}/g, ' [⊥]')
+    .replace(/\{\{unbound:[^}]*\}\}/g, ' [⚠]')
     .replace(/\s+([.,;:])/g, '$1')
     .trim();
 }

@@ -52,6 +52,15 @@ function renderCite(kind, payload, key, onCite) {
     const cls = 'cite absent' + (a.kind && a.kind !== 'unspecified' ? ' absent-' + a.kind : '');
     return <span key={key} className={cls} title={lead + ' — ' + a.receipt}>⊥</span>;
   }
+  if (kind === 'unbound') {
+    // show-but-flag (claim level): a clause SERVED in full but bound to no source
+    // line — not a void (no missing term) and not a citation. A visible inline
+    // "unverified" mark so a partly-grounded answer shows WHICH clause has no
+    // support, instead of one answer-level badge. The reason rides in the tooltip,
+    // the mechanical reading one click away — the answer is never withheld.
+    return <span key={key} className="cite unbound"
+      title={'Unverified — ' + (payload || 'no supporting line found') + '. Served as written; the mechanical reading is one click away as evidence.'}>⚠ unverified</span>;
+  }
   // void: the ELSEWHERE terrain (named in the question, not in this document) or
   // the INVENTED fabrication (a term with no site, struck). A bare {{void:term}}
   // stays 'unspecified' and renders exactly as before.
@@ -72,7 +81,7 @@ function renderCite(kind, payload, key, onCite) {
    so `a * b * c` and other stray asterisks aren't turned into emphasis. */
 const INLINE_RULES = [
   { kind: 'code',     re: /`([^`\n]+)`/g },
-  { kind: 'cite',     re: /\{\{(cite|void|infer|absent):([^}]*)\}\}/g },
+  { kind: 'cite',     re: /\{\{(cite|void|infer|absent|unbound):([^}]*)\}\}/g },
   { kind: 'image',    re: /!\[([^\]]*)\]\(([^\s)]+)\)/g },
   { kind: 'link',     re: /\[([^\]]+)\]\(([^\s)]+)\)/g },
   { kind: 'strongem', re: /\*\*\*(\S(?:[\s\S]*?\S)?)\*\*\*/g },
@@ -861,7 +870,7 @@ class MessageBoundary extends React.Component {
           <div className="msg-asst">
             <div className="asst-head"><span className="asst-av">Cl</span><span className="asst-name">Cleo</span></div>
             {raw
-              ? <p style={{ whiteSpace: 'pre-wrap' }}>{String(raw).replace(/\{\{(?:cite|void|infer|absent):[^}]*\}\}/g, '')}</p>
+              ? <p style={{ whiteSpace: 'pre-wrap' }}>{String(raw).replace(/\{\{(?:cite|void|infer|absent|unbound):[^}]*\}\}/g, '')}</p>
               : <p style={{ opacity: .75 }}>This message couldn’t be displayed.</p>}
             <div className="audit"><span className="audit-chip plain"><span className="seg"><span className="no">–</span>display error — the rest of the chat is unaffected</span></span></div>
           </div>
@@ -940,7 +949,7 @@ function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onO
             </React.Fragment>}
         {!msg.typing && !msg.loading && (
           <div className="msg-actions">
-            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer|absent):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
+            <button title="Copy" onClick={() => { try { navigator.clipboard.writeText(String(msg.text).replace(/\{\{(cite|void|infer|absent|unbound):[^}]*\}\}/g, '')); } catch (e) { window.eoWarn && window.eoWarn('copy failed', e); } }}><Icon name="copy" size={15} /></button>
             {onFork && <button title="Fork from here — copy this conversation up to this reply into a new chat" onClick={onFork}><Icon name="fork" size={15} /></button>}
             {onPromote && msg.text && <button title="Open as a document — turn this answer into an editable, grounded composition you can revise and query" onClick={onPromote}><Icon name="edit" size={15} /></button>}
             <button title="Good answer"><Icon name="thumbsup" size={15} /></button>

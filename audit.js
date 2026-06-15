@@ -116,8 +116,8 @@
     const V = String.fromCharCode(1);   // a struck {{void:…}} token
     const C = String.fromCharCode(2);   // a {{cite}}/{{infer}} binding
     const A = String.fromCharCode(3);   // a {{absent:…}} registered absence
-    const neutral = T.replace(/\{\{(cite|infer|void|absent):[^}]*\}\}/g, (m, k) =>
-      ' ' + (k === 'void' ? V : k === 'absent' ? A : C) + ' ');
+    const neutral = T.replace(/\{\{(cite|infer|void|absent|unbound):[^}]*\}\}/g, (m, k) =>
+      ' ' + (k === 'void' ? V : k === 'absent' ? A : k === 'unbound' ? '' : C) + ' ');
     const frags = neutral.split(/(?<=[.!?])\s+|\n+/);
     const per = [];
     const citesIn = (s) => s.indexOf(C) !== -1;
