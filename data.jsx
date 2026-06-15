@@ -130,7 +130,7 @@ const RULESETS = [
     layer: 'significance', mass: 4, src: 'add-on', installed: false, enabled: false, locked: false,
     desc: 'When a table and a prose source are tagged together, a third pass compares them and flags disagreements instead of silently picking one.' },
   { id: 'relation-gate', group: 'Chatting & grounding', phase: 'chat', name: 'Relation Gate', glyph: '⇋',
-    layer: 'significance', value: 1, mass: 4, src: 'add-on', installed: false, enabled: false, locked: false, live: true,
+    layer: 'significance', value: 1, mass: 4, src: 'core pack', installed: true, enabled: true, locked: false, live: true,
     desc: 'The inversion fix. Provenance binds at generation (the model tags each claim with the span it used; the old binder serves only unkeyed claims), and every claim’s subject–predicate–object is checked against the relations the page deposited — a claim whose agency inverts against its edge (“the Association cannot afford” when the OWNERS pay), names the wrong speaker, or hangs the act on a figure the edge doesn’t carry is held and flagged, never waved through with a clean cite. Off ships today’s behavior byte-identical.' },
   { id: 'cross-source', group: 'Chatting & grounding', phase: 'chat', name: 'Cross-Source Attribution', glyph: '⊗',
     layer: 'significance', value: 1, mass: 4, src: 'add-on', installed: false, enabled: false, locked: false, live: true,
