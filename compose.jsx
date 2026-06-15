@@ -514,6 +514,22 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     return best;
   }, [corpusDocs.map(d => d.id).join(',')]);
 
+  // The faithfulness veto the grounded chat path runs (app.jsx · runTurn) but
+  // compose never had: engine.inventedTerms over the active corpus — the off-page
+  // CAPITALIZED terms (a fabricated citation, an invented authority, a leaked
+  // unrelated entity) a draft names that no source carries. Pure lexical — no
+  // model, no embedder — so it runs whenever a corpus is open and degrades to a
+  // no-op (empty list) when none is. Intersected across the in-scope docs (a term
+  // EVERY source lacks), mirroring the chat path's per-doc AND, so a name one
+  // source happens to carry is never flagged as invented.
+  const invented = React.useCallback(async (prose) => {
+    if (!window.EOEngine || !window.EOEngine.inventedTerms || !corpusDocs.length || !prose) return [];
+    try {
+      const per = corpusDocs.map(d => new Set(window.EOEngine.inventedTerms(d, prose)));
+      return per.length ? [...per[0]].filter(t => per.every(s => s.has(t))) : [];
+    } catch (e) { return []; }
+  }, [corpusDocs.map(d => d.id).join(',')]);
+
   // --- appending: every action stamps a shared batch id so undo reverts the
   //     whole action (a draft + its stamp + its route) in one move ----------
   const appendBatch = React.useCallback((evts) => {
@@ -624,7 +640,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
       const lf = C.LONGFORM || { targetWords: 300, maxPasses: 4, maxTokens: 384, noveltyFloor: 0.4 };
       const spans = await retrieve(unit.job);
       const neighbors = o.neighbors || [];
-      const deps = { unit, frame, doc_id: doc.id, embed, ground, formLib: formLibRef.current };
+      const deps = { unit, frame, doc_id: doc.id, embed, ground, invented, formLib: formLibRef.current };
       // Stream one phrasing call, seeding the visible text with `seed` — so an
       // expansion shows the passage GROW and a rewrite shows it REWRITE from
       // scratch. This is the "render and rework itself" the user watches.
@@ -745,9 +761,16 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
       retrieval: C.retrievalDegree(spans), grounded,
     });
     const r = C.decide(st.confidence, {});
+    // the same faithfulness veto the draft path runs, so a re-stamp or a hand
+    // edit that introduces an off-page term is caught too (the dep is the corpus-
+    // backed engine.inventedTerms; no corpus ⇒ empty list ⇒ verdict unchanged).
+    let inv = []; if (prose) { try { inv = (await invented(prose)) || []; } catch (e) { inv = []; } }
+    const veto = C.inventedVeto({ decision: r.decision, predicate: r.predicate, tag: st.tag }, inv);
+    const stampFields = { doc_id: doc.id, unit_id: unit.id, draft_id: draftId, confidence: st.confidence, tag: veto.tag, rescued: st.rescued };
+    if (inv.length) stampFields.invented = inv;
     return [
-      C.make.stamp({ doc_id: doc.id, unit_id: unit.id, draft_id: draftId, confidence: st.confidence, tag: st.tag, rescued: st.rescued }),
-      C.make.route({ doc_id: doc.id, unit_id: unit.id, decision: r.decision, predicate: r.predicate, triggered_by: r.triggered_by }),
+      C.make.stamp(stampFields),
+      C.make.route({ doc_id: doc.id, unit_id: unit.id, decision: veto.decision, predicate: veto.predicate, triggered_by: r.triggered_by }),
     ];
   };
   // re-stamp the LIVE prose without re-phrasing — the "reread": Stamps update,

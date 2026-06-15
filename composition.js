@@ -472,6 +472,31 @@
     return { decision, predicate, triggered_by: confidence(c) };
   }
 
+  // The faithfulness veto, factored so the draft path (evaluateProse) and the
+  // re-stamp / edit path (compose.jsx · stampProse) adjust a verdict identically.
+  // The grounded chat path (app.jsx · runTurn) strikes off-page proper terms a
+  // draft names but no source carries — a fabricated citation, an invented
+  // authority, a leaked unrelated entity (engine.inventedTerms). The grain-
+  // relative witness cannot see them: a term absent from every span never enters
+  // the token-overlap measure, so a confident mis-citation reads as figure-
+  // grounded. When such a term is present the draft is an OVERREACH — route it to
+  // revise (when it was otherwise advancing) so the rewrite loop drops it, tag it,
+  // and apply a score penalty so removing the term registers as an improvement.
+  // Pure: no terms ⇒ the monitor's verdict is returned unchanged.
+  const INVENTED_PENALTY = 0.25;
+  function inventedVeto(verdict, terms) {
+    const v = verdict || {};
+    if (!terms || !terms.length)
+      return { decision: v.decision, predicate: v.predicate, tag: v.tag, penalty: 0 };
+    const grounded = (v.tag === 'figure-grounded' || v.tag === 'pattern-grounded' || v.tag === 'honest-absence');
+    return {
+      decision: v.decision === 'advance' ? 'revise' : v.decision,
+      predicate: `names ${terms.length} term(s) absent from the source (${terms.join(', ')})`,
+      tag: grounded ? 'overreach' : v.tag,
+      penalty: INVENTED_PENALTY,
+    };
+  }
+
   // ============================================================ the talker
   // generateUnit: retrieve material against the unit's job, phrase it through
   // the membrane, stamp it, and route it — returning the events to append. The
@@ -544,10 +569,14 @@
         : spans.map(s => ({ docId: s.docId, idx: s.idx })).filter(s => s.docId != null),
       confidence: ev.confidence, doc_id: d.doc_id,
     });
-    const stamp = make.stamp({
+    const stampFields = {
       draft_id: draft.id, unit_id: unit.id,
       confidence: ev.confidence, tag: ev.tag, rescued: ev.rescued, doc_id: d.doc_id,
-    });
+    };
+    // the off-page terms the faithfulness veto caught ride the stamp so the audit
+    // trail and the badge can name them (only present when the veto fired).
+    if (ev.invented && ev.invented.length) stampFields.invented = ev.invented;
+    const stamp = make.stamp(stampFields);
     const route = make.route({
       unit_id: unit.id, decision: ev.decision, predicate: ev.predicate,
       triggered_by: ev.triggeredBy, doc_id: d.doc_id,
@@ -611,11 +640,22 @@
       draftVec, genre: frame.genre, formLib: d.formLib,
       retrieval, frame: frameDeg, voice: voiceDeg, grounded,
     });
+
+    // The faithfulness veto: ask the injected detector (engine.inventedTerms,
+    // over the active corpus) for proper terms the draft names that no source
+    // carries, then adjust the monitor's verdict for them. Absent dep ⇒ no terms
+    // ⇒ the verdict is untouched, so a fakeless test or a corpusless run behaves
+    // exactly as before.
+    let invented = [];
+    if (d.invented && prose) {
+      try { invented = (await d.invented(prose)) || []; } catch (e) { invented = []; }
+    }
     const r = decide(st.confidence, {});
+    const veto = inventedVeto({ decision: r.decision, predicate: r.predicate, tag: st.tag }, invented);
     return {
-      confidence: st.confidence, tag: st.tag, rescued: st.rescued, grounded,
-      decision: r.decision, predicate: r.predicate, triggeredBy: r.triggered_by,
-      score: scoreConfidence(st.confidence),
+      confidence: st.confidence, tag: veto.tag, rescued: st.rescued, grounded, invented,
+      decision: veto.decision, predicate: veto.predicate, triggeredBy: r.triggered_by,
+      score: Math.max(0, scoreConfidence(st.confidence) - veto.penalty),
     };
   }
 
@@ -635,6 +675,8 @@
   // for the next rewrite — error-correction as guidance, not a vague "try again".
   function reviseGuidance(decision, predicate) {
     const p = String(predicate || '');
+    if (/absent from the source/.test(p))
+      return 'Rewrite it using only the people, places, and sources named in the material below — remove any name, citation, or authority that does not appear there, and keep everything the material does support.';
     if (/witness/.test(p) && /retrieval/.test(p))
       return 'The draft drifts from the source material. Rewrite it so every claim is carried by the material below — use its facts, quote or closely paraphrase them, and cut anything the material does not support.';
     if (/form/.test(p))
@@ -1127,7 +1169,7 @@
     confidence, low, high, clamp01,
     make, ev,
     fold, buildTree, bandFor,
-    witnessGrain, stampDraft, decide,
+    witnessGrain, stampDraft, decide, inventedVeto,
     generateUnit, finalizeUnit, evaluateProse, buildTalkerPrompt, buildContinuePrompt, buildRevisePrompt,
     reviseGuidance, scoreConfidence, noveltyRatio, dropDuplicateSentences,
     genreLabel, buildOutlinePrompt,

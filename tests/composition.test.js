@@ -543,6 +543,54 @@ await group('evaluateProse + the rewrite loop — "is it succeeding?", "is it re
     'buildRevisePrompt threads the guidance into the rewrite instruction');
 });
 
+await group('evaluateProse — the faithfulness veto (invented terms) the compose path now runs', async () => {
+  const [doc, frame] = C.newDoc({ goal: 'inform', genre: 'plain-report' });
+  const unit = C.make.unit({ doc_id: doc.id, job: 'report the eviction count', order: 0 });
+  const spans = [{ text: 'The city logged twelve thousand eviction filings in 2023.', score: 2.0, docId: doc.id, idx: 4 }];
+  const embed = async () => [0.1, 0.2, 0.3];
+  // a fake of the injected engine.inventedTerms: flags an off-page authority the
+  // draft introduced ("Brennan") that no span carries.
+  const inventedDep = async (prose) => (/Brennan/.test(prose) ? ['Brennan'] : []);
+  const deps = { unit, frame, embed, invented: inventedDep };
+
+  // a well-grounded draft that names NOTHING off-page advances; the veto is silent
+  const clean = await C.evaluateProse(deps, 'The city logged twelve thousand eviction filings in 2023.', spans);
+  eq(clean.decision, 'advance', 'a faithful draft naming nothing off-page still advances');
+  eq(clean.invented.length, 0, 'and the veto flags nothing');
+
+  // the SAME well-grounded draft plus a fabricated authority the source lacks:
+  // the witness is unmoved, but the veto routes it to revise and names the term
+  const over = await C.evaluateProse(deps, 'The city logged twelve thousand eviction filings in 2023, according to Brennan.', spans);
+  ok(over.confidence.witness >= 0.4, 'witness is unaffected — token overlap cannot see a term absent from every span');
+  eq(over.decision, 'revise', 'but the faithfulness veto routes the overreaching draft to revise');
+  ok(over.invented.includes('Brennan'), 'and carries the off-page term on the verdict');
+  eq(over.tag, 'overreach', 'a grounded draft that overreaches is tagged overreach');
+  ok(over.score < clean.score, 'the overreach scores below the clean draft, so dropping the term reads as an improvement');
+  ok(/Brennan/.test(over.predicate), 'the predicate names the offending term for the audit trail');
+
+  // the guidance tells the rewrite to drop the unsupported term
+  ok(/remove any name|only the people/i.test(C.reviseGuidance(over.decision, over.predicate)),
+    'reviseGuidance points the rewrite at dropping the off-page term');
+
+  // finalizeUnit rides the caught terms on the stamp (for the audit/badge) and
+  // emits the revise route
+  const out = await C.finalizeUnit(deps, 'The city logged twelve thousand eviction filings in 2023, according to Brennan.', spans);
+  ok(out.stamp.invented && out.stamp.invented.includes('Brennan'), 'the emitted stamp records the invented term');
+  eq(out.route.decision, 'revise', 'and the emitted route carries the revise decision');
+
+  // back-compat: with no invented dep injected the veto is inert (the monitor's
+  // decision stands) and no stamp gains an invented field
+  const bare = { unit, frame, embed };
+  const noVeto = await C.evaluateProse(bare, 'The city logged twelve thousand eviction filings in 2023, according to Brennan.', spans);
+  ok(noVeto.invented.length === 0 && noVeto.decision === 'advance', 'with no invented dep the veto is inert and the draft advances');
+  const bareOut = await C.finalizeUnit(bare, 'Plain grounded prose about the eviction count.', spans);
+  ok(!('invented' in bareOut.stamp), 'a stamp with no caught terms has no invented field');
+
+  // the pure helper is exported and a no-op on an empty term list
+  const passthru = C.inventedVeto({ decision: 'advance', predicate: 'p', tag: 'figure-grounded' }, []);
+  ok(passthru.decision === 'advance' && passthru.penalty === 0, 'inventedVeto with no terms returns the verdict unchanged');
+});
+
 await group('voice end-to-end — a frame carrying a target voice makes evaluateProse measure it', async () => {
   const voice = 'Rents rose. Evictions followed. Families left.';
   const [doc, frame] = C.newDoc({ goal: 'inform', genre: 'plain-report', voice });
