@@ -788,6 +788,29 @@ const READING_RULES = {
     value: 0.55, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'Predicate compatibility floor for the relation gate: a claim verb and an edge verb are the same relation when their lemmas overlap or their embedding cosine clears this. Measured on the app\'s own MiniLM-q8: cos(afford, pay) = 0.62 clears; cos(argued, hear) = 0.50 does not. This is the one place the embedder helps the relational cure, and only as a similarity scorer feeding a mechanical decision.',
   },
+  // ── Semantic antimatter — the referent rescue + demotion stages ──
+  rescue_referent: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, the absent-referent gate gains two discrete, witness-carrying stages between the lexical floor and the void. RESCUE moves a candidate anti-matter referent to matter only by resolving it to an ADMITTED (two-sighting) entity — Channel A (orthographic: an OCR/typo surface variant, by case-fold + diacritic-strip + bounded edit distance) or Channel C (coref/alias: an initialism of a multi-word admitted entity). DEMOTION moves a candidate matter referent to anti-matter when no admitted entity backs it and its presence rests only on a lowercase common-noun substring (the Amos Dresser fix: "dresser" the furniture word does not confirm "Amos Dresser" the person). No cosine is spent — name↔name embedding is below the noise floor and is forbidden, and Channel B (description→name) read its shell EMPTY in the Phase 0 horizon read (docs/horizon-read.md), so it is not built. Every rescue carries a rejectable witness; two clearers is ambiguity (a NUL act, logged, not a rescue). OFF ships today\'s behavior byte-identical (the parity floor): the lexical gate runs alone, exactly as before. See tools/predictive/measure-horizon.js for the read that sized this.',
+  },
+  // ── Semantic-antimatter orthographic mechanics — universal, no language ──
+  // The matcher constants Channel A spends. These are mechanical properties of
+  // edit-distance surface matching (not a cosine floor, and not a language fact),
+  // so they live in the constitution as hardcoded-seed/core, beside the cold-pass
+  // reconciliation thresholds — never in a language module. They are inert unless
+  // rescue_referent is ON.
+  rescue_min_token: {
+    value: 4, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Minimum token length for a fuzzy (edit-distance) orthographic match in Channel A; shorter tokens must match a surface EXACTLY. Bounded edit distance over-merges short surfaces — "Solaren"/"Solaris" collapse at distance 1 (SPEC §9). Universal mechanics: a property of the matcher, not of any language.',
+  },
+  rescue_edit_max: {
+    value: 2, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Maximum edit (Damerau–Levenshtein) distance Channel A forgives between an absent surface token and an admitted entity\'s surface token — an OCR/typo tolerance, capped so a variant is rescued but a different name is not. The per-token tolerance is min(this, 1 for short tokens). Universal mechanics.',
+  },
+  rescue_initialism_max: {
+    value: 6, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Maximum letter count for a Channel C initialism (an absent acronym resolved to a multi-word admitted entity by its initials). Longer "acronyms" are unlikely and only add noise. Universal mechanics — the page\'s own multi-word surface supplies the expansion, never the embedder.',
+  },
   // ── Cross-source attribution — the multi-document conflation veto ──
   cross_source: {
     value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
@@ -8028,11 +8051,17 @@ function projectGraph(events, frame = {}) {
   // names; and the type gate (above) drops structural/pragmatic tokens ahead of
   // the presence test, so they never reach antimatter. Returns { matter,
   // antimatter } so a hold can say what it CAN see.
-  function referents(doc, query) {
+  function referents(doc, query, opts) {
     const body = docBodyLC(doc);
     const names = String(query).match(/\p{Lu}[\p{L}’'\-]+(?:\s+\p{Lu}[\p{L}’'\-]+)*/gu) || [];
     const nonRef = nonReferentialCaps(query);     // DEF: classify before testing presence
     const matter = [], antimatter = [];
+    // The rescue/demotion amendment (SPEC: semantic antimatter) is OFF by default
+    // (opts.rescue). When off, NOTHING below the lexical push runs and the return
+    // is byte-identical — the parity floor. When on, we keep a parallel span
+    // record so the rescue/demotion stages can re-rule each candidate by witness.
+    const rescue = !!(opts && opts.rescue) || rescueEnabled();
+    const spans = rescue ? [] : null;
     for (const raw of names) {
       // a sentence-initial interrogative ("Did Caesar…") is capitalised but is
       // not part of the name — trim stopwords off both ends before deciding.
@@ -8047,9 +8076,277 @@ function projectGraph(events, frame = {}) {
       // not by a stop-list — the gate generalizes where enumeration cannot.
       const refSig = sig.filter(t => !nonRef.has(NRM_CAP(t)));
       if (!refSig.length) continue;
-      (refSig.some(t => body.includes(t.toLowerCase())) ? matter : antimatter).push(parts.join(' '));
+      const name = parts.join(' ');
+      const present = refSig.some(t => body.includes(t.toLowerCase()));
+      (present ? matter : antimatter).push(name);
+      if (rescue) spans.push({ name, refSig, present });
     }
+    if (rescue) return _rescueDemote([doc], { matter, antimatter, spans }, opts);
     return { matter, antimatter };
+  }
+
+  /* ── Semantic antimatter: the rescue + demotion stages ────────────────────
+     The lexical gate above runs first and unchanged, producing candidate matter
+     and candidate anti-matter. Two stages may RE-RULE a candidate, but only by a
+     DISCRETE check that ends in a witness — never by a continuous score:
+
+       RESCUE   (anti-matter → matter)  a name absent under its query surface
+                resolves to an ADMITTED entity by a surface transform (Channel A,
+                orthographic) or a coref/alias edge (Channel C). The embedder may
+                propose; it may never be the witness. No cosine is spent here at
+                all: name↔name embedding is below the noise floor and is forbidden
+                (SPEC §1), and Channel B (description→name) read its shell EMPTY in
+                Phase 0 (docs/horizon-read.md), so it is NOT built.
+
+       DEMOTION (matter → anti-matter)  a single capitalized hit the page admits
+                only as a common-noun substring is demoted unless an admitted
+                (INS/NER-confirmed) entity backs it — the Amos Dresser fix: the
+                furniture word "dresser" does not confirm the person "Amos Dresser".
+
+     Both stages run ONLY behind opts.rescue, so the floor stays byte-identical
+     until the amendment is switched on. The act of declaring ⊥ stays mechanical
+     and carries a receipt; the embedding never signs the ruling. */
+
+  // canonical token: NFD-fold diacritics (Unicode-universal), lowercase, drop a
+  // trailing English possessive 's (a no-op where the convention does not apply,
+  // and the same inline strip namesEntity/inventedTerms already use), keep
+  // letters only — the surface normalization Channel A maps across.
+  const _canonTok = (s) => String(s == null ? '' : s).normalize('NFD').replace(/\p{M}/gu, '')
+    .toLowerCase().replace(/['’]s$/, '').replace(/[^\p{L}]/gu, '');
+
+  // bounded Damerau–Levenshtein (transposition-aware, early-exit past `max`).
+  function _editDistB(a, b, max) {
+    const m = a.length, n = b.length;
+    if (Math.abs(m - n) > max) return max + 1;
+    const d = [];
+    for (let i = 0; i <= m; i++) { d[i] = new Array(n + 1); d[i][0] = i; }
+    for (let j = 0; j <= n; j++) d[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      let rowMin = Infinity;
+      for (let j = 1; j <= n; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        let v = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, d[i - 2][j - 2] + 1);
+        d[i][j] = v; if (v < rowMin) rowMin = v;
+      }
+      if (rowMin > max) return max + 1;     // whole remaining matrix can only grow
+    }
+    return d[m][n];
+  }
+
+  // the admitted field: the two-sighting set per prose doc, each entity with its
+  // surface tokens (canonicalized). Bounding every rescue to THIS set is the
+  // inner-horizon guard (SPEC §3) — a small, established field cannot reabsorb a
+  // candidate the way the full document can. Cached per doc.
+  const _admFieldCache = new WeakMap();
+  function _admittedField(d) {
+    if (!d || d.kind !== 'prose') return [];
+    let f = _admFieldCache.get(d);
+    if (f) return f;
+    let ents; try { ents = projectEntities(d).entities || []; } catch (e) { ents = []; }
+    f = [];
+    for (const e of ents) {
+      const surfaces = (e.surfaceForms && e.surfaceForms.length) ? e.surfaceForms : [e.name];
+      const surfToks = new Set();
+      for (const s of surfaces) for (const w of String(s).split(/\s+/)) { const c = _canonTok(w); if (c.length >= 2) surfToks.add(c); }
+      f.push({ entity: e, docId: d.id, name: e.name, surfaces, surfToks: [...surfToks] });
+    }
+    _admFieldCache.set(d, f);
+    return f;
+  }
+  function _admittedFieldScope(docs) {
+    const out = [];
+    for (const d of scopeDocs(docs)) for (const f of _admittedField(d)) out.push(f);
+    return out;
+  }
+
+  // Channel A — orthographic. The absent name is a surface-variant of a UNIQUE
+  // admitted entity when every one of its significant tokens maps (case-fold +
+  // diacritic-strip + bounded edit distance) to a surface token of that one
+  // entity, with at least one map non-exact (a pure-exact cover is lexical
+  // presence, already matter). Tokens shorter than rescue_min_token must match
+  // exactly — bounded edit distance over-merges short surfaces (SPEC §9). The
+  // thresholds are the constitution's universal mechanics (read live so a tune
+  // takes effect), never a language fact.
+  function _channelA(field, toks) {
+    const MIN = READING_RULES.rescue_min_token.value;
+    const EDIT_MAX = READING_RULES.rescue_edit_max.value;
+    const hits = [];
+    for (const f of field) {
+      const transforms = []; let coveredAll = true;
+      for (const t of toks) {
+        let best = null;
+        for (const st of f.surfToks) {
+          if (st === t) { best = { st, edit: 0, exact: true }; break; }
+          if (t.length < MIN || st.length < MIN) continue;
+          const tol = Math.min(EDIT_MAX, Math.max(t.length, st.length) <= 6 ? 1 : 2);
+          if (tol < 1) continue;
+          const dd = _editDistB(t, st, tol);
+          if (dd <= tol && (!best || dd < best.edit)) best = { st, edit: dd, exact: false };
+        }
+        if (!best) { coveredAll = false; break; }
+        transforms.push({ from: t, to: best.st, edit: best.edit, exact: best.exact });
+      }
+      if (!coveredAll || transforms.every(tr => tr.exact)) continue;
+      hits.push({ f, transforms });
+    }
+    if (hits.length === 1) return { f: hits[0].f, transforms: hits[0].transforms };
+    if (hits.length > 1) return { ambiguous: true, count: hits.length };
+    return null;
+  }
+
+  // Channel C — coref / alias (mechanical, no cosine). The absent single-token
+  // name is an initialism of a UNIQUE multi-word admitted entity. This is the
+  // name↔name identity case Channel B is forbidden from: it is settled by the
+  // page's own structure (the admitted multi-word surface), not by the embedder
+  // guessing two names mean the same thing.
+  function _channelC(field, name) {
+    const IMAX = READING_RULES.rescue_initialism_max.value;
+    const letters = _canonTok(name).replace(/[^a-z]/g, '');
+    if (letters.length < 2 || letters.length > IMAX) return null;
+    const hits = [];
+    for (const f of field) {
+      const words = String(f.name).split(/\s+/).filter(Boolean);
+      if (words.length < 2) continue;
+      const init = words.map(w => _canonTok(w[0])).join('');
+      if (init && init === letters) hits.push({ f, init });
+    }
+    if (hits.length === 1) return { f: hits[0].f, init: hits[0].init };
+    if (hits.length > 1) return { ambiguous: true, count: hits.length };
+    return null;
+  }
+
+  // rescueReferent(scope, name, refSig, opts) → { rescued, via, witness, entityId }
+  // | { rescued:false, ambiguous:true } | null. Runs ONLY on candidate anti-matter,
+  // ONLY against admitted entities. A rescue without a witness is impossible by
+  // construction: the return that says `rescued:true` is the same object that
+  // carries the witness. Two clearers is ambiguity — a NUL act, not a rescue: the
+  // referent stays anti-matter and the caller logs the ambiguity (SPEC §4, §6).
+  function rescueReferent(scope, name, refSig, opts) {
+    opts = opts || {};
+    const docs = scopeDocs(scope);
+    const toks = (refSig && refSig.length ? refSig : String(name).split(/\s+/)).map(_canonTok).filter(t => t.length >= 2);
+    if (!toks.length) return null;
+    const field = _admittedFieldScope(docs);
+    if (!field.length) return null;
+    const a = _channelA(field, toks);
+    if (a && a.ambiguous) return { rescued: false, ambiguous: true, via: 'A', count: a.count };
+    if (a && a.f) {
+      const witness = { span: a.f.name, entity: a.f.name, entityId: a.f.entity.referent_id || a.f.entity.key,
+        relation: 'orthographic-variant', transforms: a.transforms, docId: a.f.docId };
+      return { rescued: true, via: 'A', witness, entityId: witness.entityId };
+    }
+    const c = _channelC(field, name);
+    if (c && c.ambiguous) return { rescued: false, ambiguous: true, via: 'C', count: c.count };
+    if (c && c.f) {
+      const witness = { span: c.f.name, entity: c.f.name, entityId: c.f.entity.referent_id || c.f.entity.key,
+        relation: 'initialism', initials: c.init, docId: c.f.docId };
+      return { rescued: true, via: 'C', witness, entityId: witness.entityId };
+    }
+    return null;
+  }
+
+  // Does the scope's prose actually distinguish case? This is the SHAPE (not a
+  // language allow-list) of the promote_requires_uppercase_first convention —
+  // the rule, sourced to the en-narrative language module, that "capitalized ⇒
+  // promotable surface" holds only for case-bearing Latin scripts and "does NOT
+  // work for Chinese, Japanese, Hebrew, Arabic (no case)". A body with no
+  // lowercase Latin (a caseless script) carries no case signal, so the demotion
+  // below must not pretend to read one. German (every noun capitalized) passes
+  // this shape test but is handled safely by the role check: a capitalized
+  // common noun reads as proper there, so the demotion simply declines.
+  function _scopeHasCase(docs) {
+    if (!READING_RULES.promote_requires_uppercase_first.value) return false;
+    for (const d of scopeDocs(docs)) {
+      const body = (d.sentenceTexts || []).join(' ');
+      if (/\p{Ll}/u.test(body) && /\p{Lu}/u.test(body)) return true;
+    }
+    return false;
+  }
+
+  // The case role of a token in the scope's prose: does it appear as a lowercase
+  // common noun, as a capitalized proper noun (mid-sentence — sentence-initial
+  // case is uninformative), or both? This is the Latin-script CONVENTION
+  // (promote_requires_uppercase_first), not a universal — its caller gates it on
+  // _scopeHasCase so a caseless script never reaches it.
+  function _tokenCaseRole(docs, rawTok) {
+    const target = _canonTok(rawTok);
+    let common = false, proper = false;
+    if (!target) return { common, proper };
+    for (const d of scopeDocs(docs)) {
+      for (const s of (d.sentenceTexts || [])) {
+        const words = String(s).match(/[\p{L}][\p{L}'’-]*/gu) || [];
+        for (let i = 0; i < words.length; i++) {
+          if (_canonTok(words[i]) !== target) continue;
+          if (i === 0) continue;                       // sentence-initial: skip
+          if (/^\p{Lu}/u.test(words[i])) proper = true; else common = true;
+        }
+      }
+    }
+    return { common, proper };
+  }
+
+  // Demotion. The UNIVERSAL law: a candidate-matter name is false matter when no
+  // admitted (INS/two-sighting-confirmed) entity backs it and its presence rests
+  // only on a token the page uses as a COMMON noun — never as a proper-noun
+  // surface. The "common vs proper" SIGNAL is script convention: in a Latin
+  // script it is case (the promote_requires_uppercase_first rule), so the law is
+  // applied only where _scopeHasCase holds; elsewhere it conservatively declines
+  // (no demotion, so no false void). This voids "Amos Dresser" against a page
+  // that only has the furniture word "dresser", while a genuinely present proper
+  // noun (capitalized, even single-sighting and so unadmitted, like "Corman") is
+  // kept — false matter drops without the false-void rate rising, in any language.
+  function _demoteMatter(docs, name, refSig) {
+    const field = _admittedFieldScope(docs);
+    const adm = new Set();
+    for (const f of field) for (const st of f.surfToks) adm.add(st);
+    const nameToks = refSig.map(_canonTok).filter(t => t.length >= 2);
+    if (nameToks.some(t => adm.has(t))) return false;        // backed by an admitted entity → keep (universal)
+    if (!_scopeHasCase(docs)) return false;                  // no case convention → no common/proper signal → keep
+    const bodies = scopeDocs(docs).map(d => docBodyLC(d));
+    const present = refSig.filter(t => bodies.some(b => b.includes(t.toLowerCase())));
+    if (!present.length) return false;
+    for (const t of present) {
+      const role = _tokenCaseRole(docs, t);
+      if (!role.common || role.proper) return false;         // any proper use anywhere → keep
+    }
+    return true;
+  }
+
+  // The receipt the audit drawer renders for a rescue (SPEC §2): "treated NAME
+  // as present, resolves to ENTITY via RELATION." Never silent — a rescue is a
+  // claim that the page carries a thing under another surface, and the reader is
+  // owed the chance to reject it.
+  function formatRescueReceipt(name, r) {
+    if (!r || !r.rescued || !r.witness) return '';
+    const w = r.witness;
+    const via = r.via === 'A' ? 'orthographic variant' : r.via === 'C' ? 'coreference' : 'alias';
+    let how = '';
+    if (r.via === 'A' && w.transforms) how = ' (' + w.transforms.filter(t => !t.exact).map(t => `${t.from}→${t.to}, edit ${t.edit}`).join('; ') + ')';
+    else if (r.via === 'C' && w.initials) how = ` (initials “${String(w.initials).toUpperCase()}”)`;
+    return `treated “${name}” as present; resolves to “${w.entity}” via ${via}${how}.`;
+  }
+
+  // Apply both stages to the lexical split, in original span order so the output
+  // is deterministic and — absent any rescue or demotion — identical to the
+  // lexical floor. Returns { matter, antimatter, witnesses?, rescueNotes? }.
+  function _rescueDemote(docs, base, opts) {
+    const { spans } = base;
+    const matter = [], antimatter = [], witnesses = [], rescueNotes = [];
+    for (const sp of spans) {
+      if (sp.present) {
+        if (_demoteMatter(docs, sp.name, sp.refSig)) { antimatter.push(sp.name); rescueNotes.push({ term: sp.name, kind: 'demoted' }); }
+        else matter.push(sp.name);
+      } else {
+        const r = rescueReferent(docs, sp.name, sp.refSig, opts);
+        if (r && r.rescued && r.witness) { matter.push(sp.name); witnesses.push({ term: sp.name, ...r }); }
+        else { antimatter.push(sp.name); if (r && r.ambiguous) rescueNotes.push({ term: sp.name, kind: 'ambiguous', count: r.count }); }
+      }
+    }
+    const out = { matter, antimatter };
+    if (witnesses.length) out.witnesses = witnesses;
+    if (rescueNotes.length) out.rescueNotes = rescueNotes;
+    return out;
   }
   /* ── The typed void: VOID is a site, NUL is an act ────────────────────────
      One word, "void", was carrying many absences. The first cut is the seam
@@ -10852,13 +11149,20 @@ function projectGraph(events, frame = {}) {
   // Anti-matter across the whole scope: a named referent is matter if present in
   // ANY source, anti-matter only if absent from EVERY one. "What did Voss say?"
   // over two sources surfaces a void only when Voss is in neither.
-  function referentsScope(docs, query) {
+  function referentsScope(docs, query, opts) {
     const bodies = scopeDocs(docs).map(d => docBodyLC(d));
     const matter = [], antimatter = [];
+    const rescue = !!(opts && opts.rescue) || rescueEnabled();
+    const spans = rescue ? [] : null;
     for (const { name, refSig } of _referentSpans(query)) {
       const present = bodies.some(b => refSig.some(t => b.includes(t.toLowerCase())));
       (present ? matter : antimatter).push(name);
+      if (rescue) spans.push({ name, refSig, present });
     }
+    // The rescue/demotion amendment over the whole scope: a name absent under its
+    // query surface is rescued only against the scope's admitted entities, and a
+    // common-noun-substring false matter is demoted. OFF by default — parity.
+    if (rescue) return _rescueDemote(scopeDocs(docs), { matter, antimatter, spans }, opts);
     return { matter, antimatter };
   }
 
@@ -11852,6 +12156,25 @@ function projectGraph(events, frame = {}) {
   function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
   function crossSourceEnabled() { const v = READING_RULES.cross_source.value; return v === true || v === 1; }
   function bindingResolutionEnabled() { const v = READING_RULES.binding_resolution.value; return v === true || v === 1; }
+  // Semantic antimatter master (SPEC): the rescue + demotion stages at the
+  // referent gate. OFF ships the lexical floor byte-identical; ON activates the
+  // amendment everywhere referents/referentsScope are consumed. The per-call
+  // opts.rescue flag still forces it on for a single read (tests, previews).
+  function rescueEnabled() { const v = READING_RULES.rescue_referent.value; return v === true || v === 1; }
+  function setRescueEnabled(on) { const prev = rescueEnabled(); READING_RULES.rescue_referent.value = !!on; return prev; }
+  // A read-only snapshot of the rescue surface's constants, so the universal /
+  // convention split is legible to the audit drawer and the tests. The three
+  // mechanical thresholds are universal (hardcoded-seed/core); the case→proper
+  // signal demotion leans on is the promote_requires_uppercase_first CONVENTION,
+  // sourced to the language module — surfaced here by name, never re-hardcoded.
+  function rescueRules() {
+    return {
+      minToken: READING_RULES.rescue_min_token.value,
+      editMax: READING_RULES.rescue_edit_max.value,
+      initialismMax: READING_RULES.rescue_initialism_max.value,
+      caseConvention: { rule: 'promote_requires_uppercase_first', on: !!READING_RULES.promote_requires_uppercase_first.value },
+    };
+  }
   function distanceGravityEnabled() { return DISTANCE_GRAVITY(); }
   /* The addressee field (addressee.js) — the second person. Off-by-default
      masters and the seeded BKT constants, read for the host's flag-guarded
@@ -13010,6 +13333,13 @@ function projectGraph(events, frame = {}) {
     // DEF — the type gate (the fourth NUL state): which capitalized tokens are
     // truth-apt referents vs. structural/pragmatic grammar, by shape not by list.
     nonReferentialCaps, referents,
+    // semantic antimatter (SPEC): the rescue + demotion stages, OFF by default
+    // (opts.rescue) so the lexical floor stays byte-identical. rescueReferent
+    // moves candidate anti-matter → matter only by a discrete witness (Channel A
+    // orthographic, Channel C coref/alias — no cosine; name↔name and Channel B
+    // are forbidden, the latter killed by the Phase 0 horizon read). The receipt
+    // is the audit line a reader may reject.
+    rescueReferent, formatRescueReceipt, rescueEnabled, setRescueEnabled, rescueRules,
     // the extracted graph: a portrait, and a portable per-doc snapshot (explorer + export)
     // graphPortrait / graphSnapshot / projectEntities now surface NUL log,
     // signal substrate, frame, full DEF set, and long-tail entities.
