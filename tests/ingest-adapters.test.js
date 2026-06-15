@@ -83,31 +83,44 @@ ok('asrToVtt skips failure events', !/error/.test(B.asrToVtt([asrEvent(0, 1, 'ke
 ok('asrToVtt is empty with no real segments', B.asrToVtt([failEvent('x')]) === '');
 ok('asrToVtt handles a null/0 end timestamp', /-->/.test(B.asrToVtt([asrEvent(0, null, 'one chunk')])));
 
-// ---- ocrToText -------------------------------------------------------------
+// ---- ocrToText (now reconstructs via EOImportStructure) --------------------
 {
-  // Two lines: y≈10 (h=12) then y≈40 — the >0.6*medH jump starts a new line.
+  // Faithful reconstruction joins same-line words and reflows wrapped lines into
+  // reading-order prose — the old flat fold split every visual line at its wrap.
   const txt = B.ocrToText([
     ocrWord(0, 10, 20, 12, 'The'), ocrWord(25, 10, 30, 12, 'quick'),
     ocrWord(0, 40, 25, 12, 'brown'), ocrWord(30, 40, 20, 12, 'fox'),
   ]);
   ok('ocrToText joins words on a line with spaces', /The quick/.test(txt));
-  ok('ocrToText breaks lines on a y-jump', /quick\nbrown/.test(txt), JSON.stringify(txt));
+  ok('ocrToText reflows wrapped lines into reading order', /quick brown/.test(txt), JSON.stringify(txt));
 }
 ok('ocrToText uses a page-level event verbatim',
   B.ocrToText([{ region: { kind: 'bbox', x: 0, y: 0, w: 0, h: 0 }, confidence: 0.8, payload: { text: 'Whole page text.' }, meta: { level: 'page' }, adapter: { id: 'ocr-tesseract', version: '1.0.0' } }]) === 'Whole page text.');
 ok('ocrToText is empty with no words', B.ocrToText([failEvent('x')]) === '');
 
-// ---- pdfToText -------------------------------------------------------------
+// ---- pdfToText (now reconstructs via EOImportStructure) --------------------
 {
-  const txt = B.pdfToText([
-    pdfRun(1, 700, 'Title'), pdfRun(1, 680, 'First line of body.'),
-    pdfRun(2, 700, 'Second page.'),
-  ]);
-  ok('pdfToText breaks lines within a page on a y-shift', /Title\nFirst line/.test(txt), JSON.stringify(txt));
+  // A born-digital page: a larger-font heading, a body line, then a second page.
+  // Reconstruction tags the heading, reflows body, and breaks pages with a
+  // blank line (geometry-faithful, not the old single-y-gap flat fold).
+  const pr = (page, x, y, text, fs) => ({ id: 'e', adapter: { id: 'pdf-text-pdfjs', version: '1.0.0' },
+    region: { kind: 'bbox', x, y, w: Math.max(1, text.length * (fs || 10) * 0.5), h: fs || 10 },
+    confidence: 1, payload: { text, fontSize: fs || 10, fontName: 'F' }, meta: { page } });
+  const txt = B.pdfToText([pr(1, 72, 700, 'A Heading', 16), pr(1, 72, 672, 'First line of body.', 11), pr(2, 72, 700, 'Second page.', 11)]);
   ok('pdfToText breaks pages with a blank line', /\n\nSecond page\./.test(txt), JSON.stringify(txt));
+  ok('pdfToText keeps a larger-font heading distinct from the body', /A Heading\n\nFirst line of body\./.test(txt), JSON.stringify(txt));
+  // same-baseline runs at increasing x join with a space (kerning gaps do not)
+  ok('pdfToText joins same-line runs with a space',
+    /Hello world/.test(B.pdfToText([pr(1, 72, 700, 'Hello', 11), pr(1, 110, 700, 'world', 11)])));
 }
-ok('pdfToText joins same-line runs with a space',
-  /Hello world/.test(B.pdfToText([pdfRun(1, 700, 'Hello'), pdfRun(1, 700, 'world')])));
+// the reconstruction rides onto the fold's structure + provenance digest
+{
+  const r = B.eventsToText('pdf-text', [
+    { id: 'e', region: { kind: 'bbox', x: 72, y: 700, w: 40, h: 11 }, confidence: 1, payload: { text: 'Body', fontSize: 11, fontName: 'F' }, meta: { page: 1 }, adapter: { id: 'pdf-text-pdfjs', version: '1.0.0' } },
+  ]);
+  ok('eventsToText(pdf-text) returns reconstructed structure', r.structure && Array.isArray(r.structure.blocks));
+  ok('eventsToText(pdf-text) rides a compact structure digest on provenance', r.provenance.structure && r.provenance.structure.reconstructed === true);
+}
 
 // ---- eventsToText dispatch + provenance ------------------------------------
 {

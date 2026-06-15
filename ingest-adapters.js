@@ -70,6 +70,45 @@
   const evText = (e) => (e && e.payload && typeof e.payload.text === 'string') ? e.payload.text : '';
   const num = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
 
+  // ---- faithful import (Layer A) -------------------------------------------
+  // The positioned-event folds (PDF runs, OCR words) reconstruct words, lines,
+  // columns, reading order and furniture from run geometry via EOImportStructure
+  // — see import-structure.js. The legacy flat folds below stay as a defensive
+  // fallback if that module is absent (and so the bridge keeps working on its
+  // own). Resolved lazily so script/require load order never matters.
+  function importStructure() {
+    if (G.EOImportStructure && typeof G.EOImportStructure.reconstruct === 'function') return G.EOImportStructure;
+    if (typeof require === 'function') { try { return require('./import-structure.js'); } catch (_) {} }
+    return null;
+  }
+  function reconstructFold(modality, events) {
+    const IS = importStructure();
+    if (IS) { try { return IS.reconstruct(events, modality); } catch (_) {} }
+    const body = modality === 'ocr' ? legacyOcrToText(events) : legacyPdfToText(events);
+    return { body, blocks: [], furniture: [], seedEvents: [], uncertain: [], relationalCandidates: [],
+      columns: [], modality, stats: { pages: 0, lines: 0, blocks: 0, furnitureLines: 0, droppedDelimiters: 0, uncertainRuns: 0 } };
+  }
+  // A compact, serializable digest of the reconstruction to ride on the doc as
+  // provenance (the full blocks/seedEvents stay on eventsToText's return for the
+  // engine's structure channel). Bounded so it never bloats a saved doc.
+  function compactStructure(s) {
+    if (!s) return null;
+    const st = s.stats || {};
+    const seeds = s.seedEvents || [];
+    return {
+      reconstructed: true, modality: s.modality,
+      pages: st.pages || 0, lines: st.lines || 0, blocks: st.blocks || 0,
+      furnitureLines: st.furnitureLines || 0, droppedDelimiters: st.droppedDelimiters || 0,
+      uncertainRuns: st.uncertainRuns || 0,
+      furniture: (s.furniture || []).slice(0, 40).map(f => ({ text: String(f.text || '').slice(0, 80), pages: f.pages, reason: f.reason })),
+      relationalCandidates: (s.relationalCandidates || []).slice(0, 8).map(r => ({ token: r.token, page: r.page })),
+      // The layout/content split, for the audit + Reading view (the talker note
+      // is a later, gated flip). Pre-rendered phrases only — no coordinates.
+      layoutNotes: (s.layoutNotes || []).slice(0, 12).map(n => ({ role: n.role, zone: n.zone, phrase: n.phrase, source: n.source })),
+      events: { region: seeds.filter(e => e.subjectType === 'region').length, run: seeds.filter(e => e.subjectType === 'run').length },
+    };
+  }
+
   // seconds → "HH:MM:SS.mmm" (the WebVTT/SRT-ish cue shape the engine's
   // TC_LINE_RE matches, so a cue line reads as transcript structure).
   function fmtTimecode(sec) {
@@ -108,8 +147,9 @@
 
   // OCR → reading-ordered text. Words arrive in reading order; a downward jump
   // in the top-y beyond ~0.6 of the median word height starts a new line. A
-  // whole-page event (no per-word boxes) is used verbatim.
-  function ocrToText(events) {
+  // whole-page event (no per-word boxes) is used verbatim. (Legacy flat fold —
+  // kept as the fallback; ocrToText now reconstructs via EOImportStructure.)
+  function legacyOcrToText(events) {
     const words = (events || []).filter(e => !isFailure(e) && evText(e).trim());
     if (!words.length) return '';
     if (words.length === 1 && words[0].meta && words[0].meta.level === 'page') {
@@ -134,7 +174,9 @@
   // a line break; otherwise runs join with a single space unless already
   // whitespace-bounded. (Born-digital extraction; intra-line spacing follows the
   // producer's runs — declared as a limitation in the PDF adapter's manifest.)
-  function pdfToText(events) {
+  // (Legacy flat fold — kept as the fallback; pdfToText now reconstructs words,
+  // lines, columns, reading order and furniture via EOImportStructure.)
+  function legacyPdfToText(events) {
     const runs = (events || []).filter(e => !isFailure(e) && evText(e) !== '');
     if (!runs.length) return '';
     let out = '', prevY = null, prevPage = null;
@@ -156,6 +198,12 @@
     }
     return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   }
+
+  // The public folds: faithful reconstruction (words, lines, columns, reading
+  // order, furniture) via EOImportStructure, returning the clean body string.
+  // Same signature as before so eventsToText and existing callers are unmoved.
+  function pdfToText(events) { return reconstructFold('pdf', events).body; }
+  function ocrToText(events) { return reconstructFold('ocr', events).body; }
 
   // ---- provenance ----------------------------------------------------------
   // A compact, serializable record of HOW the text was produced — which adapter,
@@ -185,15 +233,20 @@
   }
 
   // The one call app.jsx makes after running an adapter: fold the events into
-  // { text, provenance } for the right capability.
+  // { text, provenance, structure } for the right capability. For the positioned
+  // modalities (PDF, OCR) `structure` carries the reconstructed blocks /
+  // furniture / seedEvents (Layer A) for the engine's structure channel, and a
+  // compact digest rides on `provenance.structure` for the doc and the audit.
   function eventsToText(capability, events) {
     const list = Array.isArray(events) ? events : [];
-    let text = '';
+    let text = '', structure = null;
     if (capability === 'asr') text = asrToVtt(list);
-    else if (capability === 'ocr') text = ocrToText(list);
-    else if (capability === 'pdf-text') text = pdfToText(list);
+    else if (capability === 'ocr') { structure = reconstructFold('ocr', list); text = structure.body; }
+    else if (capability === 'pdf-text') { structure = reconstructFold('pdf', list); text = structure.body; }
     else text = list.filter(e => !isFailure(e)).map(evText).filter(Boolean).join('\n').trim();
-    return { text, provenance: summarize(capability, list) };
+    const provenance = summarize(capability, list);
+    if (structure) provenance.structure = compactStructure(structure);
+    return { text, provenance, structure };
   }
 
   // Every event was a failure (a hard decline) vs. at least one observation.
@@ -206,6 +259,8 @@
   G.EOIngestAdapters = {
     routeFile, ACCEPT,
     eventsToText, asrToVtt, ocrToText, pdfToText,
+    reconstructFold, compactStructure,
+    legacyOcrToText, legacyPdfToText,
     fmtTimecode, summarize, allFailed, firstError, isFailure,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = G.EOIngestAdapters;
