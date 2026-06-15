@@ -987,36 +987,37 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, s
         onChange={e => onChange(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }} />
       <div className="composer-bar">
-        <button className="comp-btn icon" title="Attach a file" onClick={onAttach}><Icon name="paperclip" size={16} /></button>
-        {/* The Auto / Grounded / Creative control is opt-in (Settings → Answers):
-            hidden, every chat runs on Auto, which reads the question and grounds
-            or composes on its own. Shown, it lets the reader pin a mode per chat. */}
-        {showModeToggle && (
-          <div className="mode-seg">
-            {MODES.map(md => (
-              <button key={md.id} className={(mode === md.id ? 'on ' + md.id : '')} onClick={() => onMode(md.id)}>
-                {md.id === 'verbatim' && <Icon name="copy" size={13} />}
-                {md.id === 'grounded' && <Icon name="check" size={13} />}
-                {md.id === 'creative' && <Icon name="sparkle" size={13} />}{md.label}
-              </button>
-            ))}
-          </div>
-        )}
-        {showWiki && onForceEnrich && (
-          <button type="button" className={'comp-btn enrich' + (forceEnrich ? ' on' : '')} aria-pressed={!!forceEnrich}
-            title="Search Wikipedia for this message now — surface matching articles to research, even in Auto (skips the gate, not the choice). Only the search term (not the document) goes to Wikipedia through the proxy; nothing is pulled in until you pick one."
-            onClick={onForceEnrich}>
-            <Icon name="book" size={15} /> Wikipedia
-          </button>
-        )}
-        {hasTable && onSmartParse && (
-          <button type="button" className={'comp-btn enrich' + (smartParse ? ' on' : '')} aria-pressed={!!smartParse}
-            title="Smart parse — read a data question against the table's own columns and values (e.g. “clients from Mexico” → Country = Mexico), asking which field is meant when a value is ambiguous. Off falls back to the plain pivot parser."
-            onClick={onSmartParse}>
-            <Icon name="sparkle" size={15} /> Smart parse
-          </button>
-        )}
-        <div className="comp-spacer" />
+        <div className="comp-tools">
+          <button className="comp-btn icon" title="Attach a file" onClick={onAttach}><Icon name="paperclip" size={16} /></button>
+          {/* The Auto / Grounded / Creative control is opt-in (Settings → Answers):
+              hidden, every chat runs on Auto, which reads the question and grounds
+              or composes on its own. Shown, it lets the reader pin a mode per chat. */}
+          {showModeToggle && (
+            <div className="mode-seg">
+              {MODES.map(md => (
+                <button key={md.id} className={(mode === md.id ? 'on ' + md.id : '')} onClick={() => onMode(md.id)}>
+                  {md.id === 'verbatim' && <Icon name="copy" size={13} />}
+                  {md.id === 'grounded' && <Icon name="check" size={13} />}
+                  {md.id === 'creative' && <Icon name="sparkle" size={13} />}{md.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {showWiki && onForceEnrich && (
+            <button type="button" className={'comp-btn enrich' + (forceEnrich ? ' on' : '')} aria-pressed={!!forceEnrich}
+              title="Search Wikipedia for this message now — surface matching articles to research, even in Auto (skips the gate, not the choice). Only the search term (not the document) goes to Wikipedia through the proxy; nothing is pulled in until you pick one."
+              onClick={onForceEnrich}>
+              <Icon name="book" size={15} /> Wikipedia
+            </button>
+          )}
+          {hasTable && onSmartParse && (
+            <button type="button" className={'comp-btn enrich' + (smartParse ? ' on' : '')} aria-pressed={!!smartParse}
+              title="Smart parse — read a data question against the table's own columns and values (e.g. “clients from Mexico” → Country = Mexico), asking which field is meant when a value is ambiguous. Off falls back to the plain pivot parser."
+              onClick={onSmartParse}>
+              <Icon name="sparkle" size={15} /> Smart parse
+            </button>
+          )}
+        </div>
         {generating
           ? <button className="send-btn stop" aria-label="Stop generating" title="Stop generating" onClick={onStop}><Icon name="stop" size={15} /></button>
           : <button className="send-btn" aria-label="Send message" disabled={!value.trim() || busy} onClick={submit}><Icon name="send" size={16} /></button>}
