@@ -3703,11 +3703,13 @@ function App() {
     doc.wiki = { url: payload.url || null, title: payload.title || null, references, lineRefs };
   };
 
-  // The reader chose an article in the search modal and pressed "Add to graph":
-  // ingest it as a citable doc (clean body), pull its citations through as
-  // provenance, add it as a source, and reflect it in the chat as a sourced
-  // card. Returns { id, name } so the modal can show the added state. The modal
-  // already fetched the rendered payload, so this does no further network.
+  // The reader added an article from the search modal: ingest it as a citable
+  // doc (clean body), pull its citations through as provenance, and add it as a
+  // source — quietly. Several can be added in a sitting, so this doesn't post a
+  // chat card per add (the modal shows the added state, and the source surfaces
+  // in the chips); a later question grounds on it, its claims traceable through
+  // to what Wikipedia cites. Returns { id, name }; the modal already fetched the
+  // payload, so no further network here. Idempotent — a repeat is the same doc.
   const ingestWikiFromModal = async (payload) => {
     if (!payload || !payload.title) return null;
     const name = 'Wikipedia · ' + payload.title;
@@ -3720,12 +3722,6 @@ function App() {
     if (!doc) return null;
     attachWikiProvenance(doc, payload);
     addSource(doc.id);
-    const nRefs = (payload.references || []).length;
-    const line = 'Added **' + name + '** to the graph'
-      + (nRefs ? ' — its ' + nRefs + ' Wikipedia citation' + (nRefs === 1 ? '' : 's') + ' came along, so a claim grounded on it can be traced to the original source.' : '.');
-    const turnId = 'wt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    setMessages(m => [...m, { role: 'assistant', turnId, text: line,
-      enrichment: { status: 'hit', term: payload.title, query: payload.title, payload, cached: false, basis: payload._basis || null, ingested: { id: doc.id, name, deferred: true } } }]);
     return { id: doc.id, name };
   };
 
@@ -4187,6 +4183,13 @@ function App() {
   const runTurn = async (text) => {
     const q = (text != null ? text : input).trim();
     if (!q || busy) return;
+    // The /wikipedia command opens the search modal (optionally seeded with the
+    // rest of the line) instead of running a turn — the explicit way in, beside
+    // the composer's Wikipedia button. Only fires when the desk is configured.
+    const wm = /^\/wiki(?:pedia)?\b[\s:]*([\s\S]*)$/i.exec(q);
+    if (wm && window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled()) {
+      setInput(''); setWikiSearch(wm[1].trim()); return;
+    }
     setInput('');
     // Open a fresh generation. Stop (and any later turn) bumps this; the awaits
     // below and the detached streaming paths all stand down once superseded.

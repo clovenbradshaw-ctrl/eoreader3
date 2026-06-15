@@ -1,9 +1,9 @@
 /* Verify the Wikipedia search modal (reference.jsx → window.WikiSearchModal):
-   the composer button's destination. Mounts the REAL component through jsdom,
-   driving the REAL external.js (with an injected fetch) so the whole path runs —
-   live search (no Enter) → tag several articles → add them all to the graph,
-   each rendered close to source with its citations pulled through. The renderer
-   only runs in the browser, so this mirrors verify-markdown's harness. */
+   the composer button's / "/wikipedia" destination. Mounts the REAL component
+   through jsdom on the REAL external.js (injected fetch), exercising the whole
+   path — suggestion chips → live search (no Enter) → rich rows with thumbnails →
+   inline preview → add several articles as sources, each pulling its citations
+   through. The renderer only runs in the browser, so this mirrors verify-markdown. */
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -23,39 +23,31 @@ window.React = React;
 global.window = window; global.document = window.document;
 try { Object.defineProperty(global, 'navigator', { value: window.navigator, configurable: true }); } catch (_) {}
 global.React = React; global.performance = window.performance; global.setTimeout = setTimeout;
-global.DOMParser = window.DOMParser;            // external.js uses the browser parser when present
+global.DOMParser = window.DOMParser;
 global.IS_REACT_ACT_ENVIRONMENT = true;
-// jsdom throws inside its focus-event machinery during a passive effect (the
-// dialog's focus trap); focus isn't under test, so neutralise it for quiet output.
-try { window.HTMLElement.prototype.focus = function () {}; } catch (_) {}
+try { window.HTMLElement.prototype.focus = function () {}; } catch (_) {}   // jsdom focus throws in a passive effect; not under test
 
 const origErr = console.error;
 console.error = (...a) => { const s = a.map(x => (x && x.stack) || String(x)).join(' '); if (/act\(|deprecated/.test(s)) return; origErr.apply(console, a); };
 
-/* ---- the only "world" this test sees: a canned Wikipedia API behind a fake
-   fetch (the proxy passes ?url= through, same as external.test.js) ---- */
+/* ---- canned Wikipedia API behind a fake fetch (proxy passes ?url= through) ---- */
 const ARTICLE_HTML = `<div class="mw-parser-output">
-<table class="infobox"><caption>Article</caption><tr><td><img src="//upload.wikimedia.org/d.jpg"></td></tr></table>
-<p><b>Subject</b> is an aquatic mammal.<sup class="reference"><a href="#cite_note-a-1">[1]</a></sup> It is widespread.<sup class="reference"><a href="#cite_note-b-2">[2]</a></sup></p>
-<h2><span class="mw-headline">Diet</span><span class="mw-editsection">[edit]</span></h2>
-<p>It eats fish and squid.<sup class="reference"><a href="#cite_note-c-3">[3]</a></sup></p>
+<p><b>Subject</b> is a thing.<sup class="reference"><a href="#cite_note-a-1">[1]</a></sup> It is notable.<sup class="reference"><a href="#cite_note-b-2">[2]</a></sup></p>
 <h2>References</h2>
 <ol class="references">
-<li id="cite_note-a-1"><cite>Smith (2020). <a class="external text" href="https://example.com/smith">smith</a></cite></li>
-<li id="cite_note-b-2"><cite>Jones (2019). <a class="external text" href="https://bbc.co.uk/d">bbc</a></cite></li>
-<li id="cite_note-c-3"><cite>Doe (2021). <a class="external text" href="https://nature.com/x">nature</a></cite></li>
-</ol>
-<div class="navbox">NAVBOX JUNK</div>
-<script>danger()</script>
-</div>`;
-const searches = [];                            // every list=search term, to prove live search fired
+<li id="cite_note-a-1"><cite>Smith (2020). <a class="external text" href="https://example.com/s">s</a></cite></li>
+<li id="cite_note-b-2"><cite>Jones (2019). <a class="external text" href="https://bbc.co.uk/d">b</a></cite></li>
+</ol></div>`;
+const searches = [];                            // every generator=search term (proves live search fired)
 async function fakeFetch(full) {
   const inner = decodeURIComponent(String(full).split('?url=')[1] || '');
   const ok = (body) => ({ ok: true, status: 200, async text() { return JSON.stringify(body); } });
-  if (/list=search/.test(inner)) {
-    const term = decodeURIComponent((/srsearch=([^&]+)/.exec(inner) || [])[1] || '');
-    searches.push(term);
-    return ok({ query: { search: [{ title: 'Dolphin', snippet: 'aquatic <span class="searchmatch">mammal</span>' }, { title: 'Porpoise', snippet: 'related cetacean' }] } });
+  if (/generator=search/.test(inner)) {
+    searches.push(decodeURIComponent((/gsrsearch=([^&]+)/.exec(inner) || [])[1] || ''));
+    return ok({ query: { pages: {
+      '12': { pageid: 12, index: 1, title: 'Dolphin', description: 'aquatic mammal', extract: 'Dolphins are aquatic mammals. They are widespread.', thumbnail: { source: 'https://upload.wikimedia.org/d.jpg' } },
+      '34': { pageid: 34, index: 2, title: 'Porpoise', description: 'related cetacean', extract: 'A porpoise is a small toothed whale.' },
+    } } });
   }
   if (/action=parse/.test(inner)) {
     const title = decodeURIComponent((/[?&]page=([^&]+)/.exec(inner) || [])[1] || 'Dolphin');
@@ -81,57 +73,59 @@ let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; } else { fail++; console.error('  ✗ ' + msg); } };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const click = (el) => TestUtils.act(() => { el.dispatchEvent(new W.Event('click', { bubbles: true })); });
-const waitFor = async (fn, n = 60) => { for (let i = 0; i < n && !fn(); i++) await sleep(10); };
+const waitFor = async (fn, n = 80) => { for (let i = 0; i < n && !fn(); i++) await sleep(10); };
 
 (async function main() {
   const root = document.getElementById('root');
   const client = ReactDOMClient.createRoot(root);
   const ingestCalls = [];
-  const onIngest = (payload) => { ingestCalls.push(payload.title); return Promise.resolve({ id: 'doc-' + ingestCalls.length, name: 'Wikipedia · ' + payload.title }); };
+  const onIngest = (payload) => { ingestCalls.push({ title: payload.title, refs: (payload.references || []).length }); return Promise.resolve({ id: 'doc-' + ingestCalls.length, name: 'Wikipedia · ' + payload.title }); };
 
-  // open with no seed query — search must happen as you type, not on Enter
-  await TestUtils.act(async () => { client.render(React.createElement(W.WikiSearchModal, { initialQuery: '', onClose: () => {}, onIngest, onOpenDoc: () => {} })); });
-  ok(searches.length === 0, 'no search until the reader types (nothing leaves on open)');
+  await TestUtils.act(async () => { client.render(React.createElement(W.WikiSearchModal, { initialQuery: '', onClose: () => {}, onIngest })); });
+  ok(searches.length === 0, 'no search on open — nothing leaves until the reader acts');
+  const chips = root.querySelectorAll('.wiki-suggest');
+  ok(chips.length >= 3, 'the empty state offers suggestion chips to seed a search');
 
+  // a suggestion chip seeds + runs a search
+  await click(chips[0]);
+  await waitFor(() => root.querySelectorAll('.wiki-row').length >= 2);
+  ok(searches.length >= 1, 'a suggestion chip fires a search');
+  const rows = root.querySelectorAll('.wiki-row');
+  ok(rows.length >= 2, 'rich result rows render');
+  ok(!!root.querySelector('.wiki-row-thumb'), 'a result carries a thumbnail (or placeholder)');
+  ok(/aquatic mammal/.test(root.textContent), 'the one-line description shows on the row');
+
+  // live search: typing alone fires another search, no Enter
+  const before = searches.length;
   const input = root.querySelector('.wiki-search-input');
-  ok(!!input, 'the search box is present');
-  // type a query WITHOUT pressing Enter — the debounce should fire the search
   await TestUtils.act(async () => { TestUtils.Simulate.change(input, { target: { value: 'dolphin' } }); });
-  await waitFor(() => searches.length > 0);
+  await waitFor(() => searches.length > before);
   ok(searches.includes('dolphin'), 'live search fires from typing alone (no Enter / button)');
-  await waitFor(() => root.querySelectorAll('.wiki-opt-row').length >= 2);
+  await waitFor(() => root.querySelectorAll('.wiki-row').length >= 2);
 
-  const rows = root.querySelectorAll('.wiki-opt-row');
-  ok(rows.length >= 2, 'candidate articles are listed');
-  const checks = root.querySelectorAll('.wiki-opt-check');
-  ok(checks.length >= 2, 'each result has a tag checkbox');
+  // expand a row → inline preview with extract + read-more link
+  await click(root.querySelector('.wiki-row-head'));
+  await waitFor(() => !!root.querySelector('.wiki-row-expand'));
+  ok(!!root.querySelector('.wiki-row-expand'), 'a row expands to an inline preview');
+  ok(/Dolphins are aquatic mammals/.test(root.querySelector('.wiki-row-extract').textContent), 'the preview shows the intro extract');
+  const readMore = root.querySelector('.wiki-row-readmore');
+  ok(readMore && /en\.wikipedia\.org\/wiki\/Dolphin/.test(readMore.getAttribute('href')), 'a "read the full article" link points to Wikipedia');
 
-  // tag BOTH candidates, then add them in one go
-  await click(checks[0]);
-  await click(checks[1]);
-  await waitFor(() => /2\s*tagged/i.test(root.textContent), 30);
-  ok(/2\s*tagged/i.test(root.textContent), 'tagging multiple articles accumulates a count');
-  const addBtn = [...root.querySelectorAll('button')].find(b => /add 2 to graph/i.test(b.textContent));
-  ok(!!addBtn, 'a single "Add 2 to graph" action ingests the whole tagged set');
-  await click(addBtn);
+  // add several articles, one row at a time
+  const addBtns = () => [...root.querySelectorAll('.wiki-row-add')].filter(b => !b.disabled);
+  await click(addBtns()[0]);
+  await waitFor(() => ingestCalls.length >= 1, 120);
+  ok(ingestCalls.length === 1, 'per-row "Add source" ingests that article');
+  ok(ingestCalls[0].refs === 2, 'adding pulls the article’s citations through (full fetch, not the snippet)');
+  await waitFor(() => /1 article added/.test(root.textContent), 40);
+  ok(/1 article added/.test(root.textContent), 'the footer counts the added source');
+
+  await click(addBtns()[0]);                    // the now-first still-addable row
   await waitFor(() => ingestCalls.length >= 2, 120);
-  ok(ingestCalls.length === 2, 'both tagged articles are ingested');
-  ok(ingestCalls.includes('Dolphin') && ingestCalls.includes('Porpoise'), 'each distinct article ingested once');
-
-  // open one article: it renders close to source, sanitised, with its citations
-  await waitFor(() => root.querySelectorAll('.wiki-option').length >= 1);
-  await click(root.querySelector('.wiki-option'));
-  await waitFor(() => !!root.querySelector('.wiki-article'));
-  const article = root.querySelector('.wiki-article');
-  ok(!!article, 'a tagged/opened article renders in the reader');
-  ok(/aquatic mammal/.test(article.innerHTML), 'article body rendered from its own HTML');
-  ok(article.innerHTML.indexOf('danger()') === -1, 'embedded <script> stripped before render');
-  ok(article.innerHTML.indexOf('NAVBOX JUNK') === -1, 'navbox chrome dropped from the render');
-  ok(/Wikipedia cites/i.test(root.textContent), 'the foot surfaces the sources Wikipedia cites');
-
-  // the article we already ingested shows as added (deduped), not re-offered
-  await waitFor(() => /Added/i.test(root.textContent), 30);
-  ok(/Added/i.test(root.textContent), 'an already-ingested article reads as added');
+  ok(ingestCalls.length === 2 && ingestCalls[0].title !== ingestCalls[1].title, 'a second article adds independently (multiple sources)');
+  await waitFor(() => /2 articles added/.test(root.textContent), 40);
+  ok(/2 articles added/.test(root.textContent), 'the footer reflects multiple sources');
+  ok([...root.querySelectorAll('.wiki-row-add')].some(b => /Added/.test(b.textContent)), 'an added row reads as Added');
 
   await TestUtils.act(async () => { client.unmount(); });
   console.log(`\n${fail ? '✗' : 'PASS —'} Wikipedia search modal: ${pass} passed, ${fail} failed`);
