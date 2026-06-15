@@ -40,12 +40,26 @@ function renderCite(kind, payload, key, onCite) {
     // Absence attestation: a negative claim ("never mentioned as a speaker")
     // cites ⊥ with the receipt of what was scanned — no single line can support
     // a claim about the whole document, but a full scan of the event log can.
-    // The receipt rides in the tooltip.
-    const i = payload.indexOf(':');
-    const receipt = i >= 0 ? payload.slice(i + 1) : payload;
-    return <span key={key} className="cite absent" title={'Absence attested mechanically — ' + receipt}>⊥</span>;
+    // The receipt rides in the tooltip. The typed terrain (never-set / cleared /
+    // impossible) frames it — a fact about the SITE — but the talker is never
+    // told the type by name; the chip carries it.
+    const EO = (typeof window !== 'undefined' && window.EOEngine) || null;
+    const a = (EO && EO.parseAbsentMarker) ? EO.parseAbsentMarker(payload)
+      : (() => { const i = payload.indexOf(':'); return { kind: 'unspecified', receipt: i >= 0 ? payload.slice(i + 1) : payload }; })();
+    const lead = a.kind === 'cleared' ? 'Corrected — this was said earlier and has since been superseded'
+      : a.kind === 'impossible' ? 'The question assumes what the page denies'
+      : 'Absence attested mechanically';
+    const cls = 'cite absent' + (a.kind && a.kind !== 'unspecified' ? ' absent-' + a.kind : '');
+    return <span key={key} className={cls} title={lead + ' — ' + a.receipt}>⊥</span>;
   }
-  return <span key={key} className="cite void" title="This term appears nowhere in the sources">{payload}</span>;
+  // void: the ELSEWHERE terrain (named in the question, not in this document) or
+  // the INVENTED fabrication (a term with no site, struck). A bare {{void:term}}
+  // stays 'unspecified' and renders exactly as before.
+  const EO = (typeof window !== 'undefined' && window.EOEngine) || null;
+  const v = (EO && EO.parseVoidMarker) ? EO.parseVoidMarker(payload) : { kind: 'unspecified', term: payload };
+  const title = (EO && EO.voidKindLabel) ? EO.voidKindLabel(v.kind) : 'This term appears nowhere in the sources';
+  const cls = 'cite void' + (v.kind && v.kind !== 'unspecified' ? ' void-' + v.kind : '');
+  return <span key={key} className={cls} title={title}>{v.term}</span>;
 }
 
 /* ── Inline pass ──────────────────────────────────────────────────────────

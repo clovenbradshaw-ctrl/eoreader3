@@ -951,7 +951,13 @@ function eomriSentences(turn, hitsByIdx) {
     const mks = ids.map(i => markers[i]).filter(Boolean);
     const cites = mks.filter(k => k.kind === 'cite' || k.kind === 'infer');
     const voids = mks.filter(k => k.kind === 'void' || k.kind === 'absent');
-    const display = frag.replace(unit, (m, i) => { const k = markers[+i]; return (k && (k.kind === 'void' || k.kind === 'absent')) ? k.payload : ''; })
+    const display = frag.replace(unit, (m, i) => { const k = markers[+i]; if (!k || (k.kind !== 'void' && k.kind !== 'absent')) return '';
+        // Strip the typed kind so the readable sentence shows the bare term /
+        // receipt (byte-identical for legacy markers, which carry no kind).
+        const EO = (typeof window !== 'undefined' && window.EOEngine) || null;
+        if (k.kind === 'void') return (EO && EO.parseVoidMarker) ? EO.parseVoidMarker(k.payload).term : k.payload;
+        if (EO && EO.parseAbsentMarker) { const a = EO.parseAbsentMarker(k.payload); return a.doc ? a.doc + ':' + a.receipt : a.receipt; }
+        return k.payload; })
       .replace(/․/g, '.').replace(/\s+([.,;:!?])/g, '$1').replace(/\s{2,}/g, ' ').trim();
     const content = (display.toLowerCase().match(/[a-z0-9][a-z0-9'’-]*/g) || []).map(w => w.replace(/['’]s$/, '')).filter(w => w.length > 2 && !EOMRI_STOP.has(w));
     if (!content.length) {   // a marker-only fragment trails the previous sentence — attach backward

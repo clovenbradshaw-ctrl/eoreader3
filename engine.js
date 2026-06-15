@@ -8051,6 +8051,79 @@ function projectGraph(events, frame = {}) {
     }
     return { matter, antimatter };
   }
+  /* ── The typed void: VOID is a site, NUL is an act ────────────────────────
+     One word, "void", was carrying many absences. The first cut is the seam
+     between VOID — the SITE of nothingness, a place that holds nothing — and
+     NUL — the non-transformation, the operator declining to bind. VOID's four
+     determinate terrains and the one fabrication ride the {{void:…}} /
+     {{absent:…}} markers; NUL's two abstentions (ambiguous, inference) are NUL
+     events / {{infer}} links and are NEVER void markers, because the material
+     there is present. Telling someone a thing is absent is not enough — they
+     need to know whether it was never there, was there and is gone, is
+     somewhere else, or cannot be there at all.
+
+     The marker grammar gains an OPTIONAL leading kind segment:
+       {{void:term}}               (legacy) → kind 'unspecified', renders as today
+       {{void:kind:term}}          (typed)
+       {{absent:doc:receipt}}      (legacy) → kind 'unspecified'
+       {{absent:kind:doc:receipt}} (typed)
+     A marker is typed iff its first ':'-segment is a known kind. Bare terms and
+     doc ids never collide with a kind name (proper nouns / source ids), so the
+     grammar is a strict superset: every old marker still parses, and countVoids
+     / witnessOnProse (which match the bare {{void:|{{absent: prefix and the
+     marker NAME, not the kind) are unchanged. */
+  const VOID_KINDS = Object.freeze([
+    'never-set',   // prior absence (prāgabhāva): scanned silence + a receipt
+    'cleared',     // destruction absence (pradhvaṃsābhāva): held, then superseded
+    'elsewhere',   // mutual absence (anyonyābhāva): named, not among THIS scope's referents
+    'impossible',  // absolute absence (atyantābhāva): a denied presupposition
+    'invented',    // the struck term: a fabrication with no site (system provenance)
+    'unspecified', // the bare legacy marker, not yet classified — renders as today
+  ]);
+  const _VOID_KIND_SET = new Set(VOID_KINDS);
+  function isVoidKind(s) { return _VOID_KIND_SET.has(String(s == null ? '' : s)); }
+  // The four terrains are facts about the SITE; 'invented' is a fabrication; the
+  // act kinds (ambiguous / inference) are NUL and are never carried as a void.
+  function voidKindIsTerrain(k) { return k === 'never-set' || k === 'cleared' || k === 'elsewhere' || k === 'impossible'; }
+  // A human gloss for chips / tooltips / the audit drawer (never the prompt — the
+  // talker is handed the shape, never the type by name).
+  function voidKindLabel(kind) {
+    switch (kind) {
+      case 'never-set':  return 'the document does not establish this';
+      case 'cleared':    return 'said earlier, and since corrected';
+      case 'elsewhere':  return 'named here, but not in this document';
+      case 'impossible': return 'the question assumes what the page denies';
+      case 'invented':   return 'this word is not on the page';
+      default:           return 'This term appears nowhere in the sources';
+    }
+  }
+  // {{void:term}} | {{void:kind:term}} → { kind, term }.
+  function parseVoidMarker(payload) {
+    const p = String(payload == null ? '' : payload);
+    const i = p.indexOf(':');
+    if (i > 0 && isVoidKind(p.slice(0, i))) return { kind: p.slice(0, i), term: p.slice(i + 1) };
+    return { kind: 'unspecified', term: p };
+  }
+  // {{absent:receipt}} | {{absent:doc:receipt}} | {{absent:kind:doc:receipt}}
+  // → { kind, doc, receipt }. The single-segment legacy form keeps doc ''.
+  function parseAbsentMarker(payload) {
+    let rest = String(payload == null ? '' : payload), kind = 'unspecified';
+    const i = rest.indexOf(':');
+    if (i > 0 && isVoidKind(rest.slice(0, i))) { kind = rest.slice(0, i); rest = rest.slice(i + 1); }
+    const j = rest.indexOf(':');
+    if (j < 0) return { kind, doc: '', receipt: rest };
+    return { kind, doc: rest.slice(0, j), receipt: rest.slice(j + 1) };
+  }
+  // Build the markers back. An 'unspecified' kind emits the bare legacy form, so
+  // a round-trip of an untyped marker is byte-identical (the parity floor).
+  function formatVoidMarker(kind, term) {
+    return (kind && kind !== 'unspecified') ? `{{void:${kind}:${term}}}` : `{{void:${term}}}`;
+  }
+  function formatAbsentMarker(kind, doc, receipt) {
+    const body = doc ? `${doc}:${receipt}` : String(receipt == null ? '' : receipt);
+    return (kind && kind !== 'unspecified') ? `{{absent:${kind}:${body}}}` : `{{absent:${body}}}`;
+  }
+
   // the first anti-matter referent (or null) — what the void holds on
   function voidTerm(doc, query) { return referents(doc, query).antimatter[0] || null; }
   function inventedTerms(doc, text) {
@@ -8083,10 +8156,13 @@ function projectGraph(events, frame = {}) {
     return out;
   }
 
-  // Mark each invented term as a {{void:term}} so a kept-but-caveated model
-  // answer shows the unsupported names struck through rather than passing them
-  // off as grounded. Word-boundary, case-insensitive; never re-wraps a term that
-  // already sits inside a {{…}} marker. (softened veto)
+  // Mark each invented term as a {{void:invented:term}} so a kept-but-caveated
+  // model answer shows the unsupported names struck through rather than passing
+  // them off as grounded. This is the FABRICATION: an INS that should never have
+  // fired, a term with no site, and its provenance is the system itself — which
+  // is what sets it apart from 'elsewhere' (the user naming an absent thing).
+  // Word-boundary, case-insensitive; never re-wraps a term that already sits
+  // inside a {{…}} marker. (softened veto)
   function voidInvented(text, terms) {
     let out = String(text == null ? '' : text);
     for (const t of (terms || [])) {
@@ -8096,7 +8172,7 @@ function projectGraph(events, frame = {}) {
       // match a standalone word, skip anything already inside a {{…}} marker, and
       // leave a trailing possessive ('s) outside the void.
       const re = new RegExp('(^|[^\\p{L}{:])(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?=$|[^\\p{L}}])', 'gu');
-      out = out.replace(re, (m, pre, hit) => pre + '{{void:' + hit + '}}');
+      out = out.replace(re, (m, pre, hit) => pre + formatVoidMarker('invented', hit));
     }
     return out;
   }
@@ -9755,8 +9831,11 @@ function projectGraph(events, frame = {}) {
     }
     if (antimatter.length) {
       // Surface every anti-matter referent as a marked void, and name the
-      // present (matter) referents so the hold says what it CAN bind to.
-      const voids = antimatter.map(t => `{{void:${t}}}`);
+      // present (matter) referents so the hold says what it CAN bind to. This is
+      // the ELSEWHERE terrain (anyonyābhāva): the user named a thing that is not
+      // among this document's referents — a fact about the site, distinct from
+      // 'invented', where the SYSTEM named the absent thing.
+      const voids = antimatter.map(t => formatVoidMarker('elsewhere', t));
       const list = voids.length > 1 ? voids.slice(0, -1).join(', ') + ' and ' + voids[voids.length - 1] : voids[0];
       const many = antimatter.length > 1;
       const ackn = matter.length ? `${matter.join(' and ')} ${matter.length > 1 ? 'are' : 'is'} on the page, but ` : '';
@@ -10027,10 +10106,10 @@ function projectGraph(events, frame = {}) {
           lines.push(`No — the page does state that ${subject} ${p.predicate}.${cite(hit)} The denial contradicts the page.`);
           checks.push({ ...p, subject, verdict: 'contradicted' }); evidenced++;
         } else if (p.negated) {
-          lines.push(`Nothing on the page asserts that ${subject} ${p.predicate}, so the denial stands unchallenged. {{absent:${doc.id}:no sentence asserts that ${subject} ${p.predicate}}}`);
+          lines.push(`Nothing on the page asserts that ${subject} ${p.predicate}, so the denial stands unchallenged. {{absent:never-set:${doc.id}:no sentence asserts that ${subject} ${p.predicate}}}`);
           checks.push({ ...p, subject, verdict: 'confirmed-by-absence' }); evidenced++;
         } else {
-          lines.push(`The page never asserts that ${subject} ${p.predicate}. I checked every line that mentions ${subject}, and none makes that claim. {{absent:${doc.id}:no sentence asserts that ${subject} ${p.predicate}}}`);
+          lines.push(`The page never asserts that ${subject} ${p.predicate}. I checked every line that mentions ${subject}, and none makes that claim. {{absent:never-set:${doc.id}:no sentence asserts that ${subject} ${p.predicate}}}`);
           checks.push({ ...p, subject, verdict: 'unattested' }); bump('warn');
         }
         continue;
@@ -10059,8 +10138,8 @@ function projectGraph(events, frame = {}) {
           checks.push({ ...p, subject, verdict: p.negated ? 'contradicted' : 'confirmed' });
         } else {
           const receipt = `${subject} holds no speaker slot in ${r.events} attribution events`;
-          if (p.negated) lines.push(`Confirmed — I scanned all ${r.events} attribution events in this ${genre}, and ${subject} never holds the speaker slot. {{absent:${doc.id}:${receipt}}}`);
-          else lines.push(`The page doesn’t support that: across ${r.events} attribution events in this ${genre}, ${subject} never holds the speaker slot. {{absent:${doc.id}:${receipt}}}`);
+          if (p.negated) lines.push(`Confirmed — I scanned all ${r.events} attribution events in this ${genre}, and ${subject} never holds the speaker slot. {{absent:never-set:${doc.id}:${receipt}}}`);
+          else lines.push(`The page doesn’t support that: across ${r.events} attribution events in this ${genre}, ${subject} never holds the speaker slot. {{absent:never-set:${doc.id}:${receipt}}}`);
           checks.push({ ...p, subject, verdict: p.negated ? 'confirmed-by-absence' : 'denied-by-absence' });
         }
         evidenced++;
@@ -10076,11 +10155,11 @@ function projectGraph(events, frame = {}) {
         checks.push({ ...p, subject, verdict: 'unattested' });
         bump('notes');
       } else if (p.negated) {
-        lines.push(`Nothing on the page contradicts that — it never calls ${subject} ${p.predicate} anywhere. {{absent:${doc.id}:${receipt}}}`);
+        lines.push(`Nothing on the page contradicts that — it never calls ${subject} ${p.predicate} anywhere. {{absent:never-set:${doc.id}:${receipt}}}`);
         checks.push({ ...p, subject, verdict: 'confirmed-by-absence' });
         evidenced++;
       } else {
-        lines.push(`The page never asserts that ${subject} is ${p.predicate}. I checked its recorded assertions and attributions for ${subject}, and nothing attaches it. {{absent:${doc.id}:${receipt}}}`);
+        lines.push(`The page never asserts that ${subject} is ${p.predicate}. I checked its recorded assertions and attributions for ${subject}, and nothing attaches it. {{absent:never-set:${doc.id}:${receipt}}}`);
         checks.push({ ...p, subject, verdict: 'unattested' });
         bump('warn');
       }
@@ -10183,6 +10262,63 @@ function projectGraph(events, frame = {}) {
     return null;
   }
 
+  /* IMPOSSIBLE — the absolute-absence terrain (atyantābhāva): a question whose
+     PRESUPPOSITION the page denies. "When did Frank stop embezzling?" presupposes
+     Frank embezzled; against a page that says he never did, the site cannot hold
+     the thing, because the question is built on a false premise. This is the
+     malformed corner of the four-valued witness — distinct from 'elsewhere' (a
+     missing referent) by carrying a DENIED presupposition, and from 'never-set'
+     (mere silence) by the page ACTIVELY contradicting the premise. Conservative
+     by construction: it fires only when the page carries the subject AND a
+     sentence negates the presupposed action, so a silent or confirming page
+     falls through to the ordinary paths. */
+  const _PRESUP_STEM = (w) => String(w || '').toLowerCase().replace(/(?:ings?|ing|edly|ed|es|s)$/, '');
+  function _loadedPresupposition(query) {
+    const q = String(query == null ? '' : query).trim();
+    let m = /\bwhen\s+(?:did|has|had|does|will)\s+(.+?)\s+(?:stop|stopped|quit|quitted|cease[d]?|finish(?:ed)?|gave?\s+up|gives\s+up|give\s+up)\s+(.+?)\s*[?.!]*$/i.exec(q);
+    if (m) return { subject: m[1].trim(), action: m[2].trim() };
+    m = /\b(?:is|are|was|were|does|do|did|has|have)\s+(.+?)\s+(?:still|no\s+longer)\s+(.+?)\s*[?.!]*$/i.exec(q);
+    if (m) return { subject: m[1].trim(), action: m[2].trim() };
+    return null;
+  }
+  function detectImpossible(doc, query) {
+    if (!doc || doc.kind !== 'prose') return null;
+    const pre = _loadedPresupposition(query);
+    if (!pre) return null;
+    const subjToks = tok(pre.subject).filter(t => t.length > 2);
+    if (!subjToks.length) return null;
+    const body = docBodyLC(doc);
+    if (!subjToks.some(t => body.includes(t))) return null;     // unknown subject → elsewhere/never-set, not impossible
+    const actStems = tok(pre.action).map(_PRESUP_STEM).filter(t => t.length > 3);
+    if (!actStems.length) return null;
+    const texts = doc.sentenceTexts || [];
+    const NEG = /\b(?:not|never|no|cannot|denied|denies|deny|acquitted|cleared|exonerated|refuted|false|untrue)\b|n['’]t\b/i;
+    for (let i = 0; i < texts.length; i++) {
+      const raw = texts[i] || '', lc = raw.toLowerCase();
+      if (!subjToks.some(t => lc.includes(t))) continue;
+      if (!NEG.test(raw)) continue;
+      // skip cessation verbs: there the negation scopes over "stop", not the act
+      // ("did not stop embezzling" affirms the act), so it is not a denial of it.
+      if (/\b(?:stop|stopp|cease|quit|gave?\s+up|gives?\s+up|no\s+longer)\b/i.test(lc)) continue;
+      if (!actStems.some(a => lc.includes(a))) continue;
+      return { subject: pre.subject, action: pre.action, idx: i, denial: raw.trim() };
+    }
+    return null;
+  }
+  function answerImpossible(doc, query) {
+    const d = detectImpossible(doc, query);
+    if (!d) return null;
+    const receipt = `the question presupposes that ${d.subject} ${d.action}, which the page denies`;
+    const mark = formatAbsentMarker('impossible', doc.id, receipt);
+    const citeMark = ` {{cite:${doc.id}:${d.idx}:s${d.idx}}}`;
+    return {
+      text: `That question assumes ${d.subject} ${d.action}, but the page denies that premise${citeMark} — it says: “${d.denial}” ${mark}`,
+      audit: { status: 'warn', grounded: true, covers: '0/1', stable: true,
+        note: 'Impossible question — its presupposition is denied by the page (atyantābhāva).' },
+      cites: [{ docId: doc.id, idx: d.idx }],
+    };
+  }
+
   function answer(doc, query, opts) {
     if (!doc) return { text: 'Load a document or spreadsheet first — drop a file or paste text, and I’ll read it locally.', audit: null };
     if (doc.kind === 'table') return answerTable(doc, query);
@@ -10200,6 +10336,11 @@ function projectGraph(events, frame = {}) {
       const checked = answerConfirm(doc, query, opts);
       if (checked) return checked;
     }
+    // a loaded question whose presupposition the page DENIES is impossible — the
+    // site cannot hold the thing. Conservative (fires only on an active denial),
+    // so it never shadows the ordinary grounded path for an honest question.
+    const impossible = answerImpossible(doc, query);
+    if (impossible) return impossible;
     // a definitional ask about a referent the graph holds assertions for is
     // answered from the assertions themselves — the page's own record of what
     // the name IS, not whichever sentence shares the most tokens
@@ -10490,13 +10631,13 @@ function projectGraph(events, frame = {}) {
       // a negative existential can never be supported by one line — attest it
       // against the events instead of lashing it to whatever shared a token
       const receipt = absenceClaim(doc, sent, opts && opts.hotEntity);
-      if (receipt) { attested++; return `${sent.trim()} {{absent:${doc.id}:${receipt}}}`; }
+      if (receipt) { attested++; return `${sent.trim()} {{absent:never-set:${doc.id}:${receipt}}}`; }
       const cands = retrieve(doc, sent, 1);
       if (cands.length && supportsClaim(cands[0], sent, floor)) { cited.push({ docId: doc.id, idx: cands[0].i }); return `${sent.trim()} {{cite:${doc.id}:${cands[0].i}:s${cands[0].i}}}`; }
       // an answer-voice void that bound to nothing: attest the asked term as a ⊥
       // (verified absent), so the loop reads an honest miss, not a confabulation
       const vr = reportedVoid(doc, sent);
-      if (vr) { attested++; return `${sent.trim()} {{absent:${doc.id}:${vr}}}`; }
+      if (vr) { attested++; return `${sent.trim()} {{absent:never-set:${doc.id}:${vr}}}`; }
       return sent.trim();
     });
     const supported = cited.length + attested;
@@ -10730,6 +10871,35 @@ function projectGraph(events, frame = {}) {
   // Many → answer against the primary, but only flag voids that are absent from
   // EVERY source (a name living in another chip is not a void here). Cross-source
   // synthesis is the model's job (context across sources); this is the floor.
+  /* The cross-source form of ELSEWHERE (Phase 4). An absent referent that is
+     present in another loaded source is a POINTER, not a dead end. When the
+     question grounds nowhere in the primary but a named referent lives in some
+     other scope source, render the useful form — "not in this document, but
+     {source B} mentions it" — instead of the bare nowhere-void. This is the one
+     terrain whose render improves sharply once it knows its type. */
+  function crossSourceElsewhere(ds, primary, query) {
+    if (!primary || primary.kind !== 'prose') return null;
+    const here = referents(primary, query);
+    if (here.matter.length) return null;          // the question grounds here — answer normally
+    if (!here.antimatter.length) return null;
+    const pointers = [];
+    for (const term of here.antimatter) {
+      const tToks = tok(term).filter(t => t.length > 2);
+      if (!tToks.length) continue;
+      const src = ds.find(d => d !== primary && d.kind === 'prose' && tToks.some(t => docBodyLC(d).includes(t)));
+      if (src) pointers.push({ term, source: src.name || src.id, sourceId: src.id });
+    }
+    if (!pointers.length) return null;            // absent everywhere → ordinary elsewhere void answers
+    const frags = pointers.map(p => `${formatVoidMarker('elsewhere', p.term)} is not in this document, but ${p.source} mentions it`);
+    const list = frags.length > 1 ? frags.slice(0, -1).join('; ') + '; and ' + frags[frags.length - 1] : frags[0];
+    const receipt = pointers.map(p => `${p.term} → ${p.source}`).join(', ');
+    return {
+      text: `${list}. Put that source in focus and I’ll read it there.`,
+      audit: { status: 'warn', grounded: true, covers: `0/${pointers.length}`, stable: true,
+        note: `Cross-source elsewhere — named here, absent from this document, present in another loaded source (${receipt}).` },
+    };
+  }
+
   function answerScope(docs, query, opts) {
     const ds = scopeDocs(docs);
     if (!ds.length) return answer(null, query);
@@ -10738,6 +10908,9 @@ function projectGraph(events, frame = {}) {
     // is the conversation field's current subject); without it, lexical wins.
     const primary = routePrimary(ds, query, opts) || ds[0];
     if (primary.kind === 'table') return answer(primary, query);
+    // a referent absent here but present in another loaded source is a pointer
+    const ptr = crossSourceElsewhere(ds, primary, query);
+    if (ptr) return ptr;
     const voidWhitelist = new Set(referentsScope(ds, query).antimatter);
     return answer(primary, query, { ...(opts || {}), voidWhitelist });
   }
@@ -10928,13 +11101,13 @@ function projectGraph(events, frame = {}) {
       const receipts = ds.map(d => absenceClaim(d, sent, opts && opts.hotEntity));
       if (receipts.length && receipts.every(r => r)) {
         attested++;
-        return `${sent.trim()} {{absent:${ds[0].id}:${receipts[0]} — checked in all ${ds.length} sources}}`;
+        return `${sent.trim()} {{absent:never-set:${ds[0].id}:${receipts[0]} — checked in all ${ds.length} sources}}`;
       }
       const cand = retrieveScope(ds, sent, 1)[0];
       if (cand && supportsClaim(cand, sent, floor)) { cited.push({ docId: cand.docId, idx: cand.i }); return `${sent.trim()} {{cite:${cand.docId}:${cand.i}:s${cand.i}}}`; }
       // an answer-voice void verified absent in EVERY source — attested as a ⊥
       const vr = reportedVoidScope(ds, sent);
-      if (vr) { attested++; return `${sent.trim()} {{absent:${ds[0].id}:${vr}}}`; }
+      if (vr) { attested++; return `${sent.trim()} {{absent:never-set:${ds[0].id}:${vr}}}`; }
       return sent.trim();
     });
     const supported = cited.length + attested;
@@ -12107,13 +12280,13 @@ function projectGraph(events, frame = {}) {
       }
       // unkeyed → the old binder path, claim by claim (fallback only)
       const receipt = absenceClaim(doc, clean, opts && opts.hotEntity);
-      if (receipt) { attested++; return `${clean} {{absent:${doc.id}:${receipt}}}`; }
+      if (receipt) { attested++; return `${clean} {{absent:never-set:${doc.id}:${receipt}}}`; }
       const cands = retrieve(doc, clean, 1);
       if (cands.length && supportsClaim(cands[0], clean, floor)) { cited.push({ docId: doc.id, idx: cands[0].i }); return `${clean} {{cite:${doc.id}:${cands[0].i}:s${cands[0].i}}}`; }
       // an unkeyed answer-voice void (the model cannot key a span that isn't
       // there) — attest the verified-absent term as a ⊥, not a confabulation
       const vr = reportedVoid(doc, clean);
-      if (vr) { attested++; return `${clean} {{absent:${doc.id}:${vr}}}`; }
+      if (vr) { attested++; return `${clean} {{absent:never-set:${doc.id}:${vr}}}`; }
       return clean;
     });
     const supported = cited.length + attested;
@@ -12818,6 +12991,12 @@ function projectGraph(events, frame = {}) {
     ingestMemoryInfo, setIngestMemoryCap,
     context, bindCitations, tok, classifyIntent, hasGround, referencesDoc, inventedTerms,
     applyRules, voidInvented, isCreativeCompose, dedupeSentences,
+    // the typed void: VOID is a site (four terrains + the invented fabrication,
+    // carried on {{void:…}}/{{absent:…}}), NUL is an act (ambiguous / inference,
+    // never a void). The grammar is a strict superset — bare markers parse as
+    // 'unspecified' and render as today; the helpers parse/format the kind.
+    VOID_KINDS, isVoidKind, voidKindIsTerrain, voidKindLabel,
+    parseVoidMarker, parseAbsentMarker, formatVoidMarker, formatAbsentMarker,
     // DEF — the type gate (the fourth NUL state): which capitalized tokens are
     // truth-apt referents vs. structural/pragmatic grammar, by shape not by list.
     nonReferentialCaps, referents,
@@ -12842,6 +13021,9 @@ function projectGraph(events, frame = {}) {
     ingestionReport, classifyTokens, evaAcrossDocs, textGraph,
     // multi-doc scope: ground a conversation against an explicit set of sources
     referencesScope, retrieveScope, routePrimary, primaryFromHits, discourseBinding, referentsScope, namedReferents, answerScope,
+    // the cross-source form of elsewhere: a referent absent here but present in
+    // another loaded source renders as a pointer, not a dead end (Phase 4)
+    crossSourceElsewhere,
     resolveSubjectDoc: activeSubjectDoc,
     contextScope, bindCitationsScope, supportProbeTerms,
     // tiered context for the notes-and-spans grounded prompt
@@ -12900,6 +13082,8 @@ function projectGraph(events, frame = {}) {
     // (DEF assertions, SIG attribution slots, absence attested with ⊥ receipts),
     // and the abbreviation-aware draft splitter the binders/veto share
     answerConfirm, answerConfirmScope, splitDraft, holdsSpeakerSlot,
+    // the impossible terrain: a loaded question whose presupposition the page denies
+    answerImpossible, detectImpossible,
     // the embedder as a wandering reader: associative, δ-gated neighbors (no-op without an embedder)
     associativeNeighbors,
     // impression query: the embedder as a fuzzy graph query — the question
