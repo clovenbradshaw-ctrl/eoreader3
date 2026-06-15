@@ -67,27 +67,61 @@
   const EMBED_BATCH = (typeof window !== 'undefined' && +window.EO_EMBED_BATCH) || 24;
   const yieldToEventLoop = () => new Promise(res => setTimeout(res, 0));
 
+  // ---- indexing activity (the whole-document embed) -----------------------
+  // A single query embed is cheap and silent; embedding a WHOLE document — the
+  // first question that needs semantic recall, or the structure reconciler —
+  // is the multi-second pass the batching above exists to keep from freezing
+  // the tab. It used to run with NO UI trace at all, so a large upload would go
+  // quiet and "feel" hung (was it tie-breaking with an LLM? nothing said). We
+  // broadcast its progress so the host can name it — a sidebar "Indexing…"
+  // chip, a banner, a glass-box step. Best-effort and browser-only; with no
+  // listeners it costs a single object assignment per batch.
+  let activity = { busy: false, done: 0, total: 0, doc: null };
+  const actListeners = new Set();
+  function emitActivity(patch) {
+    activity = Object.assign({}, activity, patch);
+    for (const fn of actListeners) { try { fn(activity); } catch (e) {} }
+  }
+  function onActivity(fn) {
+    if (typeof fn !== 'function') return () => {};
+    actListeners.add(fn);
+    return () => actListeners.delete(fn);
+  }
+
   // Embed an array of sentences → array of Float32Array (one row per sentence).
   // Batched + yielding so a large document never freezes the tab (see EMBED_BATCH).
-  async function embedSentences(sentences) {
+  // `opts.doc` ({ id, name }) labels a whole-document pass so the host can show
+  // WHICH document is being indexed; it is purely advisory and may be omitted.
+  async function embedSentences(sentences, opts) {
     const ex = await ensure();
     if (!ex || !sentences || !sentences.length) return null;
     try {
       // Small inputs: one call, no batching overhead (the common query case).
+      // No activity broadcast — a single query embed isn't worth a status line.
       if (sentences.length <= EMBED_BATCH) {
         const out = await ex(sentences, { pooling: 'mean', normalize: true });
         return out.tolist().map(r => Float32Array.from(r));
       }
+      // A whole-document pass: announce it so the host can surface "indexing"
+      // status, report progress per batch, and ALWAYS close it out (finally),
+      // so a mid-pass throw can't leave the UI stuck showing work that stopped.
+      const doc = (opts && opts.doc) || null;
+      emitActivity({ busy: true, done: 0, total: sentences.length, doc });
       const rows = [];
-      for (let i = 0; i < sentences.length; i += EMBED_BATCH) {
-        const batch = sentences.slice(i, i + EMBED_BATCH);
-        const out = await ex(batch, { pooling: 'mean', normalize: true });
-        // out is a [n,384] Tensor; .tolist() → nested arrays. Convert rows to
-        // Float32Array for fast dot products in the engine.
-        for (const r of out.tolist()) rows.push(Float32Array.from(r));
-        // Let the browser paint / handle input between batches, so embedding a
-        // long document doesn't lock the page.
-        if (i + EMBED_BATCH < sentences.length) await yieldToEventLoop();
+      try {
+        for (let i = 0; i < sentences.length; i += EMBED_BATCH) {
+          const batch = sentences.slice(i, i + EMBED_BATCH);
+          const out = await ex(batch, { pooling: 'mean', normalize: true });
+          // out is a [n,384] Tensor; .tolist() → nested arrays. Convert rows to
+          // Float32Array for fast dot products in the engine.
+          for (const r of out.tolist()) rows.push(Float32Array.from(r));
+          emitActivity({ done: Math.min(i + EMBED_BATCH, sentences.length) });
+          // Let the browser paint / handle input between batches, so embedding a
+          // long document doesn't lock the page.
+          if (i + EMBED_BATCH < sentences.length) await yieldToEventLoop();
+        }
+      } finally {
+        emitActivity({ busy: false, doc: null });
       }
       return rows;
     } catch (e) { if (window.eoWarn) window.eoWarn('embedSentences failed', e); return null; }
@@ -99,5 +133,5 @@
     return v && v[0] ? v[0] : null;
   }
 
-  window.EOEmbed = { ready, warm, embedQuery, embedSentences, MODEL };
+  window.EOEmbed = { ready, warm, embedQuery, embedSentences, onActivity, getActivity: () => activity, MODEL };
 })();

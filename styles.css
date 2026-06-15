@@ -190,6 +190,20 @@ button { font-family: inherit; cursor: pointer; }
 .sb-item.active .ti { color: var(--accent); }
 .sb-item .tl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-item .tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+/* Per-document working chip: a pulsing dot + a one-word state, so a row never
+   looks idle while a pass (re-read, or the one-time semantic-search indexing)
+   is still running behind it. */
+.sb-item .doc-state {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .02em;
+  color: var(--text-3); white-space: nowrap;
+}
+.sb-item .doc-state::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); animation: pulseload 1s ease-in-out infinite;
+}
+.sb-item .doc-state.indexing { color: #b07d2b; }
+.sb-item .doc-state.indexing::before { background: #c98a2b; }
 .sb-item .meta { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
 .sb-item .count { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
 .sb-label .sb-mini { border: 0; background: none; cursor: pointer; color: var(--text-3); padding: 1px; border-radius: 4px; display: inline-flex; }

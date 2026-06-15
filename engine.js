@@ -13100,7 +13100,10 @@ function projectGraph(events, frame = {}) {
     if (_docVecCache.has(doc)) return _docVecCache.get(doc);
     if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return null;
     let v = null;
-    try { v = await window.EOEmbed.embedSentences(doc.sentenceTexts || []); } catch (e) { v = null; }
+    // Label the pass with this doc so the host can surface WHICH document is
+    // being indexed (the embedder broadcasts progress for any batch big enough
+    // to matter). Advisory only — the vectors are identical with or without it.
+    try { v = await window.EOEmbed.embedSentences(doc.sentenceTexts || [], { doc: { id: doc.id, name: doc.name } }); } catch (e) { v = null; }
     if (v) _docVecCache.set(doc, v);
     return v;
   }
