@@ -788,6 +788,11 @@ const READING_RULES = {
     value: 0.55, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'Predicate compatibility floor for the relation gate: a claim verb and an edge verb are the same relation when their lemmas overlap or their embedding cosine clears this. Measured on the app\'s own MiniLM-q8: cos(afford, pay) = 0.62 clears; cos(argued, hear) = 0.50 does not. This is the one place the embedder helps the relational cure, and only as a similarity scorer feeding a mechanical decision.',
   },
+  // ── Semantic antimatter — the referent rescue + demotion stages ──
+  rescue_referent: {
+    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, the absent-referent gate gains two discrete, witness-carrying stages between the lexical floor and the void. RESCUE moves a candidate anti-matter referent to matter only by resolving it to an ADMITTED (two-sighting) entity — Channel A (orthographic: an OCR/typo surface variant, by case-fold + diacritic-strip + bounded edit distance) or Channel C (coref/alias: an initialism of a multi-word admitted entity). DEMOTION moves a candidate matter referent to anti-matter when no admitted entity backs it and its presence rests only on a lowercase common-noun substring (the Amos Dresser fix: "dresser" the furniture word does not confirm "Amos Dresser" the person). No cosine is spent — name↔name embedding is below the noise floor and is forbidden, and Channel B (description→name) read its shell EMPTY in the Phase 0 horizon read (docs/horizon-read.md), so it is not built. Every rescue carries a rejectable witness; two clearers is ambiguity (a NUL act, logged, not a rescue). OFF ships today\'s behavior byte-identical (the parity floor): the lexical gate runs alone, exactly as before. See tools/predictive/measure-horizon.js for the read that sized this.',
+  },
   // ── Cross-source attribution — the multi-document conflation veto ──
   cross_source: {
     value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
@@ -8037,7 +8042,7 @@ function projectGraph(events, frame = {}) {
     // (opts.rescue). When off, NOTHING below the lexical push runs and the return
     // is byte-identical — the parity floor. When on, we keep a parallel span
     // record so the rescue/demotion stages can re-rule each candidate by witness.
-    const rescue = !!(opts && opts.rescue);
+    const rescue = !!(opts && opts.rescue) || rescueEnabled();
     const spans = rescue ? [] : null;
     for (const raw of names) {
       // a sentence-initial interrogative ("Did Caesar…") is capitalised but is
@@ -11096,7 +11101,7 @@ function projectGraph(events, frame = {}) {
   function referentsScope(docs, query, opts) {
     const bodies = scopeDocs(docs).map(d => docBodyLC(d));
     const matter = [], antimatter = [];
-    const rescue = !!(opts && opts.rescue);
+    const rescue = !!(opts && opts.rescue) || rescueEnabled();
     const spans = rescue ? [] : null;
     for (const { name, refSig } of _referentSpans(query)) {
       const present = bodies.some(b => refSig.some(t => b.includes(t.toLowerCase())));
@@ -12100,6 +12105,12 @@ function projectGraph(events, frame = {}) {
   function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
   function crossSourceEnabled() { const v = READING_RULES.cross_source.value; return v === true || v === 1; }
   function bindingResolutionEnabled() { const v = READING_RULES.binding_resolution.value; return v === true || v === 1; }
+  // Semantic antimatter master (SPEC): the rescue + demotion stages at the
+  // referent gate. OFF ships the lexical floor byte-identical; ON activates the
+  // amendment everywhere referents/referentsScope are consumed. The per-call
+  // opts.rescue flag still forces it on for a single read (tests, previews).
+  function rescueEnabled() { const v = READING_RULES.rescue_referent.value; return v === true || v === 1; }
+  function setRescueEnabled(on) { const prev = rescueEnabled(); READING_RULES.rescue_referent.value = !!on; return prev; }
   function distanceGravityEnabled() { return DISTANCE_GRAVITY(); }
   /* The addressee field (addressee.js) — the second person. Off-by-default
      masters and the seeded BKT constants, read for the host's flag-guarded
@@ -13264,7 +13275,7 @@ function projectGraph(events, frame = {}) {
     // orthographic, Channel C coref/alias — no cosine; name↔name and Channel B
     // are forbidden, the latter killed by the Phase 0 horizon read). The receipt
     // is the audit line a reader may reject.
-    rescueReferent, formatRescueReceipt,
+    rescueReferent, formatRescueReceipt, rescueEnabled, setRescueEnabled,
     // the extracted graph: a portrait, and a portable per-doc snapshot (explorer + export)
     // graphPortrait / graphSnapshot / projectEntities now surface NUL log,
     // signal substrate, frame, full DEF set, and long-tail entities.

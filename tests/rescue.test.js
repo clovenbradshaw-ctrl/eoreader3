@@ -131,6 +131,24 @@ async function main() {
   ok(/treated/.test(receipt) && /resolves to/.test(receipt) && /Tom Turner/.test(receipt), 'receipt: "treated NAME as present; resolves to ENTITY via RELATION"');
   ok(E.formatRescueReceipt('Zorthax', E.rescueReferent(ndp, 'Zorthax', ['Zorthax'], { rescue: true })) === '', 'receipt: a non-rescue produces no receipt (nothing to reject)');
 
+  // ── The master switch — off is the floor; on activates the answer path ─────
+  console.log('• the rescue master ships OFF (the parity floor); flipping it on suppresses a rescued referent’s void');
+  ok(E.rescueEnabled() === false, 'master: rescue_referent ships OFF — the parity floor');
+  const voidOff = E.answer(ndp, 'what did Turnor say');
+  ok(/\{\{void/.test(voidOff.text), 'master OFF: the answer fires a void for the absent "Turnor"');
+  const prev = E.setRescueEnabled(true);
+  ok(prev === false, 'master: the setter reports the previous (off) state');
+  try {
+    const refsOn = E.referents(ndp, 'what did Turnor say');
+    ok(refsOn.matter.includes('Turnor'), 'master ON: referents activates the rescue with no per-call opts (the global default)');
+    const voidOn = E.answer(ndp, 'what did Turnor say');
+    ok(!/\{\{void:[^}]*[Tt]urnor/.test(voidOn.text), 'master ON: a rescued referent produces no void (SPEC §7)');
+  } finally {
+    E.setRescueEnabled(false);
+  }
+  ok(E.rescueEnabled() === false, 'master: restored to OFF after the test — no leak across the suite');
+  ok(JSON.stringify(E.referents(ndp, 'what did Turnor say')) === JSON.stringify({ matter: [], antimatter: ['Turnor'] }), 'master: with the master back off, the lexical floor is exactly restored');
+
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
   if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }
