@@ -262,6 +262,36 @@ async function main() {
   let threw = false; try { await A.runFor('no-such-capability', 'x'); } catch (_) { threw = true; }
   ok('runFor() throws for an unknown capability', threw);
 
+  // ---- regression: TrOCR normalizes a Blob/File the image pipeline rejects ----
+  // transformers.js' image pipeline throws "Unsupported input type: object" on a
+  // raw File/Blob it doesn't recognize; the adapter must convert it to a blob:
+  // URL string first. jsdom lacks URL.createObjectURL, so inject one plus a
+  // STRICT pipeline that rejects non-string input, and confirm run() succeeds
+  // and hands the pipeline a string (not the raw object).
+  {
+    let seen, made = 0;
+    const env = loadAdapters({ inject: (w) => {
+      w.URL.createObjectURL = () => 'blob:cleo/' + (++made);
+      w.URL.revokeObjectURL = () => {};
+      w.EO_TRANSFORMERS = { pipeline: async (task) => async (input) => {
+        if (task !== 'image-to-text') return {};
+        seen = input;
+        if (typeof input !== 'string') throw new Error('Unsupported input type: ' + typeof input);
+        return [{ generated_text: 'Recognized text' }];
+      } };
+    } });
+    // control: the strict pipeline really rejects a raw object (the live bug)
+    let rejected = false;
+    try { await (await env.window.EO_TRANSFORMERS.pipeline('image-to-text'))(new env.window.Blob(['x'])); } catch (_) { rejected = true; }
+    ok('[trocr] (control) the strict image pipeline rejects a raw Blob', rejected);
+    const ev = await env.EOAdapters.byId('ocr-trocr-printed').run(new env.window.Blob(['imgbytes']));
+    const e0 = Array.isArray(ev) && ev[0];
+    ok('[trocr] a Blob input no longer fails — it is normalized first',
+      !!e0 && !(e0.meta && e0.meta.kind === 'failure'), JSON.stringify(e0 && e0.payload));
+    ok('[trocr] the pipeline received a string (blob: URL), not the raw object', typeof seen === 'string', 'seen=' + typeof seen);
+    ok('[trocr] the recognized text rides on the event', !!e0 && e0.payload && e0.payload.text === 'Recognized text');
+  }
+
   console.log(failed
     ? ('\n✗ FAIL — ' + passed + ' passed, ' + failed + ' failed')
     : ('\n✓ PASS — ' + passed + ' adapter contract checks passed, 0 failed'));
