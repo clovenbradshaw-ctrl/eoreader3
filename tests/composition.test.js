@@ -167,6 +167,42 @@ group('Phase one — assemble reads the draft pane straight through in tree orde
   eq(C.assemble(f), 'Alpha.\n\nBeta.', 'the assembled doc is the drafts in tree order');
 });
 
+group('Phase one — a frame revision stales dependent units (coherence null, band revise); a restructure survivor reads unstamped', () => {
+  const [doc, frame] = C.newDoc({ genre: 'plain-report' });
+  const u = at(C.make.unit({ doc_id: doc.id, id: 'u1', job: 'state the count', order: 0 }));
+  const d = at(C.make.draft({ doc_id: doc.id, unit_id: 'u1', prose: 'The city logged twelve thousand filings.' }));
+  const s = at(C.make.stamp({ doc_id: doc.id, unit_id: 'u1', draft_id: d.id, confidence: C.confidence({ witness: 0.7, form: 0.7 }), tag: 'figure-grounded' }));
+  const r = at(C.make.route({ doc_id: doc.id, unit_id: 'u1', decision: 'advance', predicate: 'witness >= 0.4 AND form >= 0.5' }));
+
+  // under the standing (single) frame the unit is settled, not stale
+  let f = C.fold([doc, frame, u, d, s, r]);
+  eq(f.units[0].band, 'advance', 'under the standing frame the unit advances');
+  eq(f.units[0].frame_stale, false, 'and is not frame-stale');
+  eq(f.counts.stale, 0, 'no stale units yet');
+
+  // revise the frame (a later frame event, genre flipped) — the stamp predates it
+  const frame2 = at(C.make.frame({ doc_id: doc.id, genre: 'obituary' }));
+  f = C.fold([doc, frame, u, d, s, r, frame2]);
+  eq(f.frame.genre, 'obituary', 'the latest frame wins (the revision supersedes the posture)');
+  eq(f.units[0].frame_stale, true, 'a stamp minted before the new frame is stale');
+  eq(f.units[0].band, 'revise', 'a frame-staled unit routes to revise (reconsider under the new spec)');
+  eq(f.units[0].confidence.coherence, null, 'its coherence reads null — it must be re-derived under the new frame');
+  eq(f.counts.stale, 1, 'the stale unit is counted');
+
+  // a draft re-stamped AFTER the revision is measured against the live frame → not stale
+  const d2 = at(C.make.draft({ doc_id: doc.id, unit_id: 'u1', prose: 'A fresh draft under the new frame.' }));
+  const s2 = at(C.make.stamp({ doc_id: doc.id, unit_id: 'u1', draft_id: d2.id, confidence: C.confidence({ witness: 0.7 }), tag: 'figure-grounded' }));
+  eq(C.fold([doc, frame, u, d, s, r, frame2, d2, s2]).units[0].frame_stale, false, 'a draft re-stamped after the revision is no longer stale');
+
+  // a drafted unit that was never stamped (a restructure survivor) reads unstamped
+  const u2 = at(C.make.unit({ doc_id: doc.id, id: 'u2', job: 'orphan', order: 1 }));
+  const d3 = at(C.make.draft({ doc_id: doc.id, unit_id: 'u2', prose: 'Drafted, never scored.' }));
+  const g = C.fold([doc, frame, u2, d3]);
+  eq(g.units[0].state, 'drafted', 'a draft with no stamp is still drafted');
+  eq(g.units[0].unstamped, true, 'but is flagged unstamped (no verdict on any band)');
+  eq(g.counts.unstamped, 1, 'and counted, so the loop can find and score it');
+});
+
 group('Phase two — the grain-relative witness: Figure / Ground / Pattern', () => {
   const span = 'The city recorded twelve thousand eviction filings in 2023, up from nine thousand.';
   // Figure: a claim mostly covered by the span (one unwitnessed flourish) →

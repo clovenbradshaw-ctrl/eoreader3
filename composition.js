@@ -130,11 +130,21 @@
     const live = log.filter(e => e && !dropped.has(e.id) && !(e.op === 'REC' && e.kind === 'supersede'));
 
     // (2) doc + frame
-    let doc = null, frame = null;
+    let doc = null, frame = null, frameCount = 0;
     for (const e of live) {
       if (e.kind === 'doc') doc = e;
-      else if (e.kind === 'frame') frame = e;     // latest live frame wins (revision supersedes posture)
+      else if (e.kind === 'frame') { frame = e; frameCount++; }   // latest live frame wins (revision supersedes posture)
     }
+    // A frame REVISION (more than one live frame) invalidates the standing of any
+    // unit stamped under the old frame: its coherence/form/frame components were
+    // measured against a spec that no longer holds. The fold can't re-score (that
+    // needs the talker/grounder), but it can DERIVE staleness purely from the log
+    // — a stamp minted before the live frame is stale — and route that unit to
+    // 'revise' so the next pass reconsiders it. No event is minted; replaying the
+    // same log yields the same staleness. (Interim until the standing operator
+    // ships the live coherence component — phase three.)
+    const frameEdited = frameCount > 1 && !!frame;
+    const frameTs = frame ? frame.ts : 0;
 
     // (3) units
     const cut = new Set();
@@ -192,13 +202,25 @@
       else if (u.contested) state = 'contested';
       else if (draft) state = 'drafted';
       else state = 'owed';
+      let confidence = stamp ? stamp.confidence : (draft ? draft.confidence : null);
+      let band = bandFor(state, route);
+      // a drafted unit whose stamp predates the live frame was scored under a spec
+      // that no longer holds: its coherence can't be trusted, so null it and route
+      // the unit to 'revise' (reconsider under the new frame).
+      const frameStale = !!(frameEdited && stamp && stamp.ts < frameTs && state === 'drafted');
+      if (frameStale) { band = 'revise'; confidence = Object.assign({}, confidence, { coherence: null }); }
+      // a drafted unit that was never stamped (e.g. the survivor of a restructure)
+      // carries no verdict on any band — surface it so the loop/UI can score it.
+      const unstamped = state === 'drafted' && !stamp;
       units.push(Object.assign({}, u, {
         state,
         draft, stamp, route, hole,
-        confidence: stamp ? stamp.confidence : (draft ? draft.confidence : null),
+        confidence,
         // band is the colour projection (the one place a scalar appears); the
         // route's predicate travels with it for the hover.
-        band: bandFor(state, route),
+        band,
+        frame_stale: frameStale,
+        unstamped,
       }));
     }
     // tree order: by parent then by `order` (missing order reads as 0), stable
@@ -222,6 +244,8 @@
         held: units.filter(u => u.state === 'held').length,
         contested: units.filter(u => u.state === 'contested').length,
         holes: units.filter(u => u.hole).length,
+        stale: units.filter(u => u.frame_stale).length,
+        unstamped: units.filter(u => u.unstamped).length,
       },
       dropped: [...dropped],
       _live: live,
