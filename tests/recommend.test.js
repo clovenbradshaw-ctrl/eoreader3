@@ -239,6 +239,17 @@ function group(name, fn) { console.log('• ' + name); return fn(); }
     const Lw = freshLLM({}, { EO_WEBLLM_SELFHOST: { 'wllama:llama32-3b': 'https://b/x.zip' } });
     eq(Lw.isSelfHosted('wllama:llama32-3b'), false, 'CPU/wllama keys are out of scope for the WebLLM zip path');
 
+    // The built-in mirror ships ON by default (our Google Cloud bucket, for the
+    // desktop-default Llama 3.2 3B) with NO window config — so a slow/stalled
+    // load has a single-stream fallback out of the box.
+    const Ld = freshLLM({});
+    ok(/^https:\/\/storage\.googleapis\.com\/.*Llama-3\.2-3B.*\.zip$/.test(Ld.selfHostZipUrl('Llama-3.2-3B-Instruct-q4f16_1-MLC') || ''),
+      'the built-in Google mirror is configured by default (no window config needed)');
+    eq(Ld.selfHostZipUrl('Qwen3-1.7B-q4f16_1-MLC'), null, 'a model with no built-in mirror still has none');
+    // An explicit empty map is the off switch.
+    const Loff = freshLLM({}, { EO_WEBLLM_SELFHOST: {} });
+    eq(Loff.selfHostZipUrl('Llama-3.2-3B-Instruct-q4f16_1-MLC'), null, 'window.EO_WEBLLM_SELFHOST = {} turns the mirror off');
+
     // Entry → the flat filename WebLLM requests at the base: basename, wrapper
     // folder stripped, directory + degenerate names dropped.
     eq(L.selfHostEntryName('params_shard_0.bin'), 'params_shard_0.bin', 'flat name kept');

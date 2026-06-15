@@ -84,16 +84,18 @@
 <!-- engine (plain scripts; expose window.EOEngine / window.EOLLM / window.EOStore / window.EOAudit / window.EOPython / window.EOCompute) -->
 <script src="engine.js"></script>
 <script src="llm.js"></script>
-<!-- Self-hosting a WebLLM model from a single zip (window.EO_WEBLLM_SELFHOST):
-     map a model key → a .zip of its weights on your own bucket. The app then
-     streams that ONE resumable download, unzips it into a Cache, and sw.js
-     serves the files to WebLLM — instead of ~30 separate shard requests that a
-     slow/VPN'd link keeps stalling on. Any failure falls back to the normal
-     Hugging Face load, so it can only help. The bucket must send open CORS
-     (access-control-allow-origin) and the app must be served over https (a
-     service worker needs it). Off by default — it routes ALL loads of that
-     model through the single-stream + main-thread path, which a fast connection
-     doesn't need — so uncomment to enable for your deployment:
+<!-- Self-hosting a WebLLM model from a single zip ("the faster mirror"):
+     map a model key → a .zip of its weights on a bucket. The app streams that
+     ONE resumable download, unzips it into a Cache, and sw.js serves the files
+     to WebLLM — instead of ~30 separate shard requests that a slow/VPN'd link
+     keeps stalling on. It is used ONLY as a FALLBACK, the moment the normal
+     Hugging Face download turns slow or stalls (llm.js load()), so a fast
+     connection never touches it and any mirror failure falls straight back to
+     the normal load. A built-in mirror ships ON by default — our own Google
+     Cloud bucket, for the desktop-default Llama 3.2 3B (see SELFHOST_DEFAULT in
+     llm.js). The bucket must send open CORS (access-control-allow-origin) and
+     the app must be served over https (a service worker needs it). To point at
+     your own bucket, set window.EO_WEBLLM_SELFHOST (an empty {} turns it off):
 <script>
   window.EO_WEBLLM_SELFHOST = {
     'Llama-3.2-3B-Instruct-q4f16_1-MLC':

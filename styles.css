@@ -1203,6 +1203,48 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
 .model-loading .ml-status { font-family: var(--mono); font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-loading .ml-meta + .ml-note { margin-top: 7px; }
 
+/* ── top-of-screen model-download banner ──────────────────────────────────
+   A persistent, hard-to-miss status strip under the topbar while the on-device
+   model downloads — the in-chat card scrolls away and a boot-time auto-load has
+   no message at all, so this is the reliable at-a-glance indicator. Shares the
+   evidence/grounding accent the loading card and citations use. */
+.model-banner {
+  flex-shrink: 0; display: flex; align-items: center; gap: 12px;
+  padding: 9px 16px; border-bottom: 1px solid var(--evidence-tint-2);
+  background: linear-gradient(180deg, var(--evidence-tint), var(--bg));
+  font-size: 13px; color: var(--text);
+}
+.model-banner.cloud { padding: 9px 16px; }
+.model-banner .mb-spin {
+  width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--evidence-tint-2); border-top-color: var(--evidence);
+  animation: mlspin .7s linear infinite;
+}
+.model-banner .mb-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.model-banner .mb-head { display: flex; align-items: baseline; gap: 10px; }
+.model-banner .mb-title { font-weight: 600; }
+.model-banner.cloud .mb-title { font-weight: 500; color: var(--text-2); }
+.model-banner .mb-pct { margin-left: auto; font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--evidence-ink); flex-shrink: 0; }
+.model-banner .mb-bar { height: 6px; background: var(--bg-subtle); border-radius: 999px; overflow: hidden; }
+.model-banner .mb-fill {
+  height: 100%; background: var(--evidence); border-radius: 999px;
+  transition: width .3s cubic-bezier(.2,.8,.2,1); position: relative; overflow: hidden;
+}
+.model-banner .mb-fill::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,.5) 50%, transparent 80%);
+  background-size: 220% 100%; animation: ibsheen 1.6s linear infinite;
+}
+.model-banner .mb-status {
+  font-family: var(--mono); font-size: 11px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.model-banner .mb-cancel {
+  flex-shrink: 0; align-self: center; font-size: 12px; color: var(--text-2);
+  border: 1px solid var(--border); border-radius: var(--r-pill); padding: 4px 12px; background: var(--bg);
+}
+.model-banner .mb-cancel:hover { border-color: var(--border-strong); color: var(--text); }
+
 /* staged-ingest progress banner (existence → structure → significance) */
 .ingest-banner {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);

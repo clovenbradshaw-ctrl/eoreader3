@@ -170,6 +170,50 @@ const TOOLBAR_TOOLS = [
   { id: 'promptflow', label: 'Prompt flow',     sub: 'How a turn becomes a model call and the live prompt it sees.' },
 ];
 
+// ── Top-of-screen model-download status ───────────────────────────────────
+// The on-device model downloads once on first use, and that wait is the
+// longest "is it stuck?" moment in the app. The in-chat card carries the
+// detailed countdown, but it lives in the message stream — it scrolls away, and
+// a boot-time auto-load has no message at all. This banner pins the status to
+// the top of the workspace so it's impossible to miss wherever you are: the
+// model name, a live progress bar, the percent, and the runtime's own status
+// line (including "switching to the faster mirror…" when a slow Hugging Face
+// download falls over to the single-stream google-hosted zip). Rendered only
+// while a load is actually in flight.
+function ModelLoadBanner({ status, progress, loadText, model, onCancel }) {
+  if (status !== 'loading') return null;
+  const cloud = model && model.provider === 'anthropic';
+  const name = (model && model.name) || 'the model';
+  // Claude (cloud) has no download — confirming a key is near-instant — so it
+  // gets a plain connecting line; a percent and bar would be meaningless.
+  if (cloud) {
+    return (
+      <div className="model-banner cloud" role="status" aria-live="polite">
+        <span className="mb-spin" aria-hidden="true" />
+        <span className="mb-title">Connecting to {name}…</span>
+      </div>
+    );
+  }
+  const pct = Math.max(0, Math.min(100, Math.round((progress || 0) * 100)));
+  return (
+    <div className="model-banner" role="status" aria-live="polite">
+      <span className="mb-spin" aria-hidden="true" />
+      <div className="mb-text">
+        <div className="mb-head">
+          <span className="mb-title">Downloading {name}</span>
+          <span className="mb-pct">{pct}%</span>
+        </div>
+        <div className="mb-bar" role="progressbar" aria-label="Model download progress"
+          aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+          <div className="mb-fill" style={{ width: pct + '%' }} />
+        </div>
+        <div className="mb-status">{loadText || 'Starting the download — first time only, then it’s cached on your device.'}</div>
+      </div>
+      {onCancel && <button className="mb-cancel" onClick={onCancel} title="Stop the download">Cancel</button>}
+    </div>
+  );
+}
+
 function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [docs, setDocs] = useState([]);
@@ -4743,6 +4787,9 @@ function App() {
             </button>
           )}
         </header>
+
+        <ModelLoadBanner status={modelStatus} progress={modelProgress} loadText={modelLoadText}
+          model={model} onCancel={cancelModel} />
 
         <div className="body" ref={bodyRef}>
           {showHero ? (
