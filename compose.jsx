@@ -702,7 +702,15 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
       let units = folded.units.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
       if (!units.length) { setProgress({ phase: 'outline' }); units = await planFromFrame({ keepBusy: true }); }
       const drafted = folded.unitsById;
-      const todo = units.filter(u => !(drafted[u.id] && drafted[u.id].draft));
+      let todo = units.filter(u => !(drafted[u.id] && drafted[u.id].draft));
+      // CONTINUE: nothing owed but the document already has content → don't no-op.
+      // Plan the sections that come NEXT (told the jobs already written and how it
+      // reads so far, so it extends the document instead of repeating it) and draft
+      // those. This is what the "✍ Continue" label promises a populated doc.
+      if (!todo.length && units.length && body.trim()) {
+        setProgress({ phase: 'outline' });
+        todo = await planFromFrame({ keepBusy: true, existing: units.map(u => u.job).filter(Boolean), tail: body.slice(-1500) });
+      }
       for (let i = 0; i < todo.length; i++) {
         setProgress({ phase: 'draft', i: i + 1, n: todo.length, job: todo[i].job });
         await draftOne(todo[i], {});
@@ -783,20 +791,30 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     setPlanning('');
     try {
       // genre-aware outline prompt — the sections fit the KIND of document (a
-      // recipe, a manual, a report), built and tested in the pure module.
-      const { system, user } = C.buildOutlinePrompt({ frame });
+      // recipe, a manual, a report), built and tested in the pure module. Passing
+      // `existing` / `tail` flips it to CONTINUE: plan the sections that come NEXT,
+      // told what's already written so it extends rather than re-plans.
+      const continuing = !!(o.existing && o.existing.length) || !!o.tail;
+      const { system, user } = C.buildOutlinePrompt({ frame, existing: o.existing, tail: o.tail });
       const text = await phrase({ system, user, max_tokens: 260 }, (delta) => setPlanning(t => (t || '') + delta));
       // Parse mechanically: drop a model lead-in ("Here are the sections:") and
       // strip list markers (1. / I. / (a) / •) so a preamble never drafts as a
       // unit and "I. Introduction" becomes the job "Introduction".
-      const jobs = C.parseOutline(text, 8);
+      let jobs = C.parseOutline(text, 8);
+      // When continuing, drop any proposed section that just echoes one already
+      // written — the model is told not to repeat, but a small one will anyway.
+      if (o.existing && o.existing.length) {
+        const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
+        const have = new Set(o.existing.map(norm));
+        jobs = jobs.filter(j => !have.has(norm(j)));
+      }
       let created = [];
       if (jobs.length) {
         let order = nextOrder();
         created = jobs.map(j => C.make.unit({ doc_id: doc.id, job: j, order: order++ }));
         const evts = created.slice();
         // record WHY the plan arrived, in the log (a plan hypothesis)
-        evts.push(C.make.planEdit({ doc_id: doc.id, edit_kind: 'add-unit', affected_unit_ids: created.map(e => e.id), reason: 'planned from the frame', confidence: C.confidence({ frame: 0.5 }) }));
+        evts.push(C.make.planEdit({ doc_id: doc.id, edit_kind: 'add-unit', affected_unit_ids: created.map(e => e.id), reason: continuing ? 'continued the document' : 'planned from the frame', confidence: C.confidence({ frame: 0.5 }) }));
         appendBatch(evts);
       }
       return created;
