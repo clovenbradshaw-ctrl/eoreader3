@@ -10621,6 +10621,16 @@ function projectGraph(events, frame = {}) {
     return absent.length ? _voidReceipt(absent, `in any of the ${ds.length} sources`) : null;
   }
 
+  // show-but-flag (claim level): a content clause that bound to no source line is
+  // SERVED, not dropped — wrapped in an {{unbound:…}} flag so the reader sees
+  // WHICH clause is unverified, the per-claim counterpart to the answer-level
+  // covers N/M. Opt-in via opts.flagUnbound so every existing caller is byte-
+  // identical; only the chat answer path passes it (parity / compose / repair do
+  // not). Pure metadata, never a gate — grounded / covers / cites are untouched.
+  function flagIfUnbound(opts, sent) {
+    return (opts && opts.flagUnbound) ? `${sent} {{unbound:no supporting line found}}` : sent;
+  }
+
   // bind [sN] citations onto an LLM answer mechanically (model never writes them)
   function bindCitations(doc, answerText, query, intent, opts) {
     const floor = CITE_FLOOR;
@@ -10638,7 +10648,7 @@ function projectGraph(events, frame = {}) {
       // (verified absent), so the loop reads an honest miss, not a confabulation
       const vr = reportedVoid(doc, sent);
       if (vr) { attested++; return `${sent.trim()} {{absent:never-set:${doc.id}:${vr}}}`; }
-      return sent.trim();
+      return flagIfUnbound(opts, sent.trim());
     });
     const supported = cited.length + attested;
     const grounded = supported > 0 && supported >= parts.length * 0.5;
@@ -11108,7 +11118,7 @@ function projectGraph(events, frame = {}) {
       // an answer-voice void verified absent in EVERY source — attested as a ⊥
       const vr = reportedVoidScope(ds, sent);
       if (vr) { attested++; return `${sent.trim()} {{absent:never-set:${ds[0].id}:${vr}}}`; }
-      return sent.trim();
+      return flagIfUnbound(opts, sent.trim());
     });
     const supported = cited.length + attested;
     const grounded = supported > 0 && supported >= parts.length * 0.5;
@@ -12276,7 +12286,7 @@ function projectGraph(events, frame = {}) {
         let overlap = 0; for (const t of cT) if (sT.has(t)) overlap++;
         if (overlap >= 1) { cited.push({ docId: doc.id, idx }); return `${clean} {{cite:${doc.id}:${idx}:s${idx}}}`; }
         held.push({ claim: clean, key: idx, reason: 'key-unresolved' });
-        return clean;
+        return flagIfUnbound(opts, clean);
       }
       // unkeyed → the old binder path, claim by claim (fallback only)
       const receipt = absenceClaim(doc, clean, opts && opts.hotEntity);
@@ -12287,7 +12297,7 @@ function projectGraph(events, frame = {}) {
       // there) — attest the verified-absent term as a ⊥, not a confabulation
       const vr = reportedVoid(doc, clean);
       if (vr) { attested++; return `${clean} {{absent:never-set:${doc.id}:${vr}}}`; }
-      return clean;
+      return flagIfUnbound(opts, clean);
     });
     const supported = cited.length + attested;
     const grounded = supported > 0 && supported >= parts.length * 0.5;

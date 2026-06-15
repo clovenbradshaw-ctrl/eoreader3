@@ -497,6 +497,28 @@
     };
   }
 
+  // SHOW-BUT-FLAG (compose): the per-unit flags the stamp already has the data for
+  // but was discarding. Each MEASURED Confidence component that fell below its
+  // floor, plus the witness tag when it names a fault. Pure read over the vector +
+  // tag — no new measurement, the data is already on the stamp. Shown, never a
+  // gate: the draft is always rendered (the rewrite loop owns the decision); these
+  // only tell the reader WHICH floor a kept draft missed. A rescued (re-cited)
+  // draft carries the LIFTED witness, so it correctly shows no 'unverified' flag.
+  // 'unverified' is the witness counterpart to the chat path's {{unbound}} mark.
+  function floorFlags(confidence, tag) {
+    const c = confidence || {};
+    const out = [];
+    if (c.witness   != null && c.witness   < FLOOR.witness)   out.push('unverified');
+    if (c.retrieval != null && c.retrieval < FLOOR.retrieval) out.push('weak-retrieval');
+    if (c.coherence != null && c.coherence < FLOOR.coherence) out.push('incoherent');
+    if (c.form      != null && c.form      < FLOOR.form)      out.push('off-form');
+    if (c.voice     != null && c.voice     < FLOOR.voice)     out.push('off-voice');
+    if (tag === 'confabulation') out.push('confab');
+    else if (tag === 'grain-mismatch') out.push('grain-mismatch');
+    else if (tag === 'overreach') out.push('overreach');
+    return out;
+  }
+
   // ============================================================ the talker
   // generateUnit: retrieve material against the unit's job, phrase it through
   // the membrane, stamp it, and route it — returning the events to append. The
@@ -576,6 +598,9 @@
     // the off-page terms the faithfulness veto caught ride the stamp so the audit
     // trail and the badge can name them (only present when the veto fired).
     if (ev.invented && ev.invented.length) stampFields.invented = ev.invented;
+    // the floor flags ride the stamp so the audit trail and the badge can name
+    // which floors a kept draft missed (only present when at least one fired).
+    if (ev.flags && ev.flags.length) stampFields.flags = ev.flags;
     const stamp = make.stamp(stampFields);
     const route = make.route({
       unit_id: unit.id, decision: ev.decision, predicate: ev.predicate,
@@ -654,6 +679,7 @@
     const veto = inventedVeto({ decision: r.decision, predicate: r.predicate, tag: st.tag }, invented);
     return {
       confidence: st.confidence, tag: veto.tag, rescued: st.rescued, grounded, invented,
+      flags: floorFlags(st.confidence, veto.tag),
       decision: veto.decision, predicate: veto.predicate, triggeredBy: r.triggered_by,
       score: Math.max(0, scoreConfidence(st.confidence) - veto.penalty),
     };
@@ -1007,7 +1033,7 @@
     const sources = [];
     const clean = String(text == null ? '' : text)
       .replace(/\{\{cite:([^:}]+):(\d+)\}\}/g, (_m, docId, idx) => { sources.push({ docId, idx: parseInt(idx, 10) }); return ''; })
-      .replace(/\{\{(?:void|infer|absent):[^}]*\}\}/g, '')
+      .replace(/\{\{(?:void|infer|absent|unbound):[^}]*\}\}/g, '')
       .replace(/\s+([.,;:])/g, '$1');
     return { sources, clean };
   }
@@ -1169,7 +1195,7 @@
     confidence, low, high, clamp01,
     make, ev,
     fold, buildTree, bandFor,
-    witnessGrain, stampDraft, decide, inventedVeto,
+    witnessGrain, stampDraft, decide, inventedVeto, floorFlags,
     generateUnit, finalizeUnit, evaluateProse, buildTalkerPrompt, buildContinuePrompt, buildRevisePrompt,
     reviseGuidance, scoreConfidence, noveltyRatio, dropDuplicateSentences,
     genreLabel, buildOutlinePrompt,

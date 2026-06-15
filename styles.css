@@ -369,6 +369,12 @@ ol.md-list { list-style: decimal; }
    the ⊥ chip so the receipt's nature shows before the tooltip opens. */
 .cite.absent.absent-cleared { color: #7a5b2e; background: #f6efe3; border-color: #e3d2b4; }
 .cite.absent.absent-impossible { color: var(--warn-fg, #8a5a00); background: var(--warn-bg, #fbf3e2); border-color: var(--warn-bd, #e6d2a8); }
+/* show-but-flag: an UNVERIFIED clause — served in full, but bound to no source
+   line. Not evidence (a citation) and not an absence (⊥): a caution flag in the
+   warn palette so a partly-grounded answer shows WHICH clause has no support.
+   cursor: help — the reason rides in the tooltip; the answer is never withheld. */
+.cite.unbound { color: var(--warn-fg, #8a5a00); background: var(--warn-bg, #fbf3e2); border: 1px solid var(--warn-bd, #e6d2a8); cursor: help; white-space: normal; }
+.cite.unbound:hover { border-color: var(--warn-fg, #8a5a00); background: var(--warn-bg, #f6ead0); }
 /* The reader can hide the inline footnote chips for cleaner prose (Settings →
    Answers). It's purely visual — the marker text is untouched, so a copied reply
    reads the same. Two things stay on principle, mirroring "Grounding details":
@@ -2204,6 +2210,17 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .cmp-tag-pattern-partial { background: var(--warn-bg); color: var(--warn-fg); border-color: var(--warn-bd); }
 .cmp-tag-confabulation, .cmp-tag-grain-mismatch { background: var(--bad-bg); color: var(--bad-fg); border-color: var(--bad-bd); }
 .cmp-tag-rescued { margin-left: 6px; opacity: 0.8; font-style: italic; cursor: help; }
+/* show-but-flag: the per-unit floor flags, drawn below the tag. The draft is
+   always shown; a flag only names WHICH floor a kept draft missed. cursor: help —
+   the reason rides in the tooltip. The witness/faithfulness faults read in the
+   warn palette so an unverified clause never sits under a clean stamp unmarked. */
+.cmp-flags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; }
+.cmp-flag { font-family: var(--mono); font-size: 10px; padding: 1px 7px; border-radius: var(--r-pill); cursor: help;
+  background: var(--warn-bg); color: var(--warn-fg); border: 1px solid var(--warn-bd); }
+.cmp-flag-incoherent, .cmp-flag-off-form, .cmp-flag-off-voice, .cmp-flag-weak-retrieval {
+  background: var(--void-bg); color: var(--void-fg); border-color: var(--void-bd); }
+.cmp-flag-confab, .cmp-flag-grain-mismatch, .cmp-flag-overreach {
+  background: var(--bad-bg); color: var(--bad-fg); border-color: var(--bad-bd); }
 .cmp-sources { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .cmp-sources-l { font-size: 10.5px; color: var(--text-3); margin-right: 2px; }
 .cmp-src { font-family: var(--mono); font-size: 10.5px; color: var(--evidence-ink); background: var(--evidence-tint);

@@ -591,6 +591,40 @@ await group('evaluateProse — the faithfulness veto (invented terms) the compos
   ok(passthru.decision === 'advance' && passthru.penalty === 0, 'inventedVeto with no terms returns the verdict unchanged');
 });
 
+await group('floorFlags — the per-unit floor flags the stamp now draws (show-but-flag)', async () => {
+  // pure helper: each MEASURED component below its floor + a fault tag → a flag.
+  // FLOOR = { witness:0.4, form:0.5, coherence:0.4, retrieval:0.5, voice:0.5 }.
+  eq(JSON.stringify(C.floorFlags({ witness: 0.1 }, 'figure-grounded')), JSON.stringify(['unverified']),
+    'a witness below the floor flags unverified');
+  eq(C.floorFlags({ witness: 0.9 }, 'figure-grounded').length, 0, 'a witness above the floor flags nothing');
+  eq(C.floorFlags({ witness: null }, 'figure-grounded').length, 0,
+    'a NULL (unmeasured) component never flags — only a measured miss');
+  ok(C.floorFlags({ retrieval: 0.2 }, 'figure-grounded').includes('weak-retrieval'), 'retrieval below the floor flags weak-retrieval');
+  ok(C.floorFlags({ coherence: 0.1 }, 'figure-grounded').includes('incoherent'), 'coherence below the floor flags incoherent');
+  ok(C.floorFlags({}, 'confabulation').includes('confab'), 'a confabulation tag flags confab');
+  ok(C.floorFlags({}, 'overreach').includes('overreach'), 'an overreach tag flags overreach');
+  eq(C.floorFlags({ witness: 0.8, retrieval: 0.9 }, 'figure-grounded').length, 0, 'a clean, grounded vector carries no flags');
+
+  // evaluateProse returns the flags, and finalizeUnit rides them on the stamp.
+  const [doc, frame] = C.newDoc({ goal: 'inform', genre: 'plain-report' });
+  const unit = C.make.unit({ doc_id: doc.id, job: 'report the count', order: 0 });
+  const spans = [{ text: 'The city logged twelve thousand eviction filings in 2023.', score: 2.0, docId: doc.id, idx: 4 }];
+  const deps = { unit, frame, embed: async () => [0.1, 0.2, 0.3] };
+
+  // a confabulation: prose no span carries → witness low + tag confabulation → shown, flagged
+  const confab = await C.evaluateProse(deps, 'Dragons circled the harbor at midnight under a green moon.', spans);
+  ok(Array.isArray(confab.flags), 'evaluateProse returns a flags array');
+  ok(confab.flags.includes('unverified') && confab.flags.includes('confab'),
+    'an ungrounded draft is flagged unverified + confab, not silently passed as grounded');
+  const cout = await C.finalizeUnit(deps, 'Dragons circled the harbor at midnight under a green moon.', spans);
+  ok(cout.stamp.flags && cout.stamp.flags.includes('unverified'), 'the emitted stamp carries the floor flags for the audit trail');
+
+  // a grounded draft (prose IS the span) is never flagged unverified/confab — no false positives
+  const clean = await C.evaluateProse(deps, 'The city logged twelve thousand eviction filings in 2023.', spans);
+  ok(!clean.flags.includes('unverified') && !clean.flags.includes('confab'),
+    'a grounded draft is not flagged unverified/confab');
+});
+
 await group('voice end-to-end — a frame carrying a target voice makes evaluateProse measure it', async () => {
   const voice = 'Rents rose. Evictions followed. Families left.';
   const [doc, frame] = C.newDoc({ goal: 'inform', genre: 'plain-report', voice });

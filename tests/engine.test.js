@@ -331,6 +331,41 @@ group('bindCitations — mechanical binding', () => {
   ok(!bad.audit.grounded, 'an unsupported answer is NOT marked grounded');
 });
 
+// SHOW-BUT-FLAG (claim level): a clause that binds to no source line is SERVED,
+// not dropped or refused — wrapped in {{unbound:…}} so a partly-grounded answer
+// shows WHICH clause is unverified. Opt-in (opts.flagUnbound); the flag is pure
+// metadata, never a gate (grounded / covers / cites are untouched). The two
+// clauses below are exactly the ones the group above proves bind / do not bind.
+group('claim-level unbound flag (show-but-flag)', () => {
+  const draft = 'Edith set the kettle down and listened. The spaceship departed for Jupiter at dawn.';
+  const off = E.bindCitations(voss, draft, 'what did Edith do', 'factual');
+  const on  = E.bindCitations(voss, draft, 'what did Edith do', 'factual', { flagUnbound: true });
+
+  // OFF: existing behaviour is preserved EXACTLY — no marker, byte-identical text.
+  ok(!/\{\{unbound:/.test(off.text), 'without the opt, no {{unbound}} marker is emitted');
+  eq(off.text, E.bindCitations(voss, draft, 'what did Edith do', 'factual', {}).text,
+    'an empty opts object is byte-identical to no opts (the flag is opt-in only)');
+
+  // ON: the bound clause keeps its citation; the unbound clause is SERVED + flagged.
+  ok(/\{\{cite:voss:\d+:s\d+\}\}/.test(on.text), 'the clause that binds still gets its citation');
+  ok(on.text.includes('The spaceship departed for Jupiter at dawn. {{unbound:no supporting line found}}'),
+    'the clause that binds to nothing is served in full and flagged inline as unbound');
+  eq((on.text.match(/\{\{unbound:/g) || []).length, 1, 'exactly the one unbound clause is flagged');
+
+  // The flag is metadata, not a gate: grounded / covers / cites are unchanged.
+  eq(on.audit.grounded, off.audit.grounded, 'the flag does not change the grounded verdict');
+  eq(on.audit.covers, off.audit.covers, 'the flag does not change covers N/M');
+  eq(JSON.stringify(on.cites), JSON.stringify(off.cites), 'the flag does not change the cite set');
+
+  // No false positives: a fully-bound answer gains no flag even with the opt on.
+  const allBound = E.bindCitations(voss, 'Edith set the kettle down and listened.', 'what did Edith do', 'factual', { flagUnbound: true });
+  ok(!/\{\{unbound:/.test(allBound.text), 'a fully-bound answer carries no unbound flag');
+
+  // bindCitationsScope rides the same opt across sources.
+  const scoped = E.bindCitationsScope([voss], draft, 'what did Edith do', 'factual', { flagUnbound: true });
+  ok(/\{\{unbound:/.test(scoped.text), 'bindCitationsScope honours flagUnbound too');
+});
+
 // REGRESSION (formatting): a model draft is Markdown — an intro line followed by
 // a numbered list. The binders used to splitDraft → map → join(' '), reflowing
 // the whole reply onto a single line; the renderer then showed list items 2..n
