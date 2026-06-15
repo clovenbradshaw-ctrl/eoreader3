@@ -146,6 +146,23 @@ group('a condensed recap does not become a second system message', () => {
   ok(/what is this\?/.test(last.content), 'the question survives into the final user message');
 });
 
+group('isVacuousReply flags blank/stage-direction replies, keeps real ones', () => {
+  const V = LLM.isVacuousReply;
+  // The exact failure from the audit: a wholly stage-direction reply.
+  ok(V('*no response, just a brief pause*'), 'a whole-string asterisk stage direction is vacuous');
+  ok(V('(pauses)'), 'a whole-string parenthetical stage direction is vacuous');
+  ok(V(''), 'empty string is vacuous');
+  ok(V('   \n  '), 'whitespace-only is vacuous');
+  ok(V('...'), 'punctuation-only is vacuous');
+  ok(V(null) && V(undefined), 'nullish input is safely vacuous');
+  ok(V('*nods* *waits*'), 'back-to-back stage directions with no prose are vacuous');
+  // Real replies — including ones that merely CONTAIN emphasis — are kept.
+  ok(!V('Hi!'), 'a short real greeting is not vacuous');
+  ok(!V('*Yes* — the answer is in section 2.'), 'inner emphasis with real prose is kept');
+  ok(!V('*nods* Sure, here it is.'), 'a leading stage direction with real prose is kept');
+  ok(!V('👍'), 'a lone emoji reply is kept');
+});
+
 group('short history needs no recap — still one system message, first', () => {
   const history = [
     { role: 'user', content: 'hi' },

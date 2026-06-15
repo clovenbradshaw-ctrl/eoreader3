@@ -2155,6 +2155,24 @@ function App() {
         full = await attempt(history.slice(-2), 2200);
       }
       if (genStale(myGen)) return;                  // stopped while streaming — stopTurn owns the message
+      // A call can succeed yet come back vacuous — a small model sometimes emits
+      // a roleplay stage direction ("*no response, just a brief pause*") or just
+      // whitespace instead of a reply. That never throws, so the retry-on-error
+      // path above doesn't see it; catch it here, retry once, then fall back to
+      // an honest line rather than rendering the artifact as Cleo's answer.
+      if (window.EOLLM.isVacuousReply(full)) {
+        AUD('step', 'error', { where: 'chat', attempt: 'vacuous', message: String(full || '').slice(0, 80) });
+        replaceLast({ role: 'assistant', text: '', mode: modeTag, streaming: true });
+        try {
+          full = await attempt(history, undefined);
+        } catch (e2) {
+          if (window.EOLLM.isAbort(e2) || genStale(myGen)) throw e2;   // user stop / superseded — let the outer catch settle it
+          full = '';
+        }
+        if (genStale(myGen)) return;
+        if (window.EOLLM.isVacuousReply(full))
+          full = 'Sorry — that came out blank. Could you say that again, or put it a different way?';
+      }
       replaceLast({ role: 'assistant', text: full, audit: ungroundedAudit, mode: modeTag, mechanical: mechPanel });
       AUD('end', { engine: 'model', text: full, audit: ungroundedAudit, cites: [] });
       // Unify activation: warm the field with who this chat turn named, so the
