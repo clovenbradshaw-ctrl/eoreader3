@@ -149,6 +149,11 @@
   };
 </script>
 <script src="embed.js"></script>
+<!-- Predictive fold: the forward arrow of the reading. A pure, observational
+     pass over the events the walk emits + span embeddings (from embed.js above)
+     — it records expectation→delta for the live unfold and never touches the
+     walk or the talker. See predict.js. -->
+<script src="predict.js"></script>
 <script>
   // Provenance anchors borrow the resident MiniLM for their embedding
   // signatures — but only once it is already loaded for retrieval/recall

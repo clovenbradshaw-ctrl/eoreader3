@@ -50,7 +50,40 @@ const READING_STAGE = {
   transcribing: 'Transcribing audio',
   recognizing: 'Reading text from the image',
   extracting: 'Extracting text from the PDF',
+  expecting: 'Forming expectations…',
 };
+
+// A signed-edge palette for the live delta: the reading either CONFIRMS what it
+// expected (coherence) or is BROKEN from it (rupture). Amber for the break so a
+// surprise reads at a glance against the calm accent.
+const DELTA_COLOR = { coherence: 'var(--accent)', rupture: '#e0823c' };
+
+// Sample a long span list down to ~`max` evenly-spaced bars for the settled
+// surprise strip (the live strip shows a trailing window instead).
+function sampleSpans(spans, max) {
+  if (!spans || spans.length <= max) return spans || [];
+  const step = spans.length / max, out = [];
+  for (let k = 0; k < max; k++) out.push(spans[Math.floor(k * step)]);
+  return out;
+}
+
+/* The surprise strip — one bar per span, its height the miss size (delta
+   magnitude), amber where the reading ruptured. Watching it fill is watching
+   where the document defied what the reading expected. */
+function SurpriseStrip({ spans }) {
+  if (!spans || !spans.length) return null;
+  return (
+    <div className="rm-strip" aria-hidden="true">
+      {spans.map((s, k) => {
+        const mag = s.coefficient == null ? 0 : (s.magnitude || 0);
+        const h = Math.max(6, Math.min(100, Math.round((mag / 1.6) * 100)));
+        const rupture = s.coefficient != null && s.sign === 'rupture';
+        return <span key={k} className={'rm-bar' + (rupture ? ' rupture' : '') + (s.coefficient == null ? ' void' : '')}
+          style={{ height: h + '%' }} />;
+      })}
+    </div>
+  );
+}
 
 // Overall fraction across the three movements, so a single bar can read as
 // continuous progress while the per-movement rail shows where we are. Each
@@ -100,7 +133,9 @@ function makeReadingResult(doc) {
     if (E && E.projectEntities) entities = E.projectEntities(doc).entities || [];
   } catch (e) { entities = []; }
   const ranked = entities.slice().sort((a, b) => (b.raw || 0) - (a.raw || 0));
-  const figures = ranked.slice(0, 16).map(e => ({ name: e.name, type: e.type, raw: e.raw }));
+  // `at` = the span where the figure is first read, so the live unfold can light
+  // it the moment the playback cursor reaches it (null ⇒ reveal at the end).
+  const figures = ranked.slice(0, 16).map(e => ({ name: e.name, type: e.type, raw: e.raw, at: (e.sents || [])[0] != null ? e.sents[0] : null }));
 
   // Glimpses: the sentence where each principal figure first appears — concrete
   // proof the text was read, not just measured. Fall back to the opening
@@ -134,15 +169,23 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
 
   const figures = (result && result.figures) || [];
   const glimpses = (result && result.glimpses) || [];
+  const playback = result && result.playback;
+  const spans = (playback && playback.spans) || null;
+  const N = spans ? spans.length : 0;
 
-  // The reveal: once the finished reading arrives, surface its figures one by
-  // one, then settle. Reduced motion jumps straight to settled. While `result`
-  // is null we are still reading, and these hold at zero.
-  const [reveal, setReveal] = React.useState(0);
+  // Two reveals share one settle. PLAYBACK (when the reading carries a forward
+  // expectation) plays span-by-span: a cursor walks the timeline and each delta
+  // lands live. Otherwise the finished read just surfaces its figures one by
+  // one. Reduced motion jumps either straight to settled.
+  const [reveal, setReveal] = React.useState(0);   // figures shown (non-playback)
+  const [cursor, setCursor] = React.useState(0);    // spans played (playback)
   const [settled, setSettled] = React.useState(false);
+
   React.useEffect(() => {
-    if (!result) { setReveal(0); setSettled(false); return; }
-    if (reduce || !figures.length) { setReveal(figures.length); const t = setTimeout(() => setSettled(true), 350); return () => clearTimeout(t); }
+    if (!result) { setSettled(false); setReveal(0); setCursor(0); return; }
+    if (playback) return;                            // playback effect owns this case
+    if (reduce) { setReveal(figures.length); setSettled(true); return; }
+    if (!figures.length) { setReveal(0); const t = setTimeout(() => setSettled(true), 350); return () => clearTimeout(t); }
     let n = 0; setReveal(0); setSettled(false);
     const id = setInterval(() => {
       n += 1; setReveal(n);
@@ -151,24 +194,50 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
     return () => clearInterval(id);
   }, [result]); // eslint-disable-line
 
+  React.useEffect(() => {
+    if (!playback) return;
+    if (reduce || N <= 1) { setCursor(N); setSettled(true); return; }
+    setCursor(0); setSettled(false);
+    // Bound the whole unfold to a readable spell — give the document space to
+    // breathe without making a long one a chore (≈8s, clamped per span; Skip is
+    // always there).
+    const interval = Math.max(22, Math.min(280, Math.round(8000 / N)));
+    let k = 0;
+    const id = setInterval(() => {
+      k += 1; setCursor(k);
+      if (k >= N) { clearInterval(id); setTimeout(() => setSettled(true), 550); }
+    }, interval);
+    return () => clearInterval(id);
+  }, [playback]); // eslint-disable-line
+
   const reading = !result;
-  const movementIdx = reading
-    ? Math.max(0, READING_MOVEMENTS.findIndex(m => m.id === (session && session.phase)))
-    : READING_MOVEMENTS.length;             // all movements done once result is in
-  const frac = reading ? readingFraction(session) : 1;
-  const indet = reading && (!session || session.pct == null || session.easing);
+  const inPlayback = !!playback && !settled;
   const name = (result && result.name) || (session && session.name) || 'document';
   const stageLine = session ? (READING_STAGE[session.stage] || session.stage || '') : '';
 
-  // What to show in the scanner: real read sentences once we have them, else a
-  // few skeleton lines under a travelling sweep — the "being read" texture.
+  // The span under the cursor, and the figures the reading has reached so far.
+  const playIdx = N ? Math.min(Math.max(cursor - 1, 0), N - 1) : -1;
+  const cur = spans ? spans[playIdx] : null;
+  const curI = cur ? cur.i : -1;
+  const shownFigures = settled ? figures
+    : playback ? figures.filter(f => f.at != null && f.at <= curI)
+    : figures.slice(0, reveal);
+  const rupturesSoFar = spans ? spans.slice(0, cursor).filter(s => s.coefficient != null && s.sign === 'rupture').length : 0;
+
+  const movementIdx = reading
+    ? Math.max(0, READING_MOVEMENTS.findIndex(m => m.id === (session && session.phase)))
+    : (settled ? READING_MOVEMENTS.length : READING_MOVEMENTS.length - 1);  // Weigh on while revealing
+  const frac = reading ? readingFraction(session) : 1;
+  const indet = reading && (!session || session.pct == null || session.easing);
   const SKELETON = [82, 96, 71, 90, 64];
+  const closable = settled || reading === false && !inPlayback;
+  const skip = () => { setCursor(N); setSettled(true); };
 
   return (
-    <div className="overlay center reading-overlay" onClick={reading ? undefined : onClose}>
-      <div className={'reading-modal' + (settled ? ' settled' : '') + (reading ? ' reading' : '')}
+    <div className="overlay center reading-overlay" onClick={closable ? onClose : undefined}>
+      <div className={'reading-modal' + (settled ? ' settled' : '') + (reading ? ' reading' : '') + (inPlayback ? ' playing' : '')}
            role="dialog" aria-modal="true" aria-label={'Reading ' + name}
-           aria-busy={reading} tabIndex={-1} ref={dialogRef}
+           aria-busy={reading || inPlayback} tabIndex={-1} ref={dialogRef}
            onClick={e => e.stopPropagation()}>
 
         <div className="rm-head">
@@ -176,7 +245,7 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
             <Icon name={settled ? 'check' : 'book'} size={16} />
           </span>
           <div className="rm-head-text">
-            <div className="rm-eyebrow">{settled ? 'Read' : reading ? 'Reading' : 'Read'}</div>
+            <div className="rm-eyebrow">{settled ? 'Read' : inPlayback ? 'Reading forward' : reading ? 'Reading' : 'Read'}</div>
             <h2 className="rm-title" title={name}>{name}</h2>
           </div>
           <button className="rm-x" onClick={onClose} aria-label="Close">
@@ -184,8 +253,7 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
           </button>
         </div>
 
-        {/* The movements rail — Find · Read · Weigh, lit in order; the live one
-            carries its gloss so the reader knows what the document is doing. */}
+        {/* The movements rail — Find · Read · Weigh · Ready, lit in order. */}
         <div className="rm-rail" aria-hidden="true">
           {READING_MOVEMENTS.map((m, i) => (
             <div key={m.id} className={'rm-mv' + (movementIdx > i ? ' done' : movementIdx === i ? ' on' : '')}>
@@ -202,26 +270,44 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
           <div className="rm-gloss">{READING_MOVEMENTS[movementIdx].gloss}</div>
         )}
 
-        {/* The scanner — skeleton lines under a sweep while reading; the real
-            read sentences fade in once the reading has settled. */}
-        <div className={'rm-scanner' + (reading && !reduce ? ' sweeping' : '')}>
-          {reading
-            ? SKELETON.map((w, i) => <span key={i} className="rm-skel" style={{ width: w + '%' }} />)
-            : (glimpses.length
-                ? glimpses.map((g, i) => (
-                    <span key={i} className="rm-glimpse" style={{ animationDelay: reduce ? '0s' : (i * 0.14 + 0.1) + 's' }}>{g}</span>
-                  ))
-                : <span className="rm-glimpse rm-glimpse-empty">No prose to glimpse — read the document to see it in full.</span>)}
-          {reading && !reduce && <span className="rm-sweep" aria-hidden="true" />}
-        </div>
+        {/* Stage: skeleton while reading; the live predict→delta while playing
+            forward; the representative read sentences once settled. */}
+        {inPlayback ? (
+          <div className="rm-playback">
+            <div className="rm-now">
+              {cur && cur.coefficient != null && (
+                <div className="rm-delta">
+                  <span className={'rm-sign ' + cur.sign}>{cur.sign === 'rupture' ? 'rupture' : 'coherence'}</span>
+                  <div className="rm-gauge" title="how true the expectation seemed (cosine)">
+                    <div className="rm-gauge-fill" style={{ width: Math.round(Math.max(0, Math.min(1, cur.coefficient)) * 100) + '%', background: DELTA_COLOR[cur.sign] }} />
+                  </div>
+                  <span className="rm-coeff" style={{ color: DELTA_COLOR[cur.sign] }}>{cur.coefficient.toFixed(2)}</span>
+                </div>
+              )}
+              <p className={'rm-span' + (cur && cur.sign === 'rupture' ? ' rupture' : '')}>{cur ? cur.t : ''}</p>
+            </div>
+            <SurpriseStrip spans={spans.slice(Math.max(0, cursor - 110), Math.max(cursor, 1))} />
+          </div>
+        ) : (
+          <div className={'rm-scanner' + (reading && !reduce ? ' sweeping' : '')}>
+            {reading
+              ? SKELETON.map((w, i) => <span key={i} className="rm-skel" style={{ width: w + '%' }} />)
+              : (glimpses.length
+                  ? glimpses.map((g, i) => (
+                      <span key={i} className="rm-glimpse" style={{ animationDelay: reduce ? '0s' : (i * 0.14 + 0.1) + 's' }}>{g}</span>
+                    ))
+                  : <span className="rm-glimpse rm-glimpse-empty">No prose to glimpse — read the document to see it in full.</span>)}
+            {reading && !reduce && <span className="rm-sweep" aria-hidden="true" />}
+          </div>
+        )}
 
-        {/* Figures surfacing — the people, places and organizations the reading
-            found, revealed one by one as the weighing settles. */}
+        {/* Figures surfacing — as the playback cursor reaches each one, or one by
+            one as the finished read settles. */}
         {result && figures.length > 0 && (
           <div className="rm-figures">
-            <div className="rm-figures-label">Figures it found</div>
+            <div className="rm-figures-label">{inPlayback ? 'Figures so far' : 'Figures it found'}</div>
             <div className="rm-figures-pills">
-              {figures.slice(0, reveal).map(f => (
+              {shownFigures.map(f => (
                 <span key={f.name} className="rm-fig">
                   <span className="rm-fig-swatch" style={{ background: READ_ENT_COLOR[f.type] || READ_ENT_COLOR.thing }} />
                   {f.name}{f.raw > 1 && <span className="rm-fig-n">{f.raw}</span>}
@@ -231,8 +317,8 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
           </div>
         )}
 
-        {/* Counts: what the reading measured. Prose and tables show their own. */}
-        {result && (
+        {/* Counts the reading measured — held back until it has settled. */}
+        {settled && result && (
           <div className="rm-stats">
             {result.kind === 'table' ? (
               <React.Fragment>
@@ -244,13 +330,16 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
                 <ReadStat value={result.sentences} label={result.sentences === 1 ? 'sentence' : 'sentences'} />
                 <ReadStat value={result.paragraphs} label={result.paragraphs === 1 ? 'paragraph' : 'paragraphs'} />
                 {figures.length > 0 && <ReadStat value={figures.length} label={figures.length === 1 ? 'figure' : 'figures'} />}
+                {playback && playback.summary && playback.summary.ruptures != null && (
+                  <ReadStat value={playback.summary.ruptures} label={playback.summary.ruptures === 1 ? 'rupture' : 'ruptures'} />
+                )}
               </React.Fragment>
             )}
           </div>
         )}
 
-        {/* Foot: a live progress bar + status while reading; the summary and the
-            choice (bring into chat · open to read) once it has settled. */}
+        {/* Foot: live progress + stage while reading; span counter + skip while
+            playing; the summary and the choice once it has settled. */}
         <div className="rm-foot">
           {reading ? (
             <React.Fragment>
@@ -268,10 +357,22 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
                 <div className="rm-note">A long document — read a piece at a time so the tab stays responsive. This can take a moment.</div>
               )}
             </React.Fragment>
+          ) : inPlayback ? (
+            <React.Fragment>
+              <div className="rm-bar"><div className="rm-fill" style={{ width: Math.round((cursor / Math.max(N, 1)) * 100) + '%' }} /></div>
+              <div className="rm-status">
+                <span className="rm-stage">Reading forward — expecting what comes next</span>
+                <span className="rm-count">{Math.min(cursor, N)} / {playback.total || N}{rupturesSoFar ? ' · ' + rupturesSoFar + ' surprised' : ''}</span>
+              </div>
+              <button className="rm-skip" onClick={skip}>Skip to the read</button>
+            </React.Fragment>
           ) : (
             <React.Fragment>
               <div className="rm-summary">
                 <span className="rm-summary-meta">{result.meta || 'Read and ready.'}</span>
+                {playback && playback.summary && playback.summary.measured > 0 && (
+                  <span className="rm-summary-note"> · expected forward across {playback.summary.measured} spans, ruptured at {playback.summary.ruptures}{playback.capped ? ' (first ' + playback.capped + ')' : ''}</span>
+                )}
               </div>
               <div className="rm-actions">
                 <button className="rm-btn rm-btn-primary" onClick={onOpenChat}>

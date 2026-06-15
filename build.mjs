@@ -49,6 +49,9 @@ const result = await esbuild.build({
 // are copied verbatim.
 copyFileSync(join(ROOT, 'llm.js'), join(DIST, 'llm.js'));
 copyFileSync(join(ROOT, 'embed.js'), join(DIST, 'embed.js'));
+// predict.js is a plain script too — a pure observational pass over the events
+// the engine emits + span embeddings (window.EOEmbed); it loads after embed.js.
+copyFileSync(join(ROOT, 'predict.js'), join(DIST, 'predict.js'));
 // shape.js is a plain script too (it imports nothing — generation and embedding
 // are injected); the exemplar library it scores against rides alongside.
 copyFileSync(join(ROOT, 'shape.js'), join(DIST, 'shape.js'));
@@ -95,6 +98,7 @@ const HTML = `<!doctype html>
 <!-- optional local model (dynamic-imports WebLLM from a CDN on demand) -->
 <script src="llm.js"></script>
 <script src="embed.js"></script>
+<script src="predict.js"></script>
 <!-- the adapter library (window.EOAdapters) — plain scripts, models load lazily -->
 <script src="adapters/contract.js"></script>
 <script src="adapters/registry.js"></script>

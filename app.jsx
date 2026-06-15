@@ -1036,8 +1036,24 @@ function App() {
         showToast('Added “' + name + '” · ' + doc.meta + (opts.sourceLabel ? ' · ' + opts.sourceLabel : ''));
       } else {
         readingDocRef.current = doc;
-        setReadingResult(window.makeReadingResult(doc));
-        setReadingSession(null);
+        const base = window.makeReadingResult(doc);
+        // Predictive unfold: form the forward EXPECTATION over the prose, then
+        // let the modal play the reading span-by-span and watch each delta land.
+        // Bounded + best-effort — no embedder / too little text ⇒ the modal just
+        // reveals the finished read. Pure post-walk pass; the walk is untouched,
+        // and none of this reaches the talker (it lives only on modal state).
+        if (doc.kind === 'prose' && window.EOPredict) {
+          setReadingSession({ phase: 'significance', stage: 'expecting', name, big });
+          let playback = null;
+          try { playback = await window.EOPredict.buildPlayback(doc, base, { cap: 600 }); } catch (e) { playback = null; }
+          if (tok === ingestTok.current && !readingDismiss.current) {
+            setReadingResult(playback ? Object.assign({}, base, { playback }) : base);
+            setReadingSession(null);
+          }
+        } else {
+          setReadingResult(base);
+          setReadingSession(null);
+        }
       }
     }
     return doc;

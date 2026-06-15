@@ -112,7 +112,47 @@ ok(!threw3, 'ReadingModal mounts for a table result' + (threw3 ? ' — ' + threw
 text = container.textContent || '';
 ok(/rows/.test(text) && /columns/.test(text), 'a table reading shows rows + columns');
 
+// ── State 3: predictive PLAYBACK (motion on) ───────────────────────────────
+// With motion enabled the modal plays the reading forward; assert it shows the
+// live unfold (current span + skip), then Skip jumps to the settled read. A
+// fresh root + cleared class so the modal reads motion as ON (the component
+// memoizes reduced-motion once per mount — correct for the app, where it never
+// toggles mid-modal).
 TestUtils.act(() => { root.unmount(); });
+W.document.documentElement.classList.remove('reduce-motion');
+const root2 = ReactDOMClient.createRoot(container);
+const pbResult = {
+  kind: 'prose', name: 'kafka.txt', meta: '1,240 words · prose',
+  sentences: 3, paragraphs: 2,
+  figures: [{ name: 'Gregor', type: 'person', raw: 42, at: 0 }],
+  glimpses: ['One morning Gregor woke.'],
+  playback: {
+    spans: [
+      { i: 0, t: 'One morning Gregor woke transformed.', coefficient: null, magnitude: null, sign: 'coherence', site: null },
+      { i: 1, t: 'It was no dream.', coefficient: 0.82, magnitude: 0.6, sign: 'coherence', site: null },
+      { i: 2, t: 'Suddenly the ledger named no one.', coefficient: 0.18, magnitude: 1.28, sign: 'rupture', site: 'EventBoundary', directionGated: true },
+    ],
+    summary: { measured: 2, ruptures: 1, meanCoefficient: 0.5, peak: { i: 2, magnitude: 1.28 } },
+    total: 3, capped: null,
+  },
+};
+let chat2 = 0, threw4 = null;
+try {
+  TestUtils.act(() => { root2.render(React.createElement(W.ReadingModal, { session: null, result: pbResult, onOpenChat() { chat2++; }, onOpenDoc() {}, onClose() {} })); });
+} catch (e) { threw4 = e; }
+ok(!threw4, 'ReadingModal mounts in predictive playback' + (threw4 ? ' — ' + threw4.message : ''));
+text = container.textContent || '';
+ok(/Reading forward/.test(text), 'playback shows it is reading forward');
+ok(/One morning Gregor woke transformed\./.test(text), 'playback shows the current span text');
+const skipBtn = container.querySelector('button.rm-skip');
+ok(!!skipBtn, 'playback offers a skip-to-the-read control');
+ok(!/Bring into chat/.test(text), 'no choices mid-playback');
+TestUtils.act(() => { skipBtn.dispatchEvent(new W.MouseEvent('click', { bubbles: true })); });
+text = container.textContent || '';
+ok(/Bring into chat/.test(text), 'skipping settles to the read with its choices');
+ok(/ruptured at 1/.test(text), 'the settled read reports where the reading ruptured');
+
+TestUtils.act(() => { root2.unmount(); });
 
 console.log(`\nreading-render: ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFAILURES:\n - ' + fails.join('\n - ')); process.exit(1); }
