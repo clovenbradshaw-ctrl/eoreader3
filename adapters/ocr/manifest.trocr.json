@@ -18,7 +18,7 @@
   },
   "confidenceSemantics": "heuristic",
   "failureModes": [
-    "no calibrated confidence — emits a presence flag (1 = text produced, 0 = none)",
+    "no calibrated confidence — emits a non-maximal presence flag (~0.5 = text produced but unverified, 0 = none), never read as a probability",
     "weights (~250 MB) fail to download / WebGPU unavailable (reported as a failure event)",
     "heavy layout / multi-column pages are out of scope (single text line per call)"
   ],

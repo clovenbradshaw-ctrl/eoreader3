@@ -290,6 +290,33 @@ async function main() {
       !!e0 && !(e0.meta && e0.meta.kind === 'failure'), JSON.stringify(e0 && e0.payload));
     ok('[trocr] the pipeline received a string (blob: URL), not the raw object', typeof seen === 'string', 'seen=' + typeof seen);
     ok('[trocr] the recognized text rides on the event', !!e0 && e0.payload && e0.payload.text === 'Recognized text');
+    // confidence honesty: a seq2seq decoder with no calibration must not claim
+    // certainty — the presence flag is deliberately non-maximal, never 1.0.
+    ok('[trocr] confidence is a non-maximal presence flag, never 1.0', !!e0 && e0.confidence === 0.5, 'conf=' + (e0 && e0.confidence));
+  }
+
+  // ---- regression: the default OCR is the page-capable Tesseract ------------
+  // On a WebGPU machine the memory-based profile pick lands on a single-line
+  // TrOCR model for general (full-page) OCR — which hallucinates a short string.
+  // Tesseract declares itself the capability default, so no-preference selection
+  // resolves to it regardless of profile; an explicit TrOCR choice still wins.
+  {
+    const env = loadAdapters({ inject: (w) => { try { Object.defineProperty(w.navigator, 'gpu', { value: {}, configurable: true }); } catch (_) {} } });
+    const A2 = env.EOAdapters;
+    ok('[ocr-default] Tesseract declares itself the capability default', A2.byId('ocr-tesseract').manifest.defaultForCapability === true);
+    ok('[ocr-default] TrOCR does NOT (it is a specialist)', !A2.byId('ocr-trocr-printed').manifest.defaultForCapability);
+    ok('[ocr-default] WebGPU present ⇒ the single-line TrOCR is runnable here', A2.canRun(A2.byId('ocr-trocr-printed')).ok === true);
+    A2.setPreferred('ocr', null);
+    A2.setProfile('maximum');   // the profile that would otherwise pick the heaviest (a TrOCR)
+    ok('[ocr-default] no preference ⇒ selected OCR is Tesseract, not a single-line TrOCR',
+      A2.selected('ocr').manifest.id === 'ocr-tesseract');
+    A2.setProfile('desktop');
+    ok('[ocr-default] the declared default holds on the desktop profile too',
+      A2.selected('ocr').manifest.id === 'ocr-tesseract');
+    A2.setPreferred('ocr', 'ocr-trocr-printed');
+    ok('[ocr-default] an explicit TrOCR preference still overrides the default',
+      A2.selected('ocr').manifest.id === 'ocr-trocr-printed');
+    A2.setPreferred('ocr', null);
   }
 
   console.log(failed

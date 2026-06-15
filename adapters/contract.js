@@ -94,6 +94,9 @@
       input: { type: 'object' },
       output: { type: 'object' },
       meta: { type: 'object' },
+      // Optional: this adapter is the general-purpose default for its capability
+      // (chosen over the profile pick when the user has expressed no preference).
+      defaultForCapability: { type: 'boolean' },
     },
   };
 

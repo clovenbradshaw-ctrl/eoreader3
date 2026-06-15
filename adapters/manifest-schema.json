@@ -48,6 +48,7 @@
     "failureModes": { "type": "array", "minItems": 1, "items": { "type": "string" } },
     "input": { "type": "object" },
     "output": { "type": "object" },
-    "meta": { "type": "object" }
+    "meta": { "type": "object" },
+    "defaultForCapability": { "type": "boolean" }
   }
 }
