@@ -163,7 +163,9 @@ async function evaluateCandidate(runId, edits, baseline, c) {
   rec.parity = parity;
 
   const W = loadEngine({ enginePath: path.join(sandboxDir, 'engine.js') });
-  const q = await scorer.scoreAll(W.EOEngine, baseline.scoreOpts || {});
+  // window is threaded so the 2f coref component can flip the role + coref flags
+  // durably (window.EO_RULES is what survives parseDocument's re-derivation).
+  const q = await scorer.scoreAll(W.EOEngine, { ...(baseline.scoreOpts || {}), window: W });
   rec.quality = { composite: q.composite, components: q.components, stall: { TP: q.stall.TP, FP: q.stall.FP, FN: q.stall.FN, TN: q.stall.TN } };
   rec.qualityDelta = q.composite - baseline.quality.composite;
   rec.componentDeltas = {
@@ -231,7 +233,7 @@ async function cmdRun(opts = {}) {
   const baseSource = fs.readFileSync(path.join(REPO, 'engine.js'), 'utf8');
   const scoreOpts = buildScoreOpts(c, ag);
   const W0 = loadEngine();
-  const baseQuality = await scorer.scoreAll(W0.EOEngine, scoreOpts);
+  const baseQuality = await scorer.scoreAll(W0.EOEngine, { ...scoreOpts, window: W0 });
   const baseline = { source: baseSource, quality: baseQuality, scoreOpts };
 
   // The agent's investigation capability: ingest a doc (fixture id / corpus

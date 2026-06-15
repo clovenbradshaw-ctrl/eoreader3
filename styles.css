@@ -1532,6 +1532,10 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
 .graph-ent-name { font-weight: 500; }
 .graph-ent-n { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); }
 .graph-edge { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+/* a coreference SUGGESTION edge (≈ bind / ≈ ambiguous) reads as a proposal, not
+   a solid relation: dashed lead-in + dimmed, and its verb pill is mono/dim. */
+.graph-edge-suggestion { border-left: 2px dashed var(--border-strong); padding-left: 7px; opacity: 0.82; }
+.graph-edge-suggestion .graph-verb { color: var(--text-3); background: transparent; border: 1px dashed var(--border); }
 .graph-a, .graph-b, .graph-assert b { font-weight: 600; color: var(--text); }
 .graph-verb { font-family: var(--mono); font-size: 11px; color: var(--evidence); background: var(--evidence-tint); border-radius: 5px; padding: 1px 6px; }
 .graph-asserts { color: var(--text-2); }
@@ -1751,6 +1755,9 @@ button.gax-leg:hover .gax-dim { color: var(--text-2); }
 .gax-claim-prop { font-size: 13.5px; margin-bottom: 3px; }
 .gax-rels { display: flex; flex-direction: column; gap: 5px; }
 .gax-rel { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+/* coreference suggestion edge — dashed/dim, visually separate from CON relations */
+.gax-rel-suggestion { border-left: 2px dashed var(--border-strong); padding-left: 8px; opacity: 0.82; }
+.gax-rel-suggestion .gax-verb { border: 1px dashed var(--border); background: transparent; }
 .gax-a { font-weight: 600; }
 .gax-b { font-weight: 600; }
 .gax-verb { font-family: var(--mono); font-size: 11px; color: var(--text-3); background: var(--bg-subtle); padding: 1px 7px; border-radius: var(--r-pill); }
