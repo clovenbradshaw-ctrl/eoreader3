@@ -939,6 +939,10 @@ const READING_RULES = {
     value: false, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
     desc: 'When ON, the Site face\'s (Existence, Figure) cell is named Entity — its proper name as one of the nine generated cells (the entity subtypes thing/person/place/org live BENEATH it on the entityType axis, never in a site slot) — and the SIG/NUL Object coordinate corrects: a NUL stall and an unattributed SIG read Object Ground (an ambient existence-mass with no anchor, generating Void), while an attributed SIG resolves on its speaker. The cell stays generated from (Domain, Object); only the coordinate moves. OFF ships today\'s grid (the cell misnamed \'Thing\', SIG/NUL defaulting to Figure) byte-identical — the parity floor; flip after the parallel golden on the journalism + essay fixtures diffs clean.',
   },
+  fold_column_balanced: {
+    value: false, mass: 1, layer: 'structure', src: 'hardcoded-seed', module: 'core',
+    desc: 'Master flag (default OFF — the parity floor). When ON, the document fold (_foldScope / documentFold / foldOver) is built as a column-balanced digest across the Site grid\'s Time axis — figures (Existence·Figure), what HAPPENS (Structure·Figure Link + Existence·Ground Void), recurring kinds (Pattern), and ground registrations — each column on its OWN normalized salience with a reserved budget, so an entity\'s mention-frequency can never crowd out a once-registered event. The fold is emitted event-first, not cast-first. OFF ships today\'s Figure-only, cast-led fold byte-identical (foldObject is never consulted) — the parity floor; flip after the parallel golden on the novella + journalism fixtures diffs clean.',
+  },
   speaker_label_patterns: {
     value: [], mass: 0, layer: 'structure', src: 'learned', module: 'core',
     desc: 'Grown, never seeded: line shapes (regex sources — capture 1 the label, capture 2 the statement) that bind a "LABEL: statement" line as that voice speaking — the org-acronym colon convention. Members arrive only through the proposal channel\'s admission physics: the model proposes from registered friction; documents or the user corroborate; admission writes the pattern here through the ledger. Starts EMPTY, so every shipped reading is byte-identical.',
@@ -3121,6 +3125,8 @@ const EO_SITE_GRID_LEGACY = {
 // applyRules coerces card values through Number(), so an installed card
 // arrives as 1; the seed is boolean false. Either truthy form means ON.
 function siteEntityCellEnabled() { const v = READING_RULES.site_entity_cell.value; return v === true || v === 1; }
+// Master flag for the column-balanced fold (default OFF — the parity floor).
+function foldColumnBalancedEnabled() { const v = READING_RULES.fold_column_balanced.value; return v === true || v === 1; }
 function eoSiteGrid() { return siteEntityCellEnabled() ? EO_SITE_GRID : EO_SITE_GRID_LEGACY; }
 // The entity subtypes — the classification BENEATH the Entity cell, off the
 // cube entirely. A 'thing' is a species of the genus Entity, as is a person.
@@ -7608,6 +7614,7 @@ function projectGraph(events, frame = {}) {
     'role-referent-recovery': 'role_referent_recovery',
     'cross-source': 'cross_source',
     'site-entity-cell': 'site_entity_cell',
+    'fold-column-balanced': 'fold_column_balanced',
     'distance-gravity': 'distance_gravity',
     'gravity-alpha': 'gravity_alpha',
     'gravity-offset': 'gravity_offset',
@@ -9488,6 +9495,423 @@ function projectGraph(events, frame = {}) {
     return out;
   }
 
+  // ════════════════════════════════════════════════════════════════════════
+  // COLUMN-BALANCED FOLD (READING_RULES.fold_column_balanced; default OFF).
+  // The fold as a cursor-scoped reading primitive: at ANY scope predicate, a
+  // fixed-shape digest balanced across the Site grid's Time axis — figures
+  // (Existence·Figure), what HAPPENS (Structure·Figure Link + Existence·Ground
+  // Void), recurring kinds (Pattern), ground registrations — each column on its
+  // OWN salience with a RESERVED budget, scored RELATIVE TO THE SCOPE (in-window
+  // mass, in-window events) so "what's happening up to here" never leaks the
+  // whole book's averages. Pure over (doc._events + RULES_REV): no model, no
+  // embedder; the whole-doc call caches per (doc, RULES_REV) like documentFolds.
+  // ════════════════════════════════════════════════════════════════════════
+
+  // The apparatus a document wraps its body in — Gutenberg license + metadata
+  // header field lines + Contents/byline/TOC runs — lifted to the SENTENCE so
+  // every fold column and every anchor span filters through one gate (the
+  // de-chrome the spine filter and the cast filter each do piecewise). Pure read
+  // of the sentence text + the doc's Gutenberg envelope. Content-based for the
+  // header (so the early STORY lines — the inciting events — are spared), with a
+  // position rule only for the license TAIL the story never reaches.
+  const _APPARATUS_FIELD_RE = /^\s*(?:title|author|editor|translator|illustrator|release date|posting date|most recently updated|updated|language|credits|produced by|other information|original publication|contents|title page|frontispiece)\b\s*:?/i;
+  const _APPARATUS_LICENSE_RE = /\b(?:project gutenberg|gutenberg\.org|www\.gutenberg|public domain|all rights reserved|start of (?:the|this) project gutenberg|end of (?:the|this) project gutenberg|this ebook is for the use of|terms of (?:use|this license|the trademark)|the full project gutenberg license|redistribut)/i;
+  const _APPARATUS_BYLINE_RE = /^\s*(?:by|translated by|edited by|illustrated by|with an introduction)\b/i;
+  const _APPARATUS_TOC_RE = /^\s*[ivxlcdm]+(?:\s+[ivxlcdm]+)+\.?\s*$/i;
+  // The body bounds of a Gutenberg text: everything at/before the START marker
+  // and at/after the END marker is apparatus (front matter + license tail). This
+  // is exact where the content heuristics are leaky (the GPL preamble varies),
+  // so the early STORY lines are kept and the whole wrapper is dropped.
+  function _gutenbergBody(doc) {
+    const texts = doc.sentenceTexts || [];
+    // cache on the doc — pure over the sentence list, called O(n) times by the
+    // apparatus gate, so the scan must not repeat per call (the O(n²) trap).
+    if (doc._gbBody && doc._gbBody.n === texts.length) return doc._gbBody.value;
+    let start = -1, end = texts.length;
+    for (let i = 0; i < texts.length; i++) {
+      const t = String(texts[i] == null ? '' : texts[i]);
+      if (/start of (?:the|this) project gutenberg/i.test(t)) start = i;
+      if (/end of (?:the|this) project gutenberg/i.test(t)) { end = i; break; }
+    }
+    const value = { start, end };
+    doc._gbBody = { n: texts.length, value };
+    return value;
+  }
+  function isApparatusSentence(doc, i) {
+    if (!doc) return false;
+    const texts = doc.sentenceTexts || [];
+    if (i == null || i < 0 || i >= texts.length) return true;
+    const t = String(texts[i] == null ? '' : texts[i]).replace(/\s+/g, ' ').trim();
+    if (!t) return true;
+    if (_APPARATUS_FIELD_RE.test(t) || _APPARATUS_BYLINE_RE.test(t) || _APPARATUS_TOC_RE.test(t)) return true;
+    let meta = null; try { meta = docMetadata(doc); } catch (e) {}
+    if (meta && meta.isGutenberg) {
+      const b = _gutenbergBody(doc);
+      if (b.start >= 0 && i <= b.start) return true;    // front matter, up to and incl. the START marker
+      if (i >= b.end) return true;                      // the END marker and the license tail
+      if (_APPARATUS_LICENSE_RE.test(t) || t.toLowerCase().includes('gutenberg')) return true;
+    }
+    return false;
+  }
+
+  // The (Domain, Time) Site an event addresses, derived from its OPERATOR — and
+  // applying the site_entity_cell SEMANTICS unconditionally (a NUL stall and an
+  // unattributed SIG register on Ground) so the column read is correct on the
+  // default LEGACY grid too, where ev.site would mislabel them Figure. Names the
+  // cell with the corrected grid, so the digest's site labels are stable
+  // regardless of the rule's live state.
+  function foldCellOfEvent(ev) {
+    if (!ev || !ev.op) return null;
+    const domain = EO_DOMAIN_OF_OP[ev.op];
+    if (!domain) return null;
+    let col;
+    if (ev.op === 'NUL') col = 'Ground';
+    else if (ev.op === 'SIG' && (!ev.speaker || ev.speaker === '?')) col = 'Ground';
+    else {
+      const target = ev.op === 'SIG' ? ev.speaker
+        : (ev.op === 'CON' || ev.op === 'SYN') ? (ev.o != null ? ev.o : ev.targetName)
+        : (ev.target != null ? ev.target : ev.targetName);
+      col = objectOf(target, ev.entityType || null);
+    }
+    return (EO_SITE_GRID[domain] || EO_SITE_GRID.Existence)[col];
+  }
+
+  // ── small shared helpers for the digest ──
+  function _foldClean(s) {
+    return String(s == null ? '' : s).replace(/[“”"]/g, '').replace(/\s+/g, ' ').replace(/^[\s,;:.\-—]+|[\s,;:\-—]+$/g, '').trim();
+  }
+  function _foldTrunc(s, n) { const t = _foldClean(s); return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t; }
+  // A clause gist from s/v/o ends: the FIRST clause only (the greedy SVO
+  // extractor sometimes traps a sentence boundary — "he disappeared. they"), with
+  // a dangling trailing function word / bare pronoun stripped. Empty when nothing
+  // substantive survives.
+  function _foldEventGist(s, v, o) {
+    let g = [s, v, o].filter(Boolean).join(' ').split(/[.!?…;]/)[0].trim();
+    g = g.replace(/\s+(?:and|but|or|the|a|an|to|of|that|which|who|he|she|it|they|him|her|them|his|its|their|this|these|those)$/i, '').trim();
+    return g.length >= 4 ? g : '';
+  }
+  function _foldNormGist(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+  function _foldDistinctFigures(ends, figKeys) {
+    const set = new Set();
+    for (const e of ends) { if (e == null) continue; const k = normSurface(e); if (figKeys.has(k)) set.add(k); }
+    return set.size;
+  }
+  // A clause that REPORTS a transformation / cut / fusion (a depicted SEG or
+  // SYN) is "what happens" par excellence — the Structure-row happening the fold
+  // most wants — so it earns a salience boost even when its subject is a pronoun
+  // (the Metamorphosis "he found himself transformed…"). Scans the gist's tokens
+  // against the depicted-act verb classes; never mention-count.
+  function _foldDepictBoost(gist) {
+    const toks = String(gist == null ? '' : gist).toLowerCase().match(/[a-z]+/g) || [];
+    for (const w of toks) { let a = null; try { a = depictedAct(w); } catch (e) {} if (a && (a.op === 'SEG' || a.op === 'SYN')) return 4; }
+    return 0;
+  }
+  // The fold's own "what happens" verb signal — the depict lexicon (marry/merge/
+  // split) doesn't cover the state-changes a reading turns on (transform, wake,
+  // die, sue, vote…), and a structural-figures-only metric is journalism-biased:
+  // it scores a NAMED-pair clause high and a pronoun-subject happening ("he found
+  // himself transformed") at zero. STRONG state-changes are keystone-worthy (the
+  // document's defining event); ordinary motion/transaction verbs lean an event
+  // up over inert copulas. Surface-only, deterministic — never mention-count.
+  const _FOLD_HAPPEN_STRONG = /\b(?:transform(?:ed|s|ing)?|metamorphos\w*|became|become|becoming|turn(?:ed|ing|s)? into|woke|awoke|awaken\w*|died|dies|dying|killed|kills|murder\w*|born|vanish\w*|disappear\w*|explod\w*|erupt\w*|collaps\w*|burn(?:ed|t|ing)?|sued|sues|suing|fired|hired|elect\w*|voted?|vote|marri\w*|merg\w*|arrest\w*|escap\w*|drown\w*|destroy\w*|founded|collapsed|resigned|convicted|acquitted)\b/i;
+  const _FOLD_HAPPEN_WEAK = /\b(?:found|left|arriv\w*|return\w*|mov\w*|open\w*|clos\w*|broke|threw|carri\w*|brought|sent|gave|took|signed|paid|spent|built|ran|walk\w*|slid|crawl\w*|push\w*|pull\w*|fell|rose|wrote|reported|alleg\w*|claim\w*|chair\w*|runs|hires|manage\w*)\b/i;
+  function _foldHappening(gist) {
+    if (_FOLD_HAPPEN_STRONG.test(gist)) return 5;
+    if (_FOLD_HAPPEN_WEAK.test(gist)) return 1;
+    return 0;
+  }
+  // A gendered subject/object pronoun is the protagonist in narrative — count it
+  // as touching the heaviest in-window figure, so a "he <did> X" happening is not
+  // scored at zero distinct figures (the bias that buried the transformation).
+  const _FOLD_PROTAG_PRON = /^(?:he|him|his|she|her|hers|himself|herself)$/i;
+  function _foldEndFigures(ends, figKeys, protagKey) {
+    const set = new Set();
+    for (const e of ends) {
+      if (e == null) continue;
+      const raw = String(e).trim();
+      if (_FOLD_PROTAG_PRON.test(raw)) { if (protagKey) set.add(protagKey); continue; }
+      const k = normSurface(raw);
+      if (figKeys.has(k)) set.add(k);
+    }
+    return set.size;
+  }
+  // The distinct competing surfaces a NUL stall contests, de-duped by name (the
+  // graph can carry two same-named sites) and cleaned for prose.
+  function _foldCompetingNames(ev) {
+    const seen = new Set(), names = [];
+    for (const c of (ev.competing || [])) {
+      const nm = _foldClean(c.siteName || c.site || '');
+      const k = nm.toLowerCase();
+      if (nm && !seen.has(k)) { seen.add(k); names.push(nm); }
+    }
+    return names;
+  }
+  // Existence·Figure (Entity) — the cast, scored SCOPE-RELATIVE: a figure's
+  // weight is its mention count WITHIN the window (non-apparatus), not its whole
+  // -document mass, so a globally-heavy figure absent from this scope drops out
+  // and a locally-dense one rises. Frequency is allowed HERE — that is what the
+  // Figure column is — but only the frequency the window itself witnesses.
+  function _foldFigures(doc, inScope, budget) {
+    const out = [];
+    for (const e of foldHeavy(doc)) {
+      const inSents = (e.sents || []).filter(s => inScope(s) && !isApparatusSentence(doc, s));
+      if (!inSents.length) continue;
+      out.push({ name: e.name, key: e.key, site: 'Entity', mass: inSents.length, _first: inSents[0] });
+    }
+    out.sort((a, b) => b.mass - a.mass || a._first - b._first);
+    return out.slice(0, budget).map(({ _first, ...f }) => f);
+  }
+  // Structure·Figure (Link) + Existence·Ground (Void): what HAPPENS. SYN/CON
+  // relational edges, NUL contested stalls, SIG quotes. Ranked by STRUCTURAL
+  // salience — how many distinct admitted figures the event connects (s/o ends)
+  // or contests (the NUL competing array) + a depicted-act boost — never by how
+  // often its subject is named, with a scope-relative recency lean so the window
+  // 's recent happenings surface. Reserved budget: a figure can never take an
+  // event slot.
+  function _foldEvents(doc, inScope, figKeys, protagKey, budget) {
+    let lo = Infinity, hi = -Infinity;
+    for (const ev of (doc._events || [])) {
+      const si = ev.sentence_idx;
+      if (si == null || !inScope(si) || isApparatusSentence(doc, si)) continue;
+      if (si < lo) lo = si; if (si > hi) hi = si;
+    }
+    const span = Math.max(1, hi - lo);
+    const seen = new Set(), cands = [];
+    for (const ev of (doc._events || [])) {
+      const si = ev.sentence_idx;
+      if (si == null || !inScope(si) || isApparatusSentence(doc, si)) continue;
+      let gist = null, distinct = 0, happen = 0;
+      if ((ev.op === 'SYN' && ev.method !== 'gravity' && ev.src === 'svo') ||
+          (ev.op === 'CON' && (ev.o != null || ev.relation || ev.verb))) {
+        const s = _foldClean(ev.s), v = _foldClean(ev.v || ev.relation || ev.verb), o = _foldClean(ev.o);
+        if (!(v && (s || o))) continue;
+        gist = _foldEventGist(s, v, o);
+        if (!gist) continue;
+        distinct = _foldEndFigures([ev.s, ev.o], figKeys, protagKey);
+        // happening signal: the cheap regex first; the depict lexicon (marry/
+        // merge/split) only as a fallback on the VERB head — never per token, the
+        // O(events × tokens) cost that made the fold too slow to scrub.
+        happen = _foldHappening(gist);
+        if (!happen) { let a = null; try { a = depictedAct(v); } catch (e) {} if (a && (a.op === 'SEG' || a.op === 'SYN')) happen = 4; }
+      } else if (ev.op === 'NUL' && Array.isArray(ev.competing) && ev.competing.length) {
+        const names = _foldCompetingNames(ev);
+        if (!names.length) continue;
+        gist = `“${_foldClean(ev.surface)}” — contested between ${_joinList(names)}`;
+        distinct = names.length;
+      } else if (ev.op === 'SIG' && ev.quote) {
+        gist = `“${_foldTrunc(ev.quote, 90)}”`;
+        distinct = (ev.speaker && ev.speaker !== '?') ? 1 : 0;
+      } else continue;
+      const recency = (si - lo) / span;                       // 0 (window start) … 1 (cursor)
+      const salience = distinct * 2 + happen + recency;       // structure + happening; recency leans, never dominates
+      const key = _foldNormGist(gist);
+      if (!key || seen.has(key)) continue; seen.add(key);
+      cands.push({ gist, sentence_idx: si, site: foldCellOfEvent(ev), _sal: salience, _happen: happen });
+    }
+    cands.sort((a, b) => b._sal - a._sal || b.sentence_idx - a.sentence_idx);
+    let picked = cands.slice(0, budget);
+    // KEYSTONE RESERVATION: the scope's defining happening — the strongest state
+    // -change, earliest (the inciting event) — persists in EVERY cursor's fold,
+    // so "what is this" never loses the transformation just because the window
+    // grew and recent clauses crowded the budget. Independent of mention-count.
+    const keystone = cands.filter(c => c._happen >= 5)
+      .sort((a, b) => b._happen - a._happen || a.sentence_idx - b.sentence_idx)[0];
+    if (keystone && !picked.some(p => p === keystone)) picked = picked.slice(0, Math.max(0, budget - 1)).concat(keystone);
+    return picked.map(({ _sal, _happen, ...e }) => e);
+  }
+  // Existence·Ground (Void) + Structure·Ground (Field) + Interpretation·Ground
+  // (Atmosphere): the substrate — registrations, stalls, ambient. Ranked by how
+  // LOAD-BEARING a registration is (a stall that blocked a bind — many figures
+  // contesting — outweighs an ambient mention), de-duped against what the events
+  // column already took.
+  function _foldGround(doc, inScope, budget, takenGists) {
+    const seen = new Set(), cands = [];
+    for (const ev of (doc._events || [])) {
+      const si = ev.sentence_idx;
+      if (si == null || !inScope(si) || isApparatusSentence(doc, si)) continue;
+      const cell = foldCellOfEvent(ev);
+      if (cell !== 'Void' && cell !== 'Field' && cell !== 'Atmosphere') continue;
+      let gist = null, weight = 0.5;
+      if (ev.op === 'NUL' && Array.isArray(ev.competing) && ev.competing.length) {
+        const names = _foldCompetingNames(ev);
+        if (!names.length) continue;
+        gist = `“${_foldClean(ev.surface)}” left unresolved between ${_joinList(names)}`;
+        weight = names.length + (/contest/i.test(String(ev.reason || '')) ? 1 : 0);
+      } else if (ev.op === 'SIG' && ev.quote) {
+        gist = `“${_foldTrunc(ev.quote, 90)}”`; weight = 1;
+      } else if ((ev.op === 'INS' || ev.op === 'DEF') && (ev.target || ev.targetName)) {
+        gist = `${_foldClean(ev.target || ev.targetName)} registered (${cell.toLowerCase()})`; weight = 0.5;
+      } else continue;
+      const key = _foldNormGist(gist);
+      if (!key || seen.has(key) || (takenGists && takenGists.has(key))) continue; seen.add(key);
+      cands.push({ gist, sentence_idx: si, site: cell, _w: weight });
+    }
+    cands.sort((a, b) => b._w - a._w || a.sentence_idx - b.sentence_idx);
+    return cands.slice(0, budget).map(({ _w, ...g }) => g);
+  }
+  // Existence·Pattern (Kind) + Interpretation·Pattern (Paradigm): the recurring
+  // CATEGORIES — a kind is what RECURS ACROSS MOMENTS (the grid's own definition),
+  // so this column is RECURRENCE-scored across distinct in-scope sentences, never
+  // mass-scored. Two sources: surfaces the Pattern cue routes to Pattern, and
+  // recurring lowercase common-noun phrases (a category nominal, never a proper
+  // -name figure — "shell company", "special assessment", "vermin").
+  const _FOLD_CAT_STOP = new Set(['the','a','an','of','and','or','to','in','on','for','with','by','at','from','as','is','are','was','were','be','been','that','this','it','its','his','her','their','they','them','we','you','not','but','who','which','what','when','where','how','than','then','also','have','has','had','will','would','can','could','about','into','through','over','under','out','only','other','these','those','there','such','some','more','most','all','any','no','one','two','new','same','own','said','says','like','just','very','much','many','each','both','being','here','now','still','even','first','last','next',
+    // reflexive / personal pronouns are not categories (the "himself" noise)
+    'himself','herself','itself','themselves','myself','yourself','oneself','ourselves','him','she','hers','theirs','mine','yours','ours','everyone','everything','anyone','anything','someone','something','nobody','nothing']);
+  function _foldCatNGrams(text, figKeys) {
+    const toks = String(text == null ? '' : text).match(/[A-Za-z][A-Za-z'-]*/g) || [];
+    const out = [];
+    const isCat = (w) => w && w.length >= 4 && /^[a-z]/.test(w) && !_FOLD_CAT_STOP.has(w.toLowerCase()) && !(figKeys && figKeys.has(w.toLowerCase()));
+    // a bare unigram category must look like a NOUN: drop adverb/verb shapes
+    // (-ly / -ing / -ed) that the lowercase filter alone lets through.
+    const isCatUni = (w) => isCat(w) && w.length >= 6 && !/(?:ly|ing|ed)$/.test(w.toLowerCase());
+    for (let i = 0; i < toks.length; i++) {
+      const w = toks[i];
+      if (i + 1 < toks.length && isCat(w) && isCat(toks[i + 1])) out.push((w + ' ' + toks[i + 1]).toLowerCase());
+      if (isCatUni(w)) out.push(w.toLowerCase());
+    }
+    return out;
+  }
+  function _foldKinds(doc, inScope, figKeys, budget) {
+    const texts = doc.sentenceTexts || [];
+    const bySent = new Map(), cellOf = new Map();
+    const bump = (term, si, cell) => {
+      const t = String(term || '').trim().toLowerCase();
+      if (!t || t.length < 4) return;
+      if (!bySent.has(t)) bySent.set(t, new Set());
+      bySent.get(t).add(si);
+      if (!cellOf.has(t)) cellOf.set(t, cell || 'Kind');
+    };
+    // (a) cue-path: entity surfaces the Pattern cue routes to Pattern
+    try {
+      for (const e of (projectEntities(doc).entities || [])) {
+        if (objectOf(e.name) !== 'Pattern') continue;
+        for (const si of (e.sents || [])) if (inScope(si) && !isApparatusSentence(doc, si)) bump(e.name, si, eoSite('Existence', e.name));
+      }
+    } catch (e) {}
+    // (b) recurring lowercase category nominals across distinct in-scope sentences
+    for (let si = 0; si < texts.length; si++) {
+      if (!inScope(si) || isApparatusSentence(doc, si)) continue;
+      for (const ng of _foldCatNGrams(texts[si], figKeys)) bump(ng, si, objectOf(ng) === 'Pattern' ? eoSite('Existence', ng) : 'Kind');
+    }
+    // TIER the categories: a Pattern-cue surface (tier 2) leads, then a category
+    // PHRASE (a bigram, tier 1 — "shell company", "chief clerk"), then a bare
+    // recurring noun (tier 0). Recurrence within tier. A phrase needs ≥2 distinct
+    // sentences; a bare unigram needs ≥3 (a single repeated word is weaker
+    // evidence of a CATEGORY than a recurring phrase).
+    const ranked = [...bySent.entries()]
+      .map(([term, set]) => ({ term, count: set.size, site: cellOf.get(term) || 'Kind',
+        _tier: objectOf(term) === 'Pattern' ? 2 : (term.includes(' ') ? 1 : 0) }))
+      .filter(k => k._tier === 2 || (k._tier === 1 && k.count >= 2) || (k._tier === 0 && k.count >= 3))
+      .sort((a, b) => b._tier - a._tier || b.count - a.count || (b.term.length - a.term.length) || (a.term < b.term ? -1 : 1));
+    const kept = [];
+    for (const k of ranked) {
+      // a kept phrase subsumes its parts: drop a bare unigram a kept bigram contains
+      if (kept.some(x => x.term.includes(' ') && x.term.split(' ').includes(k.term))) continue;
+      kept.push({ term: k.term, count: k.count, site: k.site });
+      if (kept.length >= budget) break;
+    }
+    return kept;
+  }
+  // The pure, no-model structured digest — the cursor-scoped reading, balanced
+  // across the grid by construction. Same graph + same RULES_REV ⇒ deep-equal.
+  function _foldObjectScope(doc, inScope) {
+    const texts = doc.sentenceTexts || [];
+    const n = texts.length;
+    const figures = _foldFigures(doc, inScope, 5);
+    const figKeys = new Set(figures.map(f => f.key));
+    const protagKey = figures.length ? figures[0].key : null;   // heaviest in-window figure
+    const events = _foldEvents(doc, inScope, figKeys, protagKey, 4);
+    const taken = new Set(events.map(e => _foldNormGist(e.gist)));
+    const ground = _foldGround(doc, inScope, 3, taken);
+    const kinds = _foldKinds(doc, inScope, figKeys, 4);
+    // Interpretation·Figure (Lens): copular DEF·class about IN-WINDOW figures.
+    const assertions = [], seenA = new Set();
+    for (const ev of (doc._events || [])) {
+      if (ev.op !== 'DEF' || ev.path !== 'class' || !ev.value) continue;
+      if (!inScope(ev.sentence_idx) || isApparatusSentence(doc, ev.sentence_idx)) continue;
+      const k = normSurface(ev.target);
+      if (!figKeys.has(k) || seenA.has(k)) continue;
+      seenA.add(k);
+      assertions.push({ name: (figures.find(f => f.key === k) || {}).name, is: String(ev.value) });
+      if (assertions.length >= 4) break;
+    }
+    const spine = foldSections(doc).filter(s => {
+      if (_APPARATUS_FIELD_RE.test(String(s.label)) || /gutenberg|full license|public domain/i.test(String(s.label))) return false;
+      if (isApparatusSentence(doc, s.start)) return false;     // a section that opens in the license tail
+      for (let i = s.start; i < s.end; i++) if (inScope(i)) return true; return false;
+    }).map(s => s.label).slice(0, 8);
+    // opener: the earliest in-scope concrete NON-apparatus line — a genuine
+    // anchor for citation binding, never the lead (the prose leads event-first).
+    let opener = '';
+    for (let i = 0; i < n; i++) {
+      if (!inScope(i) || isApparatusSentence(doc, i)) continue;
+      const t = String(texts[i] || '').trim();
+      if (t.length >= 40 && /[.!?…"”'’)]$/.test(t)) { opener = t; break; }
+    }
+    // The "something happens" invariant: a Structure-row or Existence·Ground
+    // event in scope but an all-figure digest is MALFORMED — flag it so the
+    // regression is catchable, not silent.
+    let degenerate = null;
+    if (!events.length && !ground.length) {
+      const hasHappening = (doc._events || []).some(ev => {
+        if (!inScope(ev.sentence_idx) || isApparatusSentence(doc, ev.sentence_idx)) return false;
+        const c = foldCellOfEvent(ev);
+        return c === 'Link' || c === 'Void' || c === 'Field';
+      });
+      if (hasHappening) degenerate = 'figure-only';
+    }
+    return { figures, events, kinds, ground, assertions, spine, opener, fold_degenerate: degenerate };
+  }
+  function foldObject(doc, inScope) {
+    if (!doc || doc.kind !== 'prose') return null;
+    const n = (doc.sentenceTexts || []).length;
+    if (!n) return null;
+    if (inScope == null) {
+      if (doc._foldObject && doc._foldObject.rev === RULES_REV) return doc._foldObject.value;
+      const value = _foldObjectScope(doc, () => true);
+      doc._foldObject = { rev: RULES_REV, value };
+      return value;
+    }
+    return _foldObjectScope(doc, inScope);
+  }
+  // The digest as PROSE — EVENT-FIRST, not cast-first: "what happens" leads and
+  // the figure rides INSIDE it; the cast is named through the event and the kind,
+  // never as the opening clause (leading with the figure list is entity bias
+  // re-entering at the surface). A genuinely figure-only digest (a glossary)
+  // falls back to the old figure-led phrasing. Deterministic — no model writes
+  // this. The "what happens" list orders by RECENCY so a cursor fold leads with
+  // the window's recent happening (locality), while the column itself still
+  // CARRIES the most structurally salient event wherever in the window it sits.
+  function renderFoldDigest(obj) {
+    if (!obj) return '';
+    const figures = obj.figures || [], events = obj.events || [], kinds = obj.kinds || [], ground = obj.ground || [];
+    const sents = [];
+    if (events.length || kinds.length || ground.length) {
+      if (events.length) {
+        const ordered = events.slice().sort((a, b) => b.sentence_idx - a.sentence_idx);
+        sents.push(`What happens: ${_joinList(ordered.map(e => e.gist))}.`);
+      }
+      if (kinds.length) sents.push(`It keeps returning to ${_joinList(kinds.map(k => k.term))}.`);
+      if (figures.length) {
+        const fl = _joinList(figures.map(f => f.name));
+        sents.push(figures.length === 1 ? `The figure it turns on is ${fl}.` : `The figures it turns on: ${fl}.`);
+      }
+      if (obj.assertions && obj.assertions.length) sents.push(`It takes ${_joinList(obj.assertions.filter(a => a.name).map(a => `${a.name} to be ${deAnaphorDef(a.is)}`))}.`);
+      if (ground.length) sents.push(`Left registered but unresolved: ${_joinList(ground.map(g => g.gist))}.`);
+    } else {
+      return prosifyFold({ figures: figures.map(f => f.name), asserts: obj.assertions, spine: obj.spine, opener: obj.opener });
+    }
+    if (obj.spine && obj.spine.length > 1) {
+      const middle = obj.spine.length > 2 ? `, by way of ${_joinList(obj.spine.slice(1, -1))},` : '';
+      sents.push(`It runs from ${obj.spine[0]}${middle} through to ${obj.spine[obj.spine.length - 1]}.`);
+    } else if (obj.spine && obj.spine.length === 1) {
+      sents.push(`It sits under ${obj.spine[0]}.`);
+    }
+    if (obj.opener) sents.push(`It opens: “${obj.opener}”`);
+    return sents.join(' ');
+  }
+
   // The core fold: condense whatever sentences the predicate admits into the
   // reader's-voice prose — the figures that scope turns on, what the text takes
   // them to be, the chapters it touches, and the earliest line it opens on. The
@@ -9500,6 +9924,12 @@ function projectGraph(events, frame = {}) {
     const texts = doc.sentenceTexts || [];
     const n = texts.length;
     if (!n) return '';
+    // Column-balanced digest (behind the parity-floor flag). OFF ⇒ never
+    // consulted; the legacy Figure-only fold below is byte-identical.
+    if (foldColumnBalancedEnabled()) {
+      const text = renderFoldDigest(_foldObjectScope(doc, inScope));
+      if (text) return text;
+    }
 
     // heaviest figures with a mention inside the scope
     const heavy = foldHeavy(doc).filter(e => (e.sents || []).some(inScope)).slice(0, 5);
@@ -13625,6 +14055,10 @@ function projectGraph(events, frame = {}) {
     // about" and rides every grounded turn; a chapter question gets the fold up
     // to where the next chapter begins.
     documentFold, documentFolds, foldForQuery, foldNote, foldOver,
+    // the column-balanced fold (READING_RULES.fold_column_balanced, default
+    // OFF): the cursor-scoped digest as a pure structured object, its prose
+    // renderer, the sentence-level apparatus gate, and the operator→cell map.
+    foldObject, renderFoldDigest, isApparatusSentence, foldCellOfEvent, foldColumnBalancedEnabled,
     // the nine-cell terrain histogram (Site × Time) of a scope — the
     // read-only projection that decides which cells the fold should author.
     // No operator, no event-record write: pure read over doc._events.
