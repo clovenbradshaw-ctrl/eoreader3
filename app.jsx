@@ -160,16 +160,14 @@ const INGEST_PHASES = [
 // is gated on its visibility) and for Settings → Tools (which lists them all
 // with a show/hide switch). Hiding a tool only drops its pill; the tool and
 // anything it has recorded are untouched. Ids here MUST match the gates in the
-// topbar. A couple carry a functional gate on top of visibility: Ingestion needs
-// a prose document open, Sandbox needs the evolution bundle loaded.
+// topbar. One carries a functional gate on top of visibility: Ingestion needs
+// a prose document open.
 const TOOLBAR_TOOLS = [
   { id: 'compose',    label: 'Compose',         sub: 'Spin up a long-form, grounded document — a revisable plan and a drafted output, every claim bound to evidence.' },
   { id: 'glassbox',   label: 'Glass box',       sub: 'The extracted graph and every step a chat takes, exportable as JSONL.' },
   { id: 'eomri',      label: 'EO-MRI',          sub: 'A live cross-section of a turn — the EO cube’s three faces (operators · site · resolution).' },
   { id: 'ingestion',  label: 'Ingestion audit', sub: 'The graph as it is built, word by word, in reading order, with full provenance. Shows when a prose document is open.' },
   { id: 'promptflow', label: 'Prompt flow',     sub: 'How a turn becomes a model call and the live prompt it sees.' },
-  { id: 'rules',      label: 'Rules',           sub: 'The reading rulesets in force, with per-language modes.' },
-  { id: 'sandbox',    label: 'Sandbox',         sub: 'Evolve the reading laws in an isolated in-browser engine. Shows when the evolution bundle is loaded.' },
 ];
 
 function App() {
@@ -207,11 +205,13 @@ function App() {
   const shapeLibRef = useRef(null);
   const [busy, setBusy] = useState(false);
 
-  const [rules, setRules] = useState(window.RULESETS.map(r => ({ ...r })));
+  // Every reading rule is always on. The rules used to be user-toggleable in a
+  // drawer; that panel is gone, so the engine simply reads the full registry
+  // (installed + enabled, every rule) live through window.EO_RULES.
+  const [rules] = useState(window.RULESETS.map(r => ({ ...r, installed: true, enabled: true })));
   // Per-language reading mode: { en:'original'|'learning', … }. Empty/missing
   // means Self-learning (the shipped, adaptive behavior). Persisted with prefs.
   const [langModes, setLangModes] = useState({});
-  const [rulesOpen, setRulesOpen] = useState(false);
   // Auditing mode: a glass box over the chat pipeline (window.EOAudit), inspected
   // in a drawer and exportable as JSONL. Recording is on by default.
   const [auditOpen, setAuditOpen] = useState(false);
@@ -223,7 +223,6 @@ function App() {
   // Ingestion audit: a glass box over the BUILD — the graph word by word, in
   // reading order, with per-word fate + full provenance (window.EOEngine.ingestionReport).
   const [graphAuditOpen, setGraphAuditOpen] = useState(false);
-  const [sandboxOpen, setSandboxOpen] = useState(false);
   // Prompt-flow dashboard: how a turn becomes a model call and the live prompt
   // it sees (window.EOPromptFlow → PromptFlowDrawer).
   const [promptFlowOpen, setPromptFlowOpen] = useState(false);
@@ -433,10 +432,8 @@ function App() {
 
       const prefs = window.EOStore.loadPrefs();
       if (prefs && !cancelled) {
-        if (Array.isArray(prefs.rules) && prefs.rules.length) {
-          suppressReparse.current = true;
-          setRules(rs => rs.map(r => { const p = prefs.rules.find(x => x.id === r.id); return p ? { ...r, ...p } : r; }));
-        }
+        // Rules are no longer user-toggleable (every rule is always on), so a
+        // stored rule set is ignored — the registry is the single source of truth.
         if (prefs.modelId) { const m = window.MODELS.find(x => x.id === prefs.modelId); if (m) setModel(m); }
         // Auto model selection: ON by default for new users. A returning user who
         // had explicitly picked a model before this existed (a stored modelId, no
@@ -566,8 +563,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ rules, langModes, modelId: model.id, autoModel, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews });
-  }, [rules, langModes, model, autoModel, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews]);
+    window.EOStore.savePrefs({ langModes, modelId: model.id, autoModel, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews });
+  }, [langModes, model, autoModel, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews]);
   // Hiding the answer-mode control means every turn runs on Auto: hold `mode`
   // there whenever the toggle is off, so a 'grounded'/'creative' left in prefs
   // (or any stray set) can't keep steering turns from behind a hidden control.
@@ -4444,20 +4441,6 @@ function App() {
     if (mobileRef.current) setCollapsed(true);
   };
 
-  // ---- rules ----
-  const toggleRule = (id) => setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
-  const setLangMode = (lang, mode) => setLangModes(m => (m[lang] === mode ? m : { ...m, [lang]: mode }));
-  const installRule = (id) => {
-    setRules(rs => rs.map(r => r.id === id ? { ...r, installed: !r.installed, enabled: !r.installed } : r));
-    const r = rules.find(x => x.id === id); showToast(r.installed ? r.name + ' removed' : r.name + ' installed and enabled');
-  };
-  const importRules = (newRules) => setRules(rs => {
-    const ids = new Set(rs.map(r => r.id));
-    const add = newRules.filter(r => !ids.has(r.id));
-    const upd = rs.map(r => { const n = newRules.find(x => x.id === r.id); return n ? { ...r, ...n } : r; });
-    return [...upd, ...add];
-  });
-
   // ---- drag-drop: counter so the veil can't get stuck; global reset ----
   const onDragEnter = (e) => {
     if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
@@ -4502,7 +4485,6 @@ function App() {
 
   const hasTabs = openTabs.length > 0;
   const showHero = !hasTabs && messages.length === 0;
-  const enabledRules = rules.filter(r => r.installed && r.enabled).length;
   const chatTitle = activeChat === 'new' ? 'New chat' : (chats.find(c => c.id === activeChat)?.title || 'Chat');
   const showChat = layout !== 'doc';
   const showDocPane = hasTabs && layout !== 'chat';
@@ -4519,9 +4501,9 @@ function App() {
         docs={docs} openTabs={openTabs} activeDoc={activeTab} onOpenDoc={openTab}
         onUpload={() => fileRef.current && fileRef.current.click()}
         chats={chats} activeChat={activeChat} onNewChat={newChat} onSelectChat={selectChat}
-        model={model} onModelClick={() => setModelOpen(o => !o)} onRulesClick={() => setRulesOpen(true)}
+        model={model} onModelClick={() => setModelOpen(o => !o)}
         onSettingsClick={() => setSettingsOpen(true)}
-        enabledRules={enabledRules} modelStatus={modelStatus}
+        modelStatus={modelStatus}
         projects={projects} activeProject={activeProject}
         onSelectProject={selectProject} onNewProject={newProject}
         onDeleteProject={deleteProject} onClearProject={clearProject}
@@ -4567,10 +4549,6 @@ function App() {
               <Icon name="send" size={15} /> <span className="tb-pill-lbl">Prompt flow</span>
             </button>
           )}
-          {!hiddenTools.includes('rules') && (
-            <button className="tb-pill" onClick={() => setRulesOpen(true)}><Icon name="layers" size={15} /> <span className="tb-pill-lbl">{enabledRules} rules on</span></button>
-          )}
-          {!hiddenTools.includes('sandbox') && window.EVO_SANDBOX && <button className="tb-pill tb-pill-adv" onClick={() => setSandboxOpen(true)} title="Sandbox — evolve the reading laws in an isolated in-browser engine; the agent proposes, you select"><Icon name="sparkle" size={15} /> <span className="tb-pill-lbl">Sandbox</span></button>}
         </header>
 
         <div className="body" ref={bodyRef}>
@@ -4600,10 +4578,6 @@ function App() {
         </div>
       </main>
 
-      {rulesOpen && <RulesDrawer rules={rules} langModes={langModes}
-        learnedByLang={window.EOEngine && window.EOEngine.learnedVerbsByLang ? window.EOEngine.learnedVerbsByLang() : {}}
-        onToggle={toggleRule} onInstall={installRule} onSetLangMode={setLangMode} onImport={importRules} onClose={() => setRulesOpen(false)} onToast={showToast} />}
-      {sandboxOpen && <SandboxDrawer onClose={() => setSandboxOpen(false)} onToast={showToast} mlcKey={model && model.mlc} modelReady={modelStatus === 'ready'} />}
       {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)}
         theme={theme} onTheme={setTheme} reduceMotion={reduceMotion} onReduceMotion={setReduceMotion}
         pythonEnabled={pythonEnabled} onPythonEnabled={setPython} pythonAvailable={!!window.EOPython}
