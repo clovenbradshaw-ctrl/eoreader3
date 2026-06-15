@@ -971,6 +971,12 @@ function Message({ msg, onCite, showGrounding, onConfirmWiki, onDismissWiki, onO
 }
 
 const MODES = [{ id: 'auto', label: 'Auto' }, { id: 'verbatim', label: 'Verbatim' }, { id: 'grounded', label: 'Grounded' }, { id: 'creative', label: 'Creative' }];
+function modeIcon(id) {
+  if (id === 'verbatim') return <Icon name="copy" size={13} />;
+  if (id === 'grounded') return <Icon name="check" size={13} />;
+  if (id === 'creative') return <Icon name="sparkle" size={13} />;
+  return null;
+}
 function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   const [open, setOpen] = React.useState(false);
   const has = (sources && sources.length) || (addable && addable.length);
@@ -1005,6 +1011,10 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
 
 function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, showModeToggle, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, onWikiSearch, smartParse, onSmartParse, hasTable }) {
   const ref = React.useRef(null);
+  // The answer-mode control stays collapsed to a single pill showing the current
+  // mode (Auto by default); clicking it fans out the full set, and picking any
+  // option collapses it back to a pill with just that word.
+  const [modeOpen, setModeOpen] = React.useState(false);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
   // The reference desk needs a configured proxy; in 'off' mode (or with no proxy)
@@ -1025,17 +1035,25 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, s
           {/* The Auto / Grounded / Creative control is opt-in (Settings → Answers):
               hidden, every chat runs on Auto, which reads the question and grounds
               or composes on its own. Shown, it lets the reader pin a mode per chat. */}
-          {showModeToggle && (
-            <div className="mode-seg">
+          {showModeToggle && (modeOpen ? (
+            <div className="mode-seg" onMouseLeave={() => setModeOpen(false)}>
               {MODES.map(md => (
-                <button key={md.id} className={(mode === md.id ? 'on ' + md.id : '')} onClick={() => onMode(md.id)}>
-                  {md.id === 'verbatim' && <Icon name="copy" size={13} />}
-                  {md.id === 'grounded' && <Icon name="check" size={13} />}
-                  {md.id === 'creative' && <Icon name="sparkle" size={13} />}{md.label}
+                <button key={md.id} className={(mode === md.id ? 'on ' + md.id : '')}
+                  onClick={() => { onMode(md.id); setModeOpen(false); }}>
+                  {modeIcon(md.id)}{md.label}
                 </button>
               ))}
             </div>
-          )}
+          ) : (() => {
+            const cur = MODES.find(m => m.id === mode) || MODES[0];
+            return (
+              <button type="button" className={'mode-seg-btn ' + cur.id}
+                title="Answer mode — click to change" aria-haspopup="true" aria-expanded="false"
+                onClick={() => setModeOpen(true)}>
+                {modeIcon(cur.id)}{cur.label}
+              </button>
+            );
+          })())}
           {showWiki && onWikiSearch && (
             <button type="button" className="comp-btn enrich"
               title="Search Wikipedia — opens a search box to find and read an article, then add it to the graph. Only your search term goes to Wikipedia through the proxy; nothing is pulled in until you pick one."
