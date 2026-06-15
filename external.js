@@ -666,6 +666,50 @@
                     : { status: 'miss', query: subjects[0], subjects };
   }
 
+  /* ============================================================
+     searchRich() — the search modal's one-call result list.
+
+     Where searchOptions() returns bare title + snippet (enough for the chat's
+     inline offer), the explicit search modal wants to SHOW the candidates: a
+     thumbnail, the one-line description, and a short intro extract for the
+     preview — all from a single generator=search call (pageimages + description
+     + extracts), so twelve rich rows cost one proxied request. Rate-limited,
+     gated, abstaining; not frozen (it is a live index the reader acts on).
+     ============================================================ */
+  async function searchRich(q, opts) {
+    opts = opts || {};
+    q = String(q == null ? '' : q).trim();
+    if (!q) return { status: 'miss', query: q };
+    if (!opts.allowPrivate && privateIndividual(q, opts.type)) return { status: 'gated', reason: 'private-individual', query: q };
+    if (!proxyBase() || !_fetch()) return { status: 'disabled', query: q };
+    if (opts.replayOnly) return { status: 'pending', query: q };
+    try {
+      const limit = Math.max(1, Math.min(20, opts.limit || 12));
+      const u = 'https://en.wikipedia.org/w/api.php?format=json&action=query&generator=search'
+        + '&gsrsearch=' + encodeURIComponent(q) + '&gsrlimit=' + limit
+        + '&prop=pageimages%7Cdescription%7Cextracts&exintro=1&explaintext=1&exsentences=3'
+        + '&piprop=thumbnail&pithumbsize=320&pilimit=' + limit;
+      const txt = await proxyText(u, opts.severity || 0);
+      const data = safeJSON(txt);
+      const pagesObj = (data && data.query && data.query.pages) || null;
+      const pages = pagesObj ? Object.keys(pagesObj).map(k => pagesObj[k]) : [];
+      pages.sort((a, b) => (a.index || 0) - (b.index || 0));      // search rank, not pageid order
+      const basis = { src: 'search', term: q, url: u, fetched_at: new Date().toISOString(), hash: hashTag(txt || ''), schema: SCHEMA };
+      const options = pages.filter(p => p && p.title).map(p => ({
+        id: p.pageid,
+        title: p.title,
+        description: p.description || '',
+        extract: String(p.extract || '').replace(/\s+/g, ' ').trim(),
+        thumb: (p.thumbnail && p.thumbnail.source) || '',
+        url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(p.title).replace(/ /g, '_')),
+      }));
+      return options.length ? { status: 'hit', query: q, basis, options } : { status: 'miss', query: q, basis };
+    } catch (e) {
+      if (e && e.disabled) return { status: 'disabled', query: q };
+      return { status: 'error', error: String((e && e.message) || e), query: q };
+    }
+  }
+
   // Pick the term worth looking up from a free-text chat message: a quoted
   // phrase, else the longest capitalized run (after stripping a question
   // lead-in), else the cleaned remainder. Pure — drives the chat enrichment.
@@ -1135,7 +1179,7 @@
     SCHEMA,
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
-    enrichTerm, article, articlePage, searchOptions, searchEntities, pickQuery, acquireIntent, seedQuery, isSpecificQuery,
+    enrichTerm, article, articlePage, searchOptions, searchRich, searchEntities, pickQuery, acquireIntent, seedQuery, isSpecificQuery,
     stripWikiSections, articleDocText, sanitizeWikiHtml, parseWikiReferences, buildArticlePayload,
     hasConsent, grantConsent, revokeConsent,
     clearCache,

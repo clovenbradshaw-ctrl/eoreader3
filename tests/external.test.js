@@ -53,8 +53,22 @@ function makeFetch(log) {
     const at = Date.now();
     const ok = (body) => ({ ok: true, status: 200, async text() { return JSON.stringify(body); } });
     const notfound = () => ({ ok: false, status: 404, async text() { return 'nope'; } });
+    // Wikipedia rich search (generator=search → searchRich()): pages with
+    // description + intro extract + thumbnail in one call.
+    let m = /generator=search/.test(inner) && /gsrsearch=([^&]+)/.exec(inner);
+    if (m) {
+      const term = decodeURIComponent(m[1]).toLowerCase();
+      log.push({ at, kind: 'wiki-gsearch', term });
+      const hit = WIKI[term];
+      if (!hit) return ok({});
+      const pages = {
+        '1': { pageid: 1, index: 1, title: hit.title, description: hit.description, extract: hit.extract, thumbnail: hit.thumb ? { source: hit.thumb } : undefined },
+        '2': { pageid: 2, index: 2, title: 'Other Thing', description: 'a sibling candidate', extract: 'Another article.' },
+      };
+      return ok({ query: { pages } });
+    }
     // Wikipedia search
-    let m = /list=search/.test(inner) && /srsearch=([^&]+)/.exec(inner);
+    m = /list=search/.test(inner) && /srsearch=([^&]+)/.exec(inner);
     if (m) {
       const term = decodeURIComponent(m[1]).toLowerCase();
       log.push({ at, kind: 'wiki-search', term });
@@ -287,6 +301,26 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     eq(g.status, 'gated', 'options honour the private-individual gate');
     X.setConfig({ proxy: '' });
     eq((await X.searchOptions('socialism')).status, 'disabled', 'no proxy → disabled, not a guess');
+    X.setConfig({ proxy: 'http://proxy.test/feed' });
+  });
+
+  await group('searchRich() — the modal’s rich result rows (one call)', async () => {
+    log.length = 0;
+    const r = await X.searchRich('socialism');
+    eq(r.status, 'hit', 'rich search hit');
+    ok(Array.isArray(r.options) && r.options.length >= 2, 'candidate rows carried');
+    eq(r.options[0].title, 'Socialism', 'rows ordered by search rank (index)');
+    ok(!!r.options[0].description, 'a row carries the one-line description');
+    ok(!!r.options[0].extract, 'a row carries an intro extract for the preview');
+    eq(r.options[0].thumb, 'http://img/soc.jpg', 'a row carries the thumbnail url');
+    ok(/\/wiki\/Socialism$/.test(r.options[0].url), 'a row carries the article url');
+    eq(log.filter(e => e.kind === 'wiki-gsearch').length, 1, 'exactly one generator=search request for the whole list');
+    const miss = await X.searchRich('Nonexistent Subject Xyzzy');
+    eq(miss.status, 'miss', 'no hits → miss, never fabricated');
+    const g = await X.searchRich('Mrs. Mill');
+    eq(g.status, 'gated', 'rich search honours the private-individual gate');
+    X.setConfig({ proxy: '' });
+    eq((await X.searchRich('socialism')).status, 'disabled', 'no proxy → disabled, not a guess');
     X.setConfig({ proxy: 'http://proxy.test/feed' });
   });
 
