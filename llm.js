@@ -964,24 +964,36 @@
   // these alive. Combined with persistStorage(), this is what locks the
   // multi-GB download to a one-time cost. The prebuiltAppConfig (the model
   // registry WebLLM ships) is spread first so we don't drop any entries.
-  // ---- self-hosting a WebLLM model from a single zip ----------------------
+  // ---- self-hosting a WebLLM model from a single zip (the "faster mirror") ----
   // A slow or VPN'd connection chokes on WebLLM's ~30 separate shard fetches —
-  // each a fresh request that can stall. EO_WEBLLM_SELFHOST lets a deployment
-  // host a model's weights as ONE zip (its mlc-chat-config.json, ndarray-cache,
-  // params_shard_*.bin and tokenizer files) on its own bucket; the app streams
-  // that single resumable download once, unzips it into a Cache, and the tiny
-  // sw.js service worker then serves the files to WebLLM locally. The model_lib
-  // wasm (a few MB) still comes from its normal origin. Entirely INERT unless
-  // EO_WEBLLM_SELFHOST maps the model key → a zip URL, and any failure falls
-  // straight back to the normal Hugging Face load (see load()), so it can only
-  // ever help:  window.EO_WEBLLM_SELFHOST = { 'Llama-3.2-3B-…-MLC': 'https://…/x.zip' }
+  // each a fresh request that can stall. The mirror hosts a model's weights as
+  // ONE zip (its mlc-chat-config.json, ndarray-cache, params_shard_*.bin and
+  // tokenizer files) on a bucket; the app streams that single resumable download
+  // once, unzips it into a Cache, and the tiny sw.js service worker then serves
+  // the files to WebLLM locally. The model_lib wasm (a few MB) still comes from
+  // its normal origin.
+  //
+  // It is NOT the primary path: a fast connection pulls straight from Hugging
+  // Face. The mirror is used ONLY as a FALLBACK when the normal load is slow or
+  // stalls (see load()), so it can only ever help — and any failure on it falls
+  // straight back to the normal load. One mirror ships by default (our own
+  // Google Cloud bucket, for the desktop-default Llama 3.2 3B); a deployment can
+  // replace/extend it with window.EO_WEBLLM_SELFHOST = { 'Model-Key': 'https://…/x.zip' },
+  // or set it to {} to turn the mirror off.
+  const SELFHOST_DEFAULT = {
+    'Llama-3.2-3B-Instruct-q4f16_1-MLC':
+      'https://storage.googleapis.com/intelechia-content/Llama-3.2-3B-Instruct-q4f16_1-MLC.zip',
+  };
   let activeSelfHostBase = null, activeSelfHostKey = null;   // set just before a self-host build
   const selfHostDisabled = (typeof Set === 'function') ? new Set() : null;   // keys whose zip failed this session
   const SELFHOST_CACHE_NAME = 'cleo-webllm-selfhost-v1';
   const SELFHOST_FFLATE = (typeof window !== 'undefined' && window.EO_FFLATE_URL) || 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
   function selfHostMap() {
-    const m = (typeof window !== 'undefined' && window.EO_WEBLLM_SELFHOST) || null;
-    return (m && typeof m === 'object') ? m : {};
+    // An explicit window override wins (an empty {} turns the mirror off);
+    // otherwise the built-in mirror applies.
+    const w = (typeof window !== 'undefined') ? window.EO_WEBLLM_SELFHOST : undefined;
+    if (w && typeof w === 'object') return w;
+    return SELFHOST_DEFAULT;
   }
   function selfHostZipUrl(mlcKey) { const u = selfHostMap()[mlcKey]; return (typeof u === 'string' && u) ? u : null; }
   // The browser features the zip path needs. Absent any of them (older browser,
@@ -1180,14 +1192,29 @@
   // callback re-arms the watchdog. Overridable for tests via window.EO_STALL_MS.
   const STALL_MS = (typeof window !== 'undefined' && +window.EO_STALL_MS) || 60000;
 
+  // "Slow" is distinct from "stalled": the download IS moving, just so slowly
+  // that it's worth switching to the single-stream mirror (the google link). We
+  // judge it by projecting the finish time from the rate so far — but only after
+  // a warm-up grace (so a cold start's lumpy first seconds don't misjudge a fast
+  // link) and only when there is a mirror to switch to. A projected full-download
+  // time past SLOW_PROJECT_MS trips it. Both thresholds overridable on window.
+  const SLOW_GRACE_MS = (typeof window !== 'undefined' && +window.EO_SLOW_GRACE_MS) || 45000;
+  const SLOW_PROJECT_MS = (typeof window !== 'undefined' && +window.EO_SLOW_PROJECT_MS) || 900000;
+
   // One build attempt, guarded by a stall watchdog. Resolves with the engine, or
   // rejects with code:'STALL' if no progress arrives for STALL_MS — so a hung
-  // fetch surfaces as a recoverable error instead of an eternal spinner. A build
-  // that finishes after the watchdog gave up (or after a newer load superseded
-  // it) unloads itself so it can't leak GPU memory.
+  // fetch surfaces as a recoverable error instead of an eternal spinner. When a
+  // mirror exists for this model (and we aren't already on it), it ALSO rejects
+  // with code:'SLOW' once a genuinely-slow-but-moving download projects past
+  // SLOW_PROJECT_MS, so load() can switch to the mirror. A build that finishes
+  // after the watchdog gave up (or after a newer load superseded it) unloads
+  // itself so it can't leak GPU memory.
   function buildOnce(mlcKey, onProgress, myToken) {
+    // Only worth tripping "slow" when there's a mirror to fall back to and we
+    // aren't already building from it — otherwise "slow" has nowhere better to go.
+    const slowEligible = !activeSelfHostBase && isSelfHosted(mlcKey);
     return new Promise((resolve, reject) => {
-      let settled = false, timer = null;
+      let settled = false, timer = null, slowAnchor = null;   // slowAnchor: { t, p } first real progress
       const finish = (fn, val) => { if (settled) return; settled = true; clearTimeout(timer); if (activeCancel === cancelThis) activeCancel = null; fn(val); };
       // Registered so cancelLoad() can reject THIS build immediately (with a
       // distinct code) instead of waiting out the stall watchdog.
@@ -1202,7 +1229,24 @@
         initProgressCallback: (r) => {
           if (myToken !== loadToken) return;                       // superseded by a newer load → go inert
           arm();                                                   // progress arrived → reset the stall clock
-          if (onProgress) onProgress((r && r.progress) || 0, (r && r.text) || '');
+          const p = (r && r.progress) || 0;
+          // Slow-connection switch: from the first real progress, extrapolate the
+          // rate. Past the grace window, if a full download at this rate would run
+          // longer than SLOW_PROJECT_MS, bail with code:'SLOW' so load() moves this
+          // load onto the mirror. A warm/cached load races to 100% before the grace
+          // elapses, so this only ever fires on a genuinely slow cold fetch.
+          if (slowEligible && p > 0.0005 && p < 0.98) {
+            const now = Date.now();
+            if (!slowAnchor) slowAnchor = { t: now, p };
+            else {
+              const dt = now - slowAnchor.t, dp = p - slowAnchor.p;
+              if (dt >= SLOW_GRACE_MS && dp > 0 && (dt / dp) > SLOW_PROJECT_MS) {
+                finish(reject, Object.assign(new Error('Model download is slow'), { code: 'SLOW' }));
+                return;
+              }
+            }
+          }
+          if (onProgress) onProgress(p, (r && r.text) || '');
         },
       })).then(
         (eng) => { if (settled) { try { eng && eng.unload && eng.unload(); } catch (_) {} return; } finish(resolve, eng); },
@@ -1311,49 +1355,72 @@
     loadedModel = mlcKey;
     const myToken = ++loadToken;
     loadingActive = true;
-    // Self-host: if this model is configured to come from a single bucket zip,
-    // stream + unzip it into the service-worker cache and point WebLLM at it
-    // (the redirect is read by webllmAppConfig/createEngine). Skip the fetch when
-    // WebLLM already has the weights cached under the same synthetic base. Any
-    // self-host failure clears the redirect and falls back to the normal
-    // Hugging Face download below, so it can only ever help.
+    // The mirror (the "google link") is a FALLBACK, not the primary path: a fast
+    // connection pulls straight from Hugging Face below. The one exception is a
+    // warm cache — if a previous session already unzipped the mirror and WebLLM
+    // cached those weights under the synthetic base, load straight from them (no
+    // download at all). Otherwise we start on the normal path and only switch to
+    // the mirror if it turns out slow or stalled.
     activeSelfHostBase = null; activeSelfHostKey = null;
     let didMaterialize = false;
     if (isSelfHosted(mlcKey)) {
       try {
         await importWebLLM();
         activeSelfHostBase = selfHostBase(mlcKey); activeSelfHostKey = mlcKey;
-        const already = await cacheStatusCheap(mlcKey);     // WebLLM's own cache, keyed under the synthetic base
-        if (!already) {
-          await ensureSelfHostSW();
-          await materializeSelfHost(mlcKey, onProgress, myToken);
-          didMaterialize = true;
-        }
+        if (!(await cacheStatusCheap(mlcKey))) { activeSelfHostBase = null; activeSelfHostKey = null; }   // not cached → start normal
       } catch (e) {
         if (e && e.code === 'CANCEL') {
           if (myToken === loadToken) { enginePromise = null; loadedModel = null; loadingActive = false; }
           throw e;
         }
-        activeSelfHostBase = null; activeSelfHostKey = null;   // fall back to the normal load
-        if (selfHostDisabled) selfHostDisabled.add(mlcKey);    // don't re-attempt the zip this session
-        if (onProgress) onProgress(0, 'Loading the model normally…');
+        activeSelfHostBase = null; activeSelfHostKey = null;   // probe failed → just start normal
       }
     }
+    // Stream + unzip the mirror into the service-worker cache, point WebLLM at it
+    // (the redirect is read by webllmAppConfig/createEngine), and build. Stops the
+    // slow/stalled worker download first so the mirror isn't racing a second fetch
+    // for the same model.
+    const buildFromMirror = async () => {
+      const w = activeWorker; activeWorker = null;
+      if (w) { try { w.terminate(); } catch (_) {} }
+      await importWebLLM();
+      activeSelfHostBase = selfHostBase(mlcKey); activeSelfHostKey = mlcKey;
+      if (!(await cacheStatusCheap(mlcKey))) {
+        await ensureSelfHostSW();
+        await materializeSelfHost(mlcKey, onProgress, myToken);
+        didMaterialize = true;
+      }
+      return await buildOnce(mlcKey, onProgress, myToken);
+    };
     const attempt = (async () => {
       try {
         return await buildOnce(mlcKey, onProgress, myToken);
       } catch (e) {
-        // A stall is usually a transient drop. Retry once (cached shards make it
-        // quick — only the missing bytes refetch); only if THAT stalls too does
-        // the error propagate.
+        // The normal Hugging Face load is slow or stalled. If a mirror is
+        // configured for this model — and we weren't already on it — switch to
+        // that one resumable download. This is exactly what the mirror exists for.
+        if (e && (e.code === 'STALL' || e.code === 'SLOW') && myToken === loadToken
+            && !activeSelfHostBase && isSelfHosted(mlcKey)) {
+          if (onProgress) onProgress(0, e.code === 'SLOW'
+            ? 'This download is slow — switching to the faster mirror…'
+            : 'The download stalled — switching to the faster mirror…');
+          try { return await buildFromMirror(); }
+          catch (e2) {
+            if (e2 && e2.code === 'CANCEL') throw e2;
+            if (selfHostDisabled) selfHostDisabled.add(mlcKey);   // the mirror failed too — don't loop on it
+            activeSelfHostBase = null; activeSelfHostKey = null;
+            e = e2;
+          }
+        }
+        // A stall with no mirror (or the mirror also failed): retry the normal
+        // load once — cached shards make it quick, only the missing bytes refetch.
         if (e && e.code === 'STALL' && myToken === loadToken) {
           if (onProgress) onProgress(0, 'Download stalled — retrying…');
           try { return await buildOnce(mlcKey, onProgress, myToken); }
           catch (e2) { e = e2; }
         }
-        // A self-host build that failed must never leave the user worse off than
-        // the default path: drop the redirect and try the normal Hugging Face
-        // load once before surfacing the error.
+        // A mirror build (warm-cache path) that failed must never leave the user
+        // worse off than the default path: drop the redirect and try normal once.
         if (activeSelfHostBase && myToken === loadToken && !(e && e.code === 'CANCEL')) {
           activeSelfHostBase = null; activeSelfHostKey = null;
           if (selfHostDisabled) selfHostDisabled.add(mlcKey);
@@ -1415,6 +1482,8 @@
   function friendlyError(e) {
     if (e && e.code === 'STALL')
       return new Error('The model download stalled — the connection stopped responding. Already-downloaded parts are cached, so loading the model again resumes where it left off.');
+    if (e && e.code === 'SLOW')
+      return new Error('The model download is very slow on this connection. Already-downloaded parts are cached, so loading the model again resumes where it left off.');
     return e;
   }
 
