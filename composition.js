@@ -57,7 +57,7 @@
   // degree in [0,1] or null (not measured). No scalar collapse: a Confidence is
   // never reduced to one number except for the single colour projection in the
   // UI, and there the predicate that produced it travels alongside.
-  const COMPONENTS = ['witness', 'form', 'coherence', 'retrieval', 'temporal', 'frame'];
+  const COMPONENTS = ['witness', 'form', 'coherence', 'retrieval', 'temporal', 'frame', 'voice'];
   function clamp01(x) { return x == null ? null : (x < 0 ? 0 : (x > 1 ? 1 : x)); }
   function confidence(partial) {
     const c = {};
@@ -415,6 +415,7 @@
       retrieval: o.retrieval != null ? o.retrieval : null,
       temporal: o.temporal != null ? o.temporal : null,
       frame: o.frame != null ? o.frame : null,
+      voice: o.voice != null ? o.voice : null,
     });
     return { confidence: conf, tag, witness_detail: w.detail, rescued };
   }
@@ -424,21 +425,21 @@
   // gate that fired, in v3 vocabulary, so it is auditable. A null component
   // never blocks (high() reads null as "not below"); a component only condemns
   // when it was measured and fell short. Floors per the spec.
-  const FLOOR = { witness: 0.4, form: 0.5, coherence: 0.4, retrieval: 0.5 };
+  const FLOOR = { witness: 0.4, form: 0.5, coherence: 0.4, retrieval: 0.5, voice: 0.5 };
   function decide(conf, ctx) {
     const c = conf || {};
     const o = ctx || {};
-    const W = c.witness, F = c.form, CO = c.coherence, R = c.retrieval;
+    const W = c.witness, F = c.form, CO = c.coherence, R = c.retrieval, V = c.voice;
     let decision, predicate;
 
     // Persistent low coherence across a branch → the plan itself is the problem.
     if (o.persistentLowCoherence) {
       decision = 'restructure'; predicate = 'coherence < 0.4 across multiple units';
     }
-    // witness fine, form fine, coherence fine (or null) → hold and move on
-    else if (high(W, FLOOR.witness) && W != null && high(F, FLOOR.form) && high(CO, FLOOR.coherence)) {
+    // witness fine, form fine, coherence fine (or null), voice fine (or null) → hold
+    else if (high(W, FLOOR.witness) && W != null && high(F, FLOOR.form) && high(CO, FLOOR.coherence) && high(V, FLOOR.voice)) {
       decision = 'advance';
-      predicate = 'witness >= 0.4 AND form >= 0.5 AND (coherence null OR >= 0.5)';
+      predicate = 'witness >= 0.4 AND form >= 0.5 AND (coherence null OR >= 0.4) AND (voice null OR >= 0.5)';
     }
     // witness low but the retriever found material → the talker didn't use it
     else if (low(W, FLOOR.witness) && high(R, FLOOR.retrieval) && R != null) {
@@ -451,6 +452,10 @@
     // shape off but grounding fine → redraft with the same material
     else if (low(F, FLOOR.form) && high(W, FLOOR.witness) && W != null) {
       decision = 'revise'; predicate = 'form < 0.5 AND witness >= 0.4';
+    }
+    // voice drifts from the target but grounding fine → redraft to the voice
+    else if (low(V, FLOOR.voice) && high(W, FLOOR.witness) && W != null) {
+      decision = 'revise'; predicate = 'voice < 0.5 AND witness >= 0.4';
     }
     // coherence low while the rest is fine → fit the unit to the doc, or (if the
     // unit is isolated-right) the doc to the unit
@@ -594,10 +599,17 @@
         if (gv && jv) frameDeg = cosineSafe(gv, jv);
       } catch (e) { frameDeg = null; }
     }
+    // voice: how close the draft's style sits to the frame's target voice (a few
+    // exemplar sentences or a precomputed style vector). Embedder-free — a lexical
+    // style fingerprint — so it measures even with no model resident.
+    let voiceDeg = null;
+    if (frame && frame.voice && prose) {
+      try { voiceDeg = voiceDegree(prose, frame.voice); } catch (e) { voiceDeg = null; }
+    }
     const st = stampDraft({
       prose, spans, grain,
       draftVec, genre: frame.genre, formLib: d.formLib,
-      retrieval, frame: frameDeg, grounded,
+      retrieval, frame: frameDeg, voice: voiceDeg, grounded,
     });
     const r = decide(st.confidence, {});
     return {
@@ -772,6 +784,54 @@
     return den ? clamp01(dot / den) : null;
   }
 
+  // ============================================================ voice
+  // A cheap, embedder-free STYLE fingerprint of a passage — the substrate the
+  // voice band scores against. Each feature is normalised to [0,1] then MEAN-CENTRED
+  // (−0.5) so the vector carries signed components: cosineSafe over two fingerprints
+  // then reads as voice ALIGNMENT (the same stylistic tendencies → ~1, opposite
+  // tendencies → ~0), not the saturated near-1 an all-positive vector would give.
+  // Pure: text in, fixed-length vector out, no model. The features are deliberately
+  // surface (sentence/word length, formality, person, tense, punctuation) — the
+  // "is this in the doc's voice?" the spec asks for, not semantics (that is witness).
+  function styleVector(text) {
+    const s = String(text == null ? '' : text);
+    const sents = splitSentences(s);
+    const words = s.toLowerCase().match(/[a-z0-9']+/g) || [];
+    const n = words.length || 1;
+    const ns = sents.length || 1;
+    const chars = s.replace(/\s/g, '').length;
+    const uniq = new Set(words).size;
+    const longWords = words.filter(w => w.length >= 7).length;
+    const commas = (s.match(/,/g) || []).length;
+    const semis = (s.match(/[;:]/g) || []).length;
+    const questions = sents.filter(x => /\?\s*$/.test(x)).length;
+    const first = words.filter(w => /^(i|we|me|my|our|us|mine|ours)$/.test(w)).length;
+    const second = words.filter(w => /^(you|your|yours)$/.test(w)).length;
+    const past = words.filter(w => /ed$/.test(w)).length;      // crude past-tense proxy
+    const feats = [
+      Math.min(1, (n / ns) / 40),          // mean sentence length (words)
+      Math.min(1, (chars / n) / 10),       // mean word length (chars)
+      longWords / n,                        // fraction of long words (formality)
+      uniq / n,                             // type/token ratio (lexical variety)
+      Math.min(1, (commas / ns) / 4),       // commas per sentence (clausal density)
+      Math.min(1, (semis / ns) / 2),        // semicolons/colons per sentence
+      questions / ns,                       // fraction of questions
+      Math.min(1, (first / n) * 20),        // first-person rate
+      Math.min(1, (second / n) * 20),       // second-person rate
+      Math.min(1, (past / n) * 4),          // past-tense rate
+    ];
+    return feats.map(x => x - 0.5);         // mean-centre for a discriminative cosine
+  }
+  // Voice alignment in [0,1]: how close a draft's style sits to the frame's target
+  // voice. The target is exemplar text (a few sentences in the desired voice) or a
+  // precomputed style vector. Null when no target is set — never measured, never
+  // blocks. Reuses cosineSafe over the two style fingerprints.
+  function voiceDegree(draftText, target) {
+    if (target == null) return null;
+    const tv = Array.isArray(target) ? target : styleVector(target);
+    return cosineSafe(styleVector(draftText), tv);
+  }
+
   // ============================================================ outline parsing
   // Turn a model's outline reply into a list of unit jobs. The talker is asked
   // for one bare job per line, but a small local model disobeys: it prefixes a
@@ -812,6 +872,7 @@
       goal: o.goal || '',
       constraints: o.constraints || [],
       genre: o.genre || 'plain-report',
+      voice: o.voice || null,
     });
     doc.frame_id = frame.id;
     return [doc, frame];
@@ -999,6 +1060,6 @@
     newDoc, assemble,
     diffProvenance, authorship, project, projectFold,
     seedFromProse, splitIntoUnits, deMarkdown, parseCites,
-    contentTokens, splitSentences, cosineSafe,
+    contentTokens, splitSentences, cosineSafe, styleVector, voiceDegree,
   };
 })();

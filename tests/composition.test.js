@@ -53,7 +53,7 @@ function at(e) { e.ts = ++_t; return e; }
 group('the module publishes its surface', () => {
   for (const fn of ['fold', 'confidence', 'decide', 'witnessGrain', 'stampDraft', 'generateUnit', 'newDoc', 'make', 'assemble'])
     ok(typeof C[fn] === 'function' || typeof C[fn] === 'object', 'exports ' + fn);
-  ok(Array.isArray(C.COMPONENTS) && C.COMPONENTS.length === 6, 'six named confidence components');
+  ok(Array.isArray(C.COMPONENTS) && C.COMPONENTS.length === 7, 'seven named confidence components');
 });
 
 group('Confidence — named components, null is null (never zero), clamped, no collapse', () => {
@@ -312,6 +312,27 @@ group('Phase two — the monitor: predicates over the vector, null never blocks'
   eq(restructure.decision, 'restructure', 'persistent low coherence across a branch → restructure');
 });
 
+group('Phase three (voice) — a target voice is scored as style alignment; drift routes to revise, null never blocks', () => {
+  ok(C.COMPONENTS.includes('voice'), 'voice is a named confidence component');
+  ok(C.FLOOR.voice != null, 'voice carries a floor');
+
+  // styleVector is a fixed-length fingerprint; identical prose aligns fully, a
+  // very different register aligns less (the mean-centred cosine is discriminative).
+  const terse = 'Rents rose. Evictions followed. Families left.';
+  const ornate = 'In the fullness of that difficult year, as the cost of shelter climbed inexorably beyond reach, a great many households found themselves compelled, reluctantly and with no small grief, to depart their homes.';
+  eq(C.styleVector(terse).length, C.styleVector(ornate).length, 'the style fingerprint is fixed-length regardless of input');
+  near(C.voiceDegree(terse, terse), 1, 'a draft in exactly the target voice aligns fully', 1e-9);
+  ok(C.voiceDegree(terse, ornate) < C.voiceDegree(terse, terse), 'a draft in a very different register aligns less than an identical one');
+  eq(C.voiceDegree('anything at all', null), null, 'no target voice → voice is not measured (null)');
+
+  // the monitor gates on voice exactly like form: below floor with witness fine → revise
+  const drift = C.decide(C.confidence({ witness: 0.7, voice: 0.2 }));
+  eq(drift.decision, 'revise', 'witness fine but voice below floor → revise (redraft to the voice)');
+  ok(/voice < 0.5/.test(drift.predicate), 'the voice predicate is named in v3 vocabulary');
+  eq(C.decide(C.confidence({ witness: 0.7 })).decision, 'advance', 'an unmeasured voice (null) never blocks advance');
+  eq(C.decide(C.confidence({ witness: 0.7, voice: 0.8 })).decision, 'advance', 'a voice at/above floor advances');
+});
+
 group('provenance — authorship per SENTENCE, by diff (changes carry the new author, not keystrokes)', () => {
   // a talker draft of two sentences; the user edits the second, keeps the first
   const talkerProse = 'The city logged twelve thousand filings. Most were downtown.';
@@ -466,6 +487,21 @@ await group('evaluateProse + the rewrite loop — "is it succeeding?", "is it re
   // the corrective rewrite carries the guidance into the prompt
   ok(/FIX-THIS-SPECIFICALLY/.test(C.buildRevisePrompt({ job: unit.job, frame, spans, draft: 'x', guidance: 'FIX-THIS-SPECIFICALLY' }).user),
     'buildRevisePrompt threads the guidance into the rewrite instruction');
+});
+
+await group('voice end-to-end — a frame carrying a target voice makes evaluateProse measure it', async () => {
+  const voice = 'Rents rose. Evictions followed. Families left.';
+  const [doc, frame] = C.newDoc({ goal: 'inform', genre: 'plain-report', voice });
+  eq(frame.voice, voice, 'the frame carries the target voice');
+  const unit = C.make.unit({ doc_id: doc.id, job: 'report the count', order: 0 });
+  const spans = [{ text: 'The city logged twelve thousand eviction filings in 2023.', score: 2, docId: doc.id, idx: 4 }];
+  const ev = await C.evaluateProse({ unit, frame }, 'The city logged twelve thousand eviction filings in 2023.', spans);
+  ok(ev.confidence.voice != null, 'with a target voice on the frame, the draft is given a measured voice score');
+
+  // a frame WITHOUT a target voice leaves the band unmeasured (null), never zero
+  const [, frame2] = C.newDoc({ goal: 'inform', genre: 'plain-report' });
+  const ev2 = await C.evaluateProse({ unit, frame: frame2 }, 'Some prose.', spans);
+  eq(ev2.confidence.voice, null, 'no target voice on the frame → voice null (not measured)');
 });
 
 group('the non-breaking floor — empty / garbage logs fold to nothing, never throw', () => {

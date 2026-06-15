@@ -26,6 +26,7 @@ const CMP_COMPONENTS = [
   ['retrieval', 'whether the retriever found material'],
   ['temporal', 'the freshness of the spans'],
   ['frame', "the job's alignment with the doc's goal"],
+  ['voice', 'how close the prose sits to the target voice'],
 ];
 const BAND_LABEL = { owed: 'owed', advance: 'advance', revise: 'revise', fetch: 'fetch', contested: 'contested', held: 'held', drafted: 'drafted' };
 
@@ -88,7 +89,7 @@ function ConfBars({ confidence, tag, rescued }) {
 }
 function fillClass(k, v) {
   // witness/coherence get the warn/bad treatment when low; the rest stay neutral
-  if ((k === 'witness' || k === 'coherence')) return v >= 0.5 ? 'good' : v >= 0.3 ? 'warn' : 'bad';
+  if ((k === 'witness' || k === 'coherence' || k === 'voice')) return v >= 0.5 ? 'good' : v >= 0.3 ? 'warn' : 'bad';
   if (k === 'form') return v >= 0.5 ? 'good' : 'warn';
   return 'neutral';
 }
