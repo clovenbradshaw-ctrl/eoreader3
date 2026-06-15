@@ -290,6 +290,60 @@ group('Phase two — parseOutline strips a model lead-in and list markers (item 
   eq(C.parseOutline('').length, 0, 'empty text yields no jobs');
 });
 
+group('any-content — genre-aware prompts structure a recipe or a manual, not only an essay', () => {
+  // genreLabel normalizes the genre into a readable noun; an absent genre reads as
+  // the neutral "document", so the layer never assumes a grounded essay.
+  eq(C.genreLabel({ genre: 'technical-manual' }), 'technical manual', 'a hyphenated genre reads as words');
+  eq(C.genreLabel({ genre: '  recipe ' }), 'recipe', 'whitespace is trimmed');
+  eq(C.genreLabel({}), 'document', 'no genre falls back to the neutral "document"');
+  eq(C.genreLabel(null), 'document', 'a missing frame never throws');
+
+  // The outline prompt is GENRE-AWARE: it names the kind of document and asks for
+  // the sections that kind naturally has, while keeping the one-job-per-line
+  // contract parseOutline depends on. So a recipe gets a recipe's shape, not an
+  // essay's. The plan is still DIRECTION — proposed, revisable — not a fixed mold.
+  const recipeOutline = C.buildOutlinePrompt({ frame: { genre: 'recipe', thesis_or_question: 'Weeknight dal' } });
+  ok(/recipe/i.test(recipeOutline.system), 'the outline prompt names the genre (recipe)');
+  ok(/one job per line/i.test(recipeOutline.system), 'it keeps the one-job-per-line contract parseOutline expects');
+  ok(/recipe/i.test(recipeOutline.user) && /Weeknight dal/.test(recipeOutline.user), 'the user message carries the kind of document and its topic');
+  const manualOutline = C.buildOutlinePrompt({ frame: { genre: 'technical-manual' } });
+  ok(/technical manual/i.test(manualOutline.system), 'a manual outline names a manual, not a generic document');
+  ok(!/four and seven/i.test(manualOutline.system), 'the old fixed essay-length instruction is gone');
+
+  // CONTINUE — given the sections already written (and how the document reads so
+  // far), the outline prompt plans the sections that come NEXT instead of
+  // re-planning from scratch. This is what lets the "✍ Continue" autopilot extend
+  // a finished document rather than no-op (todo would otherwise be empty).
+  const cont = C.buildOutlinePrompt({
+    frame: { genre: 'plain-report', thesis_or_question: 'The bridge collapse' },
+    existing: ['Introduction', 'The design and its critics'],
+    tail: 'Investigators traced the failure to the gusset plates.',
+  });
+  ok(/EXTENDING|come NEXT|not re-plan/i.test(cont.system), 'with existing sections it plans the NEXT sections, not a fresh outline');
+  ok(/do not repeat/i.test(cont.system), 'and tells the model not to repeat what is written');
+  ok(/one job per line/i.test(cont.system), 'while keeping the one-job-per-line contract parseOutline expects');
+  ok(/The design and its critics/.test(cont.user) && /gusset plates/.test(cont.user), 'the user message carries the sections already written and the tail to build beyond');
+  // with neither existing nor tail it is unchanged — the fresh-plan path is intact
+  ok(/planning the STRUCTURE/i.test(manualOutline.system) && !/EXTENDING/i.test(manualOutline.system), 'a plain plan (no existing/tail) is unchanged — still plans from scratch');
+
+  // The talker prompt PERMITS structure — lists, numbered steps, labelled lines —
+  // where the content calls for it, instead of forcing flowing prose. This is what
+  // lets a recipe's steps or a manual's procedure come out structured.
+  const recipeDraft = C.buildTalkerPrompt({ job: 'list the ingredients', frame: { genre: 'recipe' }, spans: [{ text: 'one cup of red lentils' }] });
+  ok(/recipe/i.test(recipeDraft.system), 'the draft prompt names the genre');
+  ok(/list|steps/i.test(recipeDraft.system), 'it permits a list / numbered steps where the content calls for it');
+  ok(!/no list/i.test(recipeDraft.system), 'the old "no list" prohibition is gone');
+  ok(/list the ingredients/.test(recipeDraft.user) && /red lentils/.test(recipeDraft.user), 'the job and the material still ride through');
+
+  // continue + revise carry the same genre framing and structure permission
+  ok(/recipe/i.test(C.buildContinuePrompt({ frame: { genre: 'recipe' }, existing: 'Heat the oil.' }).system), 'continue is genre-aware');
+  ok(/recipe/i.test(C.buildRevisePrompt({ frame: { genre: 'recipe' }, draft: 'x' }).system), 'revise is genre-aware');
+
+  // an UNKNOWN genre still produces a valid, structured prompt (free-text genre)
+  const odd = C.buildTalkerPrompt({ job: 'x', frame: { genre: 'lab-protocol' }, spans: [] });
+  ok(/lab protocol/i.test(odd.system), 'a free-text genre flows straight into the prompt — any kind of content');
+});
+
 group('Phase two — the monitor: predicates over the vector, null never blocks', () => {
   const adv = C.decide(C.confidence({ witness: 0.6, form: 0.7 }));
   eq(adv.decision, 'advance', 'witness & form fine, coherence null → advance');
