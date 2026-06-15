@@ -1,7 +1,7 @@
 /* ============================================================ Sidebar ===== */
 function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, onUpload,
-                   chats, activeChat, onNewChat, onSelectChat, model, onModelClick, onRulesClick,
-                   onSettingsClick, enabledRules, modelStatus,
+                   chats, activeChat, onNewChat, onSelectChat, model, onModelClick,
+                   onSettingsClick, modelStatus,
                    projects, activeProject, onSelectProject, onNewProject, onDeleteProject, onClearProject,
                    sourceIds, onToggleSource }) {
   const iconFor = (d) => d.kind === 'table' ? 'table' : 'doc';
@@ -89,11 +89,6 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, on
             <span className="rt">Settings</span>
           </div>
         )}
-        <div className="sb-foot-row" onClick={onRulesClick}>
-          <span className="ti"><Icon name="layers" size={17} /></span>
-          <span className="rt">Rules</span>
-          <span className="model-chip">{enabledRules} on</span>
-        </div>
         <div className="sb-foot-row" data-model-trigger onClick={onModelClick}>
           <span className={'pulse' + (modelStatus === 'loading' ? ' load' : modelStatus === 'ready' ? '' : ' idle')} />
           <span className="rt">{model.name}</span>

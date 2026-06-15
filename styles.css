@@ -1917,9 +1917,21 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .pf-reached .pf-k { margin-right: 5px; }
 .pf-flow-blurb { font-size: 13px; color: var(--text); line-height: 1.55; margin: 8px 0 0; }
 
-.pf-pipeline { display: flex; align-items: stretch; flex-wrap: wrap; gap: 7px; }
-.pf-arrow { align-self: center; color: var(--text-3); font-size: 15px; }
-.pf-call { border: 1px solid var(--border-strong); border-radius: var(--r-sm); padding: 8px 10px; background: var(--bg-sunken); min-width: 150px; max-width: 240px; }
+/* The pipeline reads as a left-to-right diagram inside a soft panel. The
+   terminals (user turn · settle/veto) are compact, vertically-centred nodes —
+   align-items:center keeps them from stretching to the tall call card's height
+   (which is what turned them into oversized grey blobs). */
+.pf-pipeline { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-sunken); }
+.pf-pipeline .pf-pipe-node { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; }
+.pf-pipeline .pf-pipe-node::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .5; flex: none; }
+.pf-arrow { align-self: center; color: var(--text-3); font-size: 16px; line-height: 1; flex: none; }
+.pf-call { flex: 0 1 auto; border: 1px solid var(--border-strong); border-radius: var(--r-sm); padding: 9px 11px; background: var(--bg); min-width: 160px; max-width: 260px; }
+/* On a phone the diagram stacks: nodes full-width, arrows turned to point down. */
+@media (max-width: 560px) {
+  .pf-pipeline { flex-direction: column; align-items: stretch; }
+  .pf-pipeline .pf-pipe-node, .pf-pipeline .pf-call { max-width: none; justify-content: center; }
+  .pf-arrow { transform: rotate(90deg); }
+}
 .pf-call-shape { border-style: dashed; }
 .pf-call-off { opacity: .55; }
 .pf-call-top { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
@@ -1936,11 +1948,11 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .pf-nocall svg { flex: none; margin-top: 1px; }
 .pf-picked { margin-top: 12px; }
 
-.pf-vetoes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
-.pf-vetoes li { font-size: 12px; line-height: 1.45; padding: 6px 9px; border-radius: var(--r-xs); background: var(--bg-sunken); border: 1px solid var(--border); }
-.pf-vetoes li b { font-weight: 600; }
+.pf-vetoes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pf-vetoes li { font-size: 12px; line-height: 1.5; padding: 8px 11px 8px 12px; border-radius: var(--r-sm); background: var(--bg-sunken); border: 1px solid var(--border); border-left: 3px solid var(--accent-tint-2); }
+.pf-vetoes li b { font-weight: 650; color: var(--text); }
 .pf-veto-on { color: var(--text-3); }
-.pf-veto-dom { border-color: var(--bad-bd); background: var(--bad-bg); }
+.pf-veto-dom { border-color: var(--bad-bd); border-left-color: var(--bad-fg); background: var(--bad-bg); }
 .pf-veto-dom b { color: var(--bad-fg); }
 
 /* ---- prompt blocks ---- */
