@@ -1395,6 +1395,23 @@
     return true;
   }
 
+  // Free a fully-LOADED resident model so its memory comes back — the WebGPU
+  // buffers for a GPU engine, the WASM heap for wllama. Unlike cancelLoad (which
+  // aborts an in-FLIGHT download), this disposes a SETTLED engine; the next
+  // load()/phrase() rebuilds it from the on-disk cache with no re-download. The
+  // app's idle reclaim calls this so an open-but-unused tab stops pinning a
+  // multi-GB model. No-op while a load is in flight (cancelLoad owns that) or
+  // when nothing is resident; cloud ('anthropic') keeps nothing to free.
+  async function release() {
+    if (loadingActive) return false;            // a load owns the engine — leave it to cancelLoad
+    if (!enginePromise) return false;           // nothing resident
+    const prev = enginePromise;
+    enginePromise = null; loadedModel = null;   // honest isLoaded() before the async teardown settles
+    loadToken++;                                // any stray in-flight reference goes inert
+    try { const eng = await prev; if (eng && eng.unload) await eng.unload(); } catch (_) {}
+    return true;
+  }
+
   function friendlyError(e) {
     if (e && e.code === 'STALL')
       return new Error('The model download stalled — the connection stopped responding. Already-downloaded parts are cached, so loading the model again resumes where it left off.');
@@ -1932,5 +1949,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, primePump, isSelfHosted, selfHostZipUrl, selfHostEntryName, load, cancelLoad, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, primePump, isSelfHosted, selfHostZipUrl, selfHostEntryName, load, cancelLoad, release, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
 })();
