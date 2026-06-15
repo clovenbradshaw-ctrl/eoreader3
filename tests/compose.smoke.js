@@ -161,7 +161,42 @@ const proj = C.project(fullDoc);
 ok(proj.kind === 'prose' && proj.sentences.length === 2, 'the composition projects to a queryable prose shape');
 ok(proj._provenance[1].author === 'user' && !/talker|user/.test(proj.sentenceTexts.join(' ')), 'authorship is traceable in the projection, absent from the text the talker reads');
 
+// (4) the "✍ Continue" autopilot EXTENDS a finished document — the regression
+// guard for the dead button. A fully-drafted doc has nothing "owed", so the old
+// write() built an empty todo and silently did nothing; Continue must now plan
+// the NEXT sections (told what's already written) and draft them. Stub the model
+// so the click produces real appends, then assert new units + prose arrive.
+const contAppends = [];
+const contDoc = { id: doc.id, name: 'Evictions', kind: 'composition', _events: [doc, frame, u, draft, stamp, route], frame_id: frame.id };
+W.EOLLM = {
+  isLoaded: () => true,
+  phrase: async (opts) => {
+    const sys = String((opts && opts.sysOverride) || '');
+    if (/one job per line/i.test(sys)) return 'The policy response\nWhat comes next';            // an outline reply
+    return 'The freeze ending pushed filings past every prior monthly record in the county.';     // a section draft
+  },
+};
+TestUtils.act(() => { root.render(null); });
+TestUtils.act(() => {
+  root.render(React.createElement(W.CompositionView, {
+    doc: contDoc, onAppend: (id, evts) => { for (const e of evts) contAppends.push(e); }, model, modelReady: true, allDocs: [], onCite() {},
+  }));
+});
+const continueBtn = Array.from(container.querySelectorAll('.cmp-act.primary')).find(b => /Continue/.test(b.textContent || ''));
+ok(!!continueBtn, 'the populated doc offers a ✍ Continue button to click');
+if (continueBtn) click(continueBtn);
+
+// let the autopilot's async write loop (plan → draft) drain, then assert it grew
+// the document instead of the old silent no-op. onAppend fires synchronously
+// inside the loop, so we depend on the appends, not on a React re-render.
 setTimeout(() => {
+  const newUnits = contAppends.filter(e => e && e.kind === 'unit' && e.id !== u.id);
+  const newDrafts = contAppends.filter(e => e && e.kind === 'draft' && e.unit_id !== u.id);
+  ok(newUnits.length > 0, '✍ Continue on a fully-drafted doc plans NEW sections (no longer a silent no-op)');
+  ok(newDrafts.length > 0, 'and drafts prose into them — the document actually grows');
+  ok(contAppends.some(e => e && e.kind === 'plan-edit-by-draft' && e.reason === 'continued the document'),
+    'the continuation is recorded honestly in the log (a "continued the document" plan edit)');
+
   console.log(`\ncompose.smoke.js — ${pass} passed, ${fail} failed`);
   if (fail) { console.error('FAILURES:\n' + fails.map(s => '  - ' + s).join('\n')); process.exit(1); }
-}, 30);
+}, 100);

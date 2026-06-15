@@ -780,21 +780,46 @@
   // plan it proposes is still DIRECTION, revisable to the end. Returns {system,
   // user}; parseOutline (below) turns the model's reply into unit jobs. Pure — the
   // surface streams it through the injected talker.
+  // When `existing` (the jobs already written) or `tail` (how the document reads
+  // so far) is supplied, the prompt flips from "plan from scratch" to CONTINUE:
+  // propose the sections that come NEXT, told what is already covered so it builds
+  // beyond the draft instead of re-planning it. With neither it is byte-identical
+  // to the original fresh plan — this is what makes the "✍ Continue" autopilot
+  // extend a finished document rather than no-op.
   function buildOutlinePrompt(o) {
     const frame = (o && o.frame) || {};
     const genre = genreLabel(frame);
-    const system = 'You are planning the STRUCTURE of a ' + genre + ', not writing it. '
-      + 'Propose the sections THIS kind of document naturally has and uses — a recipe runs its ingredients, then the method, then any notes; a manual runs an overview, then setup, use, and troubleshooting; a report runs its case in order. '
-      + 'Use as many sections as it genuinely needs, usually three to seven. '
-      + 'Each section is ONE line: a short job saying what that section must DO (its direction), never its content. One job per line — no numbering, no prose, no blank lines.';
+    const existing = ((o && o.existing) || []).filter(Boolean);
+    const tail = String((o && o.tail) || '').slice(-1500);
+    const continuing = existing.length > 0 || !!tail;
+    const system = continuing
+      ? 'You are EXTENDING a ' + genre + ' that is already written, by planning the sections that come NEXT — not re-planning or rewriting it. '
+        + 'Propose sections that carry the document forward into ground it has not covered yet, building on what is already there. '
+        + 'Do NOT repeat, restate, or re-plan any section already written below. '
+        + 'Use as many new sections as it genuinely needs, usually two to five. '
+        + 'Each section is ONE line: a short job saying what that section must DO (its direction), never its content. One job per line — no numbering, no prose, no blank lines.'
+      : 'You are planning the STRUCTURE of a ' + genre + ', not writing it. '
+        + 'Propose the sections THIS kind of document naturally has and uses — a recipe runs its ingredients, then the method, then any notes; a manual runs an overview, then setup, use, and troubleshooting; a report runs its case in order. '
+        + 'Use as many sections as it genuinely needs, usually three to seven. '
+        + 'Each section is ONE line: a short job saying what that section must DO (its direction), never its content. One job per line — no numbering, no prose, no blank lines.';
     const u = [];
     if (frame.thesis_or_question) u.push('Document: ' + frame.thesis_or_question);
     if (frame.reader) u.push('For: ' + frame.reader);
     if (frame.goal) u.push('Purpose: ' + frame.goal);
     if ((frame.constraints || []).length) u.push('Constraints: ' + frame.constraints.join('; '));
     u.push('Kind of document: ' + genre);
+    if (existing.length) {
+      u.push('');
+      u.push('Sections already written (do not repeat these):');
+      existing.forEach(j => u.push('- ' + j));
+    }
+    if (tail) {
+      u.push('');
+      u.push('How the document reads so far (its tail — continue beyond it, never repeat it):');
+      u.push(tail);
+    }
     u.push('');
-    u.push('Propose the sections, one job per line:');
+    u.push(continuing ? 'Propose the NEXT sections, one job per line:' : 'Propose the sections, one job per line:');
     return { system, user: u.join('\n') };
   }
 

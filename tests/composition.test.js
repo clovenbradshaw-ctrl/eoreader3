@@ -274,6 +274,22 @@ group('any-content — genre-aware prompts structure a recipe or a manual, not o
   ok(/technical manual/i.test(manualOutline.system), 'a manual outline names a manual, not a generic document');
   ok(!/four and seven/i.test(manualOutline.system), 'the old fixed essay-length instruction is gone');
 
+  // CONTINUE — given the sections already written (and how the document reads so
+  // far), the outline prompt plans the sections that come NEXT instead of
+  // re-planning from scratch. This is what lets the "✍ Continue" autopilot extend
+  // a finished document rather than no-op (todo would otherwise be empty).
+  const cont = C.buildOutlinePrompt({
+    frame: { genre: 'plain-report', thesis_or_question: 'The bridge collapse' },
+    existing: ['Introduction', 'The design and its critics'],
+    tail: 'Investigators traced the failure to the gusset plates.',
+  });
+  ok(/EXTENDING|come NEXT|not re-plan/i.test(cont.system), 'with existing sections it plans the NEXT sections, not a fresh outline');
+  ok(/do not repeat/i.test(cont.system), 'and tells the model not to repeat what is written');
+  ok(/one job per line/i.test(cont.system), 'while keeping the one-job-per-line contract parseOutline expects');
+  ok(/The design and its critics/.test(cont.user) && /gusset plates/.test(cont.user), 'the user message carries the sections already written and the tail to build beyond');
+  // with neither existing nor tail it is unchanged — the fresh-plan path is intact
+  ok(/planning the STRUCTURE/i.test(manualOutline.system) && !/EXTENDING/i.test(manualOutline.system), 'a plain plan (no existing/tail) is unchanged — still plans from scratch');
+
   // The talker prompt PERMITS structure — lists, numbered steps, labelled lines —
   // where the content calls for it, instead of forcing flowing prose. This is what
   // lets a recipe's steps or a manual's procedure come out structured.
