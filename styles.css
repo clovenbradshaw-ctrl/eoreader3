@@ -1303,6 +1303,156 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
   .ingest-banner .ib-fill.indet { width: 100%; left: 0; }
 }
 
+/* ============================================================ Reading modal ==
+   The focal surface for an explicitly-added document: the reader watches it be
+   read — Find · Read · Weigh — then chooses where it goes. Reuses the shared
+   .overlay.center chrome; the panel borrows the .ent-modal pop. */
+.reading-overlay { z-index: 220; }
+.reading-modal {
+  width: min(540px, calc(100vw - 32px)); max-height: 88vh; overflow-y: auto;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg); padding: 20px 22px 18px;
+  animation: pop .22s cubic-bezier(.2,.8,.2,1);
+  transition: border-color .4s ease;
+}
+.reading-modal.settled { border-color: var(--accent-tint-2); }
+
+.reading-modal .rm-head { display: flex; align-items: flex-start; gap: 12px; }
+.reading-modal .rm-orb {
+  width: 34px; height: 34px; flex-shrink: 0; border-radius: 50%;
+  display: grid; place-items: center; color: #fff; background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent-tint-2); animation: rm-breathe 1.9s ease-in-out infinite;
+}
+.reading-modal .rm-orb.done { background: var(--ok, #1f8a5b); animation: none; }
+.reading-modal .rm-head-text { flex: 1; min-width: 0; }
+.reading-modal .rm-eyebrow {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text-3);
+}
+.reading-modal .rm-title {
+  margin: 1px 0 0; font-size: 17px; font-weight: 600; line-height: 1.25;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.reading-modal .rm-x {
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 8px; border: 0;
+  background: transparent; color: var(--text-2); display: grid; place-items: center; cursor: pointer;
+}
+.reading-modal .rm-x:hover { background: var(--bg-subtle); color: var(--text); }
+
+/* The movements rail — Find · Read · Weigh · Ready, joined by a hairline that
+   fills as each completes. */
+.reading-modal .rm-rail { display: flex; align-items: center; margin: 18px 2px 0; }
+.reading-modal .rm-mv {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  position: relative; flex: 1; color: var(--text-3); transition: color .4s ease;
+}
+.reading-modal .rm-mv::before {
+  content: ''; position: absolute; top: 5px; left: -50%; width: 100%; height: 2px;
+  background: var(--border-strong); transition: background .45s ease; z-index: 0;
+}
+.reading-modal .rm-mv:first-child::before { display: none; }
+.reading-modal .rm-mv.on::before, .reading-modal .rm-mv.done::before { background: var(--accent); }
+.reading-modal .rm-mv-dot {
+  width: 12px; height: 12px; border-radius: 50%; z-index: 1;
+  background: var(--bg); border: 2px solid var(--border-strong);
+  transition: background .4s ease, border-color .4s ease, transform .4s ease;
+}
+.reading-modal .rm-mv.done .rm-mv-dot { background: var(--accent); border-color: var(--accent); }
+.reading-modal .rm-mv.on .rm-mv-dot { border-color: var(--accent); background: var(--accent-tint); animation: rm-pulse 1.5s ease-in-out infinite; }
+.reading-modal .rm-mv.done { color: var(--text-2); }
+.reading-modal .rm-mv.on { color: var(--accent); }
+.reading-modal .rm-mv-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .03em; }
+.reading-modal .rm-gloss { text-align: center; margin-top: 9px; font-size: 12px; color: var(--text-3); min-height: 16px; }
+
+/* The scanner — skeleton lines under a travelling sweep while reading; the real
+   read sentences fade in once it settles. */
+.reading-modal .rm-scanner {
+  position: relative; overflow: hidden; margin-top: 14px; padding: 14px 15px;
+  background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--r);
+  min-height: 86px; display: flex; flex-direction: column; gap: 9px;
+}
+.reading-modal .rm-skel { height: 9px; border-radius: 999px; background: var(--bg-subtle); }
+.reading-modal .rm-sweep {
+  position: absolute; inset: 0 auto 0 0; width: 40%;
+  background: linear-gradient(100deg, transparent 0%, var(--accent-tint) 50%, transparent 100%);
+  animation: rm-sweep 1.5s cubic-bezier(.45,0,.55,1) infinite; pointer-events: none;
+}
+.reading-modal .rm-glimpse {
+  font-size: 12.5px; line-height: 1.5; color: var(--text-2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  padding-left: 11px; border-left: 2px solid var(--accent-tint-2);
+  opacity: 0; animation: rm-fade-in .5s ease forwards;
+}
+.reading-modal .rm-glimpse-empty { color: var(--text-3); font-style: italic; border-left-color: var(--border); }
+
+/* Figures the reading surfaced. */
+.reading-modal .rm-figures { margin-top: 16px; }
+.reading-modal .rm-figures-label,
+.reading-modal .rm-figures-label + * { }
+.reading-modal .rm-figures-label,
+.reading-modal .rm-stat-l { font-family: var(--mono); }
+.reading-modal .rm-figures-label {
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); margin-bottom: 8px;
+}
+.reading-modal .rm-figures-pills { display: flex; flex-wrap: wrap; gap: 7px; }
+.reading-modal .rm-fig {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--text); background: var(--bg-subtle);
+  border: 1px solid var(--border); border-radius: var(--r-pill); padding: 3px 10px;
+  animation: rm-fig-in .26s cubic-bezier(.2,.8,.2,1) backwards;
+}
+.reading-modal .rm-fig-swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.reading-modal .rm-fig-n { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+
+/* Counts the reading measured. */
+.reading-modal .rm-stats { display: flex; gap: 26px; margin-top: 18px; flex-wrap: wrap; }
+.reading-modal .rm-stat { display: flex; flex-direction: column; gap: 2px; }
+.reading-modal .rm-stat-n { font-size: 22px; font-weight: 600; line-height: 1; color: var(--text); font-variant-numeric: tabular-nums; }
+.reading-modal .rm-stat-l { font-size: 10.5px; letter-spacing: .03em; color: var(--text-3); }
+
+/* Foot — live bar + status while reading; summary + choice once settled. */
+.reading-modal .rm-foot { margin-top: 20px; }
+.reading-modal .rm-bar { height: 6px; background: var(--bg-subtle); border-radius: 999px; overflow: hidden; position: relative; }
+.reading-modal .rm-fill { position: relative; height: 100%; background: var(--accent); border-radius: 999px; transition: width .35s cubic-bezier(.2,.8,.2,1); }
+.reading-modal .rm-fill.indet { position: absolute; left: 0; width: 38%; animation: rm-indet 1.25s cubic-bezier(.45,0,.55,1) infinite; }
+.reading-modal .rm-status { display: flex; align-items: center; gap: 10px; margin-top: 9px; font-size: 12px; color: var(--text-2); }
+.reading-modal .rm-status .rm-stage { font-weight: 550; color: var(--text); }
+.reading-modal .rm-status .rm-count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--accent); }
+.reading-modal .rm-note { margin-top: 9px; font-size: 11.5px; line-height: 1.5; color: var(--text-3); }
+.reading-modal .rm-summary { font-size: 13px; color: var(--text-2); margin-bottom: 14px; }
+.reading-modal .rm-summary-meta { color: var(--text); }
+.reading-modal .rm-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.reading-modal .rm-btn {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  font-size: 13.5px; font-weight: 550; padding: 9px 16px; border-radius: var(--r);
+  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text);
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.reading-modal .rm-btn:hover { background: var(--bg-subtle); border-color: var(--accent); color: var(--accent); }
+.reading-modal .rm-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.reading-modal .rm-btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
+
+@keyframes rm-breathe { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-tint-2); } 50% { box-shadow: 0 0 0 7px transparent; } }
+@keyframes rm-pulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 var(--accent-tint-2); } 50% { transform: scale(1.25); box-shadow: 0 0 0 4px transparent; } }
+@keyframes rm-sweep { 0% { left: -40%; } 100% { left: 100%; } }
+@keyframes rm-indet { 0% { left: -38%; } 100% { left: 100%; } }
+@keyframes rm-fade-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes rm-fig-in { from { opacity: 0; transform: scale(.9) translateY(3px); } }
+
+/* Reduced motion: a steady reading — no breath, sweep, or pulse. */
+@media (prefers-reduced-motion: reduce) {
+  .reading-modal .rm-orb, .reading-modal .rm-mv.on .rm-mv-dot, .reading-modal .rm-sweep,
+  .reading-modal .rm-fill.indet, .reading-modal .rm-glimpse, .reading-modal .rm-fig { animation: none; }
+  .reading-modal .rm-glimpse { opacity: 1; }
+  .reading-modal .rm-fill.indet { width: 100%; left: 0; }
+  .reading-modal .rm-sweep { display: none; }
+}
+@media (max-width: 600px) {
+  .reading-modal { width: 100vw; max-height: 92vh; border-radius: var(--r-lg) var(--r-lg) 0 0; }
+  .reading-modal .rm-actions .rm-btn { flex: 1; justify-content: center; }
+}
+
 /* The model popover slides up from the bottom edge as a sheet on phones. */
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
 
@@ -1532,6 +1682,10 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
 .graph-ent-name { font-weight: 500; }
 .graph-ent-n { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); }
 .graph-edge { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+/* a coreference SUGGESTION edge (≈ bind / ≈ ambiguous) reads as a proposal, not
+   a solid relation: dashed lead-in + dimmed, and its verb pill is mono/dim. */
+.graph-edge-suggestion { border-left: 2px dashed var(--border-strong); padding-left: 7px; opacity: 0.82; }
+.graph-edge-suggestion .graph-verb { color: var(--text-3); background: transparent; border: 1px dashed var(--border); }
 .graph-a, .graph-b, .graph-assert b { font-weight: 600; color: var(--text); }
 .graph-verb { font-family: var(--mono); font-size: 11px; color: var(--evidence); background: var(--evidence-tint); border-radius: 5px; padding: 1px 6px; }
 .graph-asserts { color: var(--text-2); }
@@ -1751,6 +1905,9 @@ button.gax-leg:hover .gax-dim { color: var(--text-2); }
 .gax-claim-prop { font-size: 13.5px; margin-bottom: 3px; }
 .gax-rels { display: flex; flex-direction: column; gap: 5px; }
 .gax-rel { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+/* coreference suggestion edge — dashed/dim, visually separate from CON relations */
+.gax-rel-suggestion { border-left: 2px dashed var(--border-strong); padding-left: 8px; opacity: 0.82; }
+.gax-rel-suggestion .gax-verb { border: 1px dashed var(--border); background: transparent; }
 .gax-a { font-weight: 600; }
 .gax-b { font-weight: 600; }
 .gax-verb { font-family: var(--mono); font-size: 11px; color: var(--text-3); background: var(--bg-subtle); padding: 1px 7px; border-radius: var(--r-pill); }

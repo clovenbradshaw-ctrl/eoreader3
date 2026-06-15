@@ -210,6 +210,77 @@ async function scoreRouting(EOEngine, fixtures, truthfulness) {
   return { score: n ? sum / n : 1, n, detail };
 }
 
+/* ---- 2f — coreference overlay quality (deterministic, no API) ----
+   The PR2 facet: with role recovery + the coref overlay ON, how well does the
+   engine (a) RECOVER the role surfaces a reader names characters by, and (b)
+   propose the RIGHT identity verdict for them? Two sub-scores, averaged:
+
+     role-recall      — fraction of the gold role surfaces that became nodes
+                        (the PR1 capability the overlay sits on; a missed node
+                        can't get a verdict).
+     overlay-precision — of the gold-labeled roles that WERE recovered, the
+                        fraction whose emitted verdict matches gold (a bind to
+                        the gold referent, or a standalone where gold says so).
+
+   Reported, weight 0 (non-gating) until proven. Needs the role + coref flags ON,
+   flipped via window.EO_RULES + applyRules (the durable path that survives
+   parseDocument's rule re-derivation) — so it takes the loaded `window`. Without
+   it the flags can't be flipped durably and the score degrades to 0; harmless at
+   weight 0. */
+async function scoreCoref(EOEngine, fixtures, windowRef) {
+  // Flip role recovery + the coref overlay ON, durably (window.EO_RULES is what
+  // deriveSets re-applies after a mid-parse ledger commit — applyRules alone
+  // reverts to the seed defaults).
+  const flipped = !!(windowRef && typeof windowRef === 'object');
+  if (flipped) {
+    windowRef.EO_RULES = [
+      { id: 'role-referent-recovery', installed: true, enabled: true, value: 1 },
+      { id: 'coref-overlay', installed: true, enabled: true, value: 1 },
+    ];
+    try { EOEngine.applyRules(windowRef.EO_RULES); } catch (e) {}
+  }
+  let recallNum = 0, recallDen = 0, precNum = 0, precDen = 0;
+  const detail = [];
+  for (const fx of fixtures) {
+    const doc = await EOEngine.parseDocument(fx.id + '.txt', fx.doc, fx.id);
+    let entities = [], coref = [];
+    try { entities = (EOEngine.projectEntities(doc).entities) || []; } catch (e) {}
+    try { coref = (doc._events || []).filter(e => e.op === 'COREF'); } catch (e) {}
+    const nodeNames = entities.map(e => e.name);
+    const hasNode = (surface) => nodeNames.some(n => wsNorm(n) === wsNorm(surface) || wsNorm(n).includes(wsNorm(surface)));
+    const verdictFor = (surface) => coref.find(c => wsNorm(c.role_surface || '') === wsNorm(surface)) || null;
+
+    // role-recall: gold role surfaces recovered as nodes
+    for (const surf of (fx.roles || [])) {
+      recallDen++;
+      const got = hasNode(surf);
+      if (got) recallNum++;
+      detail.push({ fixture: fx.id, kind: 'recall', role: surf, recovered: got });
+    }
+    // overlay-precision: gold verdicts that the overlay got right (only over the
+    // roles that WERE recovered — a missing node is a recall miss, not a
+    // precision miss).
+    for (const g of (fx.coref || [])) {
+      if (!hasNode(g.role)) { detail.push({ fixture: fx.id, kind: 'precision', role: g.role, skipped: 'not-recovered' }); continue; }
+      precDen++;
+      const v = verdictFor(g.role);
+      let ok = false;
+      if (v) {
+        if (g.verdict === 'standalone') ok = (v.verdict === 'standalone');
+        else if (g.verdict === 'bind') ok = (v.verdict === 'bind') &&
+          (v.candidates || []).some(c => sameName(c.name, g.referent));
+        else ok = (v.verdict === g.verdict);   // ambiguous etc.
+      }
+      if (ok) precNum++;
+      detail.push({ fixture: fx.id, kind: 'precision', role: g.role, expect: g.verdict, got: v ? v.verdict : null, ok });
+    }
+  }
+  const roleRecall = recallDen ? recallNum / recallDen : 1;
+  const overlayPrecision = precDen ? precNum / precDen : 1;
+  const score = (roleRecall + overlayPrecision) / 2;
+  return { score, roleRecall, overlayPrecision, recovered: recallNum, roles: recallDen, correct: precNum, verdicts: precDen, flagged: flipped, detail };
+}
+
 /* ---- 2c — integration quality ---- */
 // `integrationScorer(fx, groundedAnswer)` → number in [0,1], or null to use
 // the stub. Injected by the runner/agent in E3 (live Anthropic rubric).
@@ -261,14 +332,17 @@ async function scoreAll(EOEngine, opts = {}) {
     talkerLlm: opts.talkerLlm,
     integrationSampleSize: opts.integrationSampleSize != null ? opts.integrationSampleSize : cfg.integrationSampleSize,
   });
+  // 2f coref overlay — runs LAST because it flips role + coref flags ON (the
+  // other components score the engine's DEFAULT physics). Non-gating (weight 0).
+  const coref = await scoreCoref(EOEngine, loadFixtures('coref'), opts.window);
   const composite = (weights.binding || 0) * binding.score + (weights.stall || 0) * stall.score
     + (weights.grounding || 0) * grounding.score + (weights.routing || 0) * routing.score
-    + (weights.integration || 0) * integration.score;
+    + (weights.integration || 0) * integration.score + (weights.coref || 0) * coref.score;
   return {
     weights,
-    components: { binding: binding.score, stall: stall.score, grounding: grounding.score, routing: routing.score, integration: integration.score },
+    components: { binding: binding.score, stall: stall.score, grounding: grounding.score, routing: routing.score, integration: integration.score, coref: coref.score },
     composite,
-    binding, stall, grounding, routing, integration,
+    binding, stall, grounding, routing, integration, coref,
   };
 }
 
@@ -283,11 +357,12 @@ function formatReport(res) {
   lines.push('  2d grounding fidelity ' + r3(c.grounding) + '  (w ' + (w.grounding || 0) + ')  — ' + res.grounding.detail.filter(d => d.grounded && d.clean).length + '/' + res.grounding.detail.length + ' grounded & fabrication-free');
   lines.push('  2e routing/resolution ' + r3(c.routing) + '  (w ' + (w.routing || 0) + ')  — mean witness over ' + (res.routing ? res.routing.n : 0) + ' doc-directed turns');
   lines.push('  2c integration       ' + r3(c.integration) + '   (w ' + w.integration + ')  — ' + (res.integration.detail.some(d => d.live) ? 'live rubric' : 'stub ' + r3(res.integration.score)));
+  if (res.coref) lines.push('  2f coref overlay     ' + r3(c.coref) + '   (w ' + (w.coref || 0) + ')  — role-recall ' + r3(res.coref.roleRecall) + ' (' + res.coref.recovered + '/' + res.coref.roles + ') · overlay-precision ' + r3(res.coref.overlayPrecision) + ' (' + res.coref.correct + '/' + res.coref.verdicts + ')' + (res.coref.flagged ? '' : ' [flags not flipped]'));
   return lines.join('\n');
 }
 
 module.exports = {
-  loadFixtures, scoreBinding, scoreStall, scoreGrounding, scoreRouting, scoreIntegration, scoreAll,
+  loadFixtures, scoreBinding, scoreStall, scoreGrounding, scoreRouting, scoreIntegration, scoreCoref, scoreAll,
   formatReport, locate, loadTruthfulness, DEFAULT_WEIGHTS, INTEGRATION_STUB,
 };
 
@@ -297,7 +372,8 @@ if (require.main === module) {
     const argEngine = process.argv.find(a => a.startsWith('--engine='));
     const enginePath = argEngine ? argEngine.split('=')[1] : undefined;
     const W = loadEngine(enginePath ? { enginePath } : {});
-    const res = await scoreAll(W.EOEngine);
+    // pass the loaded window so 2f coref can flip the role + coref flags durably
+    const res = await scoreAll(W.EOEngine, { window: W });
     console.log('engine: ' + (enginePath || 'engine.js (baseline)'));
     console.log(formatReport(res));
     if (process.argv.includes('--json')) console.log('\n' + JSON.stringify(res, (k, v) => k === '_doc' ? undefined : v, 1));

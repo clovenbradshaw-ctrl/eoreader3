@@ -484,6 +484,49 @@ const READING_RULES = {
     mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'Master flag (default OFF — the parity floor). When ON, a post-extraction pass recovers recurring role-referents (occupation/role nouns) as first-class nodes and weights referent relations by a two-factor signal (co-occurrence × embedding affinity). OFF appends nothing and the graph projection is byte-identical to the named-only baseline.',
   },
+  // ── Coreference overlay (PR2) — a NON-DESTRUCTIVE identity layer on top of
+  //    PR1's association graph. For each recovered role node ("his sister",
+  //    "the chief clerk") a post-extraction pass proposes whether it corefers
+  //    with a named entity — bind / ambiguous / standalone — appended as COREF
+  //    verdict events and emitted (flag-gated) as suggestion edges. It NEVER
+  //    merges nodes and never deletes the CON backbone: a new COREF op is
+  //    ignored by every existing projection pass (the Pass-1 occ whitelist,
+  //    slotsOf, isRelationEdge, entityKeys / union-find / keyToReferent all
+  //    skip it), so with the flag OFF the projection is byte-identical and even
+  //    with it ON the association graph (nodes + CON edges + clusters) is
+  //    unperturbed. Data + thresholds; the master flag coref_overlay gates it.
+  role_gender: {
+    value: {
+      sister: 'f', mother: 'f', daughter: 'f', aunt: 'f', niece: 'f', grandmother: 'f', granddaughter: 'f',
+      widow: 'f', charwoman: 'f', landlady: 'f', maid: 'f', mistress: 'f', wife: 'f', girl: 'f', woman: 'f',
+      stepmother: 'f', stepdaughter: 'f',
+      father: 'm', brother: 'm', son: 'm', uncle: 'm', nephew: 'm', grandfather: 'm', grandson: 'm',
+      widower: 'm', landlord: 'm', master: 'm', boy: 'm', man: 'm', husband: 'm',
+      stepfather: 'm', stepson: 'm',
+    },
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Gendered role/kin heads → "f"/"m". Read by the coreference overlay to gender a role node from its HEAD ("sister"→f), name-anchored and deterministic — never from a sentence window (a ±-window scored Grete male because Gregor-narrated scenes swamp it). A head absent here contributes no gender constraint (clerk, doctor → unknown).',
+  },
+  coref_overlay: {
+    value: false,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Master flag (default OFF — the parity floor). When ON (requires role_referent_recovery ON to have role nodes to score), a post-extraction pass proposes coreference verdicts (bind/ambiguous/standalone) for each role node against named entities and projectGraph emits them as suggestion edges. The COREF events it appends are ignored by every existing projection pass, so OFF is byte-identical and ON never merges a node or perturbs the association graph.',
+  },
+  coref_bind_floor: {
+    value: 0.55,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Minimum top score for the coreference overlay to propose a binding (bind/ambiguous) rather than leaving a role standalone. Below it nothing clears the floor and the role is the canonical referent — the faithful terminal verdict for the nameless (Kafka never names the father).',
+  },
+  coref_ambiguous_margin: {
+    value: 0.15,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Minimum margin between the top and second coreference candidate for a confident bind. A top that clears coref_bind_floor but leads the runner-up by less than this is ambiguous (the top candidates are held, low confidence) rather than bound.',
+  },
+  coref_exclusion_weight: {
+    value: 0.5,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'How hard a strong association vetoes a coreference bind ∈ [0,1]. A role is not identical to a name it interacts with BECAUSE they are distinct: the hub (the most-mentioned person, the maximal-cooccurrence party PR1 already discounts) is excluded by this weight, and a role is never its own possessor (full exclusion). exclusion = max(possessor ? 1 : 0, isHub ? this : 0); the bind score is gender × number × (1 − exclusion) × affinity.',
+  },
   // ── Depicted acts — the story-world transformation a clause REPORTS, carried
   //    as content on the reader's CON bond. The bond's own op is always CON (the
   //    reading act of binding two referents); the verb may report a SEG (a cut),
@@ -1141,7 +1184,7 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
     DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
     GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS,
-    KIN_TERMS, KIN_POSS_RE, ROLE_TERMS, ROLE_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE,
+    KIN_TERMS, KIN_POSS_RE, ROLE_TERMS, ROLE_POSS_RE, ROLE_GENDER, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE,
     GUTENBERG_START_RES, GUTENBERG_END_RES,
     CHROME_RES, METAPHOR_RES, TYPE_KW_ORG, TYPE_KW_PLACE, TYPE_KW_PERSON,
     NP_GENERIC_HEADS, SITE_GROUND_CUES, SITE_PATTERN_CUES,
@@ -1178,6 +1221,13 @@ function rebuildLangSets() {
   ROLE_POSS_RE = ROLE_TERMS.size
     ? new RegExp("\\b(his|her|the)\\s+(?:own\\s+|late\\s+|elder\\s+|eldest\\s+|younger\\s+|youngest\\s+|only\\s+|old\\s+|young\\s+|chief\\s+|head\\s+)?(" + [...ROLE_TERMS].join('|') + ")\\b", 'giu')
     : /$^/;
+  // Coreference overlay (PR2): gendered role/kin heads → 'f'/'m'. Read to gender
+  // a role node from its HEAD ("sister"→f) — name-anchored, deterministic. An
+  // empty inventory (module off) yields an empty Map ⇒ no gender constraint.
+  {
+    const rg = mod_values('role_gender');
+    ROLE_GENDER = new Map((rg && typeof rg === 'object' && !Array.isArray(rg)) ? Object.entries(rg) : []);
+  }
   FEMALE_TITLES = new Set(mod_values('female_titles'));
   MALE_TITLES = new Set(mod_values('male_titles'));
   // Every personal title (gendered + genderless: Mr, Mrs, Dr, Captain,
@@ -2739,6 +2789,26 @@ function singularStem(t) {
   else if (t.endsWith('ches') || t.endsWith('shes') || t.endsWith('xes')) stem = t.slice(0, -2);
   else if (t.endsWith('s') && !t.endsWith('ss') && !t.endsWith('us') && !t.endsWith('is')) stem = t.slice(0, -1);
   return (stem && stem.length >= 3 && !STOP.has(stem)) ? stem : null;
+}
+
+// Morphological number test for a role head/surface — true when it reads as a
+// PLURAL ("the lodgers", "his parents", "children", "men", "women"). Used only
+// by the coreference overlay's number-agreement veto: a plural role cannot
+// corefer with a single named person. Conservative — an irregular-plural set
+// for the common kin/role cases, then a regular -s/-ies test that REUSES
+// singularStem (the same -s/-ies/-en morphology the entity reader trusts), with
+// the -ss/-us/-is mass-noun guard already baked into singularStem.
+const _IRREG_PLURAL = new Set(['children', 'men', 'women', 'people', 'gentlemen', 'ladies', 'folk']);
+function isPlural(headOrSurface) {
+  const w = String(headOrSurface == null ? '' : headOrSurface).toLowerCase().trim();
+  if (!w) return false;
+  // last token of a surface ("the lodgers" → "lodgers")
+  const last = w.split(/\s+/).pop();
+  if (_IRREG_PLURAL.has(last)) return true;
+  // "parents"/"lodgers"/"sisters" — a regular plural is exactly a token with a
+  // safe singular stem (singularStem returns null for short tokens and the
+  // -ss/-us/-is mass endings, so "boss"/"mistress" never read as plural).
+  return singularStem(last) != null;
 }
 
 function tokenSetOf(name) {
@@ -7347,6 +7417,70 @@ function projectGraph(events, frame = {}) {
     edgeMap.set(edgeKey, cur);
   }
 
+  // The relation edges (CON / text-layer SYN), sorted by weight. Built into a
+  // named array so the coreference overlay can APPEND suggestion edges below
+  // without touching this projection. With coref_overlay OFF (the default) the
+  // append block is skipped entirely and `edges` is byte-identical to baseline.
+  const edges = [...edgeMap.values()]
+    .map(e => {
+      // Two-factor weight: co-occurrence count × embedding affinity. When no
+      // affinity table is supplied (every shipped/Node path with the flag
+      // off, or a cold embedder), affNum is null and weight === e.cooccur ===
+      // the old co-occurrence weight — byte-identical. affinity:null is the
+      // "not computed" reading (≠ 0 ≠ no relation), kept distinct in the detail.
+      const aff = edgeAffinity ? (edgeAffinity.get(e.a + '|' + e.b) ?? edgeAffinity.get(e.b + '|' + e.a) ?? null) : null;
+      const affNum = (typeof aff === 'number' && isFinite(aff)) ? aff : null;
+      const weight = e.cooccur * (affNum == null ? 1 : affNum);
+      return {
+        a: e.a,
+        b: e.b,
+        aName: clusters.find(c => c.key === e.a)?.name || e.a,
+        bName: clusters.find(c => c.key === e.b)?.name || e.b,
+        verb: e.verb,
+        weight,
+        weight_detail: { cooccur: e.cooccur, affinity: affNum },
+        // A drawn relation is a Link (Structure × Figure) — or a Network when
+        // its endpoint reads as an architecture noun.
+        site: eoSite('Structure', e.bName || e.b, null),
+        eventSeqs: e.eventSeqs,
+      };
+    })
+    .sort((a, b) => b.weight - a.weight);
+
+  // ── Coreference SUGGESTION edges (PR2, flag-gated) ──
+  // When coref_overlay is ON, each non-standalone COREF verdict becomes a
+  // dashed suggestion edge from the role node to its top candidate — ADDITIVE
+  // only. This never touches clusterMap / parent / the CON edges above; it only
+  // pushes annotated entries onto the returned `edges` array. With the flag OFF
+  // (or no COREF events) the array is exactly the relation edges — parity holds.
+  if (READING_RULES.coref_overlay.value) {
+    const keyOfRef = (refId) => {
+      for (const c of clusters) if (c.canonical_referent_id === refId || (c.member_referent_ids || []).includes(refId)) return c.key;
+      return null;
+    };
+    for (const ev of events) {
+      if (ev.op !== 'COREF') continue;
+      if (ev.verdict === 'standalone') continue;          // the faithful nameless: no edge
+      const top = (ev.candidates || [])[0];
+      if (!top) continue;
+      const aKey = keyOfRef(ev.role_ref) || findClusterKey(ev.role_surface);
+      const bKey = keyOfRef(top.referent_id);
+      if (!aKey || !bKey || aKey === bKey) continue;
+      const aName = clusters.find(c => c.key === aKey)?.name || ev.role_surface || aKey;
+      const bName = clusters.find(c => c.key === bKey)?.name || top.name || bKey;
+      edges.push({
+        a: aKey, b: bKey, aName, bName,
+        verb: '≈ ' + ev.verdict,
+        weight: ev.confidence,
+        weight_detail: { cooccur: 0, affinity: null },
+        suggestion: true, verdict: ev.verdict, confidence: ev.confidence,
+        // A proposed identity is a Significance-layer reading, not a Structure link.
+        site: eoSite('Significance', bName || bKey, null),
+        eventSeqs: [ev.seq],
+      });
+    }
+  }
+
   return {
     entities: clusters.map(c => ({
       key: c.key,
@@ -7374,31 +7508,7 @@ function projectGraph(events, frame = {}) {
       memberKeys: c.memberKeys,
       eventSeqs: c.eventSeqs,
     })).sort((a, b) => b.mentions - a.mentions),
-    edges: [...edgeMap.values()]
-      .map(e => {
-        // Two-factor weight: co-occurrence count × embedding affinity. When no
-        // affinity table is supplied (every shipped/Node path with the flag
-        // off, or a cold embedder), affNum is null and weight === e.cooccur ===
-        // the old co-occurrence weight — byte-identical. affinity:null is the
-        // "not computed" reading (≠ 0 ≠ no relation), kept distinct in the detail.
-        const aff = edgeAffinity ? (edgeAffinity.get(e.a + '|' + e.b) ?? edgeAffinity.get(e.b + '|' + e.a) ?? null) : null;
-        const affNum = (typeof aff === 'number' && isFinite(aff)) ? aff : null;
-        const weight = e.cooccur * (affNum == null ? 1 : affNum);
-        return {
-          a: e.a,
-          b: e.b,
-          aName: clusters.find(c => c.key === e.a)?.name || e.a,
-          bName: clusters.find(c => c.key === e.b)?.name || e.b,
-          verb: e.verb,
-          weight,
-          weight_detail: { cooccur: e.cooccur, affinity: affNum },
-          // A drawn relation is a Link (Structure × Figure) — or a Network when
-          // its endpoint reads as an architecture noun.
-          site: eoSite('Structure', e.bName || e.b, null),
-          eventSeqs: e.eventSeqs,
-        };
-      })
-      .sort((a, b) => b.weight - a.weight),
+    edges,
     measurements: frameMeasurements,
     frame: {
       cursor: isFinite(horizon) ? horizon : 'end-of-text',
@@ -7573,6 +7683,12 @@ function projectGraph(events, frame = {}) {
     try {
       promoteRoleReferents(doc);
       await attachEdgeAffinity(doc);
+      // Coreference overlay (PR2, coref_overlay rule, OFF by default): propose
+      // bind/ambiguous/standalone verdicts for the recovered role nodes and
+      // append them as COREF events. Flag-gated internally; the COREF op is
+      // ignored by every projection pass, so OFF appends nothing and the graph
+      // is byte-identical. Never throws.
+      proposeCoreference(doc);
     } catch (e) { /* the role layer never blocks a parse */ }
     // The document-level de-chroming verdict over the chrome gate: a non-
     // destructive record of what was set aside (kept verbatim in the spine and
@@ -7612,6 +7728,7 @@ function projectGraph(events, frame = {}) {
     'singular-they': 'singular_they',
     'relation-gate': 'relation_gate',
     'role-referent-recovery': 'role_referent_recovery',
+    'coref-overlay': 'coref_overlay',
     'cross-source': 'cross_source',
     'site-entity-cell': 'site_entity_cell',
     'fold-column-balanced': 'fold_column_balanced',
@@ -8185,6 +8302,174 @@ function projectGraph(events, frame = {}) {
       doc._edgeAffinity = aff;
       _projCache.delete(doc);
     } catch (e) { /* best-effort: leave _edgeAffinity unset */ }
+  }
+
+  /* ── Coreference overlay (PR2, sync) ─────────────────────────────────
+     A NON-DESTRUCTIVE identity layer over PR1's association graph. For each
+     recovered role node it scores the named persons it could BE and appends one
+     COREF verdict event (bind / ambiguous / standalone). The COREF op is ignored
+     by every existing projection pass (the Pass-1 occ whitelist, slotsOf,
+     isRelationEdge, entityKeys / union-find / keyToReferent all skip it), so this
+     appends to the log without perturbing a single node, edge, or cluster — the
+     suggestion edges projectGraph draws from these events are the only consumer.
+
+     Modeled on promoteRoleReferents: same flag/prose/array guards, same
+     tail-minting + _seqToSent + _projCache.delete template, same try-wrap so the
+     identity layer never blocks a parse. Requires role_referent_recovery ON for
+     role nodes to exist; with coref_overlay OFF (the default) it is a no-op and
+     the projection is byte-identical to the named-only baseline.
+
+     Scoring — deterministic, identity by signal not embedding:
+       score(R,N) = gender_agreement × number_agreement × (1 − exclusion) × affinity
+     • gender_agreement: role gender from ROLE_GENDER (the HEAD, name-anchored);
+       named gender from the projection (genderFromName + learnedGender, already
+       name-anchored). Both known & differ → 0 (the SYN gravity veto, engine.js
+       ~5148, mirrored — and the candidate is dropped). Role known, name unknown →
+       0.75 (a mild discount so a gender-match outranks a gender-unknown, never a
+       hard veto). Either unknown → 1.
+     • number_agreement: a plural role (isPlural) can't BE a single named person → 0.
+     • exclusion ∈ [0,1]: a role is not the name it interacts with BECAUSE they're
+       distinct. possessor_ref === N → 1 (full; "his father"'s possessor is Gregor,
+       which leaves it standalone). The HUB (most-mentioned person — the maximal-
+       cooccurrence party PR1 already discounts) → coref_exclusion_weight. And a
+       candidate that never co-occurs with the role is not a coref candidate at all
+       (no shared scene ⇒ no identity evidence) — dropped before scoring.
+     • affinity: doc._edgeAffinity (PR1's optional cosine table; absent in Node) —
+       a tiebreaker only, never the decider. */
+  function proposeCoreference(doc) {
+    if (!READING_RULES.coref_overlay.value) return 0;
+    if (!doc || doc.kind !== 'prose' || !Array.isArray(doc._events) || !Array.isArray(doc.sentenceTexts)) return 0;
+    try {
+      const floor   = Number(READING_RULES.coref_bind_floor.value);
+      const margin  = Number(READING_RULES.coref_ambiguous_margin.value);
+      const exclW   = Number(READING_RULES.coref_exclusion_weight.value);
+      const FLOOR   = isFinite(floor)  ? floor  : 0.55;
+      const MARGIN  = isFinite(margin) ? margin : 0.15;
+      const EXCL_W  = isFinite(exclW)  ? Math.max(0, Math.min(1, exclW)) : 0.5;
+
+      // Role nodes: the INS events PR1 appended (eo_role). Nothing to do without them.
+      const roleNodes = doc._events.filter(ev => ev.op === 'INS' && ev.eo_role && ev.role && ev.referent_id);
+      if (!roleNodes.length) return 0;
+
+      // The projection (named + role entities) — keys match projectGraph's edge
+      // endpoints, gender is already name-anchored. Named candidates are the
+      // PERSON entities that are NOT role nodes (role ids live in the rr- space).
+      const proj = projectEntities(doc);
+      const ents = proj.entities || [];
+      const byRef = new Map(ents.map(e => [e.referent_id, e]));
+      const named = ents.filter(e => e.type === 'person' && !String(e.referent_id || '').startsWith('rr-'));
+      if (!named.length) {
+        // No named persons to bind to ⇒ every role is standalone. Still record
+        // the verdicts so the overlay is observable (and the count is honest).
+      }
+      // The hub: the most-mentioned named person (the degenerate-attractor PR1's
+      // role_hub_discount already guards; here it carries the exclusion weight).
+      let hub = null;
+      for (const e of named) { if (!hub || (e.raw || 0) > (hub.raw || 0)) hub = e; }
+
+      // Co-occurrence between a role and each named candidate, read straight off
+      // the PR1 role-cooccur CONs (the projected weight_detail.cooccur). Keyed by
+      // the SAME cluster keys projectGraph emits, so the lookup is exact.
+      const projForCooc = projectGraph(doc._events, doc._edgeAffinity ? { edgeAffinity: doc._edgeAffinity } : {});
+      const cooccur = new Map();   // "roleKey|candKey" -> summed cooccur count
+      for (const e of (projForCooc.edges || [])) {
+        const k1 = e.a + '|' + e.b, k2 = e.b + '|' + e.a;
+        cooccur.set(k1, (cooccur.get(k1) || 0) + (e.weight_detail ? (e.weight_detail.cooccur || 0) : 0));
+        cooccur.set(k2, (cooccur.get(k2) || 0) + (e.weight_detail ? (e.weight_detail.cooccur || 0) : 0));
+      }
+      const affOf = (aKey, bKey) => {
+        const t = doc._edgeAffinity;
+        if (!t || typeof t.get !== 'function') return 1;
+        const v = t.get(aKey + '|' + bKey);
+        const w = (v == null) ? t.get(bKey + '|' + aKey) : v;
+        return (typeof w === 'number' && isFinite(w)) ? w : 1;
+      };
+
+      // ── Mint events from the tail of the log (the promoteRoleReferents pattern) ──
+      let seq = doc._events.length ? ((doc._events[doc._events.length - 1].seq || 0) + 1) : 0;
+      const seqToSent = doc._seqToSent || (doc._seqToSent = new Map());
+      const appended = [];
+      const round3 = (x) => Math.round(x * 1000) / 1000;
+
+      for (const R of roleNodes) {
+        const roleEnt = byRef.get(R.referent_id);
+        const roleKey = roleEnt ? roleEnt.key : normSurface(R.target);
+        const head = R.role.head;
+        const roleGender = ROLE_GENDER.get(head) || null;
+        const roleNumber = isPlural(head) ? 'plural' : 'singular';
+        const possRef = R.role.possessor_ref || null;
+
+        let scored = [];
+        if (roleNumber !== 'plural') {
+          for (const N of named) {
+            const ng = N.gender || null;
+            // gender agreement — mirror the SYN gravity veto (both known & differ ⇒ apart)
+            let genderAgreement;
+            if (roleGender && ng) genderAgreement = (roleGender === ng) ? 1 : 0;
+            else if (roleGender && !ng) genderAgreement = 0.75;   // mild, not a veto
+            else genderAgreement = 1;
+            if (genderAgreement === 0) continue;                  // hard gender veto
+            // must share a scene to be a coref candidate (no cooccur ⇒ no evidence)
+            const co = cooccur.get(roleKey + '|' + N.key) || 0;
+            if (co <= 0) continue;
+            // exclusion: a role is never its own possessor; the hub is the
+            // maximal-cooccurrence party and is excluded by the weight.
+            let exclusion = 0;
+            if (possRef && possRef === N.referent_id) exclusion = 1;
+            else if (hub && N.referent_id === hub.referent_id) exclusion = EXCL_W;
+            const affinity = affOf(roleKey, N.key);
+            const score = genderAgreement * 1 * (1 - exclusion) * affinity;
+            if (score > 0) scored.push({ name: N.name, referent_id: N.referent_id, score, exclusion, affinity });
+          }
+        }
+        scored.sort((a, b) => b.score - a.score || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        const top = scored[0] || null;
+        const second = scored[1] || { score: 0 };
+
+        let verdict, candidates, confidence;
+        if (top && top.score >= FLOOR && (top.score - second.score) >= MARGIN) {
+          verdict = 'bind';
+          candidates = [{ name: top.name, referent_id: top.referent_id, score: round3(top.score) }];
+          confidence = round3(top.score);
+        } else if (top && top.score >= FLOOR) {
+          verdict = 'ambiguous';
+          candidates = scored.slice(0, 2).map(c => ({ name: c.name, referent_id: c.referent_id, score: round3(c.score) }));
+          // confidence for an ambiguous verdict is the (small) margin — how close
+          // the field is to a decision, not how strong the top is.
+          confidence = round3(Math.max(0, top.score - second.score));
+        } else {
+          verdict = 'standalone';
+          candidates = [];
+          confidence = top ? round3(top.score) : 0;
+        }
+
+        const firstIdx = (R.role.sentence_idxs && R.role.sentence_idxs[0] != null)
+          ? R.role.sentence_idxs[0]
+          : (R.sentence_idx != null ? R.sentence_idx : null);
+        const ev = {
+          id: 'ev-' + seq, seq: seq++, op: 'COREF', stance: 'Interpreting',
+          role_ref: R.referent_id, role_surface: R.target,
+          verdict, candidates, confidence,
+          basis: {
+            gender: roleGender, number: roleNumber,
+            exclusion: top ? round3(top.exclusion) : 0,
+            affinity: top ? round3(top.affinity) : null,
+          },
+          eo_role: true,
+          sentence_idx: firstIdx, sentence: (firstIdx != null ? (doc.sentenceTexts[firstIdx] || null) : null),
+          src: 'coref-overlay',
+        };
+        doc._events.push(ev);
+        appended.push(ev);
+        if (ev.sentence_idx != null) seqToSent.set(ev.seq, ev.sentence_idx);
+      }
+
+      _projCache.delete(doc);
+      return appended.length;
+    } catch (e) {
+      // the identity overlay never blocks a parse
+      return 0;
+    }
   }
 
   function entityDetail(doc, name) {
@@ -10172,7 +10457,9 @@ function projectGraph(events, frame = {}) {
       // refinement beneath the Entity cell ("Entity / person"), never as a
       // sibling of the nine
       entities: entities.map(e => ({ name: e.name, key: e.key, type: e.type, site: e.site, address: eoAddress(e.site, e.type), mentions: e.raw, mass: e.mass, sents: e.sents })),
-      edges: edges.map(e => ({ a: e.a, b: e.b, aName: e.aName, bName: e.bName, verb: e.verb, weight: e.weight, weight_detail: e.weight_detail })),
+      // suggestion/verdict/confidence are additive (undefined on normal CON
+      // edges — harmless); a coreference suggestion edge carries them.
+      edges: edges.map(e => ({ a: e.a, b: e.b, aName: e.aName, bName: e.bName, verb: e.verb, weight: e.weight, weight_detail: e.weight_detail, suggestion: e.suggestion, verdict: e.verdict, confidence: e.confidence })),
       assertions: (p.assertions || []).map(a => ({ subject: a.name, is: a.is })),
       spine: p.spine || [],
       frame: clone(frame),
@@ -12858,6 +13145,7 @@ function projectGraph(events, frame = {}) {
   // arrives as 1; the seed is boolean false. Either truthy form means ON.
   function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
   function roleReferentRecoveryEnabled() { const v = READING_RULES.role_referent_recovery.value; return v === true || v === 1; }
+  function corefOverlayEnabled() { const v = READING_RULES.coref_overlay.value; return v === true || v === 1; }
   function crossSourceEnabled() { const v = READING_RULES.cross_source.value; return v === true || v === 1; }
   function bindingResolutionEnabled() { const v = READING_RULES.binding_resolution.value; return v === true || v === 1; }
   // Semantic antimatter master (SPEC): the rescue + demotion stages at the
@@ -14108,6 +14396,11 @@ function projectGraph(events, frame = {}) {
     // parity floor): the master-flag getter, mirroring relationGateEnabled. The
     // pass itself (promoteRoleReferents/attachEdgeAffinity) runs inside parseProse.
     roleReferentRecoveryEnabled,
+    // coreference overlay (coref_overlay rule, OFF by default — the parity
+    // floor): the master-flag getter. The pass (proposeCoreference) runs inside
+    // parseProse after promoteRoleReferents; projectGraph emits its verdicts as
+    // suggestion edges only when the flag is on.
+    corefOverlayEnabled,
     bindClaimKeys, bindClaimKeysScope, groundingEnvelope,
     bindingResolutionEnabled,
     // the addressee field — the second person (addressee.js / window.EOAddressee).
