@@ -1908,10 +1908,30 @@ ol.refdesk-defs li { margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; }
 .wiki-hint { font-size: 13px; line-height: 1.6; color: var(--text-2); margin: 4px 2px; }
 .wiki-hint code { font-family: var(--mono); font-size: 11.5px; background: var(--bg-subtle); padding: 1px 5px; border-radius: var(--r-xs); }
 .wiki-options { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
-.wiki-option { display: block; width: 100%; text-align: left; cursor: pointer; font-family: var(--sans); background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 11px 13px; transition: border-color .12s, background .12s; }
-.wiki-option:hover { border-color: var(--enc-ink); background: var(--bg); }
+.wiki-opt-row { display: flex; align-items: stretch; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-sunken); overflow: hidden; transition: border-color .12s, background .12s; }
+.wiki-opt-row:hover { border-color: var(--enc-ink); }
+.wiki-opt-row.tagged { border-color: var(--enc-ink); background: var(--accent-tint); }
+.wiki-opt-row.added { opacity: .72; }
+.wiki-opt-check { flex: none; width: 42px; display: flex; align-items: center; justify-content: center; border: none; border-right: 1px solid var(--border); background: transparent; color: var(--text-3); cursor: pointer; }
+.wiki-opt-check:hover:not(:disabled) { background: var(--bg-subtle); color: var(--enc-ink); }
+.wiki-opt-row.tagged .wiki-opt-check { color: var(--enc-ink); }
+.wiki-opt-check:disabled { cursor: default; color: var(--good-fg); }
+.wiki-option { flex: 1; min-width: 0; display: block; text-align: left; cursor: pointer; font-family: var(--sans); background: transparent; border: none; padding: 10px 13px; }
+.wiki-option:hover { background: var(--bg); }
 .wiki-option-title { display: block; font-size: 14.5px; font-weight: 600; color: var(--text); }
+.wiki-opt-badge { margin-left: 8px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--good-fg); border: 1px solid var(--good-bd); border-radius: var(--r-xs); padding: 0 5px; vertical-align: middle; }
 .wiki-option-snippet { display: block; font-size: 12.5px; color: var(--text-3); margin-top: 3px; line-height: 1.45; }
+.wiki-tagcount { font-size: 12.5px; color: var(--text-2); } .wiki-tagcount b { color: var(--enc-ink); }
+.wiki-clear { font-family: var(--mono); font-size: 11px; border: none; background: none; color: var(--text-3); cursor: pointer; text-decoration: underline; }
+.wiki-clear:hover { color: var(--text); }
+.wiki-batch { font-size: 12.5px; color: var(--text-2); }
+/* the per-article tag toggle in the reader (light "paper", so Wikipedia-ish hues) */
+.wiki-title-row { display: flex; align-items: flex-start; gap: 12px; border-bottom: 1px solid #a2a9b1; margin-bottom: .2em; }
+.wiki-title-row .wiki-title { flex: 1; border-bottom: none; margin-bottom: 0; }
+.wiki-tag-toggle { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 13px; font-family: var(--sans); font-size: 12.5px; font-weight: 600; border: 1px solid #a2a9b1; border-radius: var(--r-pill); background: #fff; color: #3366cc; cursor: pointer; white-space: nowrap; }
+.wiki-tag-toggle:hover:not(:disabled) { background: #eaf3ff; }
+.wiki-tag-toggle.on { background: #3366cc; border-color: #3366cc; color: #fff; }
+.wiki-tag-toggle:disabled { color: #2a7a3b; border-color: #bdd9c3; background: #f1f9f3; cursor: default; }
 
 .wiki-reader { flex: 1; min-height: 0; overflow-y: auto; background: #fff; color: #202122; padding: 22px 30px 34px; }
 .wiki-reader .refdesk-loading, .wiki-reader .refdesk-note, .wiki-reader .refdesk-err, .wiki-reader .refdesk-placeholder { color: #54595d; }
