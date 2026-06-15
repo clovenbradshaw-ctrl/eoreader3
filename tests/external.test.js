@@ -26,6 +26,23 @@ const WIKI = {
 const WIKT = {
   socialism: { Noun: ['Any of various <a href="/economic">economic</a> systems.', 'A transitional stage between capitalism and communism.'] },
 };
+// Rendered article HTML (action=parse → articlePage): a lead with two footnotes,
+// a section with a third, an infobox image, and the matching reference list.
+const PARSE_HTML = {
+  Socialism: `<div class="mw-parser-output">
+<table class="infobox"><caption>Socialism</caption><tr><td><img src="//upload.wikimedia.org/soc.jpg"></td></tr></table>
+<p><b>Socialism</b> is a political philosophy.<sup class="reference" id="cn1"><a href="#cite_note-marx-1">[1]</a></sup> It has a long intellectual history.<sup class="reference"><a href="#cite_note-bbc-2">[2]</a></sup></p>
+<h2><span class="mw-headline" id="History">History</span><span class="mw-editsection">[edit]</span></h2>
+<p>Socialist systems are divided into market and non-market forms.<sup class="reference"><a href="#cite_note-econ-3">[3]</a></sup></p>
+<h2><span class="mw-headline">References</span></h2>
+<ol class="references">
+<li id="cite_note-marx-1"><span class="reference-text"><cite class="citation book">Marx, K. (1867). <i>Das Kapital</i>. <a rel="nofollow" class="external text" href="https://example.com/kapital">example.com/kapital</a></cite></span></li>
+<li id="cite_note-bbc-2"><span class="reference-text"><cite class="citation web">"Socialism explained". <a rel="nofollow" class="external text" href="https://www.bbc.co.uk/socialism">bbc.co.uk</a></cite></span></li>
+<li id="cite_note-econ-3"><span class="reference-text"><cite class="citation journal">Smith (2008). <a rel="nofollow" class="external text" href="https://nature.com/markets">nature.com/markets</a></cite></span></li>
+</ol>
+<div class="navbox">nav junk that must be dropped</div>
+</div>`,
+};
 const titleIndex = {};      // underscored title → entry (summary endpoint)
 const byTitle = {};         // exact title → entry (extracts endpoint)
 for (const k of Object.keys(WIKI)) { titleIndex[WIKI[k].title.replace(/ /g, '_')] = WIKI[k]; byTitle[WIKI[k].title] = WIKI[k]; }
@@ -55,6 +72,16 @@ function makeFetch(log) {
         ? { '1': { pageid: 1, title: e.title, extract: e.extract, description: e.description, thumbnail: e.thumb ? { source: e.thumb } : undefined } }
         : { '-1': { missing: '' } };
       return ok({ query: { pages } });
+    }
+    // Wikipedia rendered article (action=parse → articlePage())
+    m = /action=parse/.test(inner) && /[?&]page=([^&]+)/.exec(inner);
+    if (m) {
+      const title = decodeURIComponent(m[1]);
+      log.push({ at, kind: 'wiki-parse', term: title });
+      const e = byTitle[title];
+      if (!e) return ok({ error: { code: 'missingtitle' } });
+      const html = PARSE_HTML[title] || ('<div class="mw-parser-output"><p>' + e.extract + '</p></div>');
+      return ok({ parse: { title, displaytitle: title, text: { '*': html } } });
     }
     // Normalized /lookup endpoint (enrichTerm): top-level ?q=, not the ?url= proxy
     if (full.indexOf('?url=') === -1 && /[?&]q=/.test(full)) {
@@ -261,6 +288,45 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     X.setConfig({ proxy: '' });
     eq((await X.searchOptions('socialism')).status, 'disabled', 'no proxy → disabled, not a guess');
     X.setConfig({ proxy: 'http://proxy.test/feed' });
+  });
+
+  await group('articlePage() — rendered article + citations pulled through', async () => {
+    log.length = 0;
+    const a = await X.articlePage('socialism');
+    eq(a.status, 'hit', 'articlePage hit');
+    eq(a.payload.title, 'Socialism', 'resolved title');
+    ok(a.payload.html && a.payload.html.indexOf('political philosophy') !== -1, 'rendered HTML carried for the reader');
+    // clean ingest text: headings survive as == H ==, the [edit] affordance does not
+    ok(/== History ==/.test(a.payload.text), 'section heading kept as structure');
+    ok(a.payload.text.indexOf('[edit]') === -1, 'edit-section chrome stripped from the ingest text');
+    ok(a.payload.text.indexOf('nav junk') === -1, 'navbox text never reaches the ingest body');
+    eq(a.payload.thumbnail, 'https://upload.wikimedia.org/soc.jpg', 'infobox image absolutised for the card');
+    // the article's own citations, in document order
+    eq(a.payload.references.length, 3, 'three sources lifted from the reference list');
+    eq(a.payload.references[0].n, 1, 'references numbered in document order');
+    ok(/Das Kapital/.test(a.payload.references[0].text), 'reference text carried (markup stripped)');
+    eq(a.payload.references[0].url, 'https://example.com/kapital', 'reference links OUT to the original work');
+    eq(a.payload.references[1].url, 'https://www.bbc.co.uk/socialism', 'second source url carried');
+    // the per-sentence footnote map: which [n] backs which sentence
+    const fnByText = {}; a.payload.footnotes.forEach(f => { fnByText[f.text] = f.refs.join(','); });
+    eq(fnByText['Socialism is a political philosophy.'], '1', 'first claim → footnote [1] only');
+    eq(fnByText['It has a long intellectual history.'], '2', 'second claim → footnote [2] only (no boundary bleed)');
+    eq(fnByText['Socialist systems are divided into market and non-market forms.'], '3', 'a sectioned claim → footnote [3]');
+    const reqs = log.length;
+    eq(log.filter(e => e.kind === 'wiki-parse').length, 1, 'one parse request for the article');
+    const b = await X.articlePage('socialism');
+    eq(b.cached, true, 'second articlePage served from the session cache');
+    eq(log.length, reqs, 'a cached article pays no further network');
+    const g = await X.articlePage('Mrs. Mill');
+    eq(g.status, 'gated', 'articlePage honours the private-individual gate');
+    X.setConfig({ proxy: '' });
+    eq((await X.articlePage('something else entirely')).status, 'disabled', 'no proxy → disabled, not a guess');
+    X.setConfig({ proxy: 'http://proxy.test/feed' });
+
+    // parseWikiReferences is pure — exercise it directly on the same HTML
+    const refs = X.parseWikiReferences(PARSE_HTML.Socialism);
+    eq(refs.length, 3, 'parseWikiReferences finds every cite_note entry');
+    ok(refs.every(r => r.url), 'each parsed reference carries an external url');
   });
 
   await group('enrichTerm() — the normalized /lookup card', async () => {

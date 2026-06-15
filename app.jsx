@@ -279,6 +279,10 @@ function App() {
   // button (in the 'auto'/'on' modes) flags THIS message to search Wikipedia for
   // options, bypassing the acquisition gate. One-shot — consumed/cleared on send.
   const [forceEnrich, setForceEnrich] = useState(false);
+  // The explicit Wikipedia search modal. The composer's Wikipedia button opens
+  // this (the reader searches and picks an article themselves — the chat no
+  // longer guesses a term); null when closed, else a seed query string ('' ok).
+  const [wikiSearch, setWikiSearch] = useState(null);
   const [model, setModel] = useState(defaultModel);
   // Auto model selection. When on (the default for a fresh install), Cleo probes
   // the device on boot and loads the model that runs best here — see the boot
@@ -1070,6 +1074,26 @@ function App() {
     requestAnimationFrame(bring);
     if (flashTimer.current) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlashSent(null), 2600);
+  }, []);
+
+  // The seam chat.jsx's citation chips read to source a grounded claim THROUGH
+  // Wikipedia: given a cited (docId, sentence idx), return the original sources
+  // behind that line — [{ n, text, url }] from the doc's pulled-through citations
+  // — or null. A pure live read of docsRef (the codebase's window.EO* idiom), so
+  // no prop need thread through the Markdown renderer. Inert for non-wiki docs.
+  useEffect(() => {
+    window.EOCiteProv = (docId, idx) => {
+      try {
+        const d = (docsRef.current || []).find(x => x.id === docId);
+        const lr = d && d.wiki && d.wiki.lineRefs;
+        const ns = lr && lr[idx];
+        if (!ns || !ns.length) return null;
+        const byN = {}; (d.wiki.references || []).forEach(r => { byN[r.n] = r; });
+        const out = ns.map(n => byN[n]).filter(Boolean);
+        return out.length ? out : null;
+      } catch (e) { return null; }
+    };
+    return () => { try { delete window.EOCiteProv; } catch (e) { window.EOCiteProv = null; } };
   }, []);
 
   const onEntity = (name) => {
@@ -3607,15 +3631,10 @@ function App() {
     setWikiMode(next);
     if (next !== 'off') { try { window.EOExternal && window.EOExternal.grantConsent && window.EOExternal.grantConsent(); } catch (e) {} }
   };
-  // The composer Wikipedia button is a per-message FORCE ("take a stab now") in
-  // the active modes — it bypasses the acquisition gate for the next send only
-  // (it offers options to research; it does not fetch). Pressing it implies
-  // consent to consult the desk, recorded once.
-  const toggleForceEnrich = () => setForceEnrich(v => {
-    const next = !v;
-    if (next) { try { window.EOExternal && window.EOExternal.grantConsent && window.EOExternal.grantConsent(); } catch (e) {} }
-    return next;
-  });
+  // The composer Wikipedia button now OPENS THE SEARCH MODAL (see wikiSearch
+  // state + WikiSearchModal) rather than flagging a per-message force, so the
+  // reader picks the article explicitly instead of the chat guessing a term.
+  // The modal records proxy consent on its first search.
 
   // Commit an externally-sourced document into the graph WITHOUT the upload
   // path's UI seizure (no tab focus, no layout change, no busy flip): it is a
@@ -3651,6 +3670,63 @@ function App() {
     parts.push('');
     if (p.url) parts.push('Source: ' + p.url);
     return parts.join('\n').trim();
+  };
+
+  // Pull the article's CITATIONS through onto the ingested doc as provenance.
+  // The body stays clean (reference rows pollute retrieval — see external.js),
+  // so the sources ride as metadata: `doc.wiki.references` is the numbered list,
+  // and `doc.wiki.lineRefs` maps each ingested sentence index to the footnote
+  // numbers behind it — built by matching the engine's segmented sentences back
+  // to external.js's HTML-derived footnote sentences (the two segment the SAME
+  // body text, so a normalized substring match is exact in practice). This is
+  // what lets a grounded claim be sourced THROUGH to what Wikipedia cites, with
+  // no change to the engine's own citation pipeline. Best-effort and defensive.
+  const attachWikiProvenance = (doc, payload) => {
+    if (!doc || !payload) return;
+    const references = (payload.references || []).filter(r => r && r.text);
+    const footnotes = payload.footnotes || [];
+    const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const fn = footnotes.map(f => ({ refs: f.refs || [], n: norm(f.text) })).filter(f => f.n.length >= 12 && f.refs.length);
+    const lineRefs = {};
+    const sents = doc.sentenceTexts || [];
+    for (let i = 0; i < sents.length; i++) {
+      const sn = norm(sents[i]);
+      if (sn.length < 12) continue;
+      for (const f of fn) {
+        if (sn === f.n || sn.indexOf(f.n) !== -1 || f.n.indexOf(sn) !== -1) {
+          const set = lineRefs[i] || (lineRefs[i] = []);
+          for (const r of f.refs) if (set.indexOf(r) === -1) set.push(r);
+        }
+      }
+      if (lineRefs[i]) lineRefs[i].sort((a, b) => a - b);
+    }
+    doc.wiki = { url: payload.url || null, title: payload.title || null, references, lineRefs };
+  };
+
+  // The reader chose an article in the search modal and pressed "Add to graph":
+  // ingest it as a citable doc (clean body), pull its citations through as
+  // provenance, add it as a source, and reflect it in the chat as a sourced
+  // card. Returns { id, name } so the modal can show the added state. The modal
+  // already fetched the rendered payload, so this does no further network.
+  const ingestWikiFromModal = async (payload) => {
+    if (!payload || !payload.title) return null;
+    const name = 'Wikipedia · ' + payload.title;
+    let doc = docsRef.current.find(d => d.name === name);
+    if (!doc) {
+      const text = buildWikiDocText(payload);
+      if (!(text && text.replace(/\s+/g, ' ').trim().length > 60)) return null;
+      doc = await ingestExternalSource(name, text);
+    }
+    if (!doc) return null;
+    attachWikiProvenance(doc, payload);
+    addSource(doc.id);
+    const nRefs = (payload.references || []).length;
+    const line = 'Added **' + name + '** to the graph'
+      + (nRefs ? ' — its ' + nRefs + ' Wikipedia citation' + (nRefs === 1 ? '' : 's') + ' came along, so a claim grounded on it can be traced to the original source.' : '.');
+    const turnId = 'wt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    setMessages(m => [...m, { role: 'assistant', turnId, text: line,
+      enrichment: { status: 'hit', term: payload.title, query: payload.title, payload, cached: false, basis: payload._basis || null, ingested: { id: doc.id, name, deferred: true } } }]);
+    return { id: doc.id, name };
   };
 
   // An acquisition term is AMBIGUOUS against the active subject when it is a
@@ -3907,7 +3983,11 @@ function App() {
     try { X.grantConsent && X.grantConsent(); } catch (e) {}
     tag({ loading: true, term });
     let res;
-    try { res = await X.article(term); }
+    // Prefer the rendered-article fetch (articlePage): it carries the article's
+    // own citations + a per-sentence footnote map, so the ingested doc can trace
+    // a claim THROUGH to the original source. Fall back to the plain extract
+    // (article) on an older external.js.
+    try { res = typeof X.articlePage === 'function' ? await X.articlePage(term) : await X.article(term); }
     catch (e) { res = { status: 'error', error: String((e && e.message) || e) }; }
     const base = { ...res, term, query: (res && res.query) || term };
     tag(base);
@@ -3919,7 +3999,7 @@ function App() {
       const text = buildWikiDocText(res.payload);
       if (text && text.replace(/\s+/g, ' ').trim().length > 60) doc = await ingestExternalSource(name, text);
     }
-    if (doc) { addSource(doc.id); tag({ ...base, ingested: { id: doc.id, name, deferred: !!deferred } }); }
+    if (doc) { attachWikiProvenance(doc, res.payload); addSource(doc.id); tag({ ...base, ingested: { id: doc.id, name, deferred: !!deferred } }); }
     return { doc: doc || null, status };
   };
 
@@ -4589,7 +4669,7 @@ function App() {
     sources: sources.map(id => docsById[id]).filter(Boolean).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     addable: docs.filter(d => !sources.includes(d.id)).map(d => ({ id: d.id, name: d.name, kind: d.kind })),
     onAddSource: addSource, onRemoveSource: removeSource,
-    wikiMode, forceEnrich, onForceEnrich: toggleForceEnrich,
+    wikiMode, onWikiSearch: () => setWikiSearch(''),
     smartParse, onSmartParse: () => setSmartParse(v => !v), hasTable: docs.some(d => d.kind === 'table'),
   };
 
@@ -4717,6 +4797,10 @@ function App() {
         <EntityModal doc={d} name={entityModal.name} onCite={flashCitation} onEntity={(n) => setEntityModal({ docId: d.id, name: n })}
           onOpenTab={openEntityTab} onClose={() => setEntityModal(null)} />
       ) : null; })()}
+      {wikiSearch != null && window.WikiSearchModal && (
+        <window.WikiSearchModal initialQuery={wikiSearch} onClose={() => setWikiSearch(null)}
+          onIngest={ingestWikiFromModal} onOpenDoc={openTab} />
+      )}
       {dragOver && <div className="drop-veil"><div className="drop-card"><Icon name="upload" size={26} /> Drop to read</div></div>}
       {ingestStatus && (() => {
         const easing = !!ingestStatus.easing;

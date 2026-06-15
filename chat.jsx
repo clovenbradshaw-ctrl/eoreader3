@@ -24,8 +24,17 @@
 function renderCite(kind, payload, key, onCite) {
   if (kind === 'cite') {
     const [docId, idx, label] = payload.split(':');
-    return <button key={key} type="button" className="cite" title={'Jump to ' + label + ' in the document'}
-      onClick={() => onCite(docId, parseInt(idx, 10))}>{label}</button>;
+    const i = parseInt(idx, 10);
+    // Source THROUGH the document where it carries pulled-through citations (a
+    // Wikipedia article's own references): the chip then says which original
+    // works back the cited line, so the trail doesn't stop at the encyclopaedia.
+    const prov = (typeof window !== 'undefined' && window.EOCiteProv) ? window.EOCiteProv(docId, i) : null;
+    const sourced = !!(prov && prov.length);
+    const title = sourced
+      ? 'Jump to ' + label + ' — Wikipedia cites: ' + prov.map(s => '[' + s.n + '] ' + String(s.text || '').slice(0, 90)).join('  ·  ')
+      : 'Jump to ' + label + ' in the document';
+    return <button key={key} type="button" className={'cite' + (sourced ? ' cite-sourced' : '')} title={title}
+      onClick={() => onCite(docId, i)}>{label}</button>;
   }
   if (kind === 'infer') {
     // The inference void: a claim the reader phrased across two cited spans the
@@ -994,14 +1003,14 @@ function SourceChips({ sources, addable, onAddSource, onRemoveSource }) {
   );
 }
 
-function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, showModeToggle, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, forceEnrich, onForceEnrich, smartParse, onSmartParse, hasTable }) {
+function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, showModeToggle, onAttach, busy, placeholder, sources, addable, onAddSource, onRemoveSource, wikiMode, onWikiSearch, smartParse, onSmartParse, hasTable }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const el = ref.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }, [value]);
   const submit = () => { if (value.trim() && !busy) onSend(); };
   // The reference desk needs a configured proxy; in 'off' mode (or with no proxy)
   // the composer shows no Wikipedia control and the chat stays local. In 'auto'/
-  // 'on' the button is a per-message FORCE — take a stab on Wikipedia now (offer
-  // options for this one message), not a global toggle.
+  // 'on' the button OPENS THE SEARCH MODAL — the reader searches and picks an
+  // article themselves; the chat no longer guesses what they meant.
   const canEnrich = !!(window.EOExternal && window.EOExternal.enabled && window.EOExternal.enabled());
   const showWiki = canEnrich && wikiMode && wikiMode !== 'off';
   return (
@@ -1027,10 +1036,10 @@ function Composer({ value, onChange, onSend, onStop, generating, mode, onMode, s
               ))}
             </div>
           )}
-          {showWiki && onForceEnrich && (
-            <button type="button" className={'comp-btn enrich' + (forceEnrich ? ' on' : '')} aria-pressed={!!forceEnrich}
-              title="Search Wikipedia for this message now — surface matching articles to research, even in Auto (skips the gate, not the choice). Only the search term (not the document) goes to Wikipedia through the proxy; nothing is pulled in until you pick one."
-              onClick={onForceEnrich}>
+          {showWiki && onWikiSearch && (
+            <button type="button" className="comp-btn enrich"
+              title="Search Wikipedia — opens a search box to find and read an article, then add it to the graph. Only your search term goes to Wikipedia through the proxy; nothing is pulled in until you pick one."
+              onClick={onWikiSearch}>
               <Icon name="book" size={15} /> Wikipedia
             </button>
           )}
