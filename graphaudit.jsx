@@ -444,7 +444,7 @@ function GaxGraphTab({ doc, onPick }) {
           <h4>Relations <span className="gax-dim">— edges drawn between referents (SYN)</span></h4>
           <div className="gax-rels">
             {pEdges.slice.map((e, i) => (
-              <div key={i} className="gax-rel"><span className="gax-a">{e.aName}</span><span className="gax-verb">{e.verb || '—'}</span><span className="gax-b">{e.bName}</span>{e.weight > 1 && <span className="gax-dim gax-mono">×{e.weight}</span>}</div>
+              <div key={i} className="gax-rel"><span className="gax-a">{e.aName}</span><span className="gax-verb">{e.verb || '—'}</span><span className="gax-b">{e.bName}</span>{e.weight > 1 && <span className="gax-dim gax-mono">×{Math.round(e.weight)}</span>}</div>
             ))}
             {!fEdges.length && <div className="gax-dim">none{ql ? ' match' : ''}</div>}
           </div>

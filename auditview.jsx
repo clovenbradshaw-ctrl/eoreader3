@@ -487,7 +487,7 @@ function GraphView({ doc }) {
               <span className="graph-a">{e.aName}</span>
               <span className="graph-verb">{e.verb || '—'}</span>
               <span className="graph-b">{e.bName}</span>
-              {e.weight > 1 && <span className="graph-ent-n">×{e.weight}</span>}
+              {e.weight > 1 && <span className="graph-ent-n">×{Math.round(e.weight)}</span>}
             </div>
           ))}
           {!snap.edges.length && <div className="graph-dim">none</div>}
