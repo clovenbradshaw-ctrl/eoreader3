@@ -1840,6 +1840,24 @@
   function stripThink(text) {
     return String(text == null ? '' : text).replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim();
   }
+  // A generation can SUCCEED and still come back vacuous — empty/whitespace, or
+  // nothing but a roleplay STAGE DIRECTION the small models sometimes emit in
+  // place of a reply ("*no response, just a brief pause*", "(pauses)"). That
+  // isn't an error, so it never trips the throw-and-retry path; callers use this
+  // to catch it and retry/fall back rather than render the artifact as an answer.
+  // Vacuous ⇔ after removing whole *…*/(…) stage-direction segments and the
+  // residual punctuation/whitespace, nothing substantive remains. Inner emphasis
+  // in a real reply survives (the surrounding words are kept), so only a reply
+  // that is *wholly* a stage direction (or blank) is flagged.
+  function isVacuousReply(text) {
+    const t = String(text == null ? '' : text).trim();
+    if (!t) return true;
+    const stripped = t
+      .replace(/\*[^*]*\*/g, ' ')                    // *stage direction*
+      .replace(/\([^)]*\)/g, ' ')                    // (stage direction)
+      .replace(/[\s　.,…·—–\-*_~"'`!?:;()]+/g, ''); // residual punctuation / whitespace
+    return stripped.length === 0;
+  }
   // A stateful per-turn delta filter: feed() each chunk, emitting only
   // outside-think text via onToken; flush() releases the held look-behind.
   function makeThinkFilter(onToken) {
@@ -1949,5 +1967,5 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, primePump, isSelfHosted, selfHostZipUrl, selfHostEntryName, load, cancelLoad, release, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter };
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, primePump, isSelfHosted, selfHostZipUrl, selfHostEntryName, load, cancelLoad, release, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter, isVacuousReply };
 })();
