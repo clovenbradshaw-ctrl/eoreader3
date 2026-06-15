@@ -432,36 +432,45 @@ function WikiSearchModal({ initialQuery, onClose, onIngest, onOpenDoc }) {
   const inputRef = React.useRef(null);
   const articleRef = React.useRef(null);
   const mounted = React.useRef(true);
+  const seqRef = React.useRef(0);                         // search-staleness guard (live typing)
   React.useEffect(() => () => { mounted.current = false; }, []);
 
   const [q, setQ] = React.useState(initialQuery || '');
   const [search, setSearch] = React.useState({ status: 'idle', options: [], error: null, term: '' });
   const [view, setView] = React.useState(null);          // 'article' once one is opened
   const [art, setArt] = React.useState({ status: 'idle', payload: null, error: null, term: '' });
-  const [ingested, setIngested] = React.useState(null);  // { id, name } once added
-  const [adding, setAdding] = React.useState(false);
+  const [selected, setSelected] = React.useState(() => new Map());  // title → { title, snippet } tagged for ingest
+  const [added, setAdded] = React.useState(() => new Map());        // title → { id, name } already in the graph
+  const [batch, setBatch] = React.useState({ active: false, done: 0, total: 0 });
 
-  const runSearch = React.useCallback((term) => {
+  // Search the moment there's something to search — no Enter needed. A keystroke
+  // updates q; this debounces it and fires the (rate-limited) options search,
+  // ignoring any response superseded by a newer query (seqRef). Enter / the
+  // button call runSearch() directly for an immediate pass. Tags PERSIST across
+  // searches, so a reader can gather articles from several queries before adding.
+  const runSearch = (term) => {
     term = String(term == null ? q : term).trim();
-    if (!term || !X || typeof X.searchOptions !== 'function') return;
+    if (!X || typeof X.searchOptions !== 'function') return;
+    if (!term) { seqRef.current++; setSearch({ status: 'idle', options: [], error: null, term: '' }); return; }
     try { X.grantConsent && X.grantConsent(); } catch (e) {}
-    setView(null); setArt({ status: 'idle', payload: null, error: null, term: '' }); setIngested(null);
+    const mySeq = ++seqRef.current;
+    setView(null);
     setSearch({ status: 'searching', options: [], error: null, term });
     X.searchOptions(term).then((res) => {
-      if (!mounted.current) return;
+      if (!mounted.current || mySeq !== seqRef.current) return;   // a newer query has overtaken this one
       const s = res && res.status;
       if (!res || s === 'disabled') setSearch({ status: 'disabled', options: [], error: null, term });
       else if (s === 'hit') setSearch({ status: 'hit', options: (res.options || []).slice(0, 12), error: null, term });
       else if (s === 'gated') setSearch({ status: 'gated', options: [], error: null, term });
       else if (s === 'error') setSearch({ status: 'error', options: [], error: res.error, term });
       else setSearch({ status: 'miss', options: [], error: null, term });
-    }, (e) => { if (mounted.current) setSearch({ status: 'error', options: [], error: String((e && e.message) || e), term }); });
-  }, [q, X]);
+    }, (e) => { if (mounted.current && mySeq === seqRef.current) setSearch({ status: 'error', options: [], error: String((e && e.message) || e), term }); });
+  };
 
   const openArticle = (title) => {
     if (!X || typeof X.articlePage !== 'function') return;
     try { X.grantConsent && X.grantConsent(); } catch (e) {}
-    setIngested(null); setView('article');
+    setView('article');
     setArt({ status: 'loading', payload: null, error: null, term: title });
     if (articleRef.current) articleRef.current.scrollTop = 0;
     X.articlePage(title, { resolved: true }).then((res) => {
@@ -471,12 +480,33 @@ function WikiSearchModal({ initialQuery, onClose, onIngest, onOpenDoc }) {
     }, (e) => { if (mounted.current) setArt({ status: 'error', payload: null, error: String((e && e.message) || e), term: title }); });
   };
 
-  const addToGraph = () => {
-    if (!art.payload || !onIngest || adding) return;
-    setAdding(true);
-    Promise.resolve(onIngest(art.payload)).then((info) => {
-      if (!mounted.current) return; setAdding(false); if (info) setIngested(info);
-    }, () => { if (mounted.current) setAdding(false); });
+  const toggleTag = (o) => {
+    const title = o && o.title; if (!title || added.has(title)) return;
+    setSelected((prev) => { const n = new Map(prev); if (n.has(title)) n.delete(title); else n.set(title, { title, snippet: o.snippet || '' }); return n; });
+  };
+
+  // Ingest a set of titles, one rate-limited hop each (articlePage caches what
+  // was already opened, so a previewed article re-uses its parse). Each ingested
+  // article pulls its citations through (onIngest, app side); progress streams
+  // through `batch`. Best-effort per title — one miss doesn't sink the rest.
+  const ingestTitles = (titles) => {
+    titles = (titles || []).filter((t) => t && !added.has(t));
+    if (!titles.length || batch.active || !onIngest) return;
+    setBatch({ active: true, done: 0, total: titles.length });
+    (async () => {
+      const ok = [];
+      for (const title of titles) {
+        if (!mounted.current) break;
+        let payload = null;
+        try { const res = await X.articlePage(title, { resolved: true }); if (res && res.status === 'hit') payload = res.payload; } catch (e) {}
+        if (payload) { try { const info = await onIngest(payload); if (info) ok.push({ title, info }); } catch (e) {} }
+        if (mounted.current) setBatch((b) => ({ ...b, done: b.done + 1 }));
+      }
+      if (!mounted.current) return;
+      setAdded((prev) => { const n = new Map(prev); ok.forEach((x) => n.set(x.title, x.info)); return n; });
+      setSelected((prev) => { const n = new Map(prev); ok.forEach((x) => n.delete(x.title)); return n; });
+      setBatch({ active: false, done: 0, total: 0 });
+    })();
   };
 
   // Footnote anchors ([1] → #cite_note-…, and the ↑ back-refs) scroll WITHIN the
@@ -495,34 +525,46 @@ function WikiSearchModal({ initialQuery, onClose, onIngest, onOpenDoc }) {
     if (tgt) { tgt.scrollIntoView({ behavior: 'smooth', block: 'center' }); tgt.classList.add('wiki-ref-flash'); setTimeout(() => { try { tgt.classList.remove('wiki-ref-flash'); } catch (e2) {} }, 1500); }
   };
 
+  React.useEffect(() => { if (inputRef.current) { try { inputRef.current.focus(); } catch (e) {} } }, []);
+  // debounce: a settled query (≥2 chars) searches on its own; clearing resets.
   React.useEffect(() => {
-    if (inputRef.current) { try { inputRef.current.focus(); } catch (e) {} }
-    if (initialQuery && initialQuery.trim()) runSearch(initialQuery);
-  }, []); // eslint-disable-line
+    const term = q.trim();
+    if (term.length < 2) { if (search.status !== 'idle' && !term) setSearch({ status: 'idle', options: [], error: null, term: '' }); return; }
+    const t = setTimeout(() => runSearch(term), 320);
+    return () => clearTimeout(t);
+  }, [q]); // eslint-disable-line
 
   const host = (() => { try { const u = X && X.cfg && X.cfg().proxy; return u ? new URL(u).host : ''; } catch (e) { return ''; } })();
   const p = art.payload;
+  const tagN = selected.size;
+  const curAdded = !!(p && added.has(p.title));
+  const curTagged = !!(p && selected.has(p.title));
+
+  const optionRow = (o, i) => {
+    const isAdded = added.has(o.title), isTagged = selected.has(o.title);
+    return (
+      <li key={i} className={'wiki-opt-row' + (isTagged ? ' tagged' : '') + (isAdded ? ' added' : '')}>
+        <button type="button" className="wiki-opt-check" role="checkbox" aria-checked={isAdded || isTagged} disabled={isAdded}
+          title={isAdded ? 'Already added' : isTagged ? 'Tagged — click to untag' : 'Tag for ingest'} onClick={() => toggleTag(o)}>
+          <Icon name={(isAdded || isTagged) ? 'check' : 'plus'} size={13} />
+        </button>
+        <button type="button" className="wiki-option" onClick={() => openArticle(o.title)}>
+          <span className="wiki-option-title">{o.title}{isAdded ? <span className="wiki-opt-badge">added</span> : null}</span>
+          {o.snippet ? <span className="wiki-option-snippet">{o.snippet}</span> : null}
+        </button>
+      </li>
+    );
+  };
 
   const results = (
     <div className="wiki-results">
-      {search.status === 'idle' ? <p className="wiki-hint">Search Wikipedia for an article to read and (optionally) add to the graph. Only your search term leaves the device, through your proxy{host ? <span> (<code>{host}</code>)</span> : null}.</p>
+      {search.status === 'idle' ? <p className="wiki-hint">Search Wikipedia, then <b>tag</b> any articles you want and add them to the graph in one go. Only your search term leaves the device, through your proxy{host ? <span> (<code>{host}</code>)</span> : null}; nothing is ingested until you choose.</p>
         : search.status === 'searching' ? <p className="refdesk-loading">Searching Wikipedia for “{search.term}”…</p>
         : search.status === 'disabled' ? <p className="refdesk-note">Wikipedia lookups are off (the proxy is cleared).</p>
         : search.status === 'gated' ? <p className="refdesk-note">“{search.term}” reads as a private individual; the desk does not resolve people against Wikipedia.</p>
         : search.status === 'error' ? <p className="refdesk-err">Couldn’t reach Wikipedia. <code>{search.error}</code></p>
         : search.status === 'miss' || !search.options.length ? <p className="refdesk-placeholder">No Wikipedia matches for “{search.term}”.</p>
-        : (
-          <ul className="wiki-options">
-            {search.options.map((o, i) => (
-              <li key={i}>
-                <button type="button" className="wiki-option" onClick={() => openArticle(o.title)}>
-                  <span className="wiki-option-title">{o.title}</span>
-                  {o.snippet ? <span className="wiki-option-snippet">{o.snippet}</span> : null}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+        : <ul className="wiki-options">{search.options.map(optionRow)}</ul>}
     </div>
   );
 
@@ -535,13 +577,23 @@ function WikiSearchModal({ initialQuery, onClose, onIngest, onOpenDoc }) {
         : art.status !== 'hit' || !p ? <p className="refdesk-placeholder">Couldn’t load “{art.term}”.</p>
         : (
           <React.Fragment>
-            <h1 className="wiki-title">{p.title}</h1>
+            <div className="wiki-title-row">
+              <h1 className="wiki-title">{p.title}</h1>
+              <button type="button" className={'wiki-tag-toggle' + (curTagged ? ' on' : '')} disabled={curAdded}
+                onClick={() => toggleTag({ title: p.title })}
+                title={curAdded ? 'Already added' : 'Tag this article to add with others'}>
+                <Icon name={(curAdded || curTagged) ? 'check' : 'plus'} size={13} /> {curAdded ? 'Added' : curTagged ? 'Tagged' : 'Tag'}
+              </button>
+            </div>
             <div className="wiki-article" dangerouslySetInnerHTML={{ __html: p.html || '' }} />
             <div className="wiki-article-foot">From <a href={p.url} target="_blank" rel="noopener">en.wikipedia.org</a> · {(p.references || []).length} citations · CC BY-SA</div>
           </React.Fragment>
         )}
     </div>
   );
+
+  const inArticle = view === 'article' && art.status === 'hit' && p;
+  const showFoot = inArticle || tagN > 0 || batch.active;
 
   return (
     <div className="overlay center" onClick={onClose}>
@@ -566,14 +618,24 @@ function WikiSearchModal({ initialQuery, onClose, onIngest, onOpenDoc }) {
         <div className="wiki-modal-body">
           {view === 'article' ? article : results}
         </div>
-        {view === 'article' && art.status === 'hit' && p ? (
+        {showFoot ? (
           <div className="wiki-modal-foot">
-            <RefSources references={p.references} />
+            {inArticle ? <RefSources references={p.references} /> : null}
             <div className="wiki-foot-actions">
-              {ingested ? (
-                <span className="wiki-added"><Icon name="check" size={13} /> Added as <b>{ingested.name}</b>{onOpenDoc ? <button type="button" className="refcard-open" onClick={() => { onOpenDoc(ingested.id); onClose && onClose(); }}>open</button> : null}</span>
+              {batch.active ? (
+                <span className="wiki-batch">Adding {batch.done}/{batch.total}…</span>
               ) : (
-                <button type="button" className="refdesk-go" onClick={addToGraph} disabled={adding}>{adding ? 'Adding…' : 'Add to graph'}</button>
+                <React.Fragment>
+                  {tagN > 0 ? <span className="wiki-tagcount"><b>{tagN}</b> tagged</span> : null}
+                  {tagN > 0 ? <button type="button" className="wiki-clear" onClick={() => setSelected(new Map())}>clear</button> : null}
+                  <div style={{ flex: 1 }} />
+                  {inArticle && curAdded ? (
+                    <span className="wiki-added"><Icon name="check" size={13} /> Added{onOpenDoc ? <button type="button" className="refcard-open" onClick={() => { onOpenDoc(added.get(p.title).id); onClose && onClose(); }}>open</button> : null}</span>
+                  ) : inArticle && !curTagged ? (
+                    <button type="button" className="refdesk-go" onClick={() => ingestTitles([p.title])}>Add to graph</button>
+                  ) : null}
+                  {tagN > 0 ? <button type="button" className="refdesk-go" onClick={() => ingestTitles(Array.from(selected.keys()))}>Add {tagN} to graph</button> : null}
+                </React.Fragment>
               )}
             </div>
           </div>
