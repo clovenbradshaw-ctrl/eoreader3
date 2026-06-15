@@ -12,10 +12,12 @@
    documents and the only path for handwriting.
 
    CONFIDENCE: TrOCR (a seq2seq decoder) exposes no calibrated confidence. We
-   declare the semantics as "heuristic" and emit a PRESENCE flag — 1 when the
-   model produced non-empty text, 0 when it did not. That is the heuristic,
-   stated plainly and emitted as-is; it is ordinal (text vs no text), never to
-   be read as a probability. (See the spec on confidence honesty.)
+   declare the semantics as "heuristic" and emit a PRESENCE flag — a deliberately
+   NON-MAXIMAL ~0.5 when the model produced non-empty text (it cannot vouch for
+   correctness, and a whole page decoded as one line is not a confident read),
+   0 when it did not. Stated plainly and emitted as-is; it is ordinal (text vs no
+   text), never a probability, and never 1.0 — nothing here earns certainty.
+   (See the spec on confidence honesty.)
    ============================================================ */
 (function () {
   'use strict';
@@ -42,7 +44,7 @@
       resources: { backend: 'webgpu', memMB: 260, expectedLatencyMs: 1200 },
       confidenceSemantics: 'heuristic',
       failureModes: [
-        'no calibrated confidence — emits a presence flag (1 = text produced, 0 = none)',
+        'no calibrated confidence — emits a non-maximal presence flag (~0.5 = text produced but unverified, 0 = none), never read as a probability',
         'weights (~250 MB) fail to download / WebGPU unavailable (reported as a failure event)',
         spec.kind === 'handwritten' ? 'cursive or overlapping handwriting may transcribe poorly' : 'heavy layout / multi-column pages are out of scope (single text line per call)',
       ],
@@ -97,9 +99,9 @@
       return [C.event({
         adapter: ref,
         region: { kind: 'bbox', x: 0, y: 0, w: 0, h: 0 },
-        confidence: text.trim() ? 1 : 0,   // declared heuristic: presence flag
+        confidence: text.trim() ? 0.5 : 0,   // non-maximal heuristic presence flag (never 1.0 — see header)
         payload: { text },
-        meta: { kind: spec.kind, note: 'confidence is a presence flag, not a probability' },
+        meta: { kind: spec.kind, note: 'confidence is a non-maximal presence flag, not a probability' },
       })];
     }
 

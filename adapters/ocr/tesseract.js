@@ -36,6 +36,9 @@
     ],
     output: { event: 'one per detected word', payload: '{ text: string }' },
     meta: { calibration: 'per-word confidence is heuristic — ordinal, not metric', lang: 'eng', cdn: 'https://unpkg.com/tesseract.js@5' },
+    // The general-purpose OCR default: per-word boxes over a full page (what the
+    // faithful-import reconstruction needs), vs. the single-line TrOCR models.
+    defaultForCapability: true,
   };
   const ref = { id: manifest.id, version: manifest.version };
 

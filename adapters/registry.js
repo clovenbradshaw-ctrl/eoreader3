@@ -13,9 +13,13 @@
 
    selected(capability) resolves which adapter answers, in this order:
      1. the user's explicit choice (localStorage eo.adapters.preferred.<cap>),
-     2. the performance profile (localStorage eo.adapters.profile) — browser
+     2. an adapter that declares itself the capability default
+        (manifest.defaultForCapability) — a general-purpose pick that should win
+        over a heavier but narrower-scope sibling (e.g. a full-page OCR over a
+        single-line model), so the default never lands on a specialist,
+     3. the performance profile (localStorage eo.adapters.profile) — browser
         prefers the lightest, desktop the middle, maximum the heaviest,
-     3. the first runnable adapter in registration order.
+     4. the first runnable adapter in registration order.
    Adapters that cannot run on this device's backend are filtered out of the
    resolution (and rendered disabled, with the reason, in the picker).
    ============================================================ */
@@ -121,6 +125,13 @@
       // a stale/unusable preference falls through to the profile default
     }
     const runnable = here.filter(a => canRun(a).ok);
+    // A manifest may declare itself the general-purpose default for its
+    // capability — a pick that should win over a heavier but narrower-scope
+    // sibling (a full-page OCR over a single-line model). Honored before the
+    // memory-based profile pick; an explicit preference (above) still overrides,
+    // so the specialist stays one click away. Generic: a flag, never a model id.
+    const declared = runnable.find(a => a.manifest.defaultForCapability);
+    if (declared) return declared;
     return pickByProfile(runnable, profile());
   }
 

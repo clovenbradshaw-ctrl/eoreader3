@@ -29,5 +29,6 @@
     "calibration": "per-word confidence is heuristic — ordinal, not metric",
     "lang": "eng",
     "cdn": "https://unpkg.com/tesseract.js@5"
-  }
+  },
+  "defaultForCapability": true
 }
