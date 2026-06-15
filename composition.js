@@ -643,14 +643,36 @@
     return out.join(' ');
   }
 
-  // The talker's prompt. Spans first as factual material to use; the job and the
-  // frame last as closing guidance about WHAT this chunk is for — never the
-  // whole doc, never the genre prototype unfolded into words, never an operator.
+  // Genre-aware framing. A composition is no longer assumed to be a grounded
+  // essay: naming the KIND of document — a recipe, a technical manual, a report,
+  // a letter — lets the planner and the talker shape the content to what that
+  // genre naturally is. This is document-TYPE context, never the form prototype
+  // (the centroid / exemplars) unfolded into a spec; the membrane still hides the
+  // prototype and the whole document from the talker.
+  function genreLabel(frame) {
+    const g = String((frame && frame.genre) || '').replace(/[-_]+/g, ' ').trim();
+    return g || 'document';
+  }
+
+  // The formatting guidance the draft / continue / revise prompts share: write in
+  // the FORM the content calls for. Flowing prose where it reads as prose, but a
+  // list, numbered steps, or short labelled lines where the content is naturally a
+  // set, a sequence, or a table of values — so a recipe's ingredients and steps, a
+  // manual's procedure, or a spec's settings come out structured, not flattened
+  // into an essay. This permission is what lets the layer structure ANY content,
+  // a recipe or a technical manual, not only the grounded report it began as.
+  const STRUCTURE_GUIDANCE = 'Write in the form this content calls for: flowing prose where it reads as prose, but a bulleted list, numbered steps, or short labelled lines where the content is naturally a list, a sequence, or a set of values — an ingredient list, the steps of a procedure, a set of settings. Do not force prose onto something that is really a list, or a list onto something that is really prose.';
+
+  // The talker's prompt. Spans first as factual material to use; the job, the
+  // genre and the frame as closing guidance about WHAT this section is and is for
+  // — never the whole doc, never the genre prototype unfolded into words, never an
+  // operator. Naming the genre is type context, not the prototype.
   function buildTalkerPrompt(o) {
     const spans = o.spans || [];
     const frame = o.frame || {};
+    const genre = genreLabel(frame);
     const lines = [];
-    lines.push('You are writing ONE passage of a longer document. Write only this passage — flowing prose, no headings, no list unless the material demands it. Use the material below; do not invent facts it does not contain. If the material does not establish something the passage needs, say so plainly rather than guessing.');
+    lines.push('You are writing ONE section of a ' + genre + '. Write only this section. ' + STRUCTURE_GUIDANCE + ' Use the material below; do not invent facts it does not contain. If the material does not establish something the section needs, say so plainly rather than guessing.');
     const system = lines.join('\n');
 
     const u = [];
@@ -660,14 +682,14 @@
       u.push('');
     }
     if (o.neighbors && o.neighbors.length) {
-      u.push('The passage just before / after (for a smooth seam — do not repeat them):');
+      u.push('The section just before / after (for a smooth seam — do not repeat them):');
       for (const n of o.neighbors) if (n && n.prose) u.push('… ' + String(n.prose).slice(-240));
       u.push('');
     }
     if (frame.thesis_or_question) u.push('The document overall: ' + frame.thesis_or_question);
     if (frame.reader) u.push('Written for: ' + frame.reader);
     u.push('');
-    u.push('Write this passage: ' + (o.job || ''));
+    u.push('Write this section: ' + (o.job || ''));
     return { system, user: u.join('\n') };
   }
 
@@ -685,8 +707,9 @@
   function buildContinuePrompt(o) {
     const spans = o.spans || [];
     const frame = o.frame || {};
+    const genre = genreLabel(frame);
     const tail = String(o.existing || '').slice(-700);
-    const system = 'You are CONTINUING one passage of a longer document that is already in progress. Write only the NEXT part of this same passage — flowing prose that picks up naturally from where it stops and develops the point further with new detail, examples, or consequences. Do NOT repeat, summarize, or restate anything already written, and do not start over. No headings. Use the material below; do not invent facts it does not contain.';
+    const system = 'You are CONTINUING one section of a ' + genre + ' that is already in progress. Write only the NEXT part of this same section — picking up naturally from where it stops and developing it further with new detail, examples, steps, or consequences. ' + STRUCTURE_GUIDANCE + ' Do NOT repeat, summarize, or restate anything already written, and do not start over. Use the material below; do not invent facts it does not contain.';
     const u = [];
     if (spans.length) {
       u.push('Material (verbatim, to use and stay within):');
@@ -695,19 +718,20 @@
     }
     if (frame.thesis_or_question) u.push('The document overall: ' + frame.thesis_or_question);
     u.push('');
-    u.push('The passage so far (continue from its end — do not repeat any of it):');
+    u.push('The section so far (continue from its end — do not repeat any of it):');
     u.push(tail);
     u.push('');
-    u.push('Continue this passage — its job is: ' + (o.job || ''));
+    u.push('Continue this section — its job is: ' + (o.job || ''));
     return { system, user: u.join('\n') };
   }
 
-  // REVISE prompt — rewrite a settled passage into one clean, coherent passage,
+  // REVISE prompt — rewrite a settled section into one clean, coherent section,
   // keeping all substance and every fact; the "recursively rework the output."
   function buildRevisePrompt(o) {
     const spans = o.spans || [];
     const frame = o.frame || {};
-    const system = 'You are REVISING one passage of a longer document. Rewrite the draft below into a single clean, coherent, well-organized passage: keep all of its substance and every fact, smooth the flow, remove repetition and filler, and fix any rough seams. Do not add facts the material does not contain, and do not make it substantially shorter. Return only the rewritten passage — no preamble, no headings, no commentary.';
+    const genre = genreLabel(frame);
+    const system = 'You are REVISING one section of a ' + genre + '. Rewrite the draft below into a single clean, coherent, well-organized section: keep all of its substance and every fact, smooth the flow, remove repetition and filler, and fix any rough seams. ' + STRUCTURE_GUIDANCE + ' Do not add facts the material does not contain, and do not make it substantially shorter. Return only the rewritten section — no preamble, no commentary.';
     const u = [];
     if (spans.length) {
       u.push('Material (verbatim, to stay within):');
@@ -715,7 +739,7 @@
       u.push('');
     }
     if (o.neighbors && o.neighbors.length) {
-      u.push('The passages just before / after (for a smooth seam — do not repeat them):');
+      u.push('The sections just before / after (for a smooth seam — do not repeat them):');
       for (const n of o.neighbors) if (n && n.prose) u.push('… ' + String(n.prose).slice(-200));
       u.push('');
     }
@@ -727,7 +751,7 @@
     // the monitor's specific shortfall, when the loop passes one in — so the
     // rewrite is corrective, aimed at exactly what fell short, not a blind retry
     if (o.guidance) u.push('What to fix in this rewrite: ' + o.guidance);
-    u.push('Rewrite it as one polished passage:');
+    u.push('Rewrite it as one polished section:');
     return { system, user: u.join('\n') };
   }
 
@@ -748,7 +772,32 @@
     return den ? clamp01(dot / den) : null;
   }
 
-  // ============================================================ outline parsing
+  // ============================================================ outline planning
+  // Plan the STRUCTURE from the frame — genre-aware, so the sections fit the KIND
+  // of document rather than a single essay shape. Naming the genre (a recipe, a
+  // technical manual, a report) and pointing at the structure that genre naturally
+  // has is document-TYPE context, not the form prototype unfolded into a spec; the
+  // plan it proposes is still DIRECTION, revisable to the end. Returns {system,
+  // user}; parseOutline (below) turns the model's reply into unit jobs. Pure — the
+  // surface streams it through the injected talker.
+  function buildOutlinePrompt(o) {
+    const frame = (o && o.frame) || {};
+    const genre = genreLabel(frame);
+    const system = 'You are planning the STRUCTURE of a ' + genre + ', not writing it. '
+      + 'Propose the sections THIS kind of document naturally has and uses — a recipe runs its ingredients, then the method, then any notes; a manual runs an overview, then setup, use, and troubleshooting; a report runs its case in order. '
+      + 'Use as many sections as it genuinely needs, usually three to seven. '
+      + 'Each section is ONE line: a short job saying what that section must DO (its direction), never its content. One job per line — no numbering, no prose, no blank lines.';
+    const u = [];
+    if (frame.thesis_or_question) u.push('Document: ' + frame.thesis_or_question);
+    if (frame.reader) u.push('For: ' + frame.reader);
+    if (frame.goal) u.push('Purpose: ' + frame.goal);
+    if ((frame.constraints || []).length) u.push('Constraints: ' + frame.constraints.join('; '));
+    u.push('Kind of document: ' + genre);
+    u.push('');
+    u.push('Propose the sections, one job per line:');
+    return { system, user: u.join('\n') };
+  }
+
   // Turn a model's outline reply into a list of unit jobs. The talker is asked
   // for one bare job per line, but a small local model disobeys: it prefixes a
   // lead-in ("Here are the proposed sections:"), numbers the items (1. / I. /
@@ -971,6 +1020,7 @@
     witnessGrain, stampDraft, decide,
     generateUnit, finalizeUnit, evaluateProse, buildTalkerPrompt, buildContinuePrompt, buildRevisePrompt,
     reviseGuidance, scoreConfidence, noveltyRatio, dropDuplicateSentences,
+    genreLabel, buildOutlinePrompt,
     wordCount, LONGFORM, retrievalDegree, parseOutline,
     newDoc, assemble,
     diffProvenance, authorship, project, projectFold,
