@@ -1,5 +1,5 @@
 /* ============================================================ Sidebar ===== */
-function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, onUpload,
+function Sidebar({ collapsed, onToggle, docs, docStatus, openTabs, activeDoc, onOpenDoc, onUpload,
                    chats, activeChat, onNewChat, onSelectChat, model, onModelClick,
                    onSettingsClick, modelStatus,
                    projects, activeProject, onSelectProject, onNewProject, onDeleteProject, onClearProject,
@@ -62,18 +62,27 @@ function Sidebar({ collapsed, onToggle, docs, openTabs, activeDoc, onOpenDoc, on
               <span className="dz-sub">or drop a file anywhere · .txt, .md, .csv</span>
             </button>
           )}
-          {docs.map(d => (
+          {docs.map(d => {
+            const st = docStatus && docStatus[d.id];
+            return (
             <div key={d.id} className={'sb-item' + (openTabs.includes(d.id) ? ' active' : '')} onClick={() => onOpenDoc(d.id)}>
               <span className="ti"><Icon name={iconFor(d)} size={16} /></span>
               <span className="tl">{d.name}</span>
-              {d.id === activeDoc && <span className="tdot" />}
+              {st && <span className={'doc-state ' + st.state}
+                title={st.state === 'indexing'
+                  ? 'Embedding this document’s sentences for semantic search — a one-time pass.'
+                  : 'Re-reading this document under the current rules.'}>
+                {st.state === 'indexing' ? 'Indexing…' : 'Reading…'}
+              </span>}
+              {d.id === activeDoc && !st && <span className="tdot" />}
               <button className={'sb-src' + (inScope(d.id) ? ' on' : '')}
                 title={inScope(d.id) ? 'Remove from sources' : 'Add as a source'}
                 onClick={(e) => { e.stopPropagation(); onToggleSource(d.id); }}>
                 <Icon name={inScope(d.id) ? 'check' : 'plus'} size={13} />
               </button>
             </div>
-          ))}
+            );
+          })}
           {docs.length > 0 && onUpload && (
             <button type="button" className="sb-dropzone slim" onClick={onUpload}>
               <Icon name="plus" size={14} /><span className="dz-main">Add another document</span>

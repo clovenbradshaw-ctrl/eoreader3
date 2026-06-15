@@ -156,6 +156,20 @@ const INGEST_PHASES = [
   { id: 'significance', label: 'Weigh' },
 ];
 
+// docStatus map helpers — the sidebar shows a working chip on a document while
+// a pass is in flight, so a doc never silently looks "done" while it isn't.
+// Dropping an entry (optionally only when it is in a given state) clears the
+// chip once the pass settles; pure, returns the same map when nothing changes.
+function _docStateDrop(map, id, only) {
+  if (!map[id] || (only && map[id].state !== only)) return map;
+  const n = Object.assign({}, map); delete n[id]; return n;
+}
+function _docStateDropAll(map, only) {
+  let hit = false; const n = {};
+  for (const k in map) { if (map[k] && map[k].state === only) { hit = true; continue; } n[k] = map[k]; }
+  return hit ? n : map;
+}
+
 // The workspace toolbar's tools — one source of truth for the topbar (each pill
 // is gated on its visibility) and for Settings → Tools (which lists them all
 // with a show/hide switch). Hiding a tool only drops its pill; the tool and
@@ -361,6 +375,16 @@ function App() {
   const [bootReady, setBootReady] = useState(false);
   // Staged-ingest progress: null when idle, else { phase, stage, pct, name }.
   const [ingestStatus, setIngestStatus] = useState(null);
+  // Per-document working state for the sidebar — { [docId]: { state } }, where
+  // state is 'reading' (a re-parse under changed rules) or 'indexing' (its
+  // sentences are being embedded for semantic search). A settled document
+  // carries no entry; the chip shows ONLY while a pass runs, so a doc never
+  // silently reads as ready while work is still grinding behind it.
+  const [docStatus, setDocStatus] = useState({});
+  // The whole-document embedding pass (window.EOEmbed activity), surfaced as a
+  // banner so the one-time "indexing for semantic search" cost on the first
+  // question over a large document reads as progress, not a hang. null = idle.
+  const [indexStatus, setIndexStatus] = useState(null);
 
   const [openTabs, setOpenTabs] = useState([]);
   const [activeTab, setActiveTab] = useState(null);
@@ -451,6 +475,10 @@ function App() {
       for (const d of targets) {
         if (tok !== ingestTok.current) break;          // superseded by a newer parse
         const big = (d._text ? d._text.length : 0) > 1500000;
+        // The doc is already in the sidebar (unlike a fresh ingest), so mark it
+        // 'reading' — the row carries a chip instead of looking untouched while
+        // its graph is rebuilt under the new rules.
+        setDocStatus(s => Object.assign({}, s, { [d.id]: { state: 'reading' } }));
         setIngestStatus({ phase: 'structure', stage: 'reading', pct: 0, name: d.name, big });
         let nd;
         try {
@@ -460,11 +488,13 @@ function App() {
               done: p.done, total: p.total,
               easing: p.stage === 'easing', usedMB: p.usedMB, capMB: p.capMB });
           });
-        } catch (e) { eoWarn('re-parse failed for', d.name, e); continue; }
-        if (tok !== ingestTok.current) break;
+        } catch (e) { eoWarn('re-parse failed for', d.name, e); setDocStatus(s => _docStateDrop(s, d.id, 'reading')); continue; }
+        if (tok !== ingestTok.current) { setDocStatus(s => _docStateDrop(s, d.id, 'reading')); break; }
         setDocs(ds => ds.map(x => x.id === nd.id ? nd : x));
+        setDocStatus(s => _docStateDrop(s, d.id, 'reading'));
       }
       if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+      setDocStatus(s => _docStateDropAll(s, 'reading'));   // belt-and-suspenders: never strand a chip
     })();
   }, [rules, langModes]);
 
@@ -1471,6 +1501,42 @@ function App() {
     try { if (window.EOEmbed && window.EOEmbed.warm) window.EOEmbed.warm(); } catch (e) {}
     return () => { cancelled = true; };
   }, [bootReady]);
+
+  // Surface the whole-document embedding pass. embed.js broadcasts progress for
+  // any batch big enough to matter (a single query embed stays silent), so this
+  // lights up exactly when the one-time "indexing for semantic search" cost runs
+  // — on the first question over a large document, or the (off-by-default)
+  // structure reconciler. While it runs we show a banner, mark the document
+  // "Indexing…" in the sidebar, and drop one 'index' step on the in-flight turn
+  // so the glass box can name it. All best-effort: no embedder ⇒ no activity ⇒
+  // nothing renders, and the app behaves exactly as before.
+  useEffect(() => {
+    if (!window.EOEmbed || !window.EOEmbed.onActivity) return;
+    let wasBusy = false;
+    return window.EOEmbed.onActivity((a) => {
+      const doc = a && a.doc;
+      if (a && a.busy) {
+        setIndexStatus({ name: doc && doc.name, done: a.done || 0, total: a.total || 0 });
+        if (doc && doc.id) setDocStatus(s => {
+          // A re-parse owns the chip; don't overwrite 'reading' with 'indexing'.
+          if (s[doc.id] && (s[doc.id].state === 'reading' || s[doc.id].state === 'indexing')) return s;
+          return Object.assign({}, s, { [doc.id]: { state: 'indexing' } });
+        });
+        if (!wasBusy) {
+          wasBusy = true;
+          // Name it on the live turn — a no-op when no turn is recording (e.g.
+          // the ingest-time reconciler runs outside a chat turn).
+          try { if (window.EOAudit && window.EOAudit.step) window.EOAudit.step('index', { n: a.total || 0, name: doc && doc.name }); } catch (e) {}
+        }
+      } else {
+        wasBusy = false;
+        setIndexStatus(null);
+        // Single-threaded: only one document indexes at a time, so clearing every
+        // 'indexing' entry is correct even though the idle event drops the label.
+        setDocStatus(s => _docStateDropAll(s, 'indexing'));
+      }
+    });
+  }, []);
 
   // ---- responsive: collapse the sidebar to an off-canvas drawer on phones and
   // keep the body to a single pane (side-by-side split doesn't fit a phone). ----
@@ -4735,7 +4801,7 @@ function App() {
              onChange={e => { if (e.target.files.length) handleFiles(e.target.files); e.target.value = ''; }} />
 
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)}
-        docs={docs} openTabs={openTabs} activeDoc={activeTab} onOpenDoc={openTab}
+        docs={docs} docStatus={docStatus} openTabs={openTabs} activeDoc={activeTab} onOpenDoc={openTab}
         onUpload={() => fileRef.current && fileRef.current.click()}
         chats={chats} activeChat={activeChat} onNewChat={newChat} onSelectChat={selectChat}
         model={model} onModelClick={() => setModelOpen(o => !o)}
@@ -4879,7 +4945,30 @@ function App() {
                   </span>
                 ))}
               </div>
-              {ingestStatus.big && <div className="ib-note">Large document — reading it carefully, a piece at a time, so the tab stays responsive. This can take a moment.</div>}
+              {ingestStatus.stage === 'projecting'
+                ? <div className="ib-note">Projecting the graph — relating every referent across the whole document. This is the heavy step; on a long document it’s where most of the time goes. (No model runs here — it’s mechanical.)</div>
+                : ingestStatus.big && <div className="ib-note">Large document — reading it carefully, a piece at a time, so the tab stays responsive. This can take a moment.</div>}
+            </div>
+          </div>
+        );
+      })()}
+      {indexStatus && !ingestStatus && (() => {
+        const pct = indexStatus.total ? indexStatus.done / indexStatus.total : null;
+        return (
+          <div className="ingest-banner index" role="status" aria-live="polite">
+            <span className="ib-orb" aria-hidden="true" />
+            <div className="ib-main">
+              <div className="ib-head">
+                <span className="ib-stage">Indexing for semantic search</span>
+                {indexStatus.name && <span className="ib-name">· {indexStatus.name}</span>}
+                {pct != null && (
+                  <b className="ib-pct">{Math.round(pct * 100)}%
+                    {indexStatus.total ? <span className="ib-count"> · {Number(indexStatus.done || 0).toLocaleString()} / {Number(indexStatus.total).toLocaleString()} sentences</span> : null}
+                  </b>)}
+              </div>
+              <div className="ib-bar"><div className={'ib-fill' + (pct == null ? ' indet' : '')}
+                style={pct != null ? { width: Math.round(pct * 100) + '%' } : undefined} /></div>
+              <div className="ib-note">One-time for this document — embedding its sentences so questions can match by meaning, not just words. Once it’s done, later questions over this document skip this step.</div>
             </div>
           </div>
         );

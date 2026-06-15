@@ -421,6 +421,10 @@ function narrateTurn(turn) {
         push(s.recovered ? 'The wording was vague, so I searched by meaning and found the passage.'
           : 'Searched by meaning too, but nothing relevant turned up — treated it as conversation.');
         break;
+      case 'index':
+        push('Indexed ' + (s.n ? Number(s.n).toLocaleString() + ' sentence' + (s.n === 1 ? '' : 's') : 'the document')
+          + ' for semantic search — a one-time pass over this document (embedding it so I can match by meaning, not just words), so later questions over it skip this.');
+        break;
       case 'model':
         push(s.ok ? 'Loaded the local model (' + s.model + ').' : 'The local model failed to load (' + s.model + ').');
         break;
