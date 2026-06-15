@@ -3813,7 +3813,20 @@ function App() {
     const X = window.EOExternal;
     const term = String(rawTerm == null ? '' : rawTerm).trim();
     if (!X || !X.enabled || !X.enabled() || !term) return;
-    if (busyRef.current) return;                 // a turn is already in flight — ignore the click
+    // A turn is still in flight — almost always the model is still answering BESIDE
+    // a soft offer (the options card and that live reply share one message: 'on'
+    // mode, the force button, or an explicit lookup with a document already in
+    // scope). Silently dropping the click here is the "it won't let me import the
+    // article" bug — the reader pressed an explicit button and nothing happened.
+    // Honour the import WITHOUT racing a second grounded turn onto the live reply:
+    // pull the article in now as a background source (the card runs reading → added
+    // with the "ask a follow-up to ground on it" footer) and return. A follow-up
+    // then grounds on it; an idle pick still gets the read-then-answer-in-place
+    // below. fetchWikiArticle never touches busy, so the in-flight turn is unharmed.
+    if (busyRef.current) {
+      try { await fetchWikiArticle(turnId, term, true); } catch (e) { eoWarn('wiki-pick-busy', e); }
+      return;
+    }
     const myGen = ++genRef.current;              // a fresh generation; Stop (or a new turn) supersedes it
     setBusy(true);
 
