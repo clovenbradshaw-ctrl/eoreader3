@@ -360,7 +360,20 @@ function App() {
   // hydration then swapped `model` to the saved one, and nothing loaded it.
   const [bootReady, setBootReady] = useState(false);
   // Staged-ingest progress: null when idle, else { phase, stage, pct, name }.
+  // This drives the quiet bottom banner used by the BACKGROUND re-read (a rule
+  // change re-parsing already-open docs), where a focal modal would be noise.
   const [ingestStatus, setIngestStatus] = useState(null);
+  // The reading modal — the focal surface for a document a reader explicitly
+  // ADDS (drop / example / adapter / wiki). `readingSession` is the live parse
+  // streamed from ingest(); `readingResult` is the finished reading, computed
+  // once the doc is parsed. The doc is committed to the library and added as a
+  // source the moment it parses, but it no longer seizes the stage — the modal's
+  // own choice (bring into chat · open document) does that. A dismiss ref lets a
+  // reader close the modal mid-read without the completion re-popping it.
+  const [readingSession, setReadingSession] = useState(null);
+  const [readingResult, setReadingResult] = useState(null);
+  const readingDocRef = useRef(null);
+  const readingDismiss = useRef(false);
 
   const [openTabs, setOpenTabs] = useState([]);
   const [activeTab, setActiveTab] = useState(null);
@@ -971,21 +984,28 @@ function App() {
     const id = uid('doc');
     const tok = ++ingestTok.current;
     // A big paste is read deliberately — staged and breathed so the tab stays
-    // alive — so the banner says so rather than looking stalled.
+    // alive — so the modal says so rather than looking stalled.
     const big = (text ? text.length : 0) > 1500000;
     setBusy(true);
-    setIngestStatus({ phase: 'existence', stage: 'loading', pct: 0, name, big });
+    // The reading modal is the focal surface for an explicit add: a fresh add
+    // earns a fresh modal (clear any lingering dismissal + finished result), and
+    // the parse streams its movements into `readingSession`. (ingestViaAdapter
+    // may have opened the session already with its perceptual phase; we continue
+    // it.) The quiet bottom banner is reserved for the background rule re-read.
+    readingDismiss.current = false;
+    setReadingResult(null);
+    setReadingSession({ phase: 'existence', stage: 'loading', pct: 0, name, big });
     let doc;
     try {
       doc = await window.EOEngine.parseDocument(name, text, id, (p) => {
         if (tok !== ingestTok.current) return;          // superseded — stop reporting
         const pct = p.total ? p.done / p.total : null;
-        setIngestStatus({ phase: p.phase, stage: p.stage, pct, name, big,
+        setReadingSession({ phase: p.phase, stage: p.stage, pct, name, big,
           done: p.done, total: p.total,
           easing: p.stage === 'easing', usedMB: p.usedMB, capMB: p.capMB });
       });
     } catch (e) {
-      if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+      if (tok === ingestTok.current) { setReadingSession(null); setBusy(false); }
       showToast('Could not read that file.'); return null;
     }
     // A file read through a perceptual/parsing adapter (audio→transcript,
@@ -993,24 +1013,61 @@ function App() {
     // its (heuristic) confidence, device/precision — for the audit and so the
     // doc remembers it was machine-read, not typed.
     if (opts.provenance) doc._provenance = opts.provenance;
-    // Always commit a new document — the user explicitly added it and nothing
-    // else will reproduce it. Only the banner / busy flag belong to whichever
-    // parse is newest, so a rule re-read that started meanwhile owns the UI.
+    // Always commit a new document and make it an available source — the user
+    // explicitly added it and nothing else will reproduce it. It is added as a
+    // tab too, but it NO LONGER seizes the stage: the reading modal presents the
+    // finished read and the reader chooses where it goes (bring into chat · open
+    // document). Only the busy flag / live session belong to the newest parse.
     setDocs(ds => [...ds, doc]);
-    setOpenTabs(t => [...t, id]); setActiveTab(id); addSource(id);
-    // Stay chat-first after an upload on every device: the doc is added as a
-    // tab but doesn't seize the stage. The user opens it (split on desktop,
-    // fullscreen on a phone) from the view toggle when they actually want it.
-    setLayout('chat');
+    setOpenTabs(t => t.includes(id) ? t : [...t, id]);
+    addSource(id);
     if (doc.kind === 'prose') setExplore(true);
     setTableSpec(null);
-    showToast('Added “' + name + '” · ' + doc.meta + (opts.sourceLabel ? ' · ' + opts.sourceLabel : ''));
-    if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+    if (tok === ingestTok.current) { setBusy(false); }
     // the parse may have registered friction (or co-witnessed a pending
     // proposal); give the proposer its idle slot
     if (doc.kind === 'prose') maybeProposeConventions();
+    // Hand the finished reading to the modal — unless the reader dismissed it
+    // mid-read (then a quiet toast confirms the add) or a newer parse superseded
+    // this one (it owns the surface now).
+    if (tok === ingestTok.current) {
+      if (readingDismiss.current) {
+        setReadingSession(null);
+        showToast('Added “' + name + '” · ' + doc.meta + (opts.sourceLabel ? ' · ' + opts.sourceLabel : ''));
+      } else {
+        readingDocRef.current = doc;
+        setReadingResult(window.makeReadingResult(doc));
+        setReadingSession(null);
+      }
+    }
     return doc;
   };
+  // The reading modal's choices. "Bring into chat" is the move that used to
+  // happen silently on every add; "Open document" reveals the doc pane. Both
+  // close the modal; the bare close leaves the doc in the library as a source
+  // without bringing it forward.
+  const closeReading = useCallback(() => {
+    readingDismiss.current = true;
+    setReadingSession(null); setReadingResult(null); readingDocRef.current = null;
+  }, []);
+  const readingIntoChat = useCallback(() => {
+    const doc = readingDocRef.current;
+    if (doc) { addSource(doc.id); setActiveTab(doc.id); }
+    setLayout('chat');
+    closeReading();
+  }, [closeReading]);
+  const readingIntoDoc = useCallback(() => {
+    const doc = readingDocRef.current;
+    if (doc) {
+      setOpenTabs(t => t.includes(doc.id) ? t : [...t, doc.id]);
+      setActiveTab(doc.id);
+      // Reveal the doc pane the same way opening a tab does elsewhere: fullscreen
+      // on a phone, split beside the chat on desktop.
+      if (mobileRef.current) { setLayout('doc'); setCollapsed(true); }
+      else setLayout(l => l === 'chat' ? 'split' : l);
+    }
+    closeReading();
+  }, [closeReading]);
   // Read a file as text — the path the app has always used. Kept verbatim so the
   // formats it already read (.txt/.md/.csv/.tsv) ingest byte-for-byte as before.
   const readFileText = (f) => new Promise((res, rej) => {
@@ -1039,33 +1096,40 @@ function App() {
     const friendly = adapter.manifest.name;
     const tok = ++ingestTok.current;
     setBusy(true);
-    setIngestStatus({ phase: 'existence', stage: route.stage, pct: null, name: f.name, big: false });
+    // The perceptual phase opens the SAME reading modal the engine read will
+    // continue: turning a non-text file into text (transcribe / recognize /
+    // extract) is the first movement of reading it, so it belongs on the same
+    // focal surface rather than a separate banner. Indeterminate while the model
+    // downloads + runs (no clean percent to report).
+    readingDismiss.current = false;
+    setReadingResult(null);
+    setReadingSession({ phase: 'existence', stage: route.stage, pct: null, name: f.name, big: false });
     showToast(route.gerund + ' “' + f.name + '” with ' + friendly + ' — first run downloads the model…');
     let events;
     try {
       events = await A.runFor(route.capability, f);
     } catch (e) {
       eoWarn('adapter:' + route.capability, e);
-      if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+      if (tok === ingestTok.current) { setReadingSession(null); setBusy(false); }
       showToast('Couldn’t read “' + f.name + '” — ' + ((e && e.message) || 'the adapter failed') + '.');
       return null;
     }
     if (B.allFailed(events)) {
-      if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+      if (tok === ingestTok.current) { setReadingSession(null); setBusy(false); }
       showToast('Couldn’t read “' + f.name + '” — ' + (B.firstError(events) || 'the adapter failed') + '.');
       return null;
     }
     const { text, provenance } = B.eventsToText(route.capability, events);
     if (!text || !text.trim()) {
-      if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+      if (tok === ingestTok.current) { setReadingSession(null); setBusy(false); }
       showToast('No text found in “' + f.name + '”.');
       return null;
     }
-    // Hand the banner back: ingest() owns it from here, re-setting it
-    // synchronously on the normal path (so no flicker) and correctly leaving it
-    // clear if the transcript turns out to be a duplicate (ingest's early
-    // return). The source label and provenance ride onto the toast and the doc.
-    if (tok === ingestTok.current) { setIngestStatus(null); setBusy(false); }
+    // Hand the modal to ingest(): it re-opens the session synchronously on the
+    // normal path (so no flicker) and correctly leaves it clear if the transcript
+    // turns out to be a duplicate (ingest's early return). The source label and
+    // provenance ride onto the doc.
+    if (tok === ingestTok.current) { setBusy(false); }
     return ingest(f.name, text, { provenance, sourceLabel: friendly });
   };
 
@@ -4852,6 +4916,10 @@ function App() {
           onIngest={ingestWikiFromModal} onOpenDoc={openTab} />
       )}
       {dragOver && <div className="drop-veil"><div className="drop-card"><Icon name="upload" size={26} /> Drop to read</div></div>}
+      {(readingSession || readingResult) && window.ReadingModal && (
+        <window.ReadingModal session={readingSession} result={readingResult}
+          onOpenChat={readingIntoChat} onOpenDoc={readingIntoDoc} onClose={closeReading} />
+      )}
       {ingestStatus && (() => {
         const easing = !!ingestStatus.easing;
         const curIdx = INGEST_PHASES.findIndex(p => p.id === ingestStatus.phase);
