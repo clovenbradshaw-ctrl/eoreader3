@@ -801,6 +801,45 @@ function App() {
   // if the chat takes the floor before the idle slot fires, stand down.
   const busyRef = useRef(false);
   useEffect(() => { busyRef.current = busy; }, [busy]);
+  // Current model / status, read from inside the async idle timer (whose closure
+  // would otherwise capture a stale render). Assigned each render, like the other
+  // *Ref mirrors in this component.
+  const modelRef = useRef(model); modelRef.current = model;
+  const modelStatusRef = useRef(modelStatus); modelStatusRef.current = modelStatus;
+  // ---- idle reclaim: free the resident LOCAL model after a stretch with no
+  // turns, so an open-but-unused tab stops pinning the GPU/WASM weights. An
+  // on-device model sits resident — often 1–2 GB — for the whole session
+  // otherwise, even when nothing is running. The next turn rebuilds it from the
+  // on-disk cache automatically (runTurn re-loads below; streamChat → load()
+  // would too), so this trades a one-time reload — seconds, no re-download — for
+  // the idle memory. Cloud (Claude) keeps nothing resident, so it's skipped.
+  // Tunable via window.EO_IDLE_UNLOAD_MS (ms; 0 disables). ----
+  const IDLE_UNLOAD_MS = (typeof window !== 'undefined' && 'EO_IDLE_UNLOAD_MS' in window)
+    ? (+window.EO_IDLE_UNLOAD_MS || 0)
+    : 5 * 60 * 1000;
+  const idleUnloadTimer = useRef(null);
+  const clearIdleUnload = useCallback(() => {
+    if (idleUnloadTimer.current) { clearTimeout(idleUnloadTimer.current); idleUnloadTimer.current = null; }
+  }, []);
+  const armIdleUnload = useCallback(() => {
+    clearIdleUnload();
+    if (!IDLE_UNLOAD_MS) return;                                       // disabled
+    idleUnloadTimer.current = setTimeout(async () => {
+      idleUnloadTimer.current = null;
+      if (busyRef.current) { armIdleUnload(); return; }               // a turn is running — re-arm, free later
+      const m = modelRef.current, L = window.EOLLM;
+      if (!m || m.provider === 'anthropic' || !L || !L.release) return;   // nothing resident to free
+      if (!(L.isLoaded && L.isLoaded(m.mlc))) return;                 // already freed / never loaded
+      try { if (await L.release()) { setModelStatus('idle'); eoWarn('idle-unload: freed resident model', m.id); } }
+      catch (e) { eoWarn('idle-unload', e); }
+    }, IDLE_UNLOAD_MS);
+  }, [IDLE_UNLOAD_MS, clearIdleUnload]);
+  // Count down whenever the app is idle; cancel the moment a turn runs (each
+  // turn ends with busy→false, which arms a fresh countdown).
+  useEffect(() => {
+    if (busy) clearIdleUnload(); else armIdleUnload();
+    return clearIdleUnload;
+  }, [busy, armIdleUnload, clearIdleUnload]);
   // Generation guard: every turn captures the current value at dispatch; Stop
   // (and the start of a fresh turn) bumps it, so any in-flight settle that wakes
   // up afterward sees itself superseded and stands down rather than clobbering
@@ -4013,6 +4052,18 @@ function App() {
     // so React flushes and the browser paints the bubble + "…" before the work
     // starts; the turn then proceeds, lagging on its own without holding the UI.
     await new Promise(res => setTimeout(res, 0)); // yield to paint
+
+    // If idle reclaim freed the local model while the tab sat unused, bring it
+    // back before we phrase — rebuilds from the on-disk cache (no re-download),
+    // surfacing the normal load progress. A resident model makes isLoaded() true,
+    // so this is a no-op and active turns pay nothing; grounded/mechanical work
+    // below needs no model regardless.
+    if (modelStatusRef.current === 'idle') {
+      const m = modelRef.current;
+      if (m && m.provider !== 'anthropic' && window.EOLLM && window.EOLLM.isLoaded && !window.EOLLM.isLoaded(m.mlc)) {
+        try { await loadModel(m); } catch (e) { eoWarn('reload-after-idle', e); }
+      }
+    }
 
     // CHAT WITH WIKIPEDIA: consult the reference desk per the mode —
     //   off  → never (the composer FORCE button is hidden, so a force can't reach)
