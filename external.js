@@ -799,6 +799,302 @@
   }
 
   /* ============================================================
+     The Wikipedia READER — the full article, rendered close to source.
+
+     article() above pulls a plain-text extract for the engine to ground on.
+     This pulls Wikipedia's OWN rendered HTML (action=parse) so the reader can
+     SEE the article as Wikipedia lays it out — infobox, figures, tables — and,
+     from the very same parse, lifts two things the plain extract throws away:
+
+       · the article's CITATIONS (the numbered reference list), so a claim can
+         be sourced THROUGH to the work Wikipedia cites, not merely to the
+         encyclopaedia article that repeats it; and
+       · a per-sentence footnote map (which [n] backs which sentence), so an
+         ingested line can carry the sources behind it into a grounded answer.
+
+     One proxied call, then a local parse. Same disciplines as every hop:
+     consent, rate limit, the private-individual gate, abstain on a miss. The
+     rendered HTML is heavy and per-session, so it is held in a small in-memory
+     cache (not frozen to the store — the light provenance rides on the doc).
+     ============================================================ */
+  const pageCache = new Map();   // title.toLowerCase() → payload (session only)
+
+  // A fuller entity decode than stripTags needs: the article body carries
+  // numeric and the common named entities, and they must read as text once the
+  // markup is gone. Pure.
+  const NAMED_ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '–', mdash: '—', hellip: '…', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', times: '×', deg: '°', frac12: '½', frac14: '¼', frac34: '¾' };
+  function decodeEntities(s) {
+    return String(s == null ? '' : s)
+      .replace(/&#(\d+);/g, (_, d) => { try { return String.fromCodePoint(parseInt(d, 10)); } catch (e) { return _; } })
+      .replace(/&#x([0-9a-f]+);/gi, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch (e) { return _; } })
+      .replace(/&([a-z][a-z0-9]+);/gi, (m, name) => (Object.prototype.hasOwnProperty.call(NAMED_ENT, name) ? NAMED_ENT[name] : m));
+  }
+  function plain(htmlFrag) { return decodeEntities(String(htmlFrag == null ? '' : htmlFrag).replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim(); }
+
+  // Every off-page reference made absolute and safe before it renders: an
+  // in-page footnote anchor (#cite_note-…) is kept (the pane handles it), a
+  // protocol-relative or root-relative Wikipedia URL is absolutised, an http(s)
+  // URL passes; anything else (javascript:, data:, …) is dropped.
+  function absUrl(u) {
+    u = String(u == null ? '' : u).trim();
+    if (!u) return '';
+    if (u[0] === '#') return u;
+    if (u.slice(0, 2) === '//') return 'https:' + u;
+    if (u[0] === '/') return 'https://en.wikipedia.org' + u;
+    if (/^https?:\/\//i.test(u)) return u;
+    return '';
+  }
+
+  // Wikipedia's parser output is trusted-but-remote: it ships no <script>, but
+  // we still inject it as HTML, so strip anything executable, drop the chrome a
+  // reader doesn't want (edit links, navboxes), and rewrite every link/image to
+  // an absolute, safe URL. DOM when we have it (the browser, where the reader
+  // actually renders); a coarse strip is the Node fallback (no reader there).
+  const WIKI_HTML_DROP = 'script,style,link,meta,noscript,template,iframe,object,embed,form,svg,.mw-editsection,.mw-jump-link,.noprint,.navbox,.vertical-navbox,.navbox-styles,.mw-empty-elt,.mbox-small,.hatnote,.ambox,.sistersitebox,#toc,.toc';
+  function sanitizeWikiHtml(raw) {
+    raw = String(raw == null ? '' : raw);
+    if (typeof DOMParser === 'undefined') {
+      return raw.replace(/<(script|style|iframe|object|embed|form|svg)[\s\S]*?<\/\1>/gi, '')
+                .replace(/\son\w+\s*=\s*"[^"]*"/gi, '').replace(/\son\w+\s*=\s*'[^']*'/gi, '');
+    }
+    let doc;
+    try { doc = new DOMParser().parseFromString('<div id="__wk">' + raw + '</div>', 'text/html'); }
+    catch (e) { return ''; }
+    const root = doc.getElementById('__wk');
+    if (!root) return '';
+    root.querySelectorAll(WIKI_HTML_DROP).forEach(n => { try { n.remove(); } catch (e) {} });
+    root.querySelectorAll('*').forEach(el => {
+      Array.prototype.slice.call(el.attributes).forEach(a => {
+        const name = a.name.toLowerCase();
+        if (name.indexOf('on') === 0) el.removeAttribute(a.name);
+        else if (name === 'style' && /expression\(|javascript:/i.test(a.value)) el.removeAttribute(a.name);
+      });
+      const tag = el.tagName;
+      if (tag === 'A') {
+        const href = absUrl(el.getAttribute('href'));
+        if (!href) { el.removeAttribute('href'); }
+        else { el.setAttribute('href', href); if (href[0] !== '#') { el.setAttribute('target', '_blank'); el.setAttribute('rel', 'noopener nofollow'); } }
+      } else if (tag === 'IMG') {
+        const src = absUrl(el.getAttribute('src'));
+        if (!src) { try { el.remove(); } catch (e) {} return; }
+        el.setAttribute('src', src);
+        el.removeAttribute('srcset');          // one source is plenty; avoids loading every variant
+        el.setAttribute('loading', 'lazy');
+        el.setAttribute('referrerpolicy', 'no-referrer');
+      }
+    });
+    return root.innerHTML;
+  }
+
+  // The numbered reference list at the article's tail → [{ n, id, text, url }]
+  // in document order (which IS Wikipedia's citation numbering). url is the
+  // first external work the entry points at — the thing to source THROUGH to.
+  function parseWikiReferences(raw) {
+    raw = String(raw == null ? '' : raw);
+    const out = [];
+    const seen = new Set();
+    const push = (id, html) => {
+      id = id || ('cite_note-' + (out.length + 1));
+      if (seen.has(id)) return;
+      const text = plain(html).replace(/^\s*\^\s*/, '').replace(/\s*↑\s*/g, '').trim();
+      if (!text) return;
+      const a = /<a\b[^>]*\bhref="((?:https?:)?\/\/[^"#][^"]*)"[^>]*>/i.exec(html);
+      seen.add(id);
+      out.push({ n: out.length + 1, id, text: text.slice(0, 500), url: a ? absUrl(a[1]) : '' });
+    };
+    if (typeof DOMParser !== 'undefined') {
+      let doc; try { doc = new DOMParser().parseFromString(raw, 'text/html'); } catch (e) { doc = null; }
+      if (doc) {
+        const lis = doc.querySelectorAll('ol.references > li, .references li[id^="cite_note"], li[id^="cite_note"]');
+        lis.forEach(li => {
+          const cite = li.querySelector('cite, .reference-text') || li;
+          const ext = li.querySelector('a.external[href], a[href^="http"], a[href^="//"]');
+          push(li.id, (cite.innerHTML || '') + (ext ? '<a href="' + ext.getAttribute('href') + '"></a>' : ''));
+        });
+        if (out.length) return out;
+      }
+    }
+    const liRe = /<li\b[^>]*\bid="(cite_note-[^"]*)"[^>]*>([\s\S]*?)<\/li>/gi;
+    let m;
+    while ((m = liRe.exec(raw))) push(m[1], m[2]);
+    return out;
+  }
+
+  // Split into sentences, keeping each one's [start,end) over the source string
+  // so a footnote marker's position can be attributed to the sentence it backs.
+  function sentenceRanges(text) {
+    const ranges = []; let start = 0;
+    const re = /([.!?…]+["”'’)\]]?)\s+(?=[A-Z0-9"“'(\[])/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const end = m.index + m[1].length;
+      const t = text.slice(start, end).trim();
+      if (t) ranges.push({ start, end, text: t });
+      start = m.index + m[0].length;
+    }
+    const tail = text.slice(start).trim();
+    if (tail) ranges.push({ start, end: text.length, text: tail });
+    return ranges;
+  }
+
+  // Walk the rendered article in document order into clean, wiki-ish text (the
+  // engine ingests this), recording for each SENTENCE the footnote numbers that
+  // backed it. Headings survive as == H == so the chrome gate still reads them
+  // as structure; tables, infoboxes and the reference apparatus are dropped
+  // (their rows otherwise outrank prose and leak into citations — see article()).
+  // Returns { text, intro, footnotes:[{text,refs:[n]}], thumbnail }.
+  function wikiBodyAndFootnotes(raw, idToN) {
+    raw = String(raw == null ? '' : raw);
+    idToN = idToN || {};
+    // A body fragment → { clean, marks:[{pos,n}] }: strip tags to text while
+    // recording, at each reference <sup>, the citation number sitting there.
+    const refSupRe = /<sup\b[^>]*class="[^"]*\breference\b[^"]*"[^>]*>([\s\S]*?)<\/sup>/i;
+    const splitRe = /(<sup\b[^>]*class="[^"]*\breference\b[^"]*"[^>]*>[\s\S]*?<\/sup>)/i;
+    const refNum = (sup) => {
+      const num = /\[(\d+)\]/.exec(plain(sup));
+      if (num) return parseInt(num[1], 10);
+      const a = /href="#(cite_note-[^"]+)"/i.exec(sup);
+      return a && idToN[a[1]] ? idToN[a[1]] : null;
+    };
+    const fragment = (html) => {
+      const parts = String(html).split(splitRe);
+      let clean = ''; const marks = [];
+      for (const part of parts) {
+        if (refSupRe.test(part)) {
+          // record the citation AT the end of the text it follows (before any
+          // join-space the next chunk would add) so it attributes to the right
+          // sentence — Wikipedia sets "…claim.[3] Next…", the [3] backs "…claim."
+          const n = refNum(part); if (n) marks.push({ pos: clean.length, n });
+          continue;
+        }
+        const txt = plain(part);
+        if (!txt) continue;
+        if (clean && !/\s$/.test(clean)) clean += ' ';
+        clean += txt;
+      }
+      return { clean: clean.replace(/\s+/g, ' ').trim(), marks };
+    };
+
+    const blocks = [];   // ordered { kind:'h'|'p', text, html }
+    const thumbOf = (html) => { const m = /<img\b[^>]*\bsrc="([^"]+)"/i.exec(html); return m ? absUrl(m[1]) : ''; };
+    let thumbnail = '';
+
+    if (typeof DOMParser !== 'undefined') {
+      let doc; try { doc = new DOMParser().parseFromString(raw, 'text/html'); } catch (e) { doc = null; }
+      const root = doc && (doc.querySelector('.mw-parser-output') || doc.body);
+      if (root) {
+        if (!thumbnail) { const ib = root.querySelector('.infobox img, figure img, img'); if (ib) thumbnail = absUrl(ib.getAttribute('src')); }
+        const sel = ':scope > p, :scope > h2, :scope > h3, :scope > h4, :scope > ul, :scope > ol, :scope > blockquote, :scope > dl';
+        let nodes = [];
+        try { nodes = Array.prototype.slice.call(root.querySelectorAll(sel)); } catch (e) { nodes = Array.prototype.slice.call(root.children); }
+        nodes.forEach(el => {
+          const t = el.tagName;
+          if (/^H[2-4]$/.test(t)) {
+            const hl = el.querySelector('.mw-headline') || el;
+            const txt = plain(hl.textContent); if (txt && !WIKI_DROP_SECTIONS.test(txt)) blocks.push({ kind: 'h', level: +t[1], text: txt, html: '' });
+          } else if (t === 'P' || t === 'BLOCKQUOTE') {
+            blocks.push({ kind: 'p', text: '', html: el.innerHTML });
+          } else if ((t === 'UL' || t === 'OL') && !el.classList.contains('references')) {
+            Array.prototype.slice.call(el.children).forEach(li => { if (li.tagName === 'LI') blocks.push({ kind: 'p', text: '', html: li.innerHTML }); });
+          } else if (t === 'DL') {
+            Array.prototype.slice.call(el.querySelectorAll('dd')).forEach(dd => blocks.push({ kind: 'p', text: '', html: dd.innerHTML }));
+          }
+        });
+      }
+    }
+    if (!blocks.length) {
+      // Node / no-DOM fallback: drop tables + reference lists, then read the
+      // common block tags in order. Coarser, but the reader never runs here.
+      let body = raw.replace(/<table[\s\S]*?<\/table>/gi, ' ').replace(/<ol\b[^>]*class="[^"]*references[^"]*"[\s\S]*?<\/ol>/gi, ' ')
+        .replace(/<span\b[^>]*class="[^"]*mw-editsection[^"]*"[\s\S]*?<\/span>/gi, ' ');
+      if (!thumbnail) thumbnail = thumbOf(raw);
+      const blockRe = /<(p|h2|h3|h4|li|blockquote)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+      let bm;
+      while ((bm = blockRe.exec(body))) {
+        const tag = bm[1].toLowerCase();
+        if (tag === 'h2' || tag === 'h3' || tag === 'h4') { const txt = plain(bm[2]); if (txt && !WIKI_DROP_SECTIONS.test(txt)) blocks.push({ kind: 'h', level: +tag[1], text: txt, html: '' }); }
+        else blocks.push({ kind: 'p', text: '', html: bm[2] });
+      }
+    }
+
+    const lines = []; const footnotes = [];
+    for (const b of blocks) {
+      if (b.kind === 'h') { const eq = '='.repeat(b.level); lines.push(eq + ' ' + b.text + ' ' + eq); continue; }
+      const { clean, marks } = fragment(b.html);
+      if (!clean || clean.length < 2) continue;
+      lines.push(clean);
+      if (!marks.length) continue;
+      for (const r of sentenceRanges(clean)) {
+        const refs = [];
+        for (const mk of marks) if (mk.pos >= r.start && mk.pos <= r.end && refs.indexOf(mk.n) === -1) refs.push(mk.n);
+        if (refs.length) footnotes.push({ text: r.text, refs: refs.slice().sort((x, y) => x - y) });
+      }
+    }
+    const text = lines.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+    const intro = (text.split(/\n+/).find(p => p.trim() && !/^=+\s/.test(p)) || text.slice(0, 400)).trim();
+    return { text, intro: intro.length > 600 ? intro.slice(0, 600) + '…' : intro, footnotes, thumbnail };
+  }
+
+  // Assemble the reader payload from one parse: the rendered (sanitised) HTML,
+  // the clean ingest text, the citation list, and the sentence→footnote map.
+  function buildArticlePayload(title, url, rawHtml) {
+    const references = parseWikiReferences(rawHtml);
+    const idToN = {}; references.forEach(r => { idToN[r.id] = r.n; });
+    const body = wikiBodyAndFootnotes(rawHtml, idToN);
+    return {
+      title, url,
+      description: null,
+      thumbnail: body.thumbnail || null,
+      html: sanitizeWikiHtml(rawHtml),
+      text: body.text,
+      intro: body.intro,
+      footnotes: body.footnotes,        // [{ text, refs:[n] }] — per sentence
+      references,                       // [{ n, id, text, url }] — sources cited
+      also_see: [],
+      typeGuess: null,
+    };
+  }
+
+  async function articlePage(q, opts) {
+    opts = opts || {};
+    q = String(q == null ? '' : q).trim();
+    if (!q) return { status: 'miss', query: q };
+    if (!opts.allowPrivate && privateIndividual(q, opts.type)) return { status: 'gated', reason: 'private-individual', query: q };
+    const ck = q.toLowerCase();
+    if (pageCache.has(ck)) return { status: 'hit', query: q, payload: pageCache.get(ck), basis: pageCache.get(ck)._basis, cached: true };
+    if (!proxyBase() || !_fetch()) return { status: 'disabled', query: q };
+    if (opts.replayOnly) return { status: 'pending', query: q };
+    try {
+      // Resolve a free-text query to a real title unless the caller (the search
+      // modal, which already ran list=search) hands one in with resolved:true.
+      let title = q;
+      if (!opts.resolved) {
+        const searchUrl = 'https://en.wikipedia.org/w/api.php?format=json&action=query&list=search&srlimit=1&srsearch=' + encodeURIComponent(q);
+        const searchTxt = await proxyText(searchUrl, opts.severity || 0);
+        const hits = (((safeJSON(searchTxt) || {}).query) || {}).search || [];
+        if (!hits.length) return { status: 'miss', query: q, basis: { src: 'page', term: q, url: searchUrl, fetched_at: new Date().toISOString(), hash: hashTag(searchTxt || ''), schema: SCHEMA } };
+        title = hits[0].title;
+      }
+      const parseUrl = 'https://en.wikipedia.org/w/api.php?format=json&action=parse&redirects=1&disableeditsection=1&disabletoc=1&prop=text%7Cdisplaytitle&page=' + encodeURIComponent(title);
+      const parseTxt = await proxyText(parseUrl, opts.severity || 0);
+      const parsed = (safeJSON(parseTxt) || {}).parse;
+      const rawHtml = parsed && parsed.text && (parsed.text['*'] != null ? parsed.text['*'] : (typeof parsed.text === 'string' ? parsed.text : ''));
+      const basis = { src: 'page', term: q, url: parseUrl, fetched_at: new Date().toISOString(), hash: hashTag(parseTxt || ''), schema: SCHEMA };
+      if (!rawHtml || !String(rawHtml).trim()) return { status: 'miss', query: q, basis };
+      const t = plain(parsed.displaytitle != null ? parsed.displaytitle : title) || title;
+      const pageUrl = 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(t).replace(/ /g, '_'));
+      const payload = buildArticlePayload(t, pageUrl, String(rawHtml));
+      if (!payload.text || !payload.text.trim()) return { status: 'miss', query: q, basis };
+      payload._basis = basis;
+      pageCache.set(ck, payload);
+      return { status: 'hit', query: q, basis, payload };
+    } catch (e) {
+      if (e && e.disabled) return { status: 'disabled', query: q };
+      return { status: 'error', error: String((e && e.message) || e), query: q };
+    }
+  }
+
+  /* ============================================================
      The prioritised, budgeted batch. Spend at most `budget` live lookups on
      the most serious needs; the rest come back `skipped` (abstain). Results
      stream through opts.onResult so the UI can fill in as the rate limiter
@@ -839,8 +1135,8 @@
     SCHEMA,
     cfg, setConfig,
     classifyNeeds, lookup, encyclopaedia, lexicon, refdesk, resolveNeeds,
-    enrichTerm, article, searchOptions, searchEntities, pickQuery, acquireIntent, seedQuery, isSpecificQuery,
-    stripWikiSections, articleDocText,
+    enrichTerm, article, articlePage, searchOptions, searchEntities, pickQuery, acquireIntent, seedQuery, isSpecificQuery,
+    stripWikiSections, articleDocText, sanitizeWikiHtml, parseWikiReferences, buildArticlePayload,
     hasConsent, grantConsent, revokeConsent,
     clearCache,
     enabled: () => !!proxyBase() && !!_fetch(),

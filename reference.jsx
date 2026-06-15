@@ -371,6 +371,7 @@ function ReferenceCard({ data, onConfirm, onDismiss, onOpen }) {
             {p.also_see.slice(0, 4).map((t, i) => <span key={i} className="refcard-rel">{t}</span>)}
           </div>
         ) : null}
+        {p.references && p.references.length ? <RefSources references={p.references} /> : null}
       </div>
       {ing ? (
         <div className="refcard-ingested">
@@ -384,4 +385,202 @@ function ReferenceCard({ data, onConfirm, onDismiss, onOpen }) {
   );
 }
 
-Object.assign(window, { ReferenceDesk, ReferenceDeskBar, ReferenceCard });
+/* The article's own citations, surfaced as provenance: each numbered source
+   Wikipedia cites, linked OUT to the original work. The same list renders under
+   the chat card (after ingest) and could anywhere a doc carries `wiki.references` —
+   the visible proof that a grounded claim can be sourced THROUGH Wikipedia, not
+   merely to it. Collapsed by default; the count is the affordance. */
+function RefSources({ references, open: openInit }) {
+  const refs = (references || []).filter(r => r && r.text);
+  const [open, setOpen] = React.useState(!!openInit);
+  if (!refs.length) return null;
+  const host = (u) => { try { return new URL(u).host.replace(/^www\./, ''); } catch (e) { return ''; } };
+  return (
+    <div className={'refsources' + (open ? ' open' : '')}>
+      <button type="button" className="refsources-toggle" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+        <span><b>{refs.length}</b> source{refs.length === 1 ? '' : 's'} Wikipedia cites</span>
+        <span className="refsources-hint">trace a claim to the original</span>
+      </button>
+      {open ? (
+        <ol className="refsources-list">
+          {refs.map(r => (
+            <li key={r.n} id={'refsrc-' + r.n} className="refsources-item">
+              <span className="refsources-n">{r.n}</span>
+              <span className="refsources-text">
+                {r.text}
+                {r.url ? <a className="refsources-link" href={r.url} target="_blank" rel="noopener nofollow">{host(r.url) || 'source'} ↗</a> : null}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
+/* The Wikipedia SEARCH MODAL — the explicit way in. The composer's Wikipedia
+   button opens this instead of letting the chat guess a term: the reader types
+   a query, sees the real candidate articles, and opens one rendered as close to
+   Wikipedia as we can (its OWN parsed HTML — infobox, figures, working [1]…[n]
+   footnotes that link to the cited sources). "Add to graph" ingests it as a
+   citable document whose claims carry those sources through. Nothing leaves the
+   device until the reader searches; nothing is ingested until they choose. */
+function WikiSearchModal({ initialQuery, onClose, onIngest, onOpenDoc }) {
+  const X = refX();
+  const dialogRef = window.useDialog(onClose);
+  const inputRef = React.useRef(null);
+  const articleRef = React.useRef(null);
+  const mounted = React.useRef(true);
+  React.useEffect(() => () => { mounted.current = false; }, []);
+
+  const [q, setQ] = React.useState(initialQuery || '');
+  const [search, setSearch] = React.useState({ status: 'idle', options: [], error: null, term: '' });
+  const [view, setView] = React.useState(null);          // 'article' once one is opened
+  const [art, setArt] = React.useState({ status: 'idle', payload: null, error: null, term: '' });
+  const [ingested, setIngested] = React.useState(null);  // { id, name } once added
+  const [adding, setAdding] = React.useState(false);
+
+  const runSearch = React.useCallback((term) => {
+    term = String(term == null ? q : term).trim();
+    if (!term || !X || typeof X.searchOptions !== 'function') return;
+    try { X.grantConsent && X.grantConsent(); } catch (e) {}
+    setView(null); setArt({ status: 'idle', payload: null, error: null, term: '' }); setIngested(null);
+    setSearch({ status: 'searching', options: [], error: null, term });
+    X.searchOptions(term).then((res) => {
+      if (!mounted.current) return;
+      const s = res && res.status;
+      if (!res || s === 'disabled') setSearch({ status: 'disabled', options: [], error: null, term });
+      else if (s === 'hit') setSearch({ status: 'hit', options: (res.options || []).slice(0, 12), error: null, term });
+      else if (s === 'gated') setSearch({ status: 'gated', options: [], error: null, term });
+      else if (s === 'error') setSearch({ status: 'error', options: [], error: res.error, term });
+      else setSearch({ status: 'miss', options: [], error: null, term });
+    }, (e) => { if (mounted.current) setSearch({ status: 'error', options: [], error: String((e && e.message) || e), term }); });
+  }, [q, X]);
+
+  const openArticle = (title) => {
+    if (!X || typeof X.articlePage !== 'function') return;
+    try { X.grantConsent && X.grantConsent(); } catch (e) {}
+    setIngested(null); setView('article');
+    setArt({ status: 'loading', payload: null, error: null, term: title });
+    if (articleRef.current) articleRef.current.scrollTop = 0;
+    X.articlePage(title, { resolved: true }).then((res) => {
+      if (!mounted.current) return;
+      if (res && res.status === 'hit' && res.payload) setArt({ status: 'hit', payload: res.payload, error: null, term: title });
+      else setArt({ status: (res && res.status) || 'error', payload: null, error: res && res.error, term: title });
+    }, (e) => { if (mounted.current) setArt({ status: 'error', payload: null, error: String((e && e.message) || e), term: title }); });
+  };
+
+  const addToGraph = () => {
+    if (!art.payload || !onIngest || adding) return;
+    setAdding(true);
+    Promise.resolve(onIngest(art.payload)).then((info) => {
+      if (!mounted.current) return; setAdding(false); if (info) setIngested(info);
+    }, () => { if (mounted.current) setAdding(false); });
+  };
+
+  // Footnote anchors ([1] → #cite_note-…, and the ↑ back-refs) scroll WITHIN the
+  // reader rather than navigating; every other link already opens in a new tab.
+  const onArticleClick = (e) => {
+    const a = e.target && e.target.closest && e.target.closest('a[href^="#"]');
+    if (!a) return;
+    e.preventDefault();
+    const id = decodeURIComponent((a.getAttribute('href') || '').slice(1));
+    if (!id) return;
+    const pane = articleRef.current;
+    // an attribute selector handles the dots/colons Wikipedia cite_note ids carry
+    // without needing CSS.escape — robust across the footnote and back-ref anchors.
+    let tgt = null;
+    try { tgt = pane && pane.querySelector('[id="' + id.replace(/["\\]/g, '') + '"]'); } catch (err) {}
+    if (tgt) { tgt.scrollIntoView({ behavior: 'smooth', block: 'center' }); tgt.classList.add('wiki-ref-flash'); setTimeout(() => { try { tgt.classList.remove('wiki-ref-flash'); } catch (e2) {} }, 1500); }
+  };
+
+  React.useEffect(() => {
+    if (inputRef.current) { try { inputRef.current.focus(); } catch (e) {} }
+    if (initialQuery && initialQuery.trim()) runSearch(initialQuery);
+  }, []); // eslint-disable-line
+
+  const host = (() => { try { const u = X && X.cfg && X.cfg().proxy; return u ? new URL(u).host : ''; } catch (e) { return ''; } })();
+  const p = art.payload;
+
+  const results = (
+    <div className="wiki-results">
+      {search.status === 'idle' ? <p className="wiki-hint">Search Wikipedia for an article to read and (optionally) add to the graph. Only your search term leaves the device, through your proxy{host ? <span> (<code>{host}</code>)</span> : null}.</p>
+        : search.status === 'searching' ? <p className="refdesk-loading">Searching Wikipedia for “{search.term}”…</p>
+        : search.status === 'disabled' ? <p className="refdesk-note">Wikipedia lookups are off (the proxy is cleared).</p>
+        : search.status === 'gated' ? <p className="refdesk-note">“{search.term}” reads as a private individual; the desk does not resolve people against Wikipedia.</p>
+        : search.status === 'error' ? <p className="refdesk-err">Couldn’t reach Wikipedia. <code>{search.error}</code></p>
+        : search.status === 'miss' || !search.options.length ? <p className="refdesk-placeholder">No Wikipedia matches for “{search.term}”.</p>
+        : (
+          <ul className="wiki-options">
+            {search.options.map((o, i) => (
+              <li key={i}>
+                <button type="button" className="wiki-option" onClick={() => openArticle(o.title)}>
+                  <span className="wiki-option-title">{o.title}</span>
+                  {o.snippet ? <span className="wiki-option-snippet">{o.snippet}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+    </div>
+  );
+
+  const article = (
+    <div className="wiki-reader" ref={articleRef} onClick={onArticleClick}>
+      {art.status === 'loading' ? <p className="refdesk-loading">Reading “{art.term}” from Wikipedia…</p>
+        : art.status === 'gated' ? <p className="refdesk-note">“{art.term}” reads as a private individual; the desk does not resolve people against Wikipedia.</p>
+        : art.status === 'disabled' ? <p className="refdesk-note">Wikipedia lookups are off (the proxy is cleared).</p>
+        : art.status === 'error' ? <p className="refdesk-err">Couldn’t reach Wikipedia. <code>{art.error}</code></p>
+        : art.status !== 'hit' || !p ? <p className="refdesk-placeholder">Couldn’t load “{art.term}”.</p>
+        : (
+          <React.Fragment>
+            <h1 className="wiki-title">{p.title}</h1>
+            <div className="wiki-article" dangerouslySetInnerHTML={{ __html: p.html || '' }} />
+            <div className="wiki-article-foot">From <a href={p.url} target="_blank" rel="noopener">en.wikipedia.org</a> · {(p.references || []).length} citations · CC BY-SA</div>
+          </React.Fragment>
+        )}
+    </div>
+  );
+
+  return (
+    <div className="overlay center" onClick={onClose}>
+      <div className="wiki-modal" role="dialog" aria-modal="true" aria-label="Search Wikipedia" tabIndex={-1} ref={dialogRef} onClick={(e) => e.stopPropagation()}>
+        <div className="wiki-modal-head">
+          <Icon name="book" size={15} />
+          <span className="wiki-modal-title">Wikipedia</span>
+          <span className="wiki-modal-src">en.wikipedia.org</span>
+          <div style={{ flex: 1 }} />
+          <button className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={17} /></button>
+        </div>
+        <div className="wiki-searchbar">
+          {view === 'article' ? (
+            <button type="button" className="wiki-back" onClick={() => { setView(null); }} title="Back to results"><Icon name="chevron-left" size={15} /></button>
+          ) : null}
+          <Icon name="search" size={15} />
+          <input ref={inputRef} className="wiki-search-input" type="text" value={q} placeholder="Search Wikipedia…"
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } }} />
+          <button type="button" className="refdesk-go small" onClick={() => runSearch()} disabled={!q.trim()}>Search</button>
+        </div>
+        <div className="wiki-modal-body">
+          {view === 'article' ? article : results}
+        </div>
+        {view === 'article' && art.status === 'hit' && p ? (
+          <div className="wiki-modal-foot">
+            <RefSources references={p.references} />
+            <div className="wiki-foot-actions">
+              {ingested ? (
+                <span className="wiki-added"><Icon name="check" size={13} /> Added as <b>{ingested.name}</b>{onOpenDoc ? <button type="button" className="refcard-open" onClick={() => { onOpenDoc(ingested.id); onClose && onClose(); }}>open</button> : null}</span>
+              ) : (
+                <button type="button" className="refdesk-go" onClick={addToGraph} disabled={adding}>{adding ? 'Adding…' : 'Add to graph'}</button>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { ReferenceDesk, ReferenceDeskBar, ReferenceCard, RefSources, WikiSearchModal });
