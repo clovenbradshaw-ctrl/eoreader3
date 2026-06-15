@@ -453,6 +453,37 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Kinship nouns. A possessive pronoun + kin noun ("his son", "her mother") names a relation the page never states as a copula — the possessor is resolved by activation and the relation recorded as a kin DEF, so "whose son is mentioned?" is answerable from the graph instead of stranding on an unresolved pronoun.',
   },
+  // ── Role-referent recovery (PR1) — occupation/role nouns that a narrative
+  //    names a character by ("the chief clerk", "the charwoman", "his sister").
+  //    Definite descriptions and possessive+role phrases the named-entity
+  //    extractor never proposes (lowercase head ⇒ no INS), recovered as
+  //    first-class nodes by a post-extraction pass and bound by co-occurrence.
+  //    Data only; the master flag role_referent_recovery (below) gates the pass.
+  role_terms: {
+    value: ['clerk','charwoman','locksmith','doctor','lodger','lodgers','manager','servant','maid','cook','chief','boss','landlord','landlady','porter','waiter','nurse','officer','captain','soldier','priest','teacher','student','master','mistress','boy','girl','man','woman','stranger','visitor','guest','neighbour','neighbor'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Occupation / social-role nouns a narrative uses to name a recurring character ("the chief clerk", "the charwoman", "the lodgers"). A definite description or possessive+role phrase headed by one of these is lowercase, so name promotion never proposes it; role-referent recovery (flag-gated) mines it from sentence text and promotes recurring ones to nodes.',
+  },
+  role_mention_floor: {
+    value: 3,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Minimum distinct-sentence mentions a role surface needs before it is promoted to a node. Below this it is an incidental description, not a recurring character.',
+  },
+  role_cooccur_window: {
+    value: 2,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Sentence radius (±N) within which two referents are counted as co-occurring when role-referent recovery binds a role node into the graph.',
+  },
+  role_hub_discount: {
+    value: 0.25,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Multiplier applied to co-occurrences between a role node and the hub (the most-mentioned person). The hub co-occurs with everyone, so binding every role to it is the degenerate failure; this down-weights those pairs so role↔role and role↔non-hub edges can clear the floor.',
+  },
+  role_referent_recovery: {
+    value: false,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Master flag (default OFF — the parity floor). When ON, a post-extraction pass recovers recurring role-referents (occupation/role nouns) as first-class nodes and weights referent relations by a two-factor signal (co-occurrence × embedding affinity). OFF appends nothing and the graph projection is byte-identical to the named-only baseline.',
+  },
   // ── Depicted acts — the story-world transformation a clause REPORTS, carried
   //    as content on the reader's CON bond. The bond's own op is always CON (the
   //    reading act of binding two referents); the verb may report a SEG (a cut),
@@ -1106,7 +1137,7 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     ANAPHOR_PRONOUNS, ROLE_CLAUSE_VERB, TITLE_OF_RE,
     DISCOURSE_JUNK, ANSWER_DISCOURSE, STRUCTURE_LABELS, TRANSCRIPT_FORMULA,
     GENERIC_VOICE_HEADS, PLACE_ORG_CUE_RE, EVA_MACHINERY_RE, EVA_VETO_TERMS,
-    KIN_TERMS, KIN_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE,
+    KIN_TERMS, KIN_POSS_RE, ROLE_TERMS, ROLE_POSS_RE, SPEAKER_LABEL_RES, GUTENBERG_BOILERPLATE,
     GUTENBERG_START_RES, GUTENBERG_END_RES,
     CHROME_RES, METAPHOR_RES, TYPE_KW_ORG, TYPE_KW_PLACE, TYPE_KW_PERSON,
     NP_GENERIC_HEADS, SITE_GROUND_CUES, SITE_PATTERN_CUES,
@@ -1134,6 +1165,14 @@ function rebuildLangSets() {
   // extractor reads. Empty inventory (a language without it yet) disables it.
   KIN_POSS_RE = KIN_TERMS.size
     ? new RegExp("\\b(his|her)\\s+(?:own\\s+|late\\s+|elder\\s+|eldest\\s+|younger\\s+|youngest\\s+|only\\s+)?(" + [...KIN_TERMS].join('|') + ")\\b", 'giu')
+    : /$^/;
+  // Role-referent recovery (flag-gated): the role inventory is the occupation
+  // nouns PLUS the kin nouns (a role node can be "his sister" as readily as
+  // "the chief clerk"). ROLE_POSS_RE is the possessive/definite shape over that
+  // union — "his|her|the (<modifier>)? <role-noun>". Empty inventory disables it.
+  ROLE_TERMS = new Set([...mod_values('role_terms'), ...mod_values('kin_terms')]);
+  ROLE_POSS_RE = ROLE_TERMS.size
+    ? new RegExp("\\b(his|her|the)\\s+(?:own\\s+|late\\s+|elder\\s+|eldest\\s+|younger\\s+|youngest\\s+|only\\s+|old\\s+|young\\s+|chief\\s+|head\\s+)?(" + [...ROLE_TERMS].join('|') + ")\\b", 'giu')
     : /$^/;
   FEMALE_TITLES = new Set(mod_values('female_titles'));
   MALE_TITLES = new Set(mod_values('male_titles'));
@@ -6632,6 +6671,12 @@ function projectGraph(events, frame = {}) {
   // Move the cursor, demote a token, recalibrate a reader: the same
   // log measures differently. Default frame: end of text, current rules.
   const horizon = (frame.cursor == null || !isFinite(frame.cursor)) ? Infinity : frame.cursor;
+  // Two-factor edge weight (role_referent_recovery): an optional per-edge
+  // affinity table (cluster-key pair → cosine) supplied through the frame.
+  // null in every shipped/Node path (no embedder ⇒ no table) — when null,
+  // weight collapses to the co-occurrence count and the projection is
+  // byte-identical to the named-only baseline.
+  const edgeAffinity = (frame && frame.edgeAffinity) || null;
   const posOf = (ev) => (ev.sentence_idx == null ? Infinity : ev.sentence_idx);
   events = events.filter(ev => posOf(ev) <= horizon);
   let maxSent = 0;
@@ -7290,8 +7335,8 @@ function projectGraph(events, frame = {}) {
     const bKey = findClusterKey(oSurf);
     if (!aKey || !bKey || aKey === bKey) continue;
     const edgeKey = aKey + '|' + (ev.v || '') + '|' + bKey;
-    const cur = edgeMap.get(edgeKey) || { a: aKey, b: bKey, verb: ev.v || '', weight: 0, eventSeqs: [] };
-    cur.weight++;
+    const cur = edgeMap.get(edgeKey) || { a: aKey, b: bKey, verb: ev.v || '', cooccur: 0, eventSeqs: [] };
+    cur.cooccur++;
     cur.eventSeqs.push(ev.seq);
     edgeMap.set(edgeKey, cur);
   }
@@ -7324,18 +7369,29 @@ function projectGraph(events, frame = {}) {
       eventSeqs: c.eventSeqs,
     })).sort((a, b) => b.mentions - a.mentions),
     edges: [...edgeMap.values()]
-      .map(e => ({
-        a: e.a,
-        b: e.b,
-        aName: clusters.find(c => c.key === e.a)?.name || e.a,
-        bName: clusters.find(c => c.key === e.b)?.name || e.b,
-        verb: e.verb,
-        weight: e.weight,
-        // A drawn relation is a Link (Structure × Figure) — or a Network when
-        // its endpoint reads as an architecture noun.
-        site: eoSite('Structure', e.bName || e.b, null),
-        eventSeqs: e.eventSeqs,
-      }))
+      .map(e => {
+        // Two-factor weight: co-occurrence count × embedding affinity. When no
+        // affinity table is supplied (every shipped/Node path with the flag
+        // off, or a cold embedder), affNum is null and weight === e.cooccur ===
+        // the old co-occurrence weight — byte-identical. affinity:null is the
+        // "not computed" reading (≠ 0 ≠ no relation), kept distinct in the detail.
+        const aff = edgeAffinity ? (edgeAffinity.get(e.a + '|' + e.b) ?? edgeAffinity.get(e.b + '|' + e.a) ?? null) : null;
+        const affNum = (typeof aff === 'number' && isFinite(aff)) ? aff : null;
+        const weight = e.cooccur * (affNum == null ? 1 : affNum);
+        return {
+          a: e.a,
+          b: e.b,
+          aName: clusters.find(c => c.key === e.a)?.name || e.a,
+          bName: clusters.find(c => c.key === e.b)?.name || e.b,
+          verb: e.verb,
+          weight,
+          weight_detail: { cooccur: e.cooccur, affinity: affNum },
+          // A drawn relation is a Link (Structure × Figure) — or a Network when
+          // its endpoint reads as an architecture noun.
+          site: eoSite('Structure', e.bName || e.b, null),
+          eventSeqs: e.eventSeqs,
+        };
+      })
       .sort((a, b) => b.weight - a.weight),
     measurements: frameMeasurements,
     frame: {
@@ -7503,6 +7559,15 @@ function projectGraph(events, frame = {}) {
       noteDocFriction(doc);
       coWitnessScan(doc);
     } catch (e) { /* the provenance layer never blocks a parse */ }
+    // Role-referent recovery (role_referent_recovery rule, OFF by default — the
+    // parity floor): recover recurring role nodes from sentence text and weight
+    // their relations by a two-factor signal. Both are flag-gated internally and
+    // append only to the event log; with the flag OFF they are no-ops and the
+    // projection is byte-identical. Wrapped so the role layer never blocks a parse.
+    try {
+      promoteRoleReferents(doc);
+      await attachEdgeAffinity(doc);
+    } catch (e) { /* the role layer never blocks a parse */ }
     // The document-level de-chroming verdict over the chrome gate: a non-
     // destructive record of what was set aside (kept verbatim in the spine and
     // queryable on demand). Pure addition — never an event — so parity holds.
@@ -7540,6 +7605,7 @@ function projectGraph(events, frame = {}) {
     'mass-weight': 'mass_weight',
     'singular-they': 'singular_they',
     'relation-gate': 'relation_gate',
+    'role-referent-recovery': 'role_referent_recovery',
     'cross-source': 'cross_source',
     'site-entity-cell': 'site_entity_cell',
     'distance-gravity': 'distance_gravity',
@@ -7742,7 +7808,7 @@ function projectGraph(events, frame = {}) {
     const cached = _projCache.get(doc);
     if (cached && cached.rev === RULES_REV) return cached.view;
 
-    const proj = projectGraph(doc._events);
+    const proj = projectGraph(doc._events, doc._edgeAffinity ? { edgeAffinity: doc._edgeAffinity } : {});
     const seqToSent = doc._seqToSent || new Map();
     // sightings written into an INS's admission basis (gram-mining) are part
     // of the referent's sentence record, not just the depositing sentence
@@ -7905,6 +7971,213 @@ function projectGraph(events, frame = {}) {
     }
     if (fired) _projCache.delete(doc);
     return fired;
+  }
+
+  /* ── Role-referent recovery (PR1) ───────────────────────────────────
+     A post-extraction pass, modeled on evaAcrossDocs: it mines recurring
+     ROLE-referents (occupation/role nouns — "the chief clerk", "his sister")
+     the named-entity extractor never proposes (lowercase head ⇒ no INS) from
+     sentence TEXT, promotes ones above the mention floor to first-class nodes,
+     and binds them into the graph by CO-OCCURRENCE (not identity — association
+     ≠ identity; no MERGE/SYN to a name). Role nodes stay pure projections over
+     the append-only log (drop their events to undo). Flag-gated and wrapped so
+     it NEVER throws across the parse; with the flag OFF it appends nothing and
+     projectGraph is byte-identical to the named-only baseline.
+
+     Returns the number of events appended. */
+  function promoteRoleReferents(doc) {
+    if (!READING_RULES.role_referent_recovery.value) return 0;
+    if (!doc || doc.kind !== 'prose' || !Array.isArray(doc._events) || !Array.isArray(doc.sentenceTexts)) return 0;
+    try {
+      if (!ROLE_TERMS || !ROLE_TERMS.size) return 0;
+      const floor    = Number(READING_RULES.role_mention_floor.value) || 3;
+      const window    = Number(READING_RULES.role_cooccur_window.value) || 0;
+      const hubDisc   = Number(READING_RULES.role_hub_discount.value);
+      const HUB_DISCOUNT = isFinite(hubDisc) ? hubDisc : 1;
+      const COOC_FLOOR = 3;   // a small absolute floor on effective co-occurrence
+
+      // ── Mine role surfaces from narration ──
+      // Quote-stripping mirrors the possessive-kin reader (engine.js ~5532):
+      // a character speaking "my sister…" is speech, not the narrator's record.
+      const texts = doc.sentenceTexts;
+      const roleMap = new Map();   // normSurface -> { display, head, kind, idxs:Set }
+      for (let i = 0; i < texts.length; i++) {
+        const narration = String(texts[i] || '')
+          .replace(/[“][^”]*[”]?/g, ' ')
+          .replace(/"[^"]*"/g, ' ');
+        if (!narration.trim()) continue;
+        ROLE_POSS_RE.lastIndex = 0;
+        let m;
+        while ((m = ROLE_POSS_RE.exec(narration)) !== null) {
+          const det = (m[1] || '').toLowerCase();
+          const head = (m[2] || '').toLowerCase();
+          if (!head) continue;
+          const display = m[0].replace(/\s+/g, ' ').trim().toLowerCase();
+          const key = normSurface(display);
+          if (!key) continue;
+          const kind = (det === 'the') ? 'definite-desc' : 'possessive';
+          let rec = roleMap.get(key);
+          if (!rec) { rec = { display, head, kind, idxs: new Set() }; roleMap.set(key, rec); }
+          rec.idxs.add(i);
+        }
+      }
+      // ── Floor: only recurring role surfaces become nodes ──
+      const kept = [...roleMap.entries()]
+        .map(([key, r]) => ({ key, display: r.display, head: r.head, kind: r.kind, idxs: [...r.idxs].sort((a, b) => a - b) }))
+        .filter(r => r.idxs.length >= floor);
+      if (!kept.length) return 0;
+
+      // ── Possessor of a possessive role, read back from the kin DEF (no
+      //    re-resolution): DEF{path:'kin', value:<kin noun>} carries the
+      //    possessor referent on its targetHint. ──
+      const kinPossessor = new Map();   // kin noun -> referent_id (first seen)
+      for (const ev of doc._events) {
+        if (ev.op === 'DEF' && ev.path === 'kin' && ev.value && ev.targetHint && ev.targetHint.referent_id) {
+          const kv = String(ev.value).toLowerCase();
+          if (!kinPossessor.has(kv)) kinPossessor.set(kv, ev.targetHint.referent_id);
+        }
+      }
+
+      // ── Named entities + their sentences, BEFORE appending (named only) ──
+      const named = projectEntities(doc).entities || [];
+      const namedSents = named.map(e => ({ name: e.name, key: e.key, referent_id: e.referent_id, type: e.type, sents: e.sents || [], raw: e.raw || (e.sents || []).length }));
+      // The hub: the most-mentioned PERSON (it co-occurs with everyone; binding
+      // every role to it is the degenerate failure the hub discount guards).
+      let hub = null;
+      for (const e of namedSents) {
+        if (e.type !== 'person') continue;
+        if (!hub || e.raw > hub.raw) hub = e;
+      }
+
+      // ── Co-occurrence within ±window. Reuses the shared-sentence primitive
+      //    from entityDetail, widened to a radius. ──
+      const within = (aSents, bSents) => {
+        if (!aSents.length || !bSents.length) return 0;
+        const bs = bSents;
+        let co = 0; const hitSents = new Set();
+        for (const sa of aSents) {
+          for (const sb of bs) {
+            if (Math.abs(sa - sb) <= window) { co++; hitSents.add(sa); hitSents.add(sb); break; }
+          }
+        }
+        return { co, sents: [...hitSents].sort((a, b) => a - b) };
+      };
+
+      // ── Mint events from the tail of the log (the evaAcrossDocs pattern) ──
+      let seq = doc._events.length ? ((doc._events[doc._events.length - 1].seq || 0) + 1) : 0;
+      const seqToSent = doc._seqToSent || (doc._seqToSent = new Map());
+      const appended = [];
+      const pushEvent = (ev) => { doc._events.push(ev); appended.push(ev); if (ev.sentence_idx != null) seqToSent.set(ev.seq, ev.sentence_idx); };
+
+      // role surface -> its minted referent id (so role↔role CONs can hint it)
+      const roleRef = new Map();
+      let n = 0;
+      for (const r of kept) {
+        const rid = 'rr-' + (n++);
+        roleRef.set(r.key, rid);
+        const firstIdx = r.idxs[0];
+        const possRef = (r.kind === 'possessive') ? (kinPossessor.get(r.head) || null) : null;
+        pushEvent({
+          id: 'ev-' + seq, seq: seq++, op: 'INS', stance: 'Instantiating',
+          target: r.display, targetRaw: r.display, entityType: 'person',
+          referent_id: rid, in_quote: false,
+          sentence_idx: firstIdx, sentence: texts[firstIdx] || null,
+          eo_role: true,
+          role: { head: r.head, kind: r.kind, possessor_ref: possRef, mentions: r.idxs.length, sentence_idxs: r.idxs },
+          // .sents for this node come straight from basis.sightings (every
+          // mention sentence), so the projection needs no _seqToSent surgery
+          // for the node itself.
+          basis: { sightings: r.idxs.slice() },
+          src: 'role-referent',
+        });
+      }
+
+      // ── Bindings: role ↔ named, and role ↔ role. One CON per co-occurrence
+      //    sentence so the edge weight accumulates to the co-occurrence count
+      //    (the existing edge semantics). Hub co-occurrences are down-weighted;
+      //    the effective count must clear COOC_FLOOR. ──
+      const bind = (aName, aRef, aSents, bName, bRef, bSents, bIsHub) => {
+        const w = within(aSents, bSents);
+        if (!w || !w.co) return;
+        const eff = bIsHub ? w.co * HUB_DISCOUNT : w.co;
+        if (eff < COOC_FLOOR) return;
+        for (const si of w.sents) {
+          pushEvent({
+            id: 'ev-' + seq, seq: seq++, op: 'CON', stance: 'Tracing',
+            s: aName, o: bName, v: 'co-occurs',
+            sHint: { name: aName, referent_id: aRef },
+            oHint: { name: bName, referent_id: bRef },
+            eo_role: true, sentence_idx: si, sentence: texts[si] || null,
+            src: 'role-cooccur',
+          });
+        }
+      };
+      for (let i = 0; i < kept.length; i++) {
+        const r = kept[i];
+        const rRef = roleRef.get(r.key);
+        // role ↔ named
+        for (const e of namedSents) {
+          bind(r.display, rRef, r.idxs, e.name, e.referent_id, e.sents, hub && e.key === hub.key);
+        }
+        // role ↔ role (each unordered pair once; never a hub, so undiscounted)
+        for (let j = i + 1; j < kept.length; j++) {
+          const r2 = kept[j];
+          bind(r.display, rRef, r.idxs, r2.display, roleRef.get(r2.key), r2.idxs, false);
+        }
+      }
+
+      _projCache.delete(doc);
+      return appended.length;
+    } catch (e) {
+      // the role layer never blocks a parse
+      return 0;
+    }
+  }
+
+  /* ── Two-factor edge affinity (PR1, async) ──────────────────────────
+     The embedding half of the two-factor weight. For each referent (named +
+     recovered role node) it builds a context signature — the centroid of its
+     mention-sentence vectors (the docSentVectors/centroid pattern, scored with
+     _cosineNorm) — and stores pairwise cosines on doc._edgeAffinity, keyed by
+     the SAME cluster keys projectGraph emits for edges. projectGraph reads the
+     table through its frame arg and stays synchronous and pure.
+
+     Guarded on the flag AND a warm embedder (window.EOEmbed.ready()); the Node
+     test harness has no embedder, so this returns without setting the table —
+     the cold path, where weight collapses to co-occurrence (affinity:null).
+     Best-effort: any failure leaves doc._edgeAffinity unset, never throws. */
+  async function attachEdgeAffinity(doc) {
+    if (!READING_RULES.role_referent_recovery.value) return;
+    if (!doc || doc.kind !== 'prose' || !Array.isArray(doc._events)) return;
+    if (typeof window === 'undefined' || !window.EOEmbed || !window.EOEmbed.ready()) return;
+    try {
+      const vecs = await docSentVectors(doc);
+      if (!vecs || !vecs.length) return;
+      const dim = vecs[0].length;
+      const centroid = (idxs) => {
+        const use = idxs.filter(i => i >= 0 && i < vecs.length);
+        if (!use.length) return null;
+        const v = new Float64Array(dim);
+        for (const i of use) { const r = vecs[i]; for (let d = 0; d < dim; d++) v[d] += r[d]; }
+        let nrm = 0; for (let d = 0; d < dim; d++) nrm += v[d] * v[d]; nrm = Math.sqrt(nrm) || 1;
+        for (let d = 0; d < dim; d++) v[d] /= nrm;
+        return v;
+      };
+      // Post-append entities (named + role nodes), each with .key and .sents —
+      // the keys match projectGraph's edge endpoints exactly.
+      const ents = (projectEntities(doc).entities || []).filter(e => e.key && (e.sents || []).length);
+      const sigs = [];
+      for (const e of ents) { const c = centroid(e.sents); if (c) sigs.push({ key: e.key, sig: c }); }
+      const aff = new Map();
+      for (let i = 0; i < sigs.length; i++) {
+        for (let j = i + 1; j < sigs.length; j++) {
+          const cos = _cosineNorm(sigs[i].sig, sigs[j].sig);
+          aff.set(sigs[i].key + '|' + sigs[j].key, cos);
+        }
+      }
+      doc._edgeAffinity = aff;
+      _projCache.delete(doc);
+    } catch (e) { /* best-effort: leave _edgeAffinity unset */ }
   }
 
   function entityDetail(doc, name) {
@@ -9458,7 +9731,7 @@ function projectGraph(events, frame = {}) {
     if (!doc || doc.kind !== 'prose' || !doc._events) return null;
     const clone = (v) => { try { return v == null ? v : JSON.parse(JSON.stringify(v)); } catch (e) { return null; } };
     let edges = [], frame = null;
-    try { const g = projectGraph(doc._events); edges = g.edges || []; frame = g.frame || null; } catch (e) {}
+    try { const g = projectGraph(doc._events, doc._edgeAffinity ? { edgeAffinity: doc._edgeAffinity } : {}); edges = g.edges || []; frame = g.frame || null; } catch (e) {}
     const { entities } = projectEntities(doc);
     const p = graphPortrait(doc) || { assertions: [], spine: [] };
     return {
@@ -9469,7 +9742,7 @@ function projectGraph(events, frame = {}) {
       // refinement beneath the Entity cell ("Entity / person"), never as a
       // sibling of the nine
       entities: entities.map(e => ({ name: e.name, key: e.key, type: e.type, site: e.site, address: eoAddress(e.site, e.type), mentions: e.raw, mass: e.mass, sents: e.sents })),
-      edges: edges.map(e => ({ a: e.a, b: e.b, aName: e.aName, bName: e.bName, verb: e.verb, weight: e.weight })),
+      edges: edges.map(e => ({ a: e.a, b: e.b, aName: e.aName, bName: e.bName, verb: e.verb, weight: e.weight, weight_detail: e.weight_detail })),
       assertions: (p.assertions || []).map(a => ({ subject: a.name, is: a.is })),
       spine: p.spine || [],
       frame: clone(frame),
@@ -12154,6 +12427,7 @@ function projectGraph(events, frame = {}) {
   // applyRules coerces card values through Number(), so an installed card
   // arrives as 1; the seed is boolean false. Either truthy form means ON.
   function relationGateEnabled() { const v = READING_RULES.relation_gate.value; return v === true || v === 1; }
+  function roleReferentRecoveryEnabled() { const v = READING_RULES.role_referent_recovery.value; return v === true || v === 1; }
   function crossSourceEnabled() { const v = READING_RULES.cross_source.value; return v === true || v === 1; }
   function bindingResolutionEnabled() { const v = READING_RULES.binding_resolution.value; return v === true || v === 1; }
   // Semantic antimatter master (SPEC): the rescue + demotion stages at the
@@ -13396,6 +13670,10 @@ function projectGraph(events, frame = {}) {
     // old binder as fallback, and the grounding-leak envelope (distance
     // from the claim's OWN cited span, never an exemplar library)
     relationGateEnabled, checkRelations, checkRelationsScope,
+    // role-referent recovery (role_referent_recovery rule, OFF by default — the
+    // parity floor): the master-flag getter, mirroring relationGateEnabled. The
+    // pass itself (promoteRoleReferents/attachEdgeAffinity) runs inside parseProse.
+    roleReferentRecoveryEnabled,
     bindClaimKeys, bindClaimKeysScope, groundingEnvelope,
     bindingResolutionEnabled,
     // the addressee field — the second person (addressee.js / window.EOAddressee).
