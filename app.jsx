@@ -1872,8 +1872,16 @@ function App() {
         note: 'A prior reply asserted this; the graph-check does not support it. The old turn re-enters history flagged RETRACTED.' });
     }
     const said = retractions[0];
+    // CLEARED — the destruction-absence terrain (pradhvaṃsābhāva): a claim that
+    // HELD, then was superseded. Unlike never-set, it has a history: it was
+    // there and is gone, and the gone-ness is itself a fact. The marker carries
+    // that history (the superseded sentence) so the audit/witness count it as a
+    // cleared site, and the chip renders "Corrected —", never silence on the gap.
+    const cdoc = (scope && scope[0] && scope[0].id) || '';
+    const clearedReceipt = `an earlier reply asserted “${said.sentence}”; the page’s recorded events do not support it, and this turn’s reading supersedes it`;
+    const clearedMark = E && E.formatAbsentMarker ? ' ' + E.formatAbsentMarker('cleared', cdoc, clearedReceipt) : '';
     return { ...plan, text: plan.text +
-      `\n\nI’m also retracting an earlier claim of mine — I had said: “${said.sentence}” That isn’t supported by the page’s recorded events, and the earlier reply now carries the retraction.` };
+      `\n\nI’m also retracting an earlier claim of mine — I had said: “${said.sentence}” That isn’t supported by the page’s recorded events, and the earlier reply now carries the retraction.${clearedMark}` };
   };
 
   // Mechanical turn over the scope. `givenPlan` lets a caller hand in an
@@ -3083,8 +3091,8 @@ function App() {
         // clearly-absent target, on the part the passages did not witness). It
         // lowers the witness degree; it is never phrased as "the document doesn't say".
         const absentFlag = target
-          ? ` {{absent:${docId}:no presence found for “${target}”}}`
-          : ` {{absent:${docId}:the retrieved passages did not witness all of this}}`;
+          ? ` {{absent:never-set:${docId}:no presence found for “${target}”}}`
+          : ` {{absent:never-set:${docId}:the retrieved passages did not witness all of this}}`;
         let bodyText = (boundDraft && boundDraft.text) ? boundDraft.text : String(draft);
         // Any term the page does not contain is struck in place (a flag on the
         // talker's own sentence), not removed — readable, with the void visible.
@@ -3394,7 +3402,7 @@ function App() {
         if (convergeStop === 'residual-void' && residualGap.length && bound.audit.grounded) {
           const terms = residualGap.join(', ');
           const rdoc = (primaryDoc && primaryDoc.id) || (scope[0] && scope[0].id) || '';
-          bound = { ...bound, text: bound.text + ` {{absent:${rdoc}:the document does not cover ${terms}}}`,
+          bound = { ...bound, text: bound.text + ` {{absent:never-set:${rdoc}:the document does not cover ${terms}}}`,
             audit: { ...bound.audit, note: (bound.audit.note || '') + ` Residual gap left as a registered absence: ${terms}.` } };
         }
         const flagModel = (reason, note) => {

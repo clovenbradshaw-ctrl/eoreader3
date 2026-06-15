@@ -19,7 +19,11 @@ function stripForView(s) {
   return String(s == null ? '' : s)
     .replace(/\{\{cite:([^}]*)\}\}/g, (m, b) => { const p = b.split(':'); return p[2] ? ' [' + p[2] + ']' : ''; })
     .replace(/\{\{infer:([^}]*)\}\}/g, (m, b) => { const p = b.split(':'); return p[2] ? ' ⟦' + p[2] + '⟧' : ''; })
-    .replace(/\{\{void:([^}]*)\}\}/g, '⟨$1⟩')
+    .replace(/\{\{void:([^}]*)\}\}/g, (m, b) => {
+      const EO = (typeof window !== 'undefined' && window.EOEngine) || null;
+      const t = (EO && EO.parseVoidMarker) ? EO.parseVoidMarker(b).term : b;
+      return '⟨' + t + '⟩';
+    })
     .replace(/\{\{absent:[^}]*\}\}/g, ' [⊥]')
     .replace(/\s+([.,;:])/g, '$1')
     .trim();
@@ -62,7 +66,7 @@ function AuditStep({ s }) {
   if (s.t === 'referents') return (
     <Line label="referents" kind="referents">
       <span className="aud-dim">matter:</span> {(s.matter && s.matter.length) ? s.matter.join(', ') : '—'}
-      {' · '}<span className="aud-dim">void:</span> {(s.antimatter && s.antimatter.length) ? <span className="aud-void">{s.antimatter.join(', ')}</span> : '—'}
+      {' · '}<span className="aud-dim" title="the elsewhere terrain — named in the question, not among this document’s referents (a fact about the site, not the user’s fault and not the system’s)">elsewhere:</span> {(s.antimatter && s.antimatter.length) ? <span className="aud-void">{s.antimatter.join(', ')}</span> : '—'}
     </Line>
   );
   if (s.t === 'retrieve') return (
@@ -252,6 +256,36 @@ function AuditStep({ s }) {
   return <Line label={s.t}><span className="aud-dim">{JSON.stringify(s)}</span></Line>;
 }
 
+// The typed-void seam, made legible for the auditor. VOID is a SITE of
+// nothingness; its four terrains are determinate forms of the empty site, and
+// 'invented' is a fabrication with no site (the system's own fault). The two
+// abstentions (ambiguous / inference) are NUL acts, not voids, so they never
+// appear in this tally. Reads turn.final.truth.voidsByKind.
+const VOID_KIND_GLOSS = {
+  'never-set':   'never-set — prior absence: the document never established it (scanned, with a receipt)',
+  'cleared':     'cleared — destruction absence: said earlier, and since superseded',
+  'elsewhere':   'elsewhere — mutual absence: named here, but not in this document',
+  'impossible':  'impossible — absolute absence: the question assumes what the page denies',
+  'invented':    'invented — a fabrication with no site, struck (the system’s own fault)',
+  'unspecified': 'absence (kind not yet classified — the legacy marker)',
+};
+const TERRAIN_KINDS = new Set(['never-set', 'cleared', 'elsewhere', 'impossible']);
+function VoidKindChips({ byKind }) {
+  if (!byKind) return null;
+  const entries = Object.entries(byKind).filter(([, n]) => n > 0);
+  // Only worth breaking out once a real kind appears; a turn of bare
+  // (unspecified) markers reads exactly as before.
+  if (!entries.length || (entries.length === 1 && entries[0][0] === 'unspecified')) return null;
+  return (
+    <span className="aud-voidkinds">
+      {entries.map(([k, n]) => (
+        <span key={k} className={'aud-voidkind ' + (k === 'invented' ? 'voidkind-fab' : TERRAIN_KINDS.has(k) ? 'voidkind-site' : 'voidkind-un')}
+          title={VOID_KIND_GLOSS[k] || k}> {n} {k}</span>
+      ))}
+    </span>
+  );
+}
+
 // WI-7 — the per-turn truthfulness chip: bound / void / unbound and TWO degrees.
 // Unbound must be 0 (WI-2/WI-3/WI-4); a non-zero value is the dominant term and
 // is shown in alarm. The two graded stamps sit side by side, same shape: the
@@ -272,6 +306,7 @@ function TruthChip({ truth, form }) {
       + (fdeg ? '; form degree = ' + fdeg + ' (cosine to the ' + (form.move || 'genre') + ' centroid — how much it looks like the right kind of answer)' : '')}>
       <span className="aud-truth-b">{truth.bound}✓</span>
       {truth.voids ? <span className="aud-truth-v"> {truth.voids}⟨⟩</span> : null}
+      <VoidKindChips byKind={truth.voidsByKind} />
       <span className={truth.unbound ? 'aud-truth-u bad' : 'aud-truth-u'}> {truth.unbound}⊥</span>
       <span className="aud-truth-c"> · {deg} witnessed</span>
       {fdeg && <span className="aud-truth-c"> · {fdeg} form{form.revised ? ' ↻' : ''}</span>}

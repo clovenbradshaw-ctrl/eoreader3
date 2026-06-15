@@ -62,6 +62,27 @@
     const t = String(text == null ? '' : text);
     return (t.match(/\{\{(?:void|absent):/g) || []).length;
   }
+  // The typed void: a per-kind tally for the audit drawer, so the auditor sees
+  // not just HOW MANY absences but WHICH — the four terrains (facts about the
+  // site) and the one fabrication, told apart. The act kinds (ambiguous,
+  // inference) are NUL, not voids, so they never appear here. The kind set
+  // mirrors engine.js VOID_KINDS (the constitution) so this stays pure and
+  // engine-free for the VM/offline case. A bare marker (no leading kind segment,
+  // or a first segment that is not a known kind) tallies as 'unspecified'.
+  const VOID_KIND_SET = new Set(['never-set', 'cleared', 'elsewhere', 'impossible', 'invented', 'unspecified']);
+  function voidsByKind(text) {
+    const t = String(text == null ? '' : text);
+    const out = {};
+    const re = /\{\{(?:void|absent):([^}]*)\}\}/g;
+    let m;
+    while ((m = re.exec(t))) {
+      const body = m[1], ci = body.indexOf(':');
+      const seg = ci >= 0 ? body.slice(0, ci) : body;
+      const kind = VOID_KIND_SET.has(seg) ? seg : 'unspecified';
+      out[kind] = (out[kind] || 0) + 1;
+    }
+    return out;
+  }
 
   /* ---- WI-7 (extended): the witness DEGREE, per sentence ----
      A stamp that says verified / not-verified is still arithmetic, just
@@ -148,6 +169,8 @@
     // degree of witness on what was said, not a literal string match.
     const w = witnessOnProse(text);
     return { covers: (audit && audit.covers) || null, coverage, bound, voids, unbound,
+      // the seam in the audit: which absences, by kind (terrains + the fabrication)
+      voidsByKind: voidsByKind(text),
       degree: w.degree, witnessed: w.witnessed, witnessContent: w.content, witness: w.sentences };
   }
 
@@ -302,7 +325,7 @@
   window.EOAudit = {
     SCHEMA, FETCH_SCHEMA, isEnabled, setEnabled, begin, step, set, end,
     all, count, clear, restore, subscribe, toJSONL, toJSON, download, downloadJSON, publicTurn,
-    truthfulness, countVoids,
+    truthfulness, countVoids, voidsByKind,
     // the external-web touch log (cleo-fetch/1) — written by websource.js
     recordFetch, fetchLog, fetchCount, clearFetches,
     // convenience for llm.js — records the model call as an 'llm' step

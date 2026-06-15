@@ -228,7 +228,7 @@
   "hasGround:What did Zorthax say?": true,
   "context:What did Zorthax say?": "",
   "answer:What did Zorthax say?": {
-   "text": "{{void:Zorthax}} appears nowhere in this document. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.",
+   "text": "{{void:elsewhere:Zorthax}} appears nowhere in this document. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.",
    "audit": {
     "status": "warn",
     "grounded": true,
@@ -894,7 +894,7 @@
   "hasGround:What did Zorthax say?": true,
   "context:What did Zorthax say?": "",
   "answer:What did Zorthax say?": {
-   "text": "{{void:Zorthax}} appears nowhere in this document. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.",
+   "text": "{{void:elsewhere:Zorthax}} appears nowhere in this document. I won’t invent an answer for a term the page doesn’t contain — load a source that mentions it and I’ll read it.",
    "audit": {
     "status": "warn",
     "grounded": true,

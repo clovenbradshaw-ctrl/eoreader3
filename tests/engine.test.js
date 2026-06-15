@@ -181,7 +181,7 @@ group('anti-matter referents', () => {
   ok(/Caesar/.test(multi.text) && /Napoleon/.test(multi.text), 'all anti-matter referents are surfaced, not just the first');
   eq(multi.audit.covers, '0/2', 'two anti-matter referents → covers 0/2');
   ok(/Voss Point/.test(multi.text), 'a present (matter) referent is acknowledged in the hold');
-  ok(/\{\{void:Caesar\}\}/.test(multi.text), 'an anti-matter referent renders as a marked void span');
+  ok(/\{\{void:elsewhere:Caesar\}\}/.test(multi.text), 'an anti-matter referent renders as a marked ELSEWHERE void (named in the question, not in this document)');
 
   // a single absent name still holds; a fully-present query does not
   const one = E.answer(voss, 'What did Zorthax say?');
@@ -252,10 +252,12 @@ group('void / invented terms', () => {
   // the body check strips a trailing 's first, mirroring namesEntity.
   eq(E.inventedTerms(voss, "Edith's kettle was warm").length, 0,
     'a real entity in possessive form (Edith’s) is not flagged invented');
-  // voidInvented marks each flagged term as {{void:term}} so a kept-but-caveated
-  // answer shows it struck rather than passing it off as grounded.
-  eq(E.voidInvented('Zorthax met Edith', ['Zorthax']), '{{void:Zorthax}} met Edith',
-    'voidInvented wraps an invented term and leaves real ones alone');
+  // voidInvented marks each flagged term as {{void:invented:term}} so a kept-but-
+  // caveated answer shows it struck rather than passing it off as grounded. The
+  // 'invented' kind is the fabrication — system provenance, distinct from the
+  // 'elsewhere' terrain where the USER named the absent thing.
+  eq(E.voidInvented('Zorthax met Edith', ['Zorthax']), '{{void:invented:Zorthax}} met Edith',
+    'voidInvented wraps an invented term (typed) and leaves real ones alone');
 });
 
 group('table — deterministic fold', () => {
@@ -1089,7 +1091,7 @@ group('bindCitations — a negative existential is attested, never lashed to a l
   // and bound to s3 ("Thank you."), a nonsense cite on a true claim. Retrieval
   // can never ground a negative; only a scan can.
   const neg = E.bindCitations(meeting, 'The text does not mention him as a speaker.', 'was he a speaker', 'factual', { hotEntity: 'Amos Dresser' });
-  ok(/\{\{absent:meet:/.test(neg.text), 'the claim cites ⊥ with a receipt instead of a junk line');
+  ok(/\{\{absent:never-set:meet:/.test(neg.text), 'the claim cites ⊥ with a receipt instead of a junk line');
   eq(neg.cites.length, 0, 'no sentence cite is faked for a whole-document claim');
   eq(neg.audit.grounded, true, 'the attested negative IS grounded — absence is evidence');
   // a FALSE denial earns nothing: the page does attribute speech to Speaker 4
@@ -1110,7 +1112,7 @@ group('bindCitations — a negative existential is attested, never lashed to a l
 group('bindCitations — an answer-voice void is attested, not confabulated', () => {
   // aspect void: Edith is on the page, her "salary" is not. Verified absent ⇒ ⊥.
   const v = E.bindCitations(voss, "I couldn't find any information about Edith's salary.", "what is Edith's salary", 'factual');
-  ok(/\{\{absent:voss:/.test(v.text), 'the void-report cites ⊥ with a receipt, not a confabulation');
+  ok(/\{\{absent:never-set:voss:/.test(v.text), 'the void-report cites ⊥ with a NEVER-SET receipt (scanned silence), not a confabulation');
   ok(/salary/.test(v.text), 'the receipt NAMES the verified-absent term (salary)');
   eq(v.cites.length, 0, 'no span is lashed to an absence');
   eq(v.audit.grounded, true, 'a verified absence IS grounded — the miss is evidence, honestly held');
@@ -1167,7 +1169,7 @@ group('answerConfirm — confirmed / contradicted / absence-attested, no model i
   // scanning every attribution event; the graph attests what retrieval never could
   const abs = E.answerConfirm(meeting, 'he was not a speaker', { hotEntity: 'Amos Dresser' });
   ok(abs && /Confirmed — I scanned all \d+ attribution events/.test(abs.text), 'a true negative is confirmed by a full scan');
-  ok(/\{\{absent:meet:/.test(abs.text), 'and cites ⊥ with the receipt');
+  ok(/\{\{absent:never-set:meet:/.test(abs.text), 'and cites ⊥ with the receipt');
   eq(abs.checks[0].verdict, 'confirmed-by-absence', 'verdict: confirmed by absence');
   eq(abs.audit.status, 'clean', 'a complete mechanical answer wears clean');
   eq(E.answerConfirm(meeting, 'he was not a speaker'), null, 'an unresolvable anaphor declines rather than guessing');
@@ -1214,7 +1216,7 @@ group('answerConfirm — a verb-predicate is checked against the prose, never le
   // THE HEADLINE BUG: a false transitive-verb premise is attested as silence,
   // not affirmed — covers 0/1, warn, never a grounded badge.
   const fv = E.answerConfirm(meeting, 'Steven Watts founded the committee.');
-  ok(fv && /never asserts/.test(fv.text) && /\{\{absent:meet:/.test(fv.text), 'a false verb-predicate is named unattested with a receipt');
+  ok(fv && /never asserts/.test(fv.text) && /\{\{absent:never-set:meet:/.test(fv.text), 'a false verb-predicate is named unattested with a receipt');
   eq(fv.audit.status, 'warn', 'an unattested verb-predicate wears warn, not grounded');
   eq(fv.audit.covers, '0/1', 'and covers 0/1 — not retrieval coverage');
   eq(fv.checks[0].verdict, 'unattested', 'verdict: unattested');
