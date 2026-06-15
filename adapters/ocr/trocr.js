@@ -68,9 +68,30 @@
 
     async function run(input) {
       await load();
+      // transformers.js' image pipeline accepts a URL string, a Blob, or a
+      // RawImage — but a File handed straight through can trip its input check
+      // ("Unsupported input type: object"), e.g. a cross-realm Blob whose
+      // `instanceof Blob` is false in the library's realm. Normalize a
+      // Blob/File/bytes to a blob: object-URL (the string path the loader
+      // fetches), which sidesteps the check entirely. A plain string is passed
+      // as-is; anything else falls through unchanged.
+      let img = input, objUrl = null;
+      try {
+        if (typeof input !== 'string' && typeof URL !== 'undefined' && URL.createObjectURL) {
+          if (input && (typeof input.arrayBuffer === 'function' || (typeof Blob !== 'undefined' && input instanceof Blob))) {
+            objUrl = URL.createObjectURL(input);
+          } else if (input instanceof ArrayBuffer || ArrayBuffer.isView(input)) {
+            objUrl = URL.createObjectURL(new Blob([input]));
+          } else if (input && input.data && (typeof input.data.arrayBuffer === 'function' || input.data instanceof ArrayBuffer || ArrayBuffer.isView(input.data))) {
+            objUrl = URL.createObjectURL(input.data instanceof Blob ? input.data : new Blob([input.data]));
+          }
+          if (objUrl) img = objUrl;
+        }
+      } catch (_) { img = input; objUrl = null; }   // conversion failed → let the pipeline try the raw input
       let out;
-      try { out = await pipe(input); }
+      try { out = await pipe(img); }
       catch (e) { return [C.failureEvent(ref, 'trocr failed: ' + (e && e.message), { recoverable: true })]; }
+      finally { if (objUrl && URL.revokeObjectURL) { try { URL.revokeObjectURL(objUrl); } catch (_) {} } }
       const first = Array.isArray(out) ? out[0] : out;
       const text = String((first && (first.generated_text || first.text)) || '');
       return [C.event({
