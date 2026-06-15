@@ -146,7 +146,7 @@ ok(!!card, 'the unit is a paragraph in the document canvas');
 click(card);
 html = container.innerHTML;
 ok(/figure-grounded/.test(html), 'selecting reveals the witness tag as a word');
-ok(/witness/.test(html) && /coherence/.test(html), 'selecting reveals the full confidence vector (all six components labelled)');
+ok(/witness/.test(html) && /coherence/.test(html) && /voice/.test(html), 'selecting reveals the full confidence vector (all seven components labelled)');
 ok(/null/.test(html), 'an unmeasured component renders as null, not zero');
 
 // clicking the prose itself turns that paragraph into a seamless inline editor

@@ -53,7 +53,7 @@ function at(e) { e.ts = ++_t; return e; }
 group('the module publishes its surface', () => {
   for (const fn of ['fold', 'confidence', 'decide', 'witnessGrain', 'stampDraft', 'generateUnit', 'newDoc', 'make', 'assemble'])
     ok(typeof C[fn] === 'function' || typeof C[fn] === 'object', 'exports ' + fn);
-  ok(Array.isArray(C.COMPONENTS) && C.COMPONENTS.length === 6, 'six named confidence components');
+  ok(Array.isArray(C.COMPONENTS) && C.COMPONENTS.length === 7, 'seven named confidence components');
 });
 
 group('Confidence — named components, null is null (never zero), clamped, no collapse', () => {
@@ -165,6 +165,42 @@ group('Phase one — assemble reads the draft pane straight through in tree orde
   const db = at(C.make.draft({ doc_id: doc.id, unit_id: 'u2', prose: 'Beta.' }));
   const f = C.fold([doc, frame, a, b, da, db]);
   eq(C.assemble(f), 'Alpha.\n\nBeta.', 'the assembled doc is the drafts in tree order');
+});
+
+group('Phase one — a frame revision stales dependent units (coherence null, band revise); a restructure survivor reads unstamped', () => {
+  const [doc, frame] = C.newDoc({ genre: 'plain-report' });
+  const u = at(C.make.unit({ doc_id: doc.id, id: 'u1', job: 'state the count', order: 0 }));
+  const d = at(C.make.draft({ doc_id: doc.id, unit_id: 'u1', prose: 'The city logged twelve thousand filings.' }));
+  const s = at(C.make.stamp({ doc_id: doc.id, unit_id: 'u1', draft_id: d.id, confidence: C.confidence({ witness: 0.7, form: 0.7 }), tag: 'figure-grounded' }));
+  const r = at(C.make.route({ doc_id: doc.id, unit_id: 'u1', decision: 'advance', predicate: 'witness >= 0.4 AND form >= 0.5' }));
+
+  // under the standing (single) frame the unit is settled, not stale
+  let f = C.fold([doc, frame, u, d, s, r]);
+  eq(f.units[0].band, 'advance', 'under the standing frame the unit advances');
+  eq(f.units[0].frame_stale, false, 'and is not frame-stale');
+  eq(f.counts.stale, 0, 'no stale units yet');
+
+  // revise the frame (a later frame event, genre flipped) — the stamp predates it
+  const frame2 = at(C.make.frame({ doc_id: doc.id, genre: 'obituary' }));
+  f = C.fold([doc, frame, u, d, s, r, frame2]);
+  eq(f.frame.genre, 'obituary', 'the latest frame wins (the revision supersedes the posture)');
+  eq(f.units[0].frame_stale, true, 'a stamp minted before the new frame is stale');
+  eq(f.units[0].band, 'revise', 'a frame-staled unit routes to revise (reconsider under the new spec)');
+  eq(f.units[0].confidence.coherence, null, 'its coherence reads null — it must be re-derived under the new frame');
+  eq(f.counts.stale, 1, 'the stale unit is counted');
+
+  // a draft re-stamped AFTER the revision is measured against the live frame → not stale
+  const d2 = at(C.make.draft({ doc_id: doc.id, unit_id: 'u1', prose: 'A fresh draft under the new frame.' }));
+  const s2 = at(C.make.stamp({ doc_id: doc.id, unit_id: 'u1', draft_id: d2.id, confidence: C.confidence({ witness: 0.7 }), tag: 'figure-grounded' }));
+  eq(C.fold([doc, frame, u, d, s, r, frame2, d2, s2]).units[0].frame_stale, false, 'a draft re-stamped after the revision is no longer stale');
+
+  // a drafted unit that was never stamped (a restructure survivor) reads unstamped
+  const u2 = at(C.make.unit({ doc_id: doc.id, id: 'u2', job: 'orphan', order: 1 }));
+  const d3 = at(C.make.draft({ doc_id: doc.id, unit_id: 'u2', prose: 'Drafted, never scored.' }));
+  const g = C.fold([doc, frame, u2, d3]);
+  eq(g.units[0].state, 'drafted', 'a draft with no stamp is still drafted');
+  eq(g.units[0].unstamped, true, 'but is flagged unstamped (no verdict on any band)');
+  eq(g.counts.unstamped, 1, 'and counted, so the loop can find and score it');
 });
 
 group('Phase two — the grain-relative witness: Figure / Ground / Pattern', () => {
@@ -330,6 +366,27 @@ group('Phase two — the monitor: predicates over the vector, null never blocks'
   eq(restructure.decision, 'restructure', 'persistent low coherence across a branch → restructure');
 });
 
+group('Phase three (voice) — a target voice is scored as style alignment; drift routes to revise, null never blocks', () => {
+  ok(C.COMPONENTS.includes('voice'), 'voice is a named confidence component');
+  ok(C.FLOOR.voice != null, 'voice carries a floor');
+
+  // styleVector is a fixed-length fingerprint; identical prose aligns fully, a
+  // very different register aligns less (the mean-centred cosine is discriminative).
+  const terse = 'Rents rose. Evictions followed. Families left.';
+  const ornate = 'In the fullness of that difficult year, as the cost of shelter climbed inexorably beyond reach, a great many households found themselves compelled, reluctantly and with no small grief, to depart their homes.';
+  eq(C.styleVector(terse).length, C.styleVector(ornate).length, 'the style fingerprint is fixed-length regardless of input');
+  near(C.voiceDegree(terse, terse), 1, 'a draft in exactly the target voice aligns fully', 1e-9);
+  ok(C.voiceDegree(terse, ornate) < C.voiceDegree(terse, terse), 'a draft in a very different register aligns less than an identical one');
+  eq(C.voiceDegree('anything at all', null), null, 'no target voice → voice is not measured (null)');
+
+  // the monitor gates on voice exactly like form: below floor with witness fine → revise
+  const drift = C.decide(C.confidence({ witness: 0.7, voice: 0.2 }));
+  eq(drift.decision, 'revise', 'witness fine but voice below floor → revise (redraft to the voice)');
+  ok(/voice < 0.5/.test(drift.predicate), 'the voice predicate is named in v3 vocabulary');
+  eq(C.decide(C.confidence({ witness: 0.7 })).decision, 'advance', 'an unmeasured voice (null) never blocks advance');
+  eq(C.decide(C.confidence({ witness: 0.7, voice: 0.8 })).decision, 'advance', 'a voice at/above floor advances');
+});
+
 group('provenance — authorship per SENTENCE, by diff (changes carry the new author, not keystrokes)', () => {
   // a talker draft of two sentences; the user edits the second, keeps the first
   const talkerProse = 'The city logged twelve thousand filings. Most were downtown.';
@@ -484,6 +541,21 @@ await group('evaluateProse + the rewrite loop — "is it succeeding?", "is it re
   // the corrective rewrite carries the guidance into the prompt
   ok(/FIX-THIS-SPECIFICALLY/.test(C.buildRevisePrompt({ job: unit.job, frame, spans, draft: 'x', guidance: 'FIX-THIS-SPECIFICALLY' }).user),
     'buildRevisePrompt threads the guidance into the rewrite instruction');
+});
+
+await group('voice end-to-end — a frame carrying a target voice makes evaluateProse measure it', async () => {
+  const voice = 'Rents rose. Evictions followed. Families left.';
+  const [doc, frame] = C.newDoc({ goal: 'inform', genre: 'plain-report', voice });
+  eq(frame.voice, voice, 'the frame carries the target voice');
+  const unit = C.make.unit({ doc_id: doc.id, job: 'report the count', order: 0 });
+  const spans = [{ text: 'The city logged twelve thousand eviction filings in 2023.', score: 2, docId: doc.id, idx: 4 }];
+  const ev = await C.evaluateProse({ unit, frame }, 'The city logged twelve thousand eviction filings in 2023.', spans);
+  ok(ev.confidence.voice != null, 'with a target voice on the frame, the draft is given a measured voice score');
+
+  // a frame WITHOUT a target voice leaves the band unmeasured (null), never zero
+  const [, frame2] = C.newDoc({ goal: 'inform', genre: 'plain-report' });
+  const ev2 = await C.evaluateProse({ unit, frame: frame2 }, 'Some prose.', spans);
+  eq(ev2.confidence.voice, null, 'no target voice on the frame → voice null (not measured)');
 });
 
 group('the non-breaking floor — empty / garbage logs fold to nothing, never throw', () => {
