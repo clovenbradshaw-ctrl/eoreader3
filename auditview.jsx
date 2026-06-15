@@ -483,11 +483,15 @@ function GraphView({ doc }) {
         <h4>Relations <span className="graph-dim">— edges between entities</span></h4>
         <div className="graph-edges">
           {snap.edges.slice(0, 60).map((e, i) => (
-            <div key={i} className="graph-edge">
+            <div key={i} className={'graph-edge' + (e.suggestion ? ' graph-edge-suggestion' : '')}>
               <span className="graph-a">{e.aName}</span>
               <span className="graph-verb">{e.verb || '—'}</span>
               <span className="graph-b">{e.bName}</span>
-              {e.weight > 1 && <span className="graph-ent-n">×{Math.round(e.weight)}</span>}
+              {/* A coreference SUGGESTION (≈ bind / ≈ ambiguous) reads distinctly
+                  from a solid relation: a dim [verdict NN%] tag, no weight count. */}
+              {e.suggestion
+                ? <span className="graph-dim">[{e.verdict} {Math.round((e.confidence || 0) * 100)}%]</span>
+                : (e.weight > 1 && <span className="graph-ent-n">×{Math.round(e.weight)}</span>)}
             </div>
           ))}
           {!snap.edges.length && <div className="graph-dim">none</div>}

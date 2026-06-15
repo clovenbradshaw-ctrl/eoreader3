@@ -1,0 +1,14 @@
+{
+  "id": "metamorphosis",
+  "docFile": "metamorphosis.txt",
+  "genre": "narrative prose — characters named by role (Kafka's Metamorphosis, the motivating case), with titled named entities so the referents type as persons",
+  "note": "A synthetic Metamorphosis scene. Hand-annotated coreference gold for the role-referent overlay (PR2). The named characters carry titles ('Miss Grete', 'Mrs. Samsa') so the entity reader types them as persons and learns gender from the title (name-anchored, not a sentence window). Each role recurs past the mention floor and co-occurs with its true referent. The four discriminating verdicts: his sister binds Grete and his mother binds Mrs. Samsa (gender agreement from the role head + co-occurrence); his father is standalone (Kafka never names him — the possessor exclusion: a role is not its own possessor); the lodgers is standalone (the plural number veto — a plural role cannot be a single named person). The chief clerk is standalone (the protagonist hub, its only co-occurrent, is excluded as the maximal-cooccurrence party).",
+  "roles": ["his sister", "his mother", "his father", "the chief clerk", "the lodgers"],
+  "coref": [
+    { "role": "his sister", "verdict": "bind", "referent": "Grete" },
+    { "role": "his mother", "verdict": "bind", "referent": "Mrs. Samsa" },
+    { "role": "his father", "verdict": "standalone" },
+    { "role": "the chief clerk", "verdict": "standalone" },
+    { "role": "the lodgers", "verdict": "standalone" }
+  ]
+}
