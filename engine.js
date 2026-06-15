@@ -793,6 +793,24 @@ const READING_RULES = {
     value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'When ON, the absent-referent gate gains two discrete, witness-carrying stages between the lexical floor and the void. RESCUE moves a candidate anti-matter referent to matter only by resolving it to an ADMITTED (two-sighting) entity — Channel A (orthographic: an OCR/typo surface variant, by case-fold + diacritic-strip + bounded edit distance) or Channel C (coref/alias: an initialism of a multi-word admitted entity). DEMOTION moves a candidate matter referent to anti-matter when no admitted entity backs it and its presence rests only on a lowercase common-noun substring (the Amos Dresser fix: "dresser" the furniture word does not confirm "Amos Dresser" the person). No cosine is spent — name↔name embedding is below the noise floor and is forbidden, and Channel B (description→name) read its shell EMPTY in the Phase 0 horizon read (docs/horizon-read.md), so it is not built. Every rescue carries a rejectable witness; two clearers is ambiguity (a NUL act, logged, not a rescue). OFF ships today\'s behavior byte-identical (the parity floor): the lexical gate runs alone, exactly as before. See tools/predictive/measure-horizon.js for the read that sized this.',
   },
+  // ── Semantic-antimatter orthographic mechanics — universal, no language ──
+  // The matcher constants Channel A spends. These are mechanical properties of
+  // edit-distance surface matching (not a cosine floor, and not a language fact),
+  // so they live in the constitution as hardcoded-seed/core, beside the cold-pass
+  // reconciliation thresholds — never in a language module. They are inert unless
+  // rescue_referent is ON.
+  rescue_min_token: {
+    value: 4, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Minimum token length for a fuzzy (edit-distance) orthographic match in Channel A; shorter tokens must match a surface EXACTLY. Bounded edit distance over-merges short surfaces — "Solaren"/"Solaris" collapse at distance 1 (SPEC §9). Universal mechanics: a property of the matcher, not of any language.',
+  },
+  rescue_edit_max: {
+    value: 2, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Maximum edit (Damerau–Levenshtein) distance Channel A forgives between an absent surface token and an admitted entity\'s surface token — an OCR/typo tolerance, capped so a variant is rescued but a different name is not. The per-token tolerance is min(this, 1 for short tokens). Universal mechanics.',
+  },
+  rescue_initialism_max: {
+    value: 6, mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
+    desc: 'Maximum letter count for a Channel C initialism (an absent acronym resolved to a multi-word admitted entity by its initials). Longer "acronyms" are unlikely and only add noise. Universal mechanics — the page\'s own multi-word surface supplies the expansion, never the embedder.',
+  },
   // ── Cross-source attribution — the multi-document conflation veto ──
   cross_source: {
     value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
@@ -8089,8 +8107,10 @@ function projectGraph(events, frame = {}) {
      until the amendment is switched on. The act of declaring ⊥ stays mechanical
      and carries a receipt; the embedding never signs the ruling. */
 
-  // canonical token: NFD-fold diacritics, lowercase, drop a trailing possessive,
-  // keep letters only — the surface normalization Channel A maps across.
+  // canonical token: NFD-fold diacritics (Unicode-universal), lowercase, drop a
+  // trailing English possessive 's (a no-op where the convention does not apply,
+  // and the same inline strip namesEntity/inventedTerms already use), keep
+  // letters only — the surface normalization Channel A maps across.
   const _canonTok = (s) => String(s == null ? '' : s).normalize('NFD').replace(/\p{M}/gu, '')
     .toLowerCase().replace(/['’]s$/, '').replace(/[^\p{L}]/gu, '');
 
@@ -8144,9 +8164,13 @@ function projectGraph(events, frame = {}) {
   // admitted entity when every one of its significant tokens maps (case-fold +
   // diacritic-strip + bounded edit distance) to a surface token of that one
   // entity, with at least one map non-exact (a pure-exact cover is lexical
-  // presence, already matter). Tokens shorter than 4 chars must match exactly —
-  // bounded edit distance over-merges short surfaces ("Solaren"/"Solaris", §9).
+  // presence, already matter). Tokens shorter than rescue_min_token must match
+  // exactly — bounded edit distance over-merges short surfaces (SPEC §9). The
+  // thresholds are the constitution's universal mechanics (read live so a tune
+  // takes effect), never a language fact.
   function _channelA(field, toks) {
+    const MIN = READING_RULES.rescue_min_token.value;
+    const EDIT_MAX = READING_RULES.rescue_edit_max.value;
     const hits = [];
     for (const f of field) {
       const transforms = []; let coveredAll = true;
@@ -8154,8 +8178,9 @@ function projectGraph(events, frame = {}) {
         let best = null;
         for (const st of f.surfToks) {
           if (st === t) { best = { st, edit: 0, exact: true }; break; }
-          if (t.length < 4 || st.length < 4) continue;
-          const tol = Math.max(t.length, st.length) <= 6 ? 1 : 2;
+          if (t.length < MIN || st.length < MIN) continue;
+          const tol = Math.min(EDIT_MAX, Math.max(t.length, st.length) <= 6 ? 1 : 2);
+          if (tol < 1) continue;
           const dd = _editDistB(t, st, tol);
           if (dd <= tol && (!best || dd < best.edit)) best = { st, edit: dd, exact: false };
         }
@@ -8176,8 +8201,9 @@ function projectGraph(events, frame = {}) {
   // page's own structure (the admitted multi-word surface), not by the embedder
   // guessing two names mean the same thing.
   function _channelC(field, name) {
+    const IMAX = READING_RULES.rescue_initialism_max.value;
     const letters = _canonTok(name).replace(/[^a-z]/g, '');
-    if (letters.length < 2 || letters.length > 6) return null;
+    if (letters.length < 2 || letters.length > IMAX) return null;
     const hits = [];
     for (const f of field) {
       const words = String(f.name).split(/\s+/).filter(Boolean);
@@ -8220,9 +8246,29 @@ function projectGraph(events, frame = {}) {
     return null;
   }
 
+  // Does the scope's prose actually distinguish case? This is the SHAPE (not a
+  // language allow-list) of the promote_requires_uppercase_first convention —
+  // the rule, sourced to the en-narrative language module, that "capitalized ⇒
+  // promotable surface" holds only for case-bearing Latin scripts and "does NOT
+  // work for Chinese, Japanese, Hebrew, Arabic (no case)". A body with no
+  // lowercase Latin (a caseless script) carries no case signal, so the demotion
+  // below must not pretend to read one. German (every noun capitalized) passes
+  // this shape test but is handled safely by the role check: a capitalized
+  // common noun reads as proper there, so the demotion simply declines.
+  function _scopeHasCase(docs) {
+    if (!READING_RULES.promote_requires_uppercase_first.value) return false;
+    for (const d of scopeDocs(docs)) {
+      const body = (d.sentenceTexts || []).join(' ');
+      if (/\p{Ll}/u.test(body) && /\p{Lu}/u.test(body)) return true;
+    }
+    return false;
+  }
+
   // The case role of a token in the scope's prose: does it appear as a lowercase
   // common noun, as a capitalized proper noun (mid-sentence — sentence-initial
-  // case is uninformative), or both? The discrete signal the demotion turns on.
+  // case is uninformative), or both? This is the Latin-script CONVENTION
+  // (promote_requires_uppercase_first), not a universal — its caller gates it on
+  // _scopeHasCase so a caseless script never reaches it.
   function _tokenCaseRole(docs, rawTok) {
     const target = _canonTok(rawTok);
     let common = false, proper = false;
@@ -8240,18 +8286,23 @@ function projectGraph(events, frame = {}) {
     return { common, proper };
   }
 
-  // Demotion: a candidate-matter name is false matter when no admitted entity
-  // backs it AND every token its presence rests on appears only as a lowercase
-  // common noun — never as a capitalized proper-noun surface. This voids "Amos
-  // Dresser" against a page that only has the furniture word "dresser", while a
-  // genuinely present proper noun (capitalized, even if single-sighting and so
-  // unadmitted, like "Corman") is kept — false matter drops, false voids do not rise.
+  // Demotion. The UNIVERSAL law: a candidate-matter name is false matter when no
+  // admitted (INS/two-sighting-confirmed) entity backs it and its presence rests
+  // only on a token the page uses as a COMMON noun — never as a proper-noun
+  // surface. The "common vs proper" SIGNAL is script convention: in a Latin
+  // script it is case (the promote_requires_uppercase_first rule), so the law is
+  // applied only where _scopeHasCase holds; elsewhere it conservatively declines
+  // (no demotion, so no false void). This voids "Amos Dresser" against a page
+  // that only has the furniture word "dresser", while a genuinely present proper
+  // noun (capitalized, even single-sighting and so unadmitted, like "Corman") is
+  // kept — false matter drops without the false-void rate rising, in any language.
   function _demoteMatter(docs, name, refSig) {
     const field = _admittedFieldScope(docs);
     const adm = new Set();
     for (const f of field) for (const st of f.surfToks) adm.add(st);
     const nameToks = refSig.map(_canonTok).filter(t => t.length >= 2);
-    if (nameToks.some(t => adm.has(t))) return false;        // backed by an admitted entity → keep
+    if (nameToks.some(t => adm.has(t))) return false;        // backed by an admitted entity → keep (universal)
+    if (!_scopeHasCase(docs)) return false;                  // no case convention → no common/proper signal → keep
     const bodies = scopeDocs(docs).map(d => docBodyLC(d));
     const present = refSig.filter(t => bodies.some(b => b.includes(t.toLowerCase())));
     if (!present.length) return false;
@@ -12111,6 +12162,19 @@ function projectGraph(events, frame = {}) {
   // opts.rescue flag still forces it on for a single read (tests, previews).
   function rescueEnabled() { const v = READING_RULES.rescue_referent.value; return v === true || v === 1; }
   function setRescueEnabled(on) { const prev = rescueEnabled(); READING_RULES.rescue_referent.value = !!on; return prev; }
+  // A read-only snapshot of the rescue surface's constants, so the universal /
+  // convention split is legible to the audit drawer and the tests. The three
+  // mechanical thresholds are universal (hardcoded-seed/core); the case→proper
+  // signal demotion leans on is the promote_requires_uppercase_first CONVENTION,
+  // sourced to the language module — surfaced here by name, never re-hardcoded.
+  function rescueRules() {
+    return {
+      minToken: READING_RULES.rescue_min_token.value,
+      editMax: READING_RULES.rescue_edit_max.value,
+      initialismMax: READING_RULES.rescue_initialism_max.value,
+      caseConvention: { rule: 'promote_requires_uppercase_first', on: !!READING_RULES.promote_requires_uppercase_first.value },
+    };
+  }
   function distanceGravityEnabled() { return DISTANCE_GRAVITY(); }
   /* The addressee field (addressee.js) — the second person. Off-by-default
      masters and the seeded BKT constants, read for the host's flag-guarded
@@ -13275,7 +13339,7 @@ function projectGraph(events, frame = {}) {
     // orthographic, Channel C coref/alias — no cosine; name↔name and Channel B
     // are forbidden, the latter killed by the Phase 0 horizon read). The receipt
     // is the audit line a reader may reject.
-    rescueReferent, formatRescueReceipt, rescueEnabled, setRescueEnabled,
+    rescueReferent, formatRescueReceipt, rescueEnabled, setRescueEnabled, rescueRules,
     // the extracted graph: a portrait, and a portable per-doc snapshot (explorer + export)
     // graphPortrait / graphSnapshot / projectEntities now surface NUL log,
     // signal substrate, frame, full DEF set, and long-tail entities.

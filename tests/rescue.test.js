@@ -149,6 +149,36 @@ async function main() {
   ok(E.rescueEnabled() === false, 'master: restored to OFF after the test — no leak across the suite');
   ok(JSON.stringify(E.referents(ndp, 'what did Turnor say')) === JSON.stringify({ matter: [], antimatter: ['Turnor'] }), 'master: with the master back off, the lexical floor is exactly restored');
 
+  // ── The convention / universal split (what belongs where) ─────────────────
+  // Channel A's matcher constants are UNIVERSAL mechanics and live in the
+  // constitution (READING_RULES, hardcoded-seed/core). The case→proper signal
+  // demotion leans on is a Latin-script CONVENTION sourced to the language
+  // module — it must degrade safely where the convention does not hold.
+  console.log('• the universal matcher constants live in the constitution and are wired');
+  const R = E.rescueRules();
+  ok(R.minToken === 4 && R.editMax === 2 && R.initialismMax === 6, 'universal: the three matcher thresholds are the constitutional values (4 / 2 / 6)');
+  ok(R.caseConvention && R.caseConvention.rule === 'promote_requires_uppercase_first', 'convention: the case→proper signal is named to its language-module rule, not re-hardcoded');
+  // the over-merge guard (rescue_min_token): a 3-char token one edit from an
+  // admitted surface token must NOT fuzzy-merge ("Tam" ↛ "Tom"), §9.
+  ok(E.referents(ndp, 'what did Tam say', { rescue: true }).antimatter.includes('Tam'), 'universal: the over-merge guard blocks a short (<4) near-miss — "Tam" does not merge to "Tom"');
+  // the edit bound (rescue_edit_max): a long token within 2 edits rescues; 3 edits does not.
+  const gDoc = await E.parseDocument('g.txt', 'Galadriel Nightingale spoke at dawn. Galadriel Nightingale left at dusk. Everyone admired Galadriel Nightingale.', 'g');
+  ok(E.referents(gDoc, 'what did Galadrielx Nightingalx say', { rescue: true }).matter.includes('Galadrielx Nightingalx'), 'universal: a long surface within the edit bound (≤2) is rescued');
+  ok(E.referents(gDoc, 'what did Galadrxxxx Nightxxxale say', { rescue: true }).antimatter.includes('Galadrxxxx Nightxxxale'), 'universal: a long surface past the edit bound (>2) is NOT rescued — a different name is not a typo');
+
+  console.log('• the case convention degrades safely — caseless scripts inert, all-caps-noun scripts conservative');
+  // a caseless script (Chinese): the referent gate extracts no capitalized span,
+  // so rescue AND demotion are wholly inert — no false rescue, no false void.
+  const zh = await E.parseDocument('zh.txt', '物理学是研究物质的科学。物理学家做实验。这本书讲物理学的历史。物理学很有趣。', 'zh');
+  const zhR = E.referents(zh, '物理学是什么', { rescue: true });
+  ok(zhR.matter.length === 0 && zhR.antimatter.length === 0 && !zhR.witnesses, 'convention (caseless): rescue/demotion are inert on a no-case script — no false rescue or void');
+  // German-style (every noun capitalized): "Tisch" is a capitalized COMMON noun,
+  // so the case signal cannot prove common-vs-proper — demotion conservatively
+  // declines (keeps it as matter), never inventing a false void.
+  const de = await E.parseDocument('de.txt', 'Der Tisch steht im Zimmer. Der Tisch ist alt. Auf dem Tisch liegt ein Buch.', 'de');
+  const deR = E.referents(de, 'was sagte Herr Tisch', { rescue: true });
+  ok(deR.matter.includes('Herr Tisch') && !(deR.rescueNotes || []).some(n => n.kind === 'demoted'), 'convention (all-caps noun): a capitalized common noun is NOT demoted — no false void in German');
+
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);
   if (fail) { console.error('\nFailures:\n - ' + fails.join('\n - ')); process.exit(1); }
 }
