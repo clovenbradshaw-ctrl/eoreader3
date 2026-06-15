@@ -21,6 +21,7 @@ import '../sidebar.jsx';
 import '../chat.jsx';
 import '../reference.jsx';
 import '../docview.jsx';
+import '../reading.jsx';
 import '../compose.jsx';
 import '../rulesets.jsx';
 import '../auditview.jsx';

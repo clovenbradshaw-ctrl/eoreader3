@@ -8,7 +8,7 @@ const parser = require('@babel/parser');
 const traverse = require('@babel/traverse').default;
 
 const ROOT = path.resolve(__dirname, '..');
-const FILES = ['data.jsx', 'icons.jsx', 'sidebar.jsx', 'chat.jsx', 'reference.jsx', 'docview.jsx',
+const FILES = ['data.jsx', 'icons.jsx', 'sidebar.jsx', 'chat.jsx', 'reference.jsx', 'docview.jsx', 'reading.jsx',
   'rulesets.jsx', 'auditview.jsx', 'eomri.jsx', 'graphaudit.jsx', 'promptflow.jsx', 'pivot.jsx', 'settings.jsx', 'app.jsx'];
 
 // browser + app globals that are legitimately free identifiers
