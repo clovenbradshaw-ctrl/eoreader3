@@ -399,7 +399,7 @@ function EntityModal({ doc, name, onCite, onEntity, onOpenTab, onClose }) {
 function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, onLayout,
                   explore, onToggleExplore, onEntity, activeEntity, flashSent, onCite, tableSpec,
                   savedViews, onApplyView, onSaveView, onDeleteView,
-                  allDocs, model, modelReady, onCompositionEvent }) {
+                  allDocs, model, modelReady, onEnsureModel, onCompositionEvent }) {
   const resolve = (id) => {
     if (id.startsWith('@ent/')) {
       const [, docId, ...rest] = id.split('/'); return { kind: 'entity', doc: docsById[docId], name: decodeURIComponent(rest.join('/')) };
@@ -440,7 +440,7 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
         : cur.kind === 'table' ? <TableDoc doc={cur.doc} initialSpec={tableSpec}
             savedViews={(savedViews && savedViews[cur.doc.id]) || []} onApplyView={onApplyView} onSaveView={onSaveView} onDeleteView={onDeleteView} />
         : cur.kind === 'composition' ? (window.CompositionView
-            ? <window.CompositionView key={cur.doc.id} doc={cur.doc} onAppend={onCompositionEvent} model={model} modelReady={modelReady} allDocs={allDocs || []} onCite={onCite} />
+            ? <window.CompositionView key={cur.doc.id} doc={cur.doc} onAppend={onCompositionEvent} model={model} modelReady={modelReady} onEnsureModel={onEnsureModel} allDocs={allDocs || []} onCite={onCite} />
             : <div className="empty-doc">Composition layer not loaded.</div>)
         : <ProseDoc key={cur.doc.id} doc={cur.doc} explore={explore} onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={onCite} />}
     </aside>
