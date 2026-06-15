@@ -319,7 +319,7 @@ function UnitCard({ node, selected, onSelect, onProse, streaming, onCite }) {
 
 /* The action surface — contextual to what is selected. Every action is an event,
    so every action is undoable. */
-function ActionSurface({ folded, selectedId, busy, modelReady, onAct, progress, onToggleFramework }) {
+function ActionSurface({ folded, selectedId, busy, canAct, onAct, progress, onToggleFramework }) {
   const u = selectedId ? folded.unitsById[selectedId] : null;
   const Btn = ({ act, label, primary, disabled, title }) => (
     <button className={'cmp-act' + (primary ? ' primary' : '')} disabled={busy || disabled} title={title}
@@ -334,9 +334,9 @@ function ActionSurface({ folded, selectedId, busy, modelReady, onAct, progress, 
     <div className="cmp-actions">
       <div className="cmp-actions-grp">
         <span className="cmp-actions-l">Doc</span>
-        <Btn act="write" label={hasUnits ? '✍ Write the rest' : '✍ Write it'} primary disabled={!modelReady}
-          title={modelReady ? 'outline if needed, then draft every unit — watch it write' : 'load a model first'} />
-        <Btn act="planFromFrame" label="Outline only" disabled={!modelReady} title={modelReady ? 'propose a tree of units from the frame, without drafting' : 'load a model first'} />
+        <Btn act="write" label={hasUnits ? '✍ Write the rest' : '✍ Write it'} primary disabled={!canAct}
+          title={canAct ? 'outline if needed, then draft every unit — watch it write' : 'choose a model first'} />
+        <Btn act="planFromFrame" label="Outline only" disabled={!canAct} title={canAct ? 'propose a tree of units from the frame, without drafting' : 'choose a model first'} />
         <Btn act="addUnit" label="+ Unit" />
         <Btn act="restampAll" label="Restamp all" />
         <Btn act="undo" label="Undo" title="undo the last action (supersession by REC)" />
@@ -345,8 +345,8 @@ function ActionSurface({ folded, selectedId, busy, modelReady, onAct, progress, 
       {u && (
         <div className="cmp-actions-grp">
           <span className="cmp-actions-l">{u.state === 'owed' ? 'Owed unit' : 'Unit'}</span>
-          {!u.draft && <Btn act="draft" label="Draft" primary disabled={!modelReady} title={modelReady ? 'retrieve, phrase, stamp, route' : 'load a model first'} />}
-          {u.draft && <Btn act="revise" label="Revise" disabled={!modelReady} />}
+          {!u.draft && <Btn act="draft" label="Draft" primary disabled={!canAct} title={canAct ? 'retrieve, phrase, stamp, route' : 'choose a model first'} />}
+          {u.draft && <Btn act="revise" label="Revise" disabled={!canAct} />}
           {u.draft && <Btn act="restamp" label="Restamp" />}
           {u.draft && <Btn act="hold" label={u.state === 'held' ? 'Release' : 'Hold'} />}
           {u.draft && <Btn act="contest" label={u.contested ? 'Un-contest' : 'Mark contested'} />}
@@ -438,7 +438,7 @@ function DocEditor({ value, rich, onSave, placeholder }) {
 
 // The clean surface: a slim bar (topic · Write · Undo · ⚙ Framework) over the
 // body — streaming while it writes, an editor at rest.
-function CleanComposition({ doc, frame, body, bodyRich, hasContent, busy, streaming, planning, progress, modelReady, onWrite, onUndo, onSaveBody, onSetThesis, onToggleFramework }) {
+function CleanComposition({ doc, frame, body, bodyRich, hasContent, busy, streaming, planning, progress, canAct, onWrite, onUndo, onSaveBody, onSetThesis, onToggleFramework }) {
   const status = progress && progress.phase === 'outline' ? 'Planning the sections…'
     : progress && progress.phase === 'draft' ? 'Writing section ' + progress.i + ' of ' + progress.n + '…'
     : 'Working…';
@@ -450,8 +450,8 @@ function CleanComposition({ doc, frame, body, bodyRich, hasContent, busy, stream
         <div className="cmp-clean-tools">
           {busy
             ? <span className="cmp-busy"><span className="cmp-orb" /> {status}</span>
-            : <button className="cmp-act primary" disabled={!modelReady}
-                title={modelReady ? 'write the document — it drafts each section, expands it to length, and revises it, live' : 'load a model first'}
+            : <button className="cmp-act primary" disabled={!canAct}
+                title={canAct ? 'write the document — it drafts each section, expands it to length, and revises it, live' : 'choose a model first'}
                 onClick={onWrite}>{hasContent ? '✍ Continue' : '✍ Write'}</button>}
           <button className="cmp-act" disabled={busy} onClick={onUndo} title="undo the last change">Undo</button>
           <button className="cmp-clean-frame-toggle" onClick={onToggleFramework}
@@ -473,7 +473,7 @@ function CleanComposition({ doc, frame, body, bodyRich, hasContent, busy, stream
 }
 
 /* ---- the orchestrator ---------------------------------------------------- */
-function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) {
+function CompositionView({ doc, onAppend, model, modelReady, onEnsureModel, allDocs, onCite }) {
   const events = doc._events || [];
   const folded = React.useMemo(() => window.EOComposition.fold(events), [events]);
   const frame = folded.frame || {};
@@ -503,6 +503,20 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
 
   // --- the injected deps the pure module expects -------------------------
   const C = window.EOComposition;
+  // Is the talker resident right now? (Not the React `modelReady` prop, which lags
+  // a render behind a just-finished load — the action paths need the live answer.)
+  const modelLoaded = () => !!(window.EOLLM && model && window.EOLLM.isLoaded && window.EOLLM.isLoaded(model.mlc));
+  // Bring it online if it isn't, then report whether we can phrase. This is what
+  // makes Compose load-on-demand like chat: a draft click that needs the model
+  // loads it (from cache, no re-download) and proceeds, instead of dead-ending.
+  const ensureModel = async () => {
+    if (modelLoaded()) return true;
+    if (onEnsureModel) { try { return await onEnsureModel(); } catch (e) {} }
+    return modelLoaded();
+  };
+  // The drafting buttons are usable whenever a model is configured — clicking one
+  // loads it if idle. (Only a truly absent model leaves them disabled.)
+  const canAct = !!model;
   const retrieve = React.useCallback(async (job) => {
     if (!window.EOEngine || !window.EOEngine.retrieveScope || !corpusDocs.length) return [];
     let hits = [];
@@ -510,7 +524,13 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     return hits.map(h => ({ text: h.t, score: h.score, docId: h.docId, idx: h.i }));
   }, [corpusDocs.map(d => d.id).join(',')]);
   const phrase = React.useCallback(async ({ system, user, max_tokens }, onToken) => {
-    if (!window.EOLLM || !model || !window.EOLLM.isLoaded(model.mlc)) return '';
+    if (!window.EOLLM || !model) return '';
+    // Resident model required to phrase — if idle reclaim freed it (or it never
+    // loaded), bring it back first rather than silently returning empty.
+    if (!window.EOLLM.isLoaded(model.mlc)) {
+      if (onEnsureModel) { try { await onEnsureModel(); } catch (e) {} }
+      if (!window.EOLLM.isLoaded(model.mlc)) return '';
+    }
     try {
       return await window.EOLLM.phrase({
         mlcKey: model.mlc, question: user, sysOverride: system, history: [],
@@ -518,7 +538,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
         onToken: onToken || undefined,
       });
     } catch (e) { return ''; }
-  }, [model && model.mlc]);
+  }, [model && model.mlc, onEnsureModel]);
   const embed = React.useCallback(async (t) => {
     if (!window.EOEmbed || !window.EOEmbed.embedQuery) return null;
     try { return await window.EOEmbed.embedQuery(t); } catch (e) { return null; }
@@ -743,9 +763,10 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   // (streamed, so you watch it form), then draft every undrafted unit in order,
   // each streaming its tokens, with live progress. This is "start writing."
   const write = async () => {
-    if (busy || !modelReady) return;
+    if (busy) return;
     setBusy(true);
     try {
+      if (!(await ensureModel())) return;   // model couldn't load — loadModel already toasted why
       let units = folded.units.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
       if (!units.length) { setProgress({ phase: 'outline' }); units = await planFromFrame({ keepBusy: true }); }
       const drafted = folded.unitsById;
@@ -841,7 +862,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
   // it created so the autopilot can draft them without waiting for a re-fold.
   const planFromFrame = async (opts) => {
     const o = opts || {};
-    if (!o.keepBusy) { if (busy || !modelReady) return []; setBusy(true); }
+    if (!o.keepBusy) { if (busy) return []; setBusy(true); }
     setPlanning('');
     try {
       // genre-aware outline prompt — the sections fit the KIND of document (a
@@ -911,7 +932,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
       <div className="cmp-root">
         <CleanComposition
           doc={doc} frame={frame} body={body} bodyRich={bodyRich} hasContent={hasContent}
-          busy={busy} streaming={streaming} planning={planning} progress={progress} modelReady={modelReady}
+          busy={busy} streaming={streaming} planning={planning} progress={progress} canAct={canAct}
           onWrite={() => write()} onUndo={undo} onSaveBody={saveBody} onSetThesis={setThesis}
           onToggleFramework={() => setShowFramework(true)} />
       </div>
@@ -963,7 +984,7 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
           </div>
         </div>
       </div>
-      <ActionSurface folded={folded} selectedId={selectedId} busy={busy} modelReady={modelReady} onAct={onAct} progress={progress}
+      <ActionSurface folded={folded} selectedId={selectedId} busy={busy} canAct={canAct} onAct={onAct} progress={progress}
         onToggleFramework={() => setShowFramework(false)} />
     </div>
   );

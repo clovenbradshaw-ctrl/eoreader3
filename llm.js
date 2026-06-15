@@ -1609,8 +1609,8 @@
   //    folded line is tagged with its absolute turn index.
   //  - Because every turn keeps its index, an exact span can be pulled back out
   //    verbatim with recallSpan() when an answer needs the precise earlier wording.
-  const RECENT_TURNS = 8;         // most recent turns kept word-for-word
-  const SUMMARY_LINE_CHARS = 160; // per-turn cap inside the condensed recap
+  const RECENT_TURNS = 4;         // most recent turns kept word-for-word (trimmed from 8 — a local 3B re-reads the whole window every turn; stays above WM_RECENT_TURNS so a no-WM chat keeps a touch more continuity)
+  const SUMMARY_LINE_CHARS = 110; // per-turn cap inside the condensed recap
   const WM_RECENT_TURNS = 3;      // verbatim window shrinks when working memory carries continuity
 
   function condense(s, cap = SUMMARY_LINE_CHARS) {
@@ -1705,7 +1705,7 @@
   // prebuild; the budget must leave room for the reply (max_tokens ≤ 520) and
   // estimator error. The old default (7000) exceeded the window outright and
   // leaned on the caller's catch-retry to recover.
-  const DEFAULT_BUDGET = 3300;
+  const DEFAULT_BUDGET = 2400;
 
   // ---- the shape pass, dissolved (Brief 2 + the form-as-stamp patch) ----
   // The old "shape pass" was a blind per-turn LLM call that emitted a note

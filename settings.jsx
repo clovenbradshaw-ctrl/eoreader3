@@ -130,7 +130,7 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                          groundingInfo, onGroundingInfo,
                          showCitations, onShowCitations,
                          tools, hiddenTools, onToggleTool,
-                         showModeToggle, onShowModeToggle, wikiMode, onWikiMode,
+                         showModeToggle, onShowModeToggle, thinkDepth, onThinkDepth, wikiMode, onWikiMode,
                          models, defaultModelId, onDefaultModel, autoModel,
                          fallbackModelIds, onFallbackModelIds,
                          onClearData, storageOK }) {
@@ -178,6 +178,17 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
   ];
+
+  // Reading depth — the effort each turn spends seeking, walking the graph, and
+  // wandering associatively. Maps to engine.thinkingBudget(level): 1 is a single
+  // retrieval pass; 3 is the full multi-round walk. Lower is faster on a local model.
+  const DEPTH_MODES = [
+    { id: 1, label: 'Quick', sub: 'One retrieval pass — no graph walk or associative wandering. Fastest; best for a small local model or simple questions.' },
+    { id: 2, label: 'Balanced', sub: 'A round or two of seeking and a short graph walk. A faster middle ground that still grounds well.' },
+    { id: 3, label: 'Deep', sub: 'Full multi-round seeking, graph traversal, and associative wandering. Most thorough, slowest per turn.' },
+  ];
+  const depthVal = (thinkDepth === 1 || thinkDepth === 3) ? thinkDepth : 2;
+  const depthSub = (DEPTH_MODES.find(d => d.id === depthVal) || DEPTH_MODES[1]).sub;
 
   // Reference desk (Wikipedia) — a tri-state mirroring the answer-mode control.
   const WIKI_MODES = [
@@ -315,6 +326,19 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
 
           <section className="set-section">
             <h3 className="set-h">Answers</h3>
+
+            <div className="set-row set-row-col">
+              <div className="set-row-main">
+                <div className="set-label">Reading depth</div>
+                <div className="set-sub">{depthSub}</div>
+              </div>
+              <div className="set-seg" role="group" aria-label="Reading depth">
+                {DEPTH_MODES.map(d => (
+                  <button key={d.id} className={depthVal === d.id ? 'on' : ''}
+                          aria-pressed={depthVal === d.id} onClick={() => onThinkDepth(d.id)}>{d.label}</button>
+                ))}
+              </div>
+            </div>
 
             <div className="set-row">
               <div className="set-row-main">

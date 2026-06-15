@@ -193,10 +193,14 @@ function App() {
   // hidden the mode is held at 'auto' (the effect below), so a value left over
   // from when it was shown can't keep steering turns from behind a hidden control.
   const [showModeToggle, setShowModeToggle] = useState(false);
-  // Thinking depth is pinned at the deepest stop — every turn runs the full
-  // budget. thinkingBudget() clamps to its DEPTH_LEVELS ceiling, so any value
-  // ≥ that works; the literal here is the contract. The turn's resolved budget
-  // rides through the async settle paths in a ref.
+  // Reading depth — the "depth of walkage": how hard each turn seeks, walks the
+  // graph, and wanders associatively. A user dial in Settings (1 Quick · 2
+  // Balanced · 3 Deep) resolves through engine.thinkingBudget(level). Persisted
+  // with prefs; default 2 — faster than the old pinned-deepest, still grounded.
+  // (Was hardwired to thinkingBudget(999), clamped to the deepest stop, so every
+  // turn paid the maximum seek/graph/association cost regardless of the question.)
+  const [thinkDepth, setThinkDepth] = useState(2);
+  // The turn's resolved budget rides through the async settle paths in a ref.
   const turnBudgetRef = useRef(null);
   // This turn's associative links (Phase 3) — read by the inference void (Phase 4).
   const turnAssocRef = useRef([]);
@@ -460,6 +464,7 @@ function App() {
         if (prefs.modesV2 && typeof prefs.showModeToggle === 'boolean') setShowModeToggle(prefs.showModeToggle);
         else setShowModeToggle(true);
         if (typeof prefs.splitRatio === 'number') setSplitRatio(prefs.splitRatio);
+        if (typeof prefs.thinkDepth === 'number') setThinkDepth(Math.max(1, Math.min(3, prefs.thinkDepth | 0)));
         if (typeof prefs.explore === 'boolean') setExplore(prefs.explore);
         if (typeof prefs.auditEnabled === 'boolean') { setAuditEnabled(prefs.auditEnabled); if (window.EOAudit) window.EOAudit.setEnabled(prefs.auditEnabled); }
         if (typeof prefs.exportIngestion === 'boolean') setExportIngestion(prefs.exportIngestion);
@@ -563,8 +568,8 @@ function App() {
   }, [messages, chats, activeChat, openTabs, activeTab, sources]);
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
-    window.EOStore.savePrefs({ langModes, modelId: model.id, autoModel, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews });
-  }, [langModes, model, autoModel, fallbackModelIds, mode, showModeToggle, splitRatio, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews]);
+    window.EOStore.savePrefs({ langModes, modelId: model.id, autoModel, fallbackModelIds, mode, showModeToggle, modesV2: true, splitRatio, thinkDepth, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews });
+  }, [langModes, model, autoModel, fallbackModelIds, mode, showModeToggle, splitRatio, thinkDepth, explore, projects, activeProject, auditEnabled, exportIngestion, exportOutput, wikiMode, theme, reduceMotion, groundingInfo, showCitations, hiddenTools, pythonEnabled, smartParse, savedViews]);
   // Hiding the answer-mode control means every turn runs on Auto: hold `mode`
   // there whenever the toggle is off, so a 'grounded'/'creative' left in prefs
   // (or any stray set) can't keep steering turns from behind a hidden control.
@@ -803,6 +808,7 @@ function App() {
   // *Ref mirrors in this component.
   const modelRef = useRef(model); modelRef.current = model;
   const modelStatusRef = useRef(modelStatus); modelStatusRef.current = modelStatus;
+  const thinkDepthRef = useRef(thinkDepth); thinkDepthRef.current = thinkDepth;
   // ---- idle reclaim: free the resident LOCAL model after a stretch with no
   // turns, so an open-but-unused tab stops pinning the GPU/WASM weights. An
   // on-device model sits resident — often 1–2 GB — for the whole session
@@ -1175,6 +1181,18 @@ function App() {
       showToast(e.message || 'Model failed to load');
       return false;
     }
+  };
+  // Bring the configured model resident if it isn't — idle reclaim may have freed
+  // it, or it was never loaded. Rebuilds from the on-disk cache (no re-download).
+  // Returns whether it's ready to phrase. Shared by the chat turn (load-on-demand)
+  // and the compose surface, so neither dead-ends on a model the user could just
+  // load: a click that needs the model loads it, then proceeds.
+  const ensureModelLoaded = async () => {
+    const m = modelRef.current;
+    if (!m || !window.EOLLM || !window.EOLLM.isLoaded) return false;
+    if (window.EOLLM.isLoaded(m.mlc)) return true;
+    try { await loadModel(m); } catch (e) { eoWarn('ensure-model', e); }
+    return !!window.EOLLM.isLoaded(m.mlc);
   };
   // Activate a backup model and load it. The single resident-engine invariant
   // means we can't hold a warm second model beside the active one — so the
@@ -1719,7 +1737,7 @@ function App() {
   // extra round is its own numbered `retrieve` audit step. At the floor this is
   // never reached (maxSeekRounds 1); the caller uses today's contextScope.
   const seekContext = (scope, q, budget) => {
-    const E = window.EOEngine, k = 6, r4 = (x) => Math.round((x || 0) * 1e4) / 1e4;
+    const E = window.EOEngine, k = 4, r4 = (x) => Math.round((x || 0) * 1e4) / 1e4;
     const chosen = new Map();
     const add = (hs) => { for (const h of (hs || [])) { const key = h.docId + ':' + h.i; if (!chosen.has(key)) chosen.set(key, h); } };
     try { add(E.retrieveScope(scope, q, k)); } catch (e) { eoWarn('seek base', e); }
@@ -1758,7 +1776,7 @@ function App() {
       if (chosen.size === before) break;                         // nothing new came back
       if (novelty < budget.seekNoveltyFloor) break;              // the pull is too weak to justify another round
     }
-    return [...chosen.values()].sort((a, b) => b.score - a.score).slice(0, 10);
+    return [...chosen.values()].sort((a, b) => b.score - a.score).slice(0, 6);
   };
 
   // Phase 3: associative wandering (deepest depth, embedder-backed). From the
@@ -3977,7 +3995,7 @@ function App() {
     const history = historyFor();
 
     // A fresh turn budget (mirrors runTurn) and the model, loaded on demand.
-    const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(999) : null;
+    const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(thinkDepthRef.current) : null;
     turnBudgetRef.current = budget; turnAssocRef.current = [];
     const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
       ? window.EOLLM.hasAnthropicKey()
@@ -4165,7 +4183,7 @@ function App() {
     // its DEPTH_LEVELS ceiling). Decay the conversation field one tick of
     // conversational time at turn start, before this turn deposits into it —
     // recent topics stay warm, dropped ones cool.
-    const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(999) : null;
+    const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(thinkDepthRef.current) : null;
     turnBudgetRef.current = budget;
     turnAssocRef.current = [];
     try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.decayTurn(); }
@@ -4614,7 +4632,7 @@ function App() {
                   explore={explore} onToggleExplore={() => setExplore(x => !x)}
                   onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={flashCitation} tableSpec={tableSpec}
                   savedViews={savedViews} onApplyView={applyTableView} onSaveView={saveTableView} onDeleteView={deleteTableView}
-                  allDocs={docs} model={model} modelReady={modelStatus === 'ready'} onCompositionEvent={appendCompositionEvents} />
+                  allDocs={docs} model={model} modelReady={modelStatus === 'ready'} onEnsureModel={ensureModelLoaded} onCompositionEvent={appendCompositionEvents} />
               )}
             </React.Fragment>
           )}
@@ -4629,6 +4647,7 @@ function App() {
         tools={TOOLBAR_TOOLS} hiddenTools={hiddenTools}
         onToggleTool={(id) => setHiddenTools(h => h.indexOf(id) === -1 ? h.concat(id) : h.filter(x => x !== id))}
         showModeToggle={showModeToggle} onShowModeToggle={setShowModeToggle}
+        thinkDepth={thinkDepth} onThinkDepth={setThinkDepth}
         wikiMode={wikiMode} onWikiMode={changeWikiMode}
         models={window.MODELS.concat(uploadedModels)} autoModel={autoModel} defaultModelId={autoModel ? 'auto' : model.id} onDefaultModel={(id) => { if (id === 'auto') { chooseAuto(); return; } const m = window.MODELS.concat(uploadedModels).find(x => x.id === id); if (m) pickModel(m); }}
         fallbackModelIds={fallbackModelIds} onFallbackModelIds={setFallbackModelIds}
