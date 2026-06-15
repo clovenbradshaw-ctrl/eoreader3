@@ -628,6 +628,19 @@ ol.md-list { list-style: decimal; }
 .mode-seg button.on.grounded { color: var(--evidence); }
 .mode-seg button.on.creative { color: #6b4fa0; }
 
+/* collapsed answer-mode pill — shows only the current mode; click to fan out the
+   full .mode-seg, and picking any option collapses back to this pill. */
+.mode-seg-btn {
+  border: 1px solid var(--border); background: var(--bg);
+  font-size: 12px; padding: 5px 12px; border-radius: var(--r-pill);
+  color: var(--text); font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px; box-shadow: var(--sh-sm);
+}
+.mode-seg-btn:hover { background: var(--bg-subtle); }
+.mode-seg-btn.verbatim { color: #2f6f7d; }
+.mode-seg-btn.grounded { color: var(--evidence); }
+.mode-seg-btn.creative { color: #6b4fa0; }
+
 .composer-hint { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; text-align: center; font-size: 11.5px; color: var(--text-3); margin-top: 9px; }
 .composer-hint b { color: var(--text-2); font-weight: 600; }
 .export-prompts {
