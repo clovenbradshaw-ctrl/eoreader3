@@ -176,9 +176,12 @@ function App() {
   const [chats, setChats] = useState([]);
   const [activeChat, setActiveChat] = useState('new');
   const [messages, setMessages] = useState([]);
-  // The conversation's SOURCE SET: docIds the chat grounds against, shown as
+  // The conversation's SOURCE SET: docIds THIS chat grounds against, shown as
   // chips. Added intentionally (on upload, via the + menu, or by a project), not
-  // just by being the focused tab. Empty falls back to the active doc.
+  // by being the focused tab. Per-chat: the live value is the active chat's
+  // working copy, folded into its chat object on switch/save exactly like
+  // `messages`, so scope never bleeds between chats. Empty = no document scope
+  // (a fresh chat grounds against nothing until a source is added).
   const [sources, setSources] = useState([]);
   // Projects are named, persistent source sets. Selecting one loads its docs as
   // the scope; editing the scope while a project is active updates the project.
@@ -512,9 +515,15 @@ function App() {
         // top level (`messages`) with chats holding only {id,title} — upgrade them
         // by attaching that log to whichever chat was active when they were saved.
         const topMsgs = Array.isArray(savedChat.messages) ? savedChat.messages : [];
+        const topSources = Array.isArray(savedChat.sources) ? savedChat.sources : [];
         const active = savedChat.activeChat;
-        const savedChats = (Array.isArray(savedChat.chats) ? savedChat.chats : []).map(c =>
-          Array.isArray(c.messages) ? c : { ...c, messages: (c.id === active ? topMsgs : []) });
+        const savedChats = (Array.isArray(savedChat.chats) ? savedChat.chats : []).map(c => {
+          const messages = Array.isArray(c.messages) ? c.messages : (c.id === active ? topMsgs : []);
+          // Per-chat scope rides in the chat object now; older snapshots kept only
+          // the active chat's set at the top level — attach it to that chat.
+          const sources = Array.isArray(c.sources) ? c.sources : (c.id === active ? topSources : []);
+          return { ...c, messages, sources };
+        });
         setChats(savedChats); bumpUid(savedChats.map(c => c.id));
         if (active) setActiveChat(active);
         const activeObj = savedChats.find(c => c.id === active);
@@ -523,7 +532,10 @@ function App() {
         const tabOK = (id) => id.startsWith('@ent/') ? docIds.has(id.split('/')[1]) : docIds.has(id);
         if (Array.isArray(savedChat.openTabs)) setOpenTabs(savedChat.openTabs.filter(tabOK));
         if (savedChat.activeTab && tabOK(savedChat.activeTab)) setActiveTab(savedChat.activeTab);
-        if (Array.isArray(savedChat.sources)) setSources(savedChat.sources.filter(id => docIds.has(id)));
+        // Global `sources` is the ACTIVE chat's working copy — restore it from
+        // that chat's saved set (migrated above), filtered to docs that came back.
+        const activeSources = (activeObj && Array.isArray(activeObj.sources)) ? activeObj.sources : topSources;
+        setSources(activeSources.filter(id => docIds.has(id)));
         // Restore the chat's working-memory field so a reload keeps what the
         // conversation was carrying (best-effort; reset on a new/switched chat).
         if (savedChat.field && window.EOEngine && window.EOEngine.conversationField) {
@@ -548,11 +560,13 @@ function App() {
   useEffect(() => {
     if (!hydrated.current || !window.EOStore) return;
     const t = setTimeout(() => {
-      // The live `messages` array is the active chat's working copy; fold it back
-      // into that chat's stored log so the snapshot holds every thread's content
-      // (the chat objects lag during streaming and only catch up on a switch).
+      // The live `messages` and `sources` are the active chat's working copies;
+      // fold them back into that chat's stored record so the snapshot holds every
+      // thread's content and scope (the chat objects lag during streaming and only
+      // catch up on a switch). Top-level `sources` below stays the active chat's,
+      // for older readers and the migration path.
       const chatsToSave = (activeChat && activeChat !== 'new')
-        ? chats.map(c => c.id === activeChat ? { ...c, messages } : c)
+        ? chats.map(c => c.id === activeChat ? { ...c, messages, sources } : c)
         : chats;
       window.EOStore.saveChat({
         messages, chats: chatsToSave, activeChat, openTabs, activeTab, sources,
@@ -696,13 +710,12 @@ function App() {
     if (activeProject === id) setActiveProject(null);
   };
   const clearProject = () => setActiveProject(null);
-  // The documents the turn grounds against: the explicit source set if any,
-  // otherwise the focused doc (preserves the single-doc experience).
-  const scopeList = () => {
-    let ds = sources.map(id => docsById[id]).filter(Boolean);
-    if (!ds.length) { const b = backingDoc(); ds = b ? [b] : []; }
-    return withCompositionProjections(ds);
-  };
+  // The documents the turn grounds against: THIS chat's explicit source set, and
+  // nothing more. An empty set is empty scope — a chat no longer silently inherits
+  // whatever doc happens to be open (that bled context across chats and dragged
+  // spans into every turn). The reader adds a source explicitly — + Source, a
+  // project, or an upload (which auto-adds) — to ground answers on a document.
+  const scopeList = () => withCompositionProjections(sources.map(id => docsById[id]).filter(Boolean));
 
   // A composition is queryable by the chat through its PROJECTION — a prose
   // shape (sentences + per-sentence provenance) the retriever reads like any
@@ -809,6 +822,12 @@ function App() {
   const modelRef = useRef(model); modelRef.current = model;
   const modelStatusRef = useRef(modelStatus); modelStatusRef.current = modelStatus;
   const thinkDepthRef = useRef(thinkDepth); thinkDepthRef.current = thinkDepth;
+  // The live active chat, and the chat that owns the in-flight turn. A local turn
+  // can run for many seconds, so the user may switch chats mid-generation — when
+  // they do, the settle-time field/addressee deposits must NOT land in the chat
+  // they switched to (working memory is per-chat). Deposits compare the two.
+  const activeChatRef = useRef(activeChat); activeChatRef.current = activeChat;
+  const turnChatIdRef = useRef(null);
   // ---- idle reclaim: free the resident LOCAL model after a stretch with no
   // turns, so an open-but-unused tab stops pinning the GPU/WASM weights. An
   // on-device model sits resident — often 1–2 GB — for the whole session
@@ -1449,7 +1468,7 @@ function App() {
   const firstUserText = (msgs) => { const u = (msgs || []).find(m => m && m.role === 'user'); return u ? u.text : ''; };
   const ensureChat = (q) => {
     if (activeChat === 'new') {
-      const id = uid('c'); setChats(cs => [{ id, title: titleFrom(q), messages: [] }, ...cs]); setActiveChat(id);
+      const id = uid('c'); setChats(cs => [{ id, title: titleFrom(q), messages: [], sources: sources.slice() }, ...cs]); setActiveChat(id);
     }
   };
   // A settle clears the in-flight flags by default (typing always; streaming
@@ -1605,6 +1624,10 @@ function App() {
   // the NEXT turn can carry them forward. Always runs (depth-independent); what
   // the depth dial governs is how much of the field is read back into a prompt.
   const depositSettled = (scope, q, cites) => {
+    // If the user switched chats while this turn was generating, its results belong
+    // to the chat they left — don't warm the working memory of the one they're now
+    // in (the field is per-chat; this is the settle-time half of that promise).
+    if (turnChatIdRef.current !== null && activeChatRef.current !== turnChatIdRef.current) return;
     // Stash the carry for follow-up turns (see lastCarryRef): every settled
     // grounded turn becomes the retrieval seed the next elliptical turn rides.
     lastCarryRef.current = { q: String(q || ''), cites: (cites || []).slice(0, 8) };
@@ -1647,6 +1670,8 @@ function App() {
   // and reading share one activation law. Legible-THAT: records THAT the
   // conversation carried these names, with how much heat — never why.
   const depositConversation = (q, answer) => {
+    // Same per-chat guard as depositSettled — a mid-turn chat switch voids this.
+    if (turnChatIdRef.current !== null && activeChatRef.current !== turnChatIdRef.current) return;
     const E = window.EOEngine;
     if (!E || !E.conversationField || !E.namedReferents) return;
     let names = [];
@@ -3996,7 +4021,7 @@ function App() {
 
     // A fresh turn budget (mirrors runTurn) and the model, loaded on demand.
     const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(thinkDepthRef.current) : null;
-    turnBudgetRef.current = budget; turnAssocRef.current = [];
+    turnBudgetRef.current = budget; turnAssocRef.current = []; turnChatIdRef.current = activeChatRef.current;
     const canLLM = !!(window.EOLLM && (model.provider === 'anthropic'
       ? window.EOLLM.hasAnthropicKey()
       : model.provider === 'wllama'
@@ -4186,6 +4211,9 @@ function App() {
     const budget = (window.EOEngine && window.EOEngine.thinkingBudget) ? window.EOEngine.thinkingBudget(thinkDepthRef.current) : null;
     turnBudgetRef.current = budget;
     turnAssocRef.current = [];
+    // This turn belongs to the chat active right now — settle-time deposits check
+    // this against the live active chat so a mid-turn switch can't bleed into it.
+    turnChatIdRef.current = activeChatRef.current;
     try { window.EOEngine && window.EOEngine.conversationField && window.EOEngine.conversationField.decayTurn(); }
     catch (e) { eoWarn('field decay', e); }
     // One tick of conversational time for the addressee field too — what was
@@ -4457,8 +4485,10 @@ function App() {
   // switch away, so the thread we're leaving keeps everything it had. ('new' has
   // no chat object yet — its messages ride along until the first send.)
   const stashActiveInto = (cs) => (activeChat && activeChat !== 'new')
-    ? cs.map(c => c.id === activeChat ? { ...c, messages } : c) : cs;
-  const newChat = () => { sweepProvisional(true); setChats(cs => stashActiveInto(cs)); setMessages([]); setActiveChat('new'); resetTurnRefs(); resetField(); if (mobileRef.current) setCollapsed(true); };
+    ? cs.map(c => c.id === activeChat ? { ...c, messages, sources } : c) : cs;
+  // A fresh chat is its own workspace: empty messages AND empty scope, with no
+  // project forcing a doc set in. Nothing carries over from the chat we just left.
+  const newChat = () => { sweepProvisional(true); setChats(cs => stashActiveInto(cs)); setMessages([]); setSources([]); setActiveProject(null); setActiveChat('new'); resetTurnRefs(); resetField(); if (mobileRef.current) setCollapsed(true); };
   const selectChat = (id) => {
     if (id === activeChat) { if (mobileRef.current) setCollapsed(true); return; }
     sweepProvisional(true);
@@ -4466,6 +4496,10 @@ function App() {
     setChats(cs => stashActiveInto(cs));
     setActiveChat(id);
     setMessages(target && Array.isArray(target.messages) ? target.messages : []);
+    // Load THIS chat's own scope; clear any active project so it can't re-force a
+    // doc set into the thread we're entering. (Scope is per-chat, like messages.)
+    setSources(target && Array.isArray(target.sources) ? target.sources : []);
+    setActiveProject(null);
     resetTurnRefs(); resetField(); if (mobileRef.current) setCollapsed(true);
   };
 
@@ -4483,7 +4517,7 @@ function App() {
       // The live thread was never saved as a chat — promote it first so forking
       // it preserves the original instead of abandoning the throwaway buffer.
       srcId = uid('c');
-      next.unshift({ id: srcId, title: titleFrom(firstUserText(messages)), messages: messages.map(m => ({ ...m })) });
+      next.unshift({ id: srcId, title: titleFrom(firstUserText(messages)), messages: messages.map(m => ({ ...m })), sources: sources.slice() });
     } else {
       next = next.map(c => c.id === srcId ? { ...c, messages: messages.map(m => ({ ...m })) } : c);
     }
@@ -4492,7 +4526,7 @@ function App() {
     const forkTitle = (base + ' (fork)').length > 40 ? base.slice(0, 34) + '… (fork)' : base + ' (fork)';
     const forkId = uid('c');
     const srcIdx = next.findIndex(c => c.id === srcId);
-    next.splice(Math.max(0, srcIdx), 0, { id: forkId, title: forkTitle, messages: slice, forkedFrom: srcId });
+    next.splice(Math.max(0, srcIdx), 0, { id: forkId, title: forkTitle, messages: slice, sources: sources.slice(), forkedFrom: srcId });
     sweepProvisional(true);
     setChats(next);
     setActiveChat(forkId);
