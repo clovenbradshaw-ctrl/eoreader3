@@ -1967,5 +1967,40 @@
     return out;
   }
 
-  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, primePump, isSelfHosted, selfHostZipUrl, selfHostEntryName, load, cancelLoad, release, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter, isVacuousReply };
+  // Decide what a turn is asking to LOOK UP, for the reference desk. A tiny,
+  // tightly-scoped model call: given the user's latest message and a little
+  // conversation context, return ONE short Wikipedia search topic (a title-ish
+  // noun phrase / proper name), or '' when the turn names nothing to look up.
+  // This keeps the search on what the USER asked, not on whatever entities are
+  // hot in the field — which can include the assistant's own name and leak into
+  // the query. Best-effort and FAIL-SAFE: never triggers a model LOAD (only a
+  // model already resident answers; Anthropic answers via its API), and returns
+  // '' on any miss so the caller falls back to its heuristic.
+  async function decideQuery({ mlcKey, question, context }) {
+    try {
+      const q = String(question == null ? '' : question).trim();
+      if (!mlcKey || !q) return '';
+      if (!isAnthropic(mlcKey) && !isLoaded(mlcKey)) return '';   // never wake a model just to name a query
+      const ctx = String(context == null ? '' : context).trim().slice(0, 300);
+      const sys = 'You turn a chat message into a single Wikipedia search query. '
+        + 'Reply with ONLY the topic to look up — a short noun phrase or proper name, like a Wikipedia article title. '
+        + 'No sentence, no quotation marks, no explanation, no label. '
+        + 'Base it on the user\'s message; the context is only to disambiguate. '
+        + 'If the message names no clear topic to look up, reply with the single word NONE.';
+      const user = (ctx ? ('Context (for disambiguation only): ' + ctx + '\n\n') : '') + 'Message: ' + q;
+      const messages = [{ role: 'system', content: sys }, { role: 'user', content: user }];
+      let raw = '';
+      try { raw = await streamChat({ mlcKey, messages, temperature: 0, maxTokens: 24 }); }
+      catch (e) { return ''; }
+      let out = stripThink(String(raw || '')).trim();
+      out = out.split('\n')[0];                                   // first line only
+      out = out.replace(/^(?:wikipedia\s+)?(?:search\s+)?(?:query|topic)\s*[:\-]\s*/i, '');  // drop an echoed label
+      out = out.replace(/^["'`“”‘’\s]+|["'`“”‘’.\s]+$/g, '').trim();                          // trim quotes/punct
+      if (!out || /^none\b/i.test(out)) return '';
+      if (out.length > 80) out = out.slice(0, 80).trim();
+      return out;
+    } catch (e) { return ''; }
+  }
+
+  window.EOLLM = { hasWebGPU, hasAnthropicKey, setAnthropicKey, isAnthropic, isWllama, hasWasm, wllamaModels, modelTier, modelParamsB, probeDevice, recommendModel, registerUploadedModel, fallbackKey, prewarmFallback, prewarmFallbackModel, primePump, isSelfHosted, selfHostZipUrl, selfHostEntryName, load, cancelLoad, release, interrupt, isAbort, isLoaded, clearCache, persistStorage, cacheStatus, storageEstimate, phrase, decideQuery, runAnthropicTools, systemFor, assembleMessages, buildUserContent, renderNotes, renderWorkingMemory, summarizeTurns, recallSpan, RECENT_TURNS, DEFAULT_BUDGET, estTokens, resolveMaxTokens, stripThink, makeThinkFilter, isVacuousReply };
 })();

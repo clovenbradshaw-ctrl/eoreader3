@@ -1482,7 +1482,7 @@ function App() {
     const a = m.audit;
     if (!a) return '';
     if (a.status === 'plain') return '[an earlier reply from general knowledge, not the document] ';
-    if (a.status === 'warn' && a.grounded) return '[an earlier reply with terms the document does not contain struck as unverified — do not repeat or defend the struck parts] ';
+    if (a.status === 'warn' && a.grounded) return '[an earlier reply with wording the document does not contain, footnoted as unverified — do not repeat or defend the footnoted parts] ';
     if (a.grounded === false) return '[an earlier reply that was NOT verified against the document — do not repeat or defend its claims] ';
     return '';
   };
@@ -2726,19 +2726,21 @@ function App() {
     };
     const mechEvidenceSmall = () => (mech && mech.text && mech.text.trim())
       ? { text: mech.text, audit: mech.audit, cites: mech.cites || [] } : null;
-    // The rephrase introduced material the bound reading does not carry. The
-    // grounder does not speak in its place: SERVE the talker's rephrase, strike
-    // the unwitnessed additions in place (a visible flag, not a deletion), and
-    // keep the mechanical reading as click-to-view evidence. The witness degree
-    // (WI-7) reads how much of the rephrase a span backs.
+    // The rephrase introduced material the bound reading does not carry. Less
+    // censoring, more footnote: SERVE the talker's rephrase as written — the added
+    // words are NOT crossed out — and bind what the page backs so the grounded
+    // parts stay cited. A single quiet footnote marks that some phrasing wasn't
+    // found in the source; the exact mechanical reading rides as click-to-view
+    // evidence. The witness degree (WI-7) still reads how much a span backs; the
+    // specifics (added/invented tokens) ride the audit trace, not a strike.
     const serveSmallFlagged = (re, added, invented, reason) => {
       if (genStale(myGen)) return;
-      const strike = [...new Set([...(invented || []), ...(added || [])])].filter(t => t && String(t).length > 2);
-      let text = re; try { text = E.voidInvented(re, strike); } catch (e) {}
       let b = null; try { b = E.bindCitationsScope(scope, re, q, intent, { hotEntity: hotEntity() }); } catch (e) {}
+      let text = (b && b.text) || re;
+      text = String(text).replace(/\s+$/, '') + ' {{unbound:some wording here isn’t backed by a source line}}';
       const audit = { status: 'warn', grounded: true,
         covers: (b && b.audit && b.audit.covers) || (mech.audit && mech.audit.covers) || null, stable: true,
-        note: `Small-tier rephrase introduced material the bound reading does not carry (${reason}); it is served as written with those parts struck as unverified, and the witness degree marks the gap. The exact mechanical reading rides as evidence.` };
+        note: 'Phrased by the model; a few words aren’t in the source, so they’re footnoted rather than crossed out. The exact mechanical reading below is the evidence.' };
       AUD('step', 'veto', { decision: 'model-flagged (small)', reason, added, invented });
       settleSmall(text, audit, (b && b.cites) || mech.cites || [], 'model (small, flagged: ' + reason + ')', mechEvidenceSmall());
     };
@@ -3533,7 +3535,7 @@ function App() {
           const list = invented.length > 1 ? invented.slice(0, -1).join(', ') + ' and ' + invented[invented.length - 1] : invented[0];
           const caveated = { ...bound, text: window.EOEngine.voidInvented(bound.text, invented),
             audit: { ...bound.audit, status: 'warn',
-              note: `Phrased by the model and grounded in the passages, but it named ${list} — which the document doesn’t contain, shown struck as unverified.` } };
+              note: `Phrased by the model and grounded in the passages, but it named ${list} — which the document doesn’t contain, marked as unverified rather than crossed out.` } };
           AUD('step', 'veto', { decision: 'model-caveat', invented, boundGrounded: true, boundCovers: bound.audit.covers });
           settle(caveated, 'model + caveat');
         } else if (unboundN > 0) {
@@ -4150,9 +4152,22 @@ function App() {
         // (below): a turn-taking card when there's nothing to ground on, else a
         // side-offer beside the grounded answer.
         if (!wr.explicit) {
-          // hottest-subjects offer when the conversation has a subject to anchor
-          // on; the single-term offer only as the cold-field fallback.
-          if (wr.entities && wr.entities.length) offerWikiHot(turnId, wr.entities).catch((e) => eoWarn('wiki-hot', e));
+          // The desk searches what the USER asked, not whatever entities are hot
+          // in the field (which can include the assistant's own name and bleed in).
+          // A tiny model call decides the query from the message + a little context;
+          // we await it HERE (before the main reply generates) so two model calls
+          // never overlap, then fire the network search async. Fail-safe: an empty
+          // decision (model not resident / nothing to look up) falls back to the
+          // hottest-subjects offer, then the single bare term.
+          let decided = '';
+          try {
+            const sctx = wikiSeedContext();
+            const ctxStr = ((sctx && sctx.entities) || []).slice(0, 5).join(', ');
+            if (window.EOLLM && window.EOLLM.decideQuery)
+              decided = await window.EOLLM.decideQuery({ mlcKey: model.mlc, question: q, context: ctxStr });
+          } catch (e) { eoWarn('wiki-decide', e); }
+          if (decided) offerWikiOptions(turnId, decided).catch((e) => eoWarn('wiki-options', e));
+          else if (wr.entities && wr.entities.length) offerWikiHot(turnId, wr.entities).catch((e) => eoWarn('wiki-hot', e));
           else offerWikiOptions(turnId, wr.term).catch((e) => eoWarn('wiki-options', e));
         }
       }

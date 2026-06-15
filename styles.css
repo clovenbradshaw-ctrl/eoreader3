@@ -359,12 +359,27 @@ ol.md-list { list-style: decimal; }
 .cite.absent:hover { border-color: #5b6470; }
 /* The typed void, rendered distinctly (Phase 3). VOID is a site, NUL is an act;
    the void's terrains and the one fabrication read differently because they ARE
-   different absences. INVENTED is the fabrication — a term with no site, the
-   system's own fault — so it reads as a strike. ELSEWHERE carries a pointer
-   (named here, not in this document), so it reads as a dotted reference, never a
-   strike. A bare (unspecified) void is unchanged. */
-.cite.void.void-invented { text-decoration: line-through; text-decoration-thickness: 1px; }
+   different absences. ELSEWHERE carries a pointer (named here, not in this
+   document), so it reads as a dotted reference. INVENTED — a term with no site —
+   is NOT crossed out: the reader asked for less censoring, so it is served as
+   ordinary prose, flagged only by a faint dotted underline, with the reason in
+   the tooltip and the mechanical reading as the evidence. A bare (unspecified)
+   void is unchanged. */
+.cite.void.void-invented {
+  font-family: inherit; font-size: inherit; vertical-align: baseline;
+  color: inherit; background: none; border-color: transparent; padding: 0;
+  white-space: normal; cursor: help;
+  text-decoration: underline dotted var(--void-bd); text-underline-offset: 3px; text-decoration-thickness: 1px;
+}
+.cite.void.void-invented:hover { background: none; border-color: transparent; text-decoration-color: var(--void-fg); }
 .cite.void.void-elsewhere { text-decoration: underline dotted; text-underline-offset: 2px; }
+/* Footnote marker — the quiet successor to the struck word / “⚠ unverified” chip
+   (renderCite's `unbound` case). NOT censorship: the clause reads as written;
+   this superscript dagger only notes that no source line backed the phrasing,
+   with the reason in the tooltip and the mechanical reading below as evidence. */
+.cite-fn { color: var(--text-3); cursor: help; margin: 0 1px; font-family: var(--mono); text-decoration: none; }
+.cite-fn:hover, .cite-fn:focus-visible { color: var(--text-2); outline: none; }
+:root.hide-citations .msg-asst .cite-fn { display: none; }
 /* The absent terrains: cleared (corrected) and impossible (denied premise) tint
    the ⊥ chip so the receipt's nature shows before the tooltip opens. */
 .cite.absent.absent-cleared { color: #7a5b2e; background: #f6efe3; border-color: #e3d2b4; }
@@ -414,7 +429,11 @@ ol.md-list { list-style: decimal; }
    reads as good (green), like a clean grounded answer. */
 .audit-chip.verbatim { background: var(--good-bg); border-color: var(--good-bd); }
 .audit-chip.notes { background: var(--warn-bg); border-color: var(--warn-bd); }
-.audit-chip.warn  { background: var(--bad-bg);  border-color: var(--bad-bd); }
+/* A served-but-footnoted answer (grounded, with a clause or term the page doesn't
+   back) is NOT an error — the reader asked to lower the visible feedback of
+   ungroundedness, so the chip reads neutral (a quiet "noted"), not a red alarm.
+   The inline footnote and the mechanical reading carry the detail. */
+.audit-chip.warn  { background: var(--void-bg); border-color: var(--void-bd); }
 /* held: related lines were found but don't cover the question — shown and cited,
    but explicitly NOT grounded. Amber like notes, dashed to read as "partial". */
 .audit-chip.held  { background: var(--warn-bg); border-color: var(--warn-bd); border-style: dashed; }
