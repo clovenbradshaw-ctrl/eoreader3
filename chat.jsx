@@ -54,12 +54,13 @@ function renderCite(kind, payload, key, onCite) {
   }
   if (kind === 'unbound') {
     // show-but-flag (claim level): a clause SERVED in full but bound to no source
-    // line — not a void (no missing term) and not a citation. A visible inline
-    // "unverified" mark so a partly-grounded answer shows WHICH clause has no
-    // support, instead of one answer-level badge. The reason rides in the tooltip,
-    // the mechanical reading one click away — the answer is never withheld.
-    return <span key={key} className="cite unbound"
-      title={'Unverified — ' + (payload || 'no supporting line found') + '. Served as written; the mechanical reading is one click away as evidence.'}>⚠ unverified</span>;
+    // line. A FOOTNOTE, not a redaction — the clause reads as written; a quiet
+    // superscript dagger just notes that no source line backed this phrasing. The
+    // reason rides in the tooltip and the exact mechanical reading below is the
+    // standing evidence. (Less censoring, more footnote — the answer is never
+    // withheld and never crossed out.)
+    return <sup key={key} className="cite-fn" tabIndex={0}
+      title={'Not found in the source — ' + (payload || 'no supporting line') + '. Served as written; the exact mechanical reading below is the evidence.'}>†</sup>;
   }
   // void: the ELSEWHERE terrain (named in the question, not in this document) or
   // the INVENTED fabrication (a term with no site, struck). A bare {{void:term}}
@@ -430,7 +431,7 @@ function narrateTurn(turn) {
         if (s.decision === 'model')
           push('Checked the draft against the document — every name and claim binds to a passage — so I kept it' + (s.boundCovers ? ' (covers ' + s.boundCovers + ').' : '.'));
         else if (s.decision === 'model-caveat')
-          push('Kept the draft, but it named ' + quoteList(s.invented || []) + ' — not in the document — so I struck those as unverified and flagged the answer.');
+          push('Kept the draft, but it named ' + quoteList(s.invented || []) + ' — not in the document — so I marked those as unverified and footnoted the answer.');
         else if (s.decision === 'reject')
           push('The draft just echoed a single passage instead of answering, so I sent it back under a stricter rule.');
         else if (s.decision === 'model-flagged') {
@@ -520,7 +521,7 @@ function narrateTurn(turn) {
     push(/stopped/.test(f.engine) ? 'Stopped — you interrupted the reply before it finished.'
       : /mechanical/.test(f.engine) ? 'Final answer: the document’s exact mechanical reading.'
       : /flag/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', kept but flagged — the page’s exact mechanical reading is one click away.'
-      : /caveat/.test(f.engine) ? 'Final answer: the model’s phrasing, kept with unverified terms struck and citations bound.'
+      : /caveat/.test(f.engine) ? 'Final answer: the model’s phrasing, kept with unverified terms footnoted and citations bound.'
       : /model/.test(f.engine) ? 'Final answer: phrased by ' + modelName + ', with citations bound to the document.'
       : /reference/.test(f.engine) ? 'Final answer: a Wikipedia search — the matching articles are offered above to research; nothing was summarized from memory.'
       : 'Final answer: ' + f.engine + '.');

@@ -403,7 +403,13 @@ function SettingsDrawer({ onClose, theme, onTheme, reduceMotion, onReduceMotion,
                 <div className="set-row-main">
                   <div className="set-label">Storage on this device</div>
                   <div className="set-sub">
-                    {fmtMB(storage.usage)}{storage.quota ? ' of ' + fmtMB(storage.quota) + ' available' : ''} —
+                    {(() => {
+                      const used = storage.usage || 0, total = storage.quota || 0;
+                      // Only show the cap when the browser's estimate is self-consistent
+                      // (some report a quota BELOW current usage, which reads as nonsense
+                      // like "4.1 GB of 2.0 GB available"); otherwise just state what's used.
+                      return total > used ? fmtMB(used) + ' used of ' + fmtMB(total) + ' available' : fmtMB(used) + ' used';
+                    })()} —
                     {' '}covers everything Cleon keeps, including any model weights you’ve downloaded so they don’t fetch again.
                     {persisted === true && ' This origin is persistent, so the cache won’t be evicted under storage pressure.'}
                     {persisted === false && ' This origin is best-effort, so the browser may evict cached models. Mark persistent to keep them.'}
