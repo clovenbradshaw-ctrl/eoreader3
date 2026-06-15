@@ -452,8 +452,14 @@ class EOMRIInstrument extends React.Component {
       const groundedG = grade === 'Ground' || grounds.length > 0;
       let honTag, honCol;
       if (se.rejected) { honTag = 'REJECTED · FORM LOW'; honCol = '#ff3b52'; }
+      // the relation gate held this claim: a span was cited, but its agency/speaker
+      // inverts against the page — a caught fabrication, never counted grounded.
+      else if (se.gateHeld) { honTag = 'RELATION HELD'; honCol = '#ff3b52'; }
       else if (!groundedG && grade === 'Figure') { honTag = 'CONFABULATION'; honCol = '#ff3b52'; }
       else if (grade === 'Ground') { honTag = 'HONEST ABSENCE'; honCol = '#3ddc84'; }
+      // the two honest tiers of a bound claim: the page's own words vs a faithful
+      // reword — both green (the page carries it), never the overclaim "verified".
+      else if (se.verbatim) { honTag = 'VERBATIM'; honCol = '#5ee0a0'; }
       else { honTag = 'GROUNDED'; honCol = '#3ddc84'; }
       const accent = honCol;   // accent by honesty, not by raw witness magnitude
       const gradeLabel = grade === 'Ground' ? 'condition — the retrieval-miss IS the ground'
@@ -959,7 +965,20 @@ function eomriSentences(turn, hitsByIdx) {
     else if (absent) { witness = 0.2; }
     else if (grounded) { bound = true; witness = cover != null ? cover : 0.8; }
     else { witness = 0.12; }
-    out.push({ text: display, witness: eomriClamp(witness), bound: bound, grounds: cites.map(groundOf), voidc: voids.length, absent: absent });
+    const groundsResolved = cites.map(groundOf);
+    // VERBATIM vs GROUNDED — two honest tiers, never "verified". Verbatim is the
+    // page's OWN words: the claim lifts a contiguous run from its cited span. A
+    // faithful reword that still binds is grounded. Both say "the page carries
+    // this," neither says "this is true." Strict on purpose — a compression that
+    // merely reuses the span's vocabulary is a reword, not a quote, so it reads
+    // grounded; only a literal substring (either direction) reads verbatim.
+    let verbatim = false;
+    if (bound && groundsResolved.length) {
+      const norm = (x) => String(x == null ? '' : x).toLowerCase().replace(/[^a-z0-9'’ ]+/g, ' ').replace(/\s+/g, ' ').trim();
+      const claimN = norm(display);
+      if (claimN.length >= 8) verbatim = groundsResolved.some(g => { const sp = norm(g && g.text); return !!sp && (sp.includes(claimN) || claimN.includes(sp)); });
+    }
+    out.push({ text: display, witness: eomriClamp(witness), bound: bound, grounds: groundsResolved, voidc: voids.length, absent: absent, verbatim: verbatim });
   }
   // grounded mechanical readings cite via the cites[] array, not inline markers —
   // show what the last sentence stood on so the grounds panel isn't bare.
@@ -968,6 +987,21 @@ function eomriSentences(turn, hitsByIdx) {
     out[out.length - 1].bound = true;
   }
   return out.slice(0, 12);
+}
+
+// Normalize a claim sentence for cross-layer comparison — the relation gate's
+// recorded claim text vs a rendered answer sentence: drop markers and [sN] tags,
+// lowercase, strip punctuation, collapse whitespace.
+function eomriNormClaim(x) {
+  return String(x == null ? '' : x).replace(/\{\{[^}]*\}\}/g, ' ').replace(/\[s?\d+\]/gi, ' ')
+    .toLowerCase().replace(/[^a-z0-9'’ ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+// Why the gate held a claim, in the badge's voice.
+function eomriGateReason(kind) {
+  return kind === 'inverted' ? 'the page’s edge runs the other way'
+    : kind === 'wrong-speaker' ? 'the page attributes the line to another voice'
+    : kind === 'foreign-subject' ? 'the page’s edge names a different figure'
+    : 'its subject–predicate–object does not match the page';
 }
 
 function eomriTraceFromTurn(turn) {
@@ -979,6 +1013,22 @@ function eomriTraceFromTurn(turn) {
     const hitsByIdx = eomriHitsIndex(turn);
     const sents = eomriSentences(turn, hitsByIdx);
     if (!sents.length) return null;
+
+    // The relation gate's verdict, folded into the per-claim read. A claim it held
+    // — inverted agency, the wrong speaker, a foreign subject — bound a span yet
+    // did NOT survive the support check; it reads as a caught fabrication here, not
+    // as grounded, so the ledger and badge inherit the gate's floor and a fabrication
+    // that merely cleared overlap can never be counted "grounded." (steps carry the
+    // recorded relation-gate mismatches; auditview reads the same s.mismatches field.)
+    const rgStep = steps.find(s => s && s.t === 'relation-gate');
+    const flagged = ((rgStep && rgStep.mismatches) || [])
+      .map(m => ({ n: eomriNormClaim(m && m.claim), kind: (m && m.kind) || 'relation-mismatch' })).filter(f => f.n);
+    if (flagged.length) sents.forEach(se => {
+      if (!se.bound || se.absent) return;
+      const sn = eomriNormClaim(se.text);
+      const hit = sn && flagged.find(f => f.n === sn || sn.includes(f.n) || f.n.includes(sn));
+      if (hit) { se.bound = false; se.verbatim = false; se.gateHeld = hit.kind; se.witness = Math.min(se.witness, 0.15); }
+    });
 
     // The turn's shape, read off the recorded audit — never scripted. The engine
     // and reason fields are a controlled vocabulary, so matching them is safe;
@@ -1048,8 +1098,11 @@ function eomriTraceFromTurn(turn) {
       const addr = eomriAddress(se, domain);
       frames.push({ op: 'sentence', text: se.text, witness: se.witness, form: formDeg, grounds: se.grounds,
         site: addr.site, object: se.absent ? 'Ground' : addr.object, notation: addr.notation, resolution: addr.resolution,
-        alarm: !se.bound && !se.absent, absence: !!se.absent,
-        groundNote: se.absent
+        alarm: !se.bound && !se.absent, absence: !!se.absent, verbatim: !se.absent && !!se.bound && !!se.verbatim,
+        gateHeld: se.gateHeld || null,
+        groundNote: se.gateHeld
+          ? ('a span was cited, but the relation gate held it — ' + eomriGateReason(se.gateHeld))
+          : se.absent
           ? ((audit && audit.note) ? eomriTrunc(audit.note, 120) : 'nothing in scope covers the subject — shown as absence, not asserted')
           : 'no retrieved span supports this — the talker drafted from its prior, not the page' });
     });
@@ -1062,7 +1115,21 @@ function eomriTraceFromTurn(turn) {
       text: learnMode === 'fetch' ? 'cold miss → fetch a source · fold into the Given-Log' : 'witness-deficit → fetch a source on the subject' });
     frames.push({ op: 'asymptote', value: asymptote == null ? 0 : asymptote });
 
-    return { label: label, genre: genre, decision: decision, reason: reason, tone: tone, verdictWord: verdictWord, targetSite: eomriTargetSite(domain), frames: frames };
+    // Per-claim ledger — the honest tally the badge reads: verbatim (the page's
+    // own words), grounded (a faithful cited reword), absence (a held ⊥), and
+    // confabulation (unbound, fluent on no span). A count of CLAIMS, not query
+    // tokens, so a thin answer can no longer hide behind a green passage fraction.
+    const ledger = sents.reduce((a, se) => {
+      a.claims++;
+      if (se.gateHeld) a.flagged++;
+      else if (se.absent) a.absence++;
+      else if (!se.bound) a.confabulation++;
+      else if (se.verbatim) a.verbatim++;
+      else a.grounded++;
+      return a;
+    }, { claims: 0, verbatim: 0, grounded: 0, absence: 0, confabulation: 0, flagged: 0 });
+
+    return { label: label, genre: genre, decision: decision, reason: reason, tone: tone, verdictWord: verdictWord, targetSite: eomriTargetSite(domain), ledger: ledger, frames: frames };
   } catch (e) { return null; }
 }
 

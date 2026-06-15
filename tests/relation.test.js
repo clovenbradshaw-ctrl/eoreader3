@@ -15,8 +15,9 @@
    tools/predictive/read3.js. Without an embedder the gate degrades to
    lexical: the strict swap still flags, the paraphrased inversion waits.
 
-   Everything is behind the relation_gate rule, OFF by default — the first
-   assertions pin that floor.
+   The relation_gate rule now ships ON (the go-live flip); the first
+   assertions pin that, and that the gate still degrades to lexical when the
+   embedder is cold. Set value:false to restore the overlap-binder floor.
    ============================================================ */
 'use strict';
 const { loadEngine } = require('../evo/engine-host');
@@ -67,11 +68,11 @@ function stubEmbed() {
 }
 
 async function main() {
-  // ---- 1. the floor: gate off by default, embedder absent ⇒ vacuous ----
+  // ---- 1. ships ON; with the embedder absent the gate degrades to lexical ----
   const W1 = loadEngine();
   const E1 = W1.EOEngine;
-  console.log('• relation gate — default-off floor and lexical degradation (no embedder)');
-  ok(E1.relationGateEnabled() === false, 'relation_gate ships OFF — the parity floor');
+  console.log('• relation gate — ships ON; lexical degradation when the embedder is cold');
+  ok(E1.relationGateEnabled() === true, 'relation_gate now ships ON (the go-live flip)');
   const doc1 = await E1.parseDocument('NDP.txt', NDP, 'ndp');
   const swap1 = await E1.checkRelations(doc1, 'The Partnership pays downtown business owners an annual assessment.');
   ok(swap1.length === 1 && swap1[0].kind === 'inverted', 'the strict swap flags LEXICALLY (no embedder needed): ' + JSON.stringify(swap1.map(m => m.kind)));

@@ -777,8 +777,8 @@ const READING_RULES = {
   },
   // ── Relation gate — the relational cure (agency inversion) ──────
   relation_gate: {
-    value: false, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
-    desc: 'When ON, provenance binds at generation (the model tags each claim with the span id it used; bindClaimKeys consumes the tags and the old binder is fallback for unkeyed claims only) and every draft claim\'s subject–predicate–object is checked against the relations the graph deposited — a claim whose subject inverts against its edge, or names a figure the edge does not carry, is held and flagged relation-mismatch. OFF ships today\'s behavior byte-identical (the parity floor); flip after the parallel golden on the journalism + essay fixtures diffs clean.',
+    value: true, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'When ON, provenance binds at generation (the model tags each claim with the span id it used; bindClaimKeys consumes the tags and the old binder is fallback for unkeyed claims only) and every draft claim\'s subject–predicate–object is checked against the relations the graph deposited — a claim whose subject inverts against its edge, or names a figure the edge does not carry, is held and flagged relation-mismatch. Now ships ON (the go-live flip): the parallel golden on the journalism + essay fixtures (tests/golden-relation-gate.json) diffs clean and the parity floor is gate-independent — the app\'s old overlap binder, which parity pins, is reached only as the unkeyed fallback. Set value:false (or disable the Relation Gate rule) to restore the floor: the app falls back to the overlap binder with no relation check, exactly as before.',
   },
   relation_align_floor: {
     value: 0.45, mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',

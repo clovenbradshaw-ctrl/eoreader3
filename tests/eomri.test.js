@@ -108,6 +108,69 @@ async function main() {
     eq(fr(tr, 'learn')[0].mode, 'lit', 'grounded + accepted → the loop is allowed to drift');
     const asy = fr(tr, 'asymptote')[0];
     ok(asy && Math.abs(asy.value - (t.final.truth.degree)) < 1e-6, 'asymptote IS the WI-7 witness degree');
+    // both claims reword their span (…"in 1895", "that same spring") — grounded,
+    // not verbatim; the per-claim ledger counts CLAIMS, not query tokens
+    eq(tr.ledger.claims, 2, 'ledger counts both claims');
+    eq(tr.ledger.grounded, 2, 'both reworded claims read grounded');
+    eq(tr.ledger.verbatim, 0, 'neither is a word-for-word quote');
+    ok(sents[0].verbatim === false, 'a reworded claim is not stamped verbatim');
+  });
+
+  group('verbatim vs grounded — the two honest tiers, never "verified"', () => {
+    // a claim that lifts its span's OWN words reads verbatim; a faithful reword of
+    // the same span reads grounded. Both are bound (green); neither claims truth.
+    const t = turn(W, 'turn-vg', 'what does the title page say, and when did it print?',
+      [{ t: 'route', path: 'grounded', reason: 'strong lexical hits' },
+       { t: 'intent', intent: 'lookup' },
+       { t: 'retrieve', k: 6, engine: 'embedding', hits: [
+         { score: 0.9, idx: 12, text: 'written by H. G. Wells, 1895' },
+         { score: 0.8, idx: 7, text: 'first published in the spring of 1895' }] },
+       { t: 'ground', hasGround: true },
+       { t: 'veto', decision: 'model', boundGrounded: true, boundCovers: '2/2' }],
+      { engine: 'model',
+        // sentence 1 quotes s12 word-for-word; sentence 2 rewords s7
+        text: 'The page reads: written by H. G. Wells, 1895{{cite:doc1:12:s12}}. It reached print that same spring{{cite:doc1:7:s7}}.',
+        cites: [{ docId: 'doc1', idx: 12 }, { docId: 'doc1', idx: 7 }],
+        audit: { status: 'clean', grounded: true, covers: '2/2', stable: true },
+        form: { degree: 0.86, move: 'lookup' } });
+    const tr = TF(t);
+    const sents = fr(tr, 'sentence');
+    eq(sents.length, 2, 'two answer sentences');
+    ok(sents[0].verbatim === true, "the word-for-word claim reads VERBATIM (the span's own words)");
+    ok(sents[1].verbatim === false, 'the reworded claim reads GROUNDED, not verbatim');
+    ok(!sents[0].alarm && !sents[1].alarm, 'both bound claims are honest (no alarm)');
+    eq(tr.ledger.claims, 2, 'ledger counts both claims');
+    eq(tr.ledger.verbatim, 1, 'one verbatim (the page speaking)');
+    eq(tr.ledger.grounded, 1, 'one grounded (a faithful reword)');
+    eq(tr.ledger.confabulation, 0, 'no confabulation');
+  });
+
+  group('the ledger inherits the relation gate — a held claim is not grounded', () => {
+    // the model bound a span on backwards agency ("the Partnership pays owners");
+    // the gate held it (inverted). It cited a span, so it would read grounded — but
+    // the ledger and badge must demote it to a caught fabrication, never grounded.
+    const claim = 'The Partnership pays the owners an annual assessment';
+    const t = turn(W, 'turn-rg', 'who pays whom?',
+      [{ t: 'route', path: 'grounded', reason: 'strong lexical hits' },
+       { t: 'retrieve', k: 6, engine: 'embedding', hits: [
+         { score: 0.8, idx: 1, text: 'Downtown owners pay an annual assessment to the Partnership' }] },
+       { t: 'ground', hasGround: true },
+       { t: 'relation-gate', keyed: 0, held: [],
+         mismatches: [{ kind: 'inverted', claim: claim, docId: 'doc1', edge: 'owners —pay→ the Partnership', sent: 1 }] },
+       { t: 'veto', decision: 'model', boundGrounded: true, boundCovers: '1/1' }],
+      { engine: 'model',
+        text: claim + '{{cite:doc1:1:s1}}.',
+        cites: [{ docId: 'doc1', idx: 1 }],
+        audit: { status: 'warn', grounded: true, covers: '1/1', stable: true },
+        form: { degree: 0.8, move: 'lookup' } });
+    const tr = TF(t);
+    const s = fr(tr, 'sentence')[0];
+    eq(s.gateHeld, 'inverted', 'the held claim carries the gate verdict');
+    ok(s.alarm, 'a gate-held claim is not honest — it lights the alarm');
+    ok(!s.verbatim, 'and is never verbatim');
+    eq(tr.ledger.flagged, 1, 'the ledger counts it FLAGGED (a caught fabrication)');
+    eq(tr.ledger.grounded, 0, 'so the grounded count excludes the fabrication that merely cleared overlap');
+    eq(tr.ledger.verbatim, 0, 'nor verbatim');
   });
 
   group('fluent on thin air — an ungrounded assertion', () => {
@@ -127,6 +190,8 @@ async function main() {
     ok(s.site !== 'Void', 'an asserted Figure lands at its Site, NOT Void');
     eq(s.grounds.length, 0, 'no grounds — fluent on nothing');
     ok(s.witness < 0.35, 'witness is low');
+    eq(tr.ledger.confabulation, 1, 'the ledger tallies one confabulation, not a grounded claim');
+    eq(tr.ledger.verbatim + tr.ledger.grounded, 0, 'and nothing reads as bound');
     eq(fr(tr, 'learn')[0].mode, 'blocked', 'learning is blocked, not drifted');
     eq(fr(tr, 'log', f => f.kind === 'fetch').length, 1, 'and the turn is routed to fetch');
     // the no-hit retrieval reads as cold (deriveOps must not light INS/SEG for it)
