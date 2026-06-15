@@ -641,6 +641,40 @@ doc as provenance and onto the toast, so a machine-read source remembers it was
 machine-read. Text files (`.txt/.md/.csv/.tsv/.vtt/.srt`) keep the original
 read-as-text path byte-for-byte; the golden parity is unmoved.
 
+**Faithful import** (`import-structure.js`, `window.EOImportStructure`) is what
+turns positioned events back into prose without throwing away the transformations
+the page's layout encodes. The old fold projected the page to a flat string on a
+single y-gap, discarding x (columns, indentation), font (heading vs body), and
+page-relative position (furniture). `reconstruct(events, modality)` instead
+rebuilds — genre-blind — words (rejoining kerning fragments, `P laintiff` →
+`Plaintiff`, healing hyphenated wraps), lines, columns (isolating a legal
+caption's right-margin `)` column so the fold never opens with `) ) ) ) )`),
+reading order, and **furniture** (a running header or page number that recurs
+across pages, or sits in a margin band, is held out of `body` as a NUL — never
+spliced into prose, so the talker never reads `EFILED…` as content). OCR carries
+a load-bearing per-word **confidence** the born-digital path doesn't: a run in the
+low tail of the document's own distribution is marked uncertain (it stays in
+`body` so coverage is honest, but never seeds a confident operator), and the
+talker is never handed an OCR error as the document's words. The same primitives
+run for every modality; only the event source's quirks differ (PDF is y-up, OCR
+is y-down with confidence).
+
+The **layout/content firewall** keeps "where" from contaminating "what": layout
+facts are events whose subject is a **region** (`DEF(region, role, header)`,
+`DEF(region, position, top-right)`, `CON(captionRegion, below, figureRegion)`,
+`NUL(region, furniture)`); content facts are spans whose subject is a referent.
+A `doc-layout` adapter supplies region roles from its closed class (header → out
+of `body`, title → heading, …); absent one, regions are synthesized from
+geometry. Two deterministic functions turn boxes into spoken tokens —
+`describePosition` (a closed zone token + an artifact-register phrase like "a
+header runs across the top") and `describeRelation` (above / below / contains) —
+salience-gated so ordinary body position is never narrated. Subject type is the
+firewall: a render path queries region-subject events for layout and
+referent-subject spans for content, so it cannot promote a "where" into a "what."
+The events land in the Given-Log (and the audit / Reading view) from the first
+wire-up; the talker's layout-note is flipped on later, once a detector's
+confidence and the phrase lookup read well.
+
 ### Transcripts
 
 A transcript declares itself through its own typography — timecode lines

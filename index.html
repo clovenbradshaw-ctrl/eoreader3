@@ -176,6 +176,10 @@
 <script src="adapters/layout/docling-lite.js"></script>
 <script src="adapters/embed/minilm.js"></script>
 <script src="adapters/embed/clip.js"></script>
+<!-- faithful import (window.EOImportStructure): reconstructs words, lines,
+     columns, reading order and furniture from positioned-event geometry, and
+     the layout/content firewall. Loads before the bridge that uses it. -->
+<script src="import-structure.js"></script>
 <!-- the perceptual-ingest bridge (window.EOIngestAdapters): the pack-side glue
      that routes a dropped audio/image/PDF file to its adapter and folds the
      adapter's events back into the text the engine reads. -->
