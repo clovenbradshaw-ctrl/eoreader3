@@ -620,11 +620,12 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
     const o = opts || {};
     setSelectedId(unit.id); setStreaming({ unitId: unit.id, text: '' });
     try {
-      const lf = C.LONGFORM || { targetWords: 320, maxExpandPasses: 5, maxTokens: 384 };
+      const lf = C.LONGFORM || { targetWords: 300, maxPasses: 4, maxTokens: 384, noveltyFloor: 0.4 };
       const spans = await retrieve(unit.job);
       const neighbors = o.neighbors || [];
-      // Stream one phrasing call, seeding the visible text with `seed` — so a
-      // continuation shows the passage GROW and a revision shows it REWRITE from
+      const deps = { unit, frame, doc_id: doc.id, embed, ground, formLib: formLibRef.current };
+      // Stream one phrasing call, seeding the visible text with `seed` — so an
+      // expansion shows the passage GROW and a rewrite shows it REWRITE from
       // scratch. This is the "render and rework itself" the user watches.
       const streamFrom = async (p, seed) => {
         let acc = seed || '';
@@ -635,31 +636,50 @@ function CompositionView({ doc, onAppend, model, modelReady, allDocs, onCite }) 
         });
         return String(out || '');
       };
+
       // pass 1 — the initial draft of this section
       const p1 = C.buildTalkerPrompt({ job: unit.job, frame, spans, neighbors });
       let prose = (await streamFrom(p1, '')).trim();
-      // expand toward the length target — indefinitely many calls "as the
-      // framework requires" (here: the length the section owes), capped so a
-      // stubborn model always settles rather than looping forever
+
+      // The feedback loop: evaluate the draft the way the monitor will, then
+      //   • REWRITE it (guided by the specific shortfall) while it isn't
+      //     succeeding — error-correction as guidance, keeping the better version;
+      //   • EXPAND it with genuinely NEW material while it's sound but thin;
+      // and STOP the moment it's succeeding and full enough, a pass stops
+      // improving it, or the material is spent — so it reworks itself toward a
+      // good passage without getting in its own way (or looping on itself).
+      let ev = await C.evaluateProse(deps, prose, spans);
+      let best = { prose, score: ev.score };
       let passes = 0;
-      while (C.wordCount(prose) < lf.targetWords && passes < lf.maxExpandPasses) {
+      while (passes < lf.maxPasses) {
         passes++;
-        const pc = C.buildContinuePrompt({ job: unit.job, frame, spans, existing: prose });
-        const more = (await streamFrom(pc, prose + '\n\n')).trim();
-        if (!more) break;
-        const next = (prose + '\n\n' + more).trim();
-        if (C.wordCount(next) <= C.wordCount(prose) + 3) break;   // no real progress → stop
-        prose = next;
+        if (ev.decision !== 'advance') {
+          // not succeeding yet → corrective rewrite aimed at what fell short
+          const pr = C.buildRevisePrompt({ job: unit.job, frame, spans, draft: prose, neighbors, guidance: C.reviseGuidance(ev.decision, ev.predicate) });
+          const rewritten = (await streamFrom(pr, '')).trim();
+          if (!rewritten || C.wordCount(rewritten) < Math.min(30, Math.round(C.wordCount(prose) * 0.5))) break;  // collapsed → keep best
+          const evNext = await C.evaluateProse(deps, rewritten, spans);
+          const better = evNext.score > best.score + 0.02 || (evNext.decision === 'advance' && ev.decision !== 'advance');
+          if (!better) break;                       // the rewrite didn't help → stop, don't thrash
+          best = { prose: rewritten, score: evNext.score }; prose = rewritten; ev = evNext;
+        } else if (C.wordCount(prose) < lf.targetWords) {
+          // sound but thin → add genuinely new material; stop if it can't
+          const pc = C.buildContinuePrompt({ job: unit.job, frame, spans, existing: prose });
+          const raw = (await streamFrom(pc, prose + '\n\n')).trim();
+          if (!raw || C.noveltyRatio(prose, raw) < (lf.noveltyFloor || 0.4)) break;   // repeating itself / material spent
+          const fresh = C.dropDuplicateSentences(prose, raw).trim();
+          if (!fresh || C.wordCount(fresh) < 12) break;
+          prose = (prose + '\n\n' + fresh).trim();
+          ev = await C.evaluateProse(deps, prose, spans);
+          if (ev.score >= best.score) best = { prose, score: ev.score };  // keep the better-grounded version
+        } else {
+          break;   // succeeding and full enough → done
+        }
       }
-      // one revision pass — rework the whole section into clean, coherent prose
-      if (prose) {
-        const pr = C.buildRevisePrompt({ job: unit.job, frame, spans, draft: prose, neighbors });
-        const revised = (await streamFrom(pr, '')).trim();
-        // accept the rewrite only if it didn't collapse the section
-        if (C.wordCount(revised) >= Math.min(40, Math.round(C.wordCount(prose) * 0.5))) prose = revised;
-      }
+      prose = best.prose;
+
       // finalize through the SAME grounding + monitor path the single call uses
-      const out = await C.finalizeUnit({ unit, frame, doc_id: doc.id, embed, ground, formLib: formLibRef.current }, prose, spans);
+      const out = await C.finalizeUnit(deps, prose, spans);
       if (out && out.draft) appendBatch([out.draft, out.stamp, out.route]);
       return out;
     } catch (e) { if (window.eoWarn) window.eoWarn('draftOne', e); return null; }

@@ -495,6 +495,49 @@
   async function finalizeUnit(deps, prose, spans) {
     const d = deps || {};
     const unit = d.unit || {};
+    prose = String(prose == null ? '' : prose).trim();
+    spans = spans || [];
+    const ev = await evaluateProse(d, prose, spans);
+
+    // The talker authored every sentence here, so the provenance is uniformly
+    // 'talker' — a later user edit re-attributes the sentences it changes. When
+    // the rescue bound sentences to real lines, those per-sentence cites are
+    // stronger evidence than the job-level spans (and exist where the job
+    // retrieved nothing), so they become the draft's source_events.
+    const rescuedCites = (ev.rescued && ev.grounded && ev.grounded.cites)
+      ? ev.grounded.cites.map(c => ({ docId: c.docId, idx: c.idx })).filter(s => s.docId != null && s.idx != null)
+      : null;
+    const draft = make.draft({
+      unit_id: unit.id, prose,
+      author: 'talker',
+      provenance: splitSentences(prose).map(t => ({ text: t, author: 'talker' })),
+      source_events: (rescuedCites && rescuedCites.length) ? rescuedCites
+        : spans.map(s => ({ docId: s.docId, idx: s.idx })).filter(s => s.docId != null),
+      confidence: ev.confidence, doc_id: d.doc_id,
+    });
+    const stamp = make.stamp({
+      draft_id: draft.id, unit_id: unit.id,
+      confidence: ev.confidence, tag: ev.tag, rescued: ev.rescued, doc_id: d.doc_id,
+    });
+    const route = make.route({
+      unit_id: unit.id, decision: ev.decision, predicate: ev.predicate,
+      triggered_by: ev.triggeredBy, doc_id: d.doc_id,
+    });
+    return { draft, stamp, route, prose, spans, confidence: ev.confidence, tag: ev.tag, rescued: ev.rescued };
+  }
+
+  // ============================================================ the evaluator
+  // Score a candidate passage the way the monitor will judge it — the loop's
+  // "is it succeeding?". Measure the grain-relative witness (with the mechanical
+  // re-citation rescue when the lexical witness reads low), the form, the
+  // retrieval and the frame alignment, then run the monitor's predicates → a
+  // decision (advance / revise / fetch / restructure) and the gate that fired.
+  // finalizeUnit emits the events from it; the surface's rewrite loop reads its
+  // decision/predicate as error-correction guidance and its score to tell whether
+  // a rewrite improved. Pure but for the injected embed / ground / formLib.
+  async function evaluateProse(deps, prose, spans) {
+    const d = deps || {};
+    const unit = d.unit || {};
     const frame = d.frame || {};
     prose = String(prose == null ? '' : prose).trim();
     spans = spans || [];
@@ -532,33 +575,72 @@
       draftVec, genre: frame.genre, formLib: d.formLib,
       retrieval, frame: frameDeg, grounded,
     });
-
-    // The talker authored every sentence here, so the provenance is uniformly
-    // 'talker' — a later user edit re-attributes the sentences it changes. When
-    // the rescue bound sentences to real lines, those per-sentence cites are
-    // stronger evidence than the job-level spans (and exist where the job
-    // retrieved nothing), so they become the draft's source_events.
-    const rescuedCites = (st.rescued && grounded && grounded.cites)
-      ? grounded.cites.map(c => ({ docId: c.docId, idx: c.idx })).filter(s => s.docId != null && s.idx != null)
-      : null;
-    const draft = make.draft({
-      unit_id: unit.id, prose,
-      author: 'talker',
-      provenance: splitSentences(prose).map(t => ({ text: t, author: 'talker' })),
-      source_events: (rescuedCites && rescuedCites.length) ? rescuedCites
-        : spans.map(s => ({ docId: s.docId, idx: s.idx })).filter(s => s.docId != null),
-      confidence: st.confidence, doc_id: d.doc_id,
-    });
-    const stamp = make.stamp({
-      draft_id: draft.id, unit_id: unit.id,
-      confidence: st.confidence, tag: st.tag, rescued: st.rescued, doc_id: d.doc_id,
-    });
     const r = decide(st.confidence, {});
-    const route = make.route({
-      unit_id: unit.id, decision: r.decision, predicate: r.predicate,
-      triggered_by: r.triggered_by, doc_id: d.doc_id,
-    });
-    return { draft, stamp, route, prose, spans, confidence: st.confidence, tag: st.tag, rescued: st.rescued };
+    return {
+      confidence: st.confidence, tag: st.tag, rescued: st.rescued, grounded,
+      decision: r.decision, predicate: r.predicate, triggeredBy: r.triggered_by,
+      score: scoreConfidence(st.confidence),
+    };
+  }
+
+  // A single scalar for "did this rewrite improve?" — witness carries most of it
+  // (grounding is what the loop chases), with form and coherence as minor terms.
+  // Only measured components count; an unmeasured one neither helps nor hurts.
+  function scoreConfidence(c) {
+    c = c || {};
+    let s = 0, w = 0;
+    if (c.witness != null) { s += c.witness * 0.6; w += 0.6; }
+    if (c.form != null) { s += c.form * 0.25; w += 0.25; }
+    if (c.coherence != null) { s += c.coherence * 0.15; w += 0.15; }
+    return w ? s / w : 0;
+  }
+
+  // Turn the monitor's decision + the gate that fired into a concrete instruction
+  // for the next rewrite — error-correction as guidance, not a vague "try again".
+  function reviseGuidance(decision, predicate) {
+    const p = String(predicate || '');
+    if (/witness/.test(p) && /retrieval/.test(p))
+      return 'The draft drifts from the source material. Rewrite it so every claim is carried by the material below — use its facts, quote or closely paraphrase them, and cut anything the material does not support.';
+    if (/form/.test(p))
+      return 'Rewrite it to read as one clear, well-formed passage — fix awkward phrasing and structure — without adding any fact the material does not contain.';
+    if (decision === 'restructure' || /coherence/.test(p))
+      return 'Rewrite it to sit coherently with the rest of the document: resolve any contradiction with the neighbouring passages and strengthen the through-line, without adding unsupported claims.';
+    return 'Rewrite it to be clearer and better grounded in the material below, without adding unsupported claims.';
+  }
+
+  // How much of `addition` is genuinely new vs. already in `existing` — the
+  // signal that the loop is repeating itself (low novelty → stop expanding).
+  function noveltyRatio(existing, addition) {
+    const add = contentTokens(addition);
+    if (!add.length) return 0;
+    const have = new Set(contentTokens(existing));
+    let fresh = 0;
+    for (const t of add) if (!have.has(t)) fresh++;
+    return fresh / add.length;
+  }
+
+  // Drop sentences from `addition` that repeat something already in `existing`
+  // (or earlier in the addition): exact match, or near-total token containment —
+  // so a reworded restatement is caught too. Keeps the surface from padding a
+  // section with its own echo.
+  function dropDuplicateSentences(existing, addition) {
+    const have = new Set(splitSentences(existing).map(normSent));
+    const haveTokens = new Set(contentTokens(existing));
+    const out = [];
+    for (const s of splitSentences(addition)) {
+      const key = normSent(s);
+      if (!key || have.has(key)) continue;
+      const toks = contentTokens(s);
+      if (toks.length) {
+        let covered = 0;
+        for (const t of toks) if (haveTokens.has(t)) covered++;
+        if (covered / toks.length > 0.7) { have.add(key); continue; }
+      }
+      out.push(s);
+      have.add(key);
+      for (const t of toks) haveTokens.add(t);
+    }
+    return out.join(' ');
   }
 
   // Genre-aware framing. A composition is no longer assumed to be a grounded
@@ -611,11 +693,12 @@
     return { system, user: u.join('\n') };
   }
 
-  // Long-form drafting config — how the surface's recursive loop writes a section:
-  // draft once, then CONTINUE the same passage call after call until it reaches a
-  // length target ("write longer within a section"), capped so it always settles,
-  // then a single REVISE pass to rework it into clean prose. Tunable in one place.
-  const LONGFORM = { targetWords: 320, maxExpandPasses: 5, maxTokens: 384 };
+  // Long-form drafting config — how the surface's feedback loop writes a section:
+  // draft once, then REWRITE it (guided by the monitor's shortfall) while it
+  // isn't succeeding, or EXPAND it with genuinely new material while it's sound
+  // but thin — stopping the moment it's succeeding and full enough, a pass stops
+  // improving it, or the material is spent. Caps as a safety net. Tunable here.
+  const LONGFORM = { targetWords: 300, maxPasses: 4, maxTokens: 384, noveltyFloor: 0.4 };
   function wordCount(s) { return String(s == null ? '' : s).trim().split(/\s+/).filter(Boolean).length; }
 
   // CONTINUE prompt — write the NEXT part of a passage already in progress, from
@@ -665,6 +748,9 @@
     u.push('Draft to revise — its job is: ' + (o.job || ''));
     u.push(String(o.draft || ''));
     u.push('');
+    // the monitor's specific shortfall, when the loop passes one in — so the
+    // rewrite is corrective, aimed at exactly what fell short, not a blind retry
+    if (o.guidance) u.push('What to fix in this rewrite: ' + o.guidance);
     u.push('Rewrite it as one polished section:');
     return { system, user: u.join('\n') };
   }
@@ -932,7 +1018,8 @@
     make, ev,
     fold, buildTree, bandFor,
     witnessGrain, stampDraft, decide,
-    generateUnit, finalizeUnit, buildTalkerPrompt, buildContinuePrompt, buildRevisePrompt,
+    generateUnit, finalizeUnit, evaluateProse, buildTalkerPrompt, buildContinuePrompt, buildRevisePrompt,
+    reviseGuidance, scoreConfidence, noveltyRatio, dropDuplicateSentences,
     genreLabel, buildOutlinePrompt,
     wordCount, LONGFORM, retrievalDegree, parseOutline,
     newDoc, assemble,

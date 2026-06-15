@@ -1100,6 +1100,34 @@ group('bindCitations — a negative existential is attested, never lashed to a l
   ok(/\{\{absent:.*checked in all 2 sources/.test(sc.text), 'a scope-wide absence carries the scope-wide receipt');
 });
 
+// ── The answer-voice void: tell a FOUND void from a CONFABULATION ──
+// A question can point at a void — "Gregor's salary in euros" against a text
+// that has Gregor but no salary. The honest answer reports the miss ("I couldn't
+// find any information about …"); absenceClaim()'s denial grammar doesn't reach
+// it (no attribution verb, no absent NAMED subject — salary is an aspect of a
+// PRESENT figure). It used to fall through as a confabulation. It must read as a
+// ⊥: a verified absence, held — never the orange "fluent on thin air" flag.
+group('bindCitations — an answer-voice void is attested, not confabulated', () => {
+  // aspect void: Edith is on the page, her "salary" is not. Verified absent ⇒ ⊥.
+  const v = E.bindCitations(voss, "I couldn't find any information about Edith's salary.", "what is Edith's salary", 'factual');
+  ok(/\{\{absent:voss:/.test(v.text), 'the void-report cites ⊥ with a receipt, not a confabulation');
+  ok(/salary/.test(v.text), 'the receipt NAMES the verified-absent term (salary)');
+  eq(v.cites.length, 0, 'no span is lashed to an absence');
+  eq(v.audit.grounded, true, 'a verified absence IS grounded — the miss is evidence, honestly held');
+  // verification holds the line against a present term: a void-report whose term
+  // the page DOES carry is not waved through as absence (bias is toward present).
+  const present = E.bindCitations(voss, "I couldn't find anything about the keeper.", 'who is the keeper', 'factual');
+  ok(!/\{\{absent:/.test(present.text), 'a present term is never attested absent — only a verified miss is');
+  // and the asymmetry the whole instrument turns on: a positive assertion drafted
+  // from the prior ("Edith earns a salary") is NOT absence-shaped, so it can never
+  // borrow the void's receipt — a confabulation stays a confabulation.
+  const confab = E.bindCitations(voss, 'Edith earns a generous salary as the lighthouse keeper.', "what is Edith's salary", 'factual');
+  ok(!/\{\{absent:/.test(confab.text), 'a fluent assertion cannot disguise itself as a void');
+  // scope: the asked term must verify absent in EVERY source to attest the void
+  const sc = E.bindCitationsScope([voss, meeting], "There is no information about Edith's salary anywhere.", "what is Edith's salary", 'factual');
+  ok(/\{\{absent:.*in any of the 2 sources/.test(sc.text), 'a scope-wide void carries the scope-wide receipt');
+});
+
 // ── The phantom-voice routing fix: "speaker" is a role word, not a name ──
 group('routing — a generic voice label no longer hijacks meta-conversation', () => {
   const r = E.routeTurn([meeting], "but it sounds like he's not a speaker");
