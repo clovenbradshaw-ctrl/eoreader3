@@ -121,29 +121,36 @@ ok(/rows/.test(text) && /columns/.test(text), 'a table reading shows rows + colu
 TestUtils.act(() => { root.unmount(); });
 W.document.documentElement.classList.remove('reduce-motion');
 const root2 = ReactDOMClient.createRoot(container);
+const spans = [
+  { i: 0, t: 'One morning Gregor woke transformed.', coefficient: null, magnitude: null, surprise: 0, sign: 'coherence', site: null },
+  { i: 1, t: 'It was no dream.', coefficient: 0.82, magnitude: 0.6, surprise: 0.4, sign: 'coherence', site: null },
+  { i: 2, t: 'Suddenly the ledger named no one.', coefficient: 0.18, magnitude: 1.28, surprise: 2.6, sign: 'rupture', semantic: true, site: 'EventBoundary', directionGated: true },
+];
 const pbResult = {
   kind: 'prose', name: 'kafka.txt', meta: '1,240 words · prose',
   sentences: 3, paragraphs: 2,
   figures: [{ name: 'Gregor', type: 'person', raw: 42, at: 0 }],
   glimpses: ['One morning Gregor woke.'],
   playback: {
-    spans: [
-      { i: 0, t: 'One morning Gregor woke transformed.', coefficient: null, magnitude: null, sign: 'coherence', site: null },
-      { i: 1, t: 'It was no dream.', coefficient: 0.82, magnitude: 0.6, sign: 'coherence', site: null },
-      { i: 2, t: 'Suddenly the ledger named no one.', coefficient: 0.18, magnitude: 1.28, sign: 'rupture', site: 'EventBoundary', directionGated: true },
-    ],
+    spans,
+    checkpoints: spans,
     summary: { measured: 2, ruptures: 1, meanCoefficient: 0.5, peak: { i: 2, magnitude: 1.28 } },
     total: 3, capped: null,
   },
 };
-let chat2 = 0, threw4 = null;
+let settled2 = 0, threw4 = null;
 try {
-  TestUtils.act(() => { root2.render(React.createElement(W.ReadingModal, { session: null, result: pbResult, onOpenChat() { chat2++; }, onOpenDoc() {}, onClose() {} })); });
+  TestUtils.act(() => { root2.render(React.createElement(W.ReadingModal, { session: null, result: pbResult, onOpenChat() {}, onOpenDoc() {}, onClose() {}, onSettled() { settled2++; } })); });
 } catch (e) { threw4 = e; }
 ok(!threw4, 'ReadingModal mounts in predictive playback' + (threw4 ? ' — ' + threw4.message : ''));
 text = container.textContent || '';
 ok(/Reading forward/.test(text), 'playback shows it is reading forward');
-ok(/One morning Gregor woke transformed\./.test(text), 'playback shows the current span text');
+// The unfold opens on the WONDERING beat — the passage hasn't landed yet, so the
+// anticipation line is what shows first (the reader's "I wonder…").
+const anticipateEl = container.querySelector('.rm-anticipate');
+ok(!!anticipateEl && (anticipateEl.textContent || '').trim().length > 0, 'playback opens by wondering what comes next');
+ok(/Checkpoint 1 of 3/.test(text), 'playback shows the checkpoint counter');
+ok(!settled2, 'onSettled has not fired while still playing');
 const skipBtn = container.querySelector('button.rm-skip');
 ok(!!skipBtn, 'playback offers a skip-to-the-read control');
 ok(!/Bring into chat/.test(text), 'no choices mid-playback');
@@ -151,8 +158,27 @@ TestUtils.act(() => { skipBtn.dispatchEvent(new W.MouseEvent('click', { bubbles:
 text = container.textContent || '';
 ok(/Bring into chat/.test(text), 'skipping settles to the read with its choices');
 ok(/ruptured at 1/.test(text), 'the settled read reports where the reading ruptured');
+ok(settled2 === 1, 'settling fires onSettled exactly once (the content is used only now)');
 
 TestUtils.act(() => { root2.unmount(); });
+
+// ── The thinking-out-loud voice — the phrasing the reader asked for ─────────
+// Exported pools, asserted directly so the beat timers don't have to be driven.
+const V = W._readingVoice;
+ok(V && V.ANTICIPATE && V.REACT, 'the reading voice is exported for inspection');
+const allAnticipations = [].concat(...Object.values(V.ANTICIPATE)).join(' ');
+ok(/wonder/i.test(allAnticipations), 'the reading wonders ("I wonder…")');
+ok(/seems like/i.test(allAnticipations), 'the reading hedges ("it seems like…")');
+const allReactions = [].concat(...Object.values(V.REACT)).join(' ');
+ok(/thought/i.test(allReactions), 'a confirmed read reacts "like I thought"');
+ok(/see that coming/i.test(allReactions), 'a surprise reacts "I didn’t see that coming"');
+// reactionFor picks rupture vs coherence by the span's sign, and names the channel
+const surpriseReaction = V.reactionFor(2, { sign: 'rupture', semantic: true });
+ok(/see that coming|broke|turn|caught/i.test(surpriseReaction) && /meaning/i.test(surpriseReaction),
+  'a semantic rupture reacts as a surprise and names the channel');
+const heldReaction = V.reactionFor(1, { sign: 'coherence' });
+ok(/thought|held|followed|course/i.test(heldReaction), 'a confirmed span reacts as expected');
+ok(V.anticipationFor(0, null, spans[0]).length > 0, 'the opening checkpoint has an anticipation line');
 
 console.log(`\nreading-render: ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFAILURES:\n - ' + fails.join('\n - ')); process.exit(1); }

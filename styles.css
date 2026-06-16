@@ -1502,8 +1502,46 @@ html[data-theme="dark"] .reading-modal .rm-chan.semantic { color: #d6b25a; borde
 .reading-modal .rm-skip:hover { color: var(--accent); text-decoration: underline; }
 .reading-modal .rm-summary-note { color: var(--text-3); }
 
+/* ── The reading thinking out loud — wonder → passage → react ──────────────
+   The anticipation is the reading's quiet, hedged voice ("I wonder if…"); once
+   the passage lands it dims and steps aside; the reaction names what came of it,
+   coloured the way a surprise reads elsewhere (accent for held, amber for broke). */
+.reading-modal .rm-anticipate {
+  margin: 0 0 10px; font-size: 13px; line-height: 1.5; font-style: italic;
+  color: var(--text-3); animation: rm-fade-in .4s ease;
+  transition: opacity .3s ease, font-size .3s ease;
+}
+.reading-modal .rm-anticipate.faded { opacity: .5; font-size: 12px; margin-bottom: 9px; }
+.reading-modal .rm-reaction { margin-top: 11px; }
+.reading-modal .rm-react {
+  margin: 0 0 9px; font-size: 13.5px; line-height: 1.45; font-weight: 550;
+  animation: rm-fade-in .4s ease;
+}
+.reading-modal .rm-react.coherence { color: var(--accent); }
+.reading-modal .rm-react.rupture { color: #b35a16; }
+html[data-theme="dark"] .reading-modal .rm-react.rupture { color: #e0823c; }
+.reading-modal .rm-react.opening { color: var(--text-2); }
+.reading-modal .rm-dismiss-hint { margin: 13px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--text-3); }
+
+/* The checkpoint strip — one bar per checkpoint, the current one lit, the passed
+   ones holding their place behind it. Wider and gappier than the per-span strip
+   since there are only a handful. */
+.reading-modal .rm-cpstrip {
+  display: flex; align-items: flex-end; gap: 5px; height: 30px; margin-top: 12px;
+  padding: 0 1px;
+}
+.reading-modal .rm-cpbar {
+  flex: 1; min-width: 5px; background: var(--accent-tint-2); border-radius: 2px 2px 0 0;
+  opacity: .45; transition: opacity .3s ease, height .25s ease, transform .25s ease;
+}
+.reading-modal .rm-cpbar.rupture { background: #e0823c; }
+.reading-modal .rm-cpbar.past { opacity: .75; }
+.reading-modal .rm-cpbar.current { opacity: 1; transform: scaleY(1.06); box-shadow: 0 0 0 1px var(--accent-tint-2); }
+.reading-modal .rm-cpbar.rupture.current { box-shadow: 0 0 0 1px #e0823c; }
+
 @media (prefers-reduced-motion: reduce) {
-  .reading-modal .rm-span, .reading-modal .rm-gauge-fill, .reading-modal .rm-bar { animation: none; transition: none; }
+  .reading-modal .rm-span, .reading-modal .rm-gauge-fill, .reading-modal .rm-bar,
+  .reading-modal .rm-anticipate, .reading-modal .rm-react, .reading-modal .rm-cpbar { animation: none; transition: none; }
 }
 
 /* The model popover slides up from the bottom edge as a sheet on phones. */

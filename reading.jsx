@@ -76,22 +76,110 @@ function spanLevel(s) {
   return 0;
 }
 
-/* The surprise strip — one bar per span, its height the fused surprise, amber
-   where the reading ruptured. Watching it fill is watching where the document
-   defied what the reading-so-far predicted. */
-function SurpriseStrip({ spans }) {
-  if (!spans || !spans.length) return null;
+/* The checkpoint strip — one bar per CHECKPOINT (not per span), its height the
+   fused surprise, amber where the reading ruptured. The bar under the cursor is
+   lit; the ones behind it dim as passed. Watching it step along is watching the
+   reading move through the moments worth stopping at. */
+function CheckpointStrip({ checkpoints, current }) {
+  if (!checkpoints || !checkpoints.length) return null;
   return (
-    <div className="rm-strip" aria-hidden="true">
-      {spans.map((s, k) => {
+    <div className="rm-cpstrip" aria-hidden="true">
+      {checkpoints.map((s, k) => {
         const lvl = spanLevel(s);
-        const rupture = s.sign === 'rupture';
-        const flat = s.surprise == null && s.coefficient == null;
-        return <span key={k} className={'rm-bar' + (rupture ? ' rupture' : '') + (flat ? ' void' : '')}
-          style={{ height: Math.max(6, Math.round(lvl * 100)) + '%' }} />;
+        const cls = 'rm-cpbar'
+          + (s.sign === 'rupture' ? ' rupture' : '')
+          + (k === current ? ' current' : k < current ? ' past' : '');
+        return <span key={k} className={cls} style={{ height: Math.max(8, Math.round(lvl * 100)) + '%' }} />;
       })}
     </div>
   );
+}
+
+/* The reading thinks out loud. At each checkpoint it first WONDERS what's coming
+   (a hedged, forward-looking line — it has an expectation, not a prediction),
+   then the passage lands, then it REACTS: the thread held, or it didn't see that
+   coming. The phrasing is felt, never a fabricated "what happens next" (the
+   faithful generative guess is deferred in predict.js); it leans only on what the
+   reading actually measured — the prior beat's outcome, the upcoming span's site,
+   and the channel that flinched. Pools are picked deterministically by checkpoint
+   index so a re-render never reshuffles the voice mid-beat. */
+const ANTICIPATE = {
+  opening: [
+    'Just getting my bearings…',
+    'I don’t know this one yet — let’s read…',
+    'Settling in. Let’s see what this is…',
+  ],
+  steady: [
+    'It seems like the thread holds — I expect more of the same…',
+    'This feels steady. I’d guess it keeps on…',
+    'I’m expecting it to stay its course…',
+  ],
+  afterRupture: [
+    'After that turn, I wonder where it lands…',
+    'That shifted things — I’m not sure what’s next…',
+    'I’m watching more closely now…',
+  ],
+  reference: [
+    'I’m not sure yet who this is about…',
+    'There’s a name I can’t quite place — let’s see…',
+  ],
+  scene: [
+    'It seems like the scene is about to move…',
+    'Something tells me this turns here…',
+  ],
+  fallback: [
+    'I wonder what comes next…',
+    'It seems like something’s building…',
+    'Let’s see where this goes…',
+  ],
+};
+const REACT = {
+  opening: [
+    'Now I have a feel for it.',
+    'Okay — I have my bearings.',
+    'That’s where we begin.',
+  ],
+  coherence: [
+    '…and it did. Just as I thought.',
+    'Yes — the thread held.',
+    'That followed, like I expected.',
+    'No surprise there — it stayed on course.',
+  ],
+  rupture: [
+    'I didn’t see that coming.',
+    'Oh — that broke from what I expected.',
+    'A turn I wasn’t expecting.',
+    'That caught me off guard.',
+  ],
+};
+// Which channel of the fusion flinched, appended to a surprise so the rupture is
+// legible: structure (Tier 0), the meaning (semantic), or both at once.
+const REACT_CHANNEL = {
+  both: ' The structure and the meaning both moved.',
+  semantic: ' The meaning turned with no warning in the structure.',
+  struct: ' The structure jumped.',
+};
+const pickPhrase = (pool, seed) => pool[((seed % pool.length) + pool.length) % pool.length];
+
+function anticipationFor(cp, prevSign, span) {
+  let pool;
+  if (cp === 0) pool = ANTICIPATE.opening;
+  else if (prevSign === 'rupture') pool = ANTICIPATE.afterRupture;
+  else if (span && span.site === 'ReferenceBoundary') pool = ANTICIPATE.reference;
+  else if (span && span.site === 'EventBoundary') pool = ANTICIPATE.scene;
+  else pool = (cp % 2 === 0) ? ANTICIPATE.steady : ANTICIPATE.fallback;
+  return pickPhrase(pool, cp);
+}
+function reactionFor(cp, span) {
+  if (cp === 0) return pickPhrase(REACT.opening, cp);
+  if (span && span.sign === 'rupture') {
+    let note = '';
+    if (span.semantic && span.struct) note = REACT_CHANNEL.both;
+    else if (span.semantic) note = REACT_CHANNEL.semantic;
+    else if (span.struct) note = REACT_CHANNEL.struct;
+    return pickPhrase(REACT.rupture, cp) + note;
+  }
+  return pickPhrase(REACT.coherence, cp);
 }
 
 // Overall fraction across the three movements, so a single bar can read as
@@ -172,7 +260,7 @@ function ReadStat({ value, label }) {
   );
 }
 
-function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
+function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose, onSettled }) {
   const dialogRef = window.useDialog(onClose);
   const reduce = React.useMemo(prefersReducedMotion, []);
 
@@ -180,19 +268,32 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
   const glimpses = (result && result.glimpses) || [];
   const playback = result && result.playback;
   const spans = (playback && playback.spans) || null;
-  const N = spans ? spans.length : 0;
+  // The reading pauses at CHECKPOINTS, not at every span — playing all of them
+  // flew by too fast to follow. predict.js curates them (opening, surprises,
+  // close, a few spread between); fall back to an even sample if an older payload
+  // carries none.
+  const checkpoints = React.useMemo(() => {
+    if (!playback) return [];
+    const cps = (playback.checkpoints && playback.checkpoints.length)
+      ? playback.checkpoints : sampleSpans(spans || [], 5);
+    return (cps || []).filter(s => s && typeof s.t === 'string');
+  }, [playback]); // eslint-disable-line
+  const CN = checkpoints.length;
 
-  // Two reveals share one settle. PLAYBACK (when the reading carries a forward
-  // expectation) plays span-by-span: a cursor walks the timeline and each delta
-  // lands live. Otherwise the finished read just surfaces its figures one by
-  // one. Reduced motion jumps either straight to settled.
-  const [reveal, setReveal] = React.useState(0);   // figures shown (non-playback)
-  const [cursor, setCursor] = React.useState(0);    // spans played (playback)
+  // The finished read either PLAYS THROUGH its checkpoints — at each one the
+  // reading wonders aloud, the passage lands, then it reacts — or, when there's
+  // no forward expectation, just surfaces its figures one by one. Reduced motion
+  // jumps either straight to settled. The playback is a three-BEAT machine per
+  // checkpoint: anticipate → passage → react.
+  const [reveal, setReveal] = React.useState(0);     // figures shown (non-playback)
+  const [cp, setCp] = React.useState(0);              // checkpoint index (playback)
+  const [beat, setBeat] = React.useState('anticipate'); // anticipate | passage | react
   const [settled, setSettled] = React.useState(false);
 
+  // Non-playback reveal (and the reset when a fresh reading replaces this one).
   React.useEffect(() => {
-    if (!result) { setSettled(false); setReveal(0); setCursor(0); return; }
-    if (playback) return;                            // playback effect owns this case
+    if (!result) { setSettled(false); setReveal(0); setCp(0); setBeat('anticipate'); return; }
+    if (playback) return;                            // the playback effects own this case
     if (reduce) { setReveal(figures.length); setSettled(true); return; }
     if (!figures.length) { setReveal(0); const t = setTimeout(() => setSettled(true), 350); return () => clearTimeout(t); }
     let n = 0; setReveal(0); setSettled(false);
@@ -203,35 +304,56 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
     return () => clearInterval(id);
   }, [result]); // eslint-disable-line
 
+  // Playback start: rewind to the first checkpoint, first beat.
   React.useEffect(() => {
     if (!playback) return;
-    if (reduce || N <= 1) { setCursor(N); setSettled(true); return; }
-    setCursor(0); setSettled(false);
-    // Bound the whole unfold to a readable spell — give the document space to
-    // breathe without making a long one a chore (≈8s, clamped per span; Skip is
-    // always there).
-    const interval = Math.max(22, Math.min(280, Math.round(8000 / N)));
-    let k = 0;
-    const id = setInterval(() => {
-      k += 1; setCursor(k);
-      if (k >= N) { clearInterval(id); setTimeout(() => setSettled(true), 550); }
-    }, interval);
-    return () => clearInterval(id);
+    if (reduce || CN === 0) { setSettled(true); return; }
+    setCp(0); setBeat('anticipate'); setSettled(false);
   }, [playback]); // eslint-disable-line
+
+  // Playback advance: each beat holds long enough to read, then steps to the
+  // next — passage after the wondering, reaction after the passage, then on to
+  // the next checkpoint, and finally settling. Generous holds (Skip is always
+  // there) so the moment can actually be followed.
+  React.useEffect(() => {
+    if (!playback || reduce || CN === 0 || settled) return;
+    const HOLD = { anticipate: 1200, passage: 1700, react: 1600 };
+    const id = setTimeout(() => {
+      if (beat === 'anticipate') setBeat('passage');
+      else if (beat === 'passage') setBeat('react');
+      else if (cp + 1 < CN) { setCp(cp + 1); setBeat('anticipate'); }
+      else setSettled(true);
+    }, HOLD[beat] || 1300);
+    return () => clearTimeout(id);
+  }, [playback, cp, beat, settled, CN, reduce]); // eslint-disable-line
+
+  // The reading is DONE the moment it settles (played through, or skipped to).
+  // Only now is the content used — the parent attaches it to the chat here, never
+  // before. Closing earlier leaves it in the library, unbrought-into-chat.
+  React.useEffect(() => { if (settled && onSettled) onSettled(); }, [settled]); // eslint-disable-line
 
   const reading = !result;
   const inPlayback = !!playback && !settled;
   const name = (result && result.name) || (session && session.name) || 'document';
   const stageLine = session ? (READING_STAGE[session.stage] || session.stage || '') : '';
 
-  // The span under the cursor, and the figures the reading has reached so far.
-  const playIdx = N ? Math.min(Math.max(cursor - 1, 0), N - 1) : -1;
-  const cur = spans ? spans[playIdx] : null;
+  // The checkpoint under the cursor, its forward-looking line and its reaction,
+  // and the figures the reading has reached so far. While merely wondering (the
+  // anticipate beat) we hold the figure reveal to the PREVIOUS checkpoint, so a
+  // name about to be read doesn't leak before its passage lands.
+  const cur = CN ? checkpoints[Math.min(cp, CN - 1)] : null;
   const curI = cur ? cur.i : -1;
+  const prevSign = cp > 0 ? checkpoints[cp - 1].sign : null;
+  const anticipation = cur ? anticipationFor(cp, prevSign, cur) : '';
+  const reaction = cur ? reactionFor(cp, cur) : '';
+  const revealI = (beat === 'anticipate' && cp > 0) ? checkpoints[cp - 1].i : curI;
   const shownFigures = settled ? figures
-    : playback ? figures.filter(f => f.at != null && f.at <= curI)
+    : playback ? figures.filter(f => f.at != null && f.at <= revealI)
     : figures.slice(0, reveal);
-  const rupturesSoFar = spans ? spans.slice(0, cursor).filter(s => s.coefficient != null && s.sign === 'rupture').length : 0;
+  const passedCps = checkpoints.slice(0, cp + (beat === 'anticipate' ? 0 : 1));
+  const rupturesSoFar = passedCps.filter(s => s.sign === 'rupture').length;
+  const BEAT_FRAC = { anticipate: 0.15, passage: 0.55, react: 0.9 };
+  const playFrac = CN ? (cp + (BEAT_FRAC[beat] || 0)) / CN : 0;
 
   const movementIdx = reading
     ? Math.max(0, READING_MOVEMENTS.findIndex(m => m.id === (session && session.phase)))
@@ -239,11 +361,13 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
   const frac = reading ? readingFraction(session) : 1;
   const indet = reading && (!session || session.pct == null || session.easing);
   const SKELETON = [82, 96, 71, 90, 64];
-  const closable = settled || reading === false && !inPlayback;
-  const skip = () => { setCursor(N); setSettled(true); };
+  const skip = () => setSettled(true);
 
   return (
-    <div className="overlay center reading-overlay" onClick={closable ? onClose : undefined}>
+    // Closable at any point — mid-parse, mid-playback, settled. Clicking out (or
+    // Escape, or the ✕) dismisses the surface; the reading itself keeps going and
+    // the content isn't brought into the chat until it has settled (see onSettled).
+    <div className="overlay center reading-overlay" onClick={onClose}>
       <div className={'reading-modal' + (settled ? ' settled' : '') + (reading ? ' reading' : '') + (inPlayback ? ' playing' : '')}
            role="dialog" aria-modal="true" aria-label={'Reading ' + name}
            aria-busy={reading || inPlayback} tabIndex={-1} ref={dialogRef}
@@ -279,25 +403,40 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
           <div className="rm-gloss">{READING_MOVEMENTS[movementIdx].gloss}</div>
         )}
 
-        {/* Stage: skeleton while reading; the live predict→delta while playing
-            forward; the representative read sentences once settled. */}
+        {/* Stage: skeleton while reading; the checkpoint unfold (wonder → passage
+            → react) while playing forward; the read sentences once settled. */}
         {inPlayback ? (
           <div className="rm-playback">
             <div className="rm-now">
-              {cur && (cur.surprise != null || cur.coefficient != null) && (
-                <div className="rm-delta">
-                  <span className={'rm-sign ' + cur.sign}>{cur.sign === 'rupture' ? 'surprise' : 'expected'}</span>
-                  <div className="rm-gauge" title="surprise above the local baseline">
-                    <div className="rm-gauge-fill" style={{ width: Math.round(spanLevel(cur) * 100) + '%', background: DELTA_COLOR[cur.sign] }} />
-                  </div>
-                  {/* which channel flinched — the fusion, made legible */}
-                  {cur.struct && <span className="rm-chan struct" title="the graph moved unexpectedly">structure</span>}
-                  {cur.semantic && <span className="rm-chan semantic" title="the meaning turned with no structural change">semantic</span>}
+              {/* what it thinks will happen — a hedged, forward-looking line. Stays
+                  visible (dimmed) once the passage lands, so the wondering and what
+                  came of it can be read together. */}
+              <p className={'rm-anticipate' + (beat !== 'anticipate' ? ' faded' : '')}>{anticipation}</p>
+
+              {/* the passage itself — what actually came */}
+              {beat !== 'anticipate' && cur && (
+                <p key={'span-' + cp} className={'rm-span' + (cur.sign === 'rupture' ? ' rupture' : '')}>{cur.t}</p>
+              )}
+
+              {/* the reaction — held it, or didn't see it coming — with the gauge
+                  and which channel of the fusion flinched. */}
+              {beat === 'react' && cur && (
+                <div className="rm-reaction">
+                  <p className={'rm-react ' + (cp === 0 ? 'opening' : cur.sign)}>{reaction}</p>
+                  {cp !== 0 && (cur.surprise != null || cur.coefficient != null) && (
+                    <div className="rm-delta">
+                      <span className={'rm-sign ' + cur.sign}>{cur.sign === 'rupture' ? 'surprise' : 'expected'}</span>
+                      <div className="rm-gauge" title="surprise above the local baseline">
+                        <div className="rm-gauge-fill" style={{ width: Math.round(spanLevel(cur) * 100) + '%', background: DELTA_COLOR[cur.sign] }} />
+                      </div>
+                      {cur.struct && <span className="rm-chan struct" title="the graph moved unexpectedly">structure</span>}
+                      {cur.semantic && <span className="rm-chan semantic" title="the meaning turned with no structural change">semantic</span>}
+                    </div>
+                  )}
                 </div>
               )}
-              <p className={'rm-span' + (cur && cur.sign === 'rupture' ? ' rupture' : '')}>{cur ? cur.t : ''}</p>
             </div>
-            <SurpriseStrip spans={spans.slice(Math.max(0, cursor - 110), Math.max(cursor, 1))} />
+            <CheckpointStrip checkpoints={checkpoints} current={cp} />
           </div>
         ) : (
           <div className={'rm-scanner' + (reading && !reduce ? ' sweeping' : '')}>
@@ -370,10 +509,10 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
             </React.Fragment>
           ) : inPlayback ? (
             <React.Fragment>
-              <div className="rm-bar"><div className="rm-fill" style={{ width: Math.round((cursor / Math.max(N, 1)) * 100) + '%' }} /></div>
+              <div className="rm-bar"><div className="rm-fill" style={{ width: Math.round(playFrac * 100) + '%' }} /></div>
               <div className="rm-status">
-                <span className="rm-stage">Reading forward — expecting what comes next</span>
-                <span className="rm-count">{Math.min(cursor, N)} / {playback.total || N}{rupturesSoFar ? ' · ' + rupturesSoFar + ' surprised' : ''}</span>
+                <span className="rm-stage">Reading forward — stopping where it matters</span>
+                <span className="rm-count">Checkpoint {Math.min(cp + 1, CN)} of {CN}{rupturesSoFar ? ' · ' + rupturesSoFar + ' surprised' : ''}</span>
               </div>
               <button className="rm-skip" onClick={skip}>Skip to the read</button>
             </React.Fragment>
@@ -395,10 +534,16 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
               </div>
             </React.Fragment>
           )}
+          {!settled && (
+            <p className="rm-dismiss-hint">Close anytime — it won’t be pulled into the chat while it’s still reading.</p>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-Object.assign(window, { ReadingModal, makeReadingResult });
+// The phrase pools are exported alongside the component so the smoke test can
+// assert the voice the reader asked for ("I wonder…", "like I thought", "I didn't
+// see that coming") without driving the beat timers.
+Object.assign(window, { ReadingModal, makeReadingResult, _readingVoice: { ANTICIPATE, REACT, anticipationFor, reactionFor } });
