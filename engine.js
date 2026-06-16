@@ -453,6 +453,11 @@ const READING_RULES = {
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Kinship nouns. A possessive pronoun + kin noun ("his son", "her mother") names a relation the page never states as a copula — the possessor is resolved by activation and the relation recorded as a kin DEF, so "whose son is mentioned?" is answerable from the graph instead of stranding on an unresolved pronoun.',
   },
+  kin_poss_modifiers: {
+    value: ['own','late','elder','eldest','younger','youngest','only'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Adjectives that may sit between a possessive pronoun and a kin noun in the possessive-kin shape ("his late father", "her only daughter"). Built into KIN_POSS_RE as an optional group so the modifier is skipped and the kin head still reads ("his father" needs none). English-specific; grows without editing the regex.',
+  },
   // ── Role-referent recovery (PR1) — occupation/role nouns that a narrative
   //    names a character by ("the chief clerk", "the charwoman", "his sister").
   //    Definite descriptions and possessive+role phrases the named-entity
@@ -463,6 +468,11 @@ const READING_RULES = {
     value: ['clerk','charwoman','locksmith','doctor','lodger','lodgers','manager','servant','maid','cook','chief','boss','landlord','landlady','porter','waiter','nurse','officer','captain','soldier','priest','teacher','student','master','mistress','boy','girl','man','woman','stranger','visitor','guest','neighbour','neighbor'],
     mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
     desc: 'Occupation / social-role nouns a narrative uses to name a recurring character ("the chief clerk", "the charwoman", "the lodgers"). A definite description or possessive+role phrase headed by one of these is lowercase, so name promotion never proposes it; role-referent recovery (flag-gated) mines it from sentence text and promotes recurring ones to nodes.',
+  },
+  role_poss_modifiers: {
+    value: ['own','late','elder','eldest','younger','youngest','only','old','young','chief','head'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Adjectives that may sit between his/her/the and a role or kin noun in the definite/possessive role shape ("the chief clerk", "his old sister", "the head porter"). Superset of kin_poss_modifiers (roles add old/young/chief/head). Built into ROLE_POSS_RE as an optional group; English-specific.',
   },
   role_mention_floor: {
     value: 3,
@@ -478,6 +488,11 @@ const READING_RULES = {
     value: 0.25,
     mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'Multiplier applied to co-occurrences between a role node and the hub (the most-mentioned person). The hub co-occurs with everyone, so binding every role to it is the degenerate failure; this down-weights those pairs so role↔role and role↔non-hub edges can clear the floor.',
+  },
+  role_cooccur_floor: {
+    value: 3,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Minimum effective co-occurrence (after role_hub_discount is applied) for a role-referent edge to be appended. A small absolute floor so a pair whose raw co-occurrence is thinned by the hub discount still needs real shared scenes, not one diluted brush, to bind.',
   },
   role_referent_recovery: {
     value: false,
@@ -526,6 +541,16 @@ const READING_RULES = {
     value: 0.5,
     mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
     desc: 'How hard a strong association vetoes a coreference bind ∈ [0,1]. A role is not identical to a name it interacts with BECAUSE they are distinct: the hub (the most-mentioned person, the maximal-cooccurrence party PR1 already discounts) is excluded by this weight, and a role is never its own possessor (full exclusion). exclusion = max(possessor ? 1 : 0, isHub ? this : 0); the bind score is gender × number × (1 − exclusion) × affinity.',
+  },
+  coref_gender_unknown_weight: {
+    value: 0.75,
+    mass: 1, layer: 'significance', src: 'hardcoded-seed', module: 'core',
+    desc: 'Gender-agreement weight for a coreference candidate when the role head is gendered (role_gender) but the candidate name\'s gender is unknown — a mild discount ∈ [0,1], not a veto (both-known-and-differ is the hard veto, weight 0). Raise toward 1 to ignore the asymmetry; lower toward 0 to treat unknown gender as near-disqualifying.',
+  },
+  irregular_plurals: {
+    value: ['children','men','women','people','gentlemen','ladies','folk'],
+    mass: 1, layer: 'structure', src: 'language-module:en-narrative-v1', module: 'en-narrative-v1',
+    desc: 'Irregular plural surfaces (no -s/-ies stem) for the coreference overlay\'s number-agreement veto — a plural role ("his parents", "children") cannot corefer with a single named person. Regular plurals are caught by singularStem; this is the closed-class remainder. English-specific; built into IRREG_PLURALS in rebuildLangSets, read by isPlural.',
   },
   // ── Depicted acts — the story-world transformation a clause REPORTS, carried
   //    as content on the reader's CON bond. The bond's own op is always CON (the
@@ -1188,7 +1213,7 @@ let STOP, PRONOUNS, PERSON_PRONOUNS, NONPERSON_PRONOUNS, FEMALE_PRONOUNS,
     GUTENBERG_START_RES, GUTENBERG_END_RES,
     CHROME_RES, METAPHOR_RES, TYPE_KW_ORG, TYPE_KW_PLACE, TYPE_KW_PERSON,
     NP_GENERIC_HEADS, SITE_GROUND_CUES, SITE_PATTERN_CUES,
-    COPULAR, AUX_VERBS_RE, RG_PRONOUN_RE, DEICTIC_PRONOUNS, IRREG_PAST,
+    COPULAR, AUX_VERBS_RE, RG_PRONOUN_RE, DEICTIC_PRONOUNS, IRREG_PAST, IRREG_PLURALS,
     TITLE_CASE_MINOR, FOLLOWUP_GLUE, ASK_FRAME, RG_STOP, RG_ATTRIB;
 function rebuildLangSets() {
   STOP = new Set([
@@ -1210,16 +1235,20 @@ function rebuildLangSets() {
   STATE_VERBS = new Set(mod_values('depict_state_verbs'));
   // "his/her (own|late|elder…) <kin-noun>" — the possessive-kin shape the
   // extractor reads. Empty inventory (a language without it yet) disables it.
+  const kinPossMods = mod_values('kin_poss_modifiers');
+  const kinModAlt = kinPossMods.length ? '(?:' + kinPossMods.map(m => m + '\\s+').join('|') + ')?' : '';
   KIN_POSS_RE = KIN_TERMS.size
-    ? new RegExp("\\b(his|her)\\s+(?:own\\s+|late\\s+|elder\\s+|eldest\\s+|younger\\s+|youngest\\s+|only\\s+)?(" + [...KIN_TERMS].join('|') + ")\\b", 'giu')
+    ? new RegExp("\\b(his|her)\\s+" + kinModAlt + "(" + [...KIN_TERMS].join('|') + ")\\b", 'giu')
     : /$^/;
   // Role-referent recovery (flag-gated): the role inventory is the occupation
   // nouns PLUS the kin nouns (a role node can be "his sister" as readily as
   // "the chief clerk"). ROLE_POSS_RE is the possessive/definite shape over that
   // union — "his|her|the (<modifier>)? <role-noun>". Empty inventory disables it.
   ROLE_TERMS = new Set([...mod_values('role_terms'), ...mod_values('kin_terms')]);
+  const rolePossMods = mod_values('role_poss_modifiers');
+  const roleModAlt = rolePossMods.length ? '(?:' + rolePossMods.map(m => m + '\\s+').join('|') + ')?' : '';
   ROLE_POSS_RE = ROLE_TERMS.size
-    ? new RegExp("\\b(his|her|the)\\s+(?:own\\s+|late\\s+|elder\\s+|eldest\\s+|younger\\s+|youngest\\s+|only\\s+|old\\s+|young\\s+|chief\\s+|head\\s+)?(" + [...ROLE_TERMS].join('|') + ")\\b", 'giu')
+    ? new RegExp("\\b(his|her|the)\\s+" + roleModAlt + "(" + [...ROLE_TERMS].join('|') + ")\\b", 'giu')
     : /$^/;
   // Coreference overlay (PR2): gendered role/kin heads → 'f'/'m'. Read to gender
   // a role node from its HEAD ("sister"→f) — name-anchored, deterministic. An
@@ -1228,6 +1257,9 @@ function rebuildLangSets() {
     const rg = mod_values('role_gender');
     ROLE_GENDER = new Map((rg && typeof rg === 'object' && !Array.isArray(rg)) ? Object.entries(rg) : []);
   }
+  // Irregular plurals (no -s/-ies stem) for the coref overlay's number-agreement
+  // veto — see isPlural. English-specific lexicon; module off ⇒ empty set.
+  IRREG_PLURALS = new Set(mod_values('irregular_plurals'));
   FEMALE_TITLES = new Set(mod_values('female_titles'));
   MALE_TITLES = new Set(mod_values('male_titles'));
   // Every personal title (gendered + genderless: Mr, Mrs, Dr, Captain,
@@ -2797,14 +2829,14 @@ function singularStem(t) {
 // corefer with a single named person. Conservative — an irregular-plural set
 // for the common kin/role cases, then a regular -s/-ies test that REUSES
 // singularStem (the same -s/-ies/-en morphology the entity reader trusts), with
-// the -ss/-us/-is mass-noun guard already baked into singularStem.
-const _IRREG_PLURAL = new Set(['children', 'men', 'women', 'people', 'gentlemen', 'ladies', 'folk']);
+// the -ss/-us/-is mass-noun guard already baked into singularStem. The irregular
+// set (IRREG_PLURALS) is the irregular_plurals rule, built in rebuildLangSets.
 function isPlural(headOrSurface) {
   const w = String(headOrSurface == null ? '' : headOrSurface).toLowerCase().trim();
   if (!w) return false;
   // last token of a surface ("the lodgers" → "lodgers")
   const last = w.split(/\s+/).pop();
-  if (_IRREG_PLURAL.has(last)) return true;
+  if (IRREG_PLURALS.has(last)) return true;
   // "parents"/"lodgers"/"sisters" — a regular plural is exactly a token with a
   // safe singular stem (singularStem returns null for short tokens and the
   // -ss/-us/-is mass endings, so "boss"/"mistress" never read as plural).
@@ -8118,7 +8150,7 @@ function projectGraph(events, frame = {}) {
       const window    = Number(READING_RULES.role_cooccur_window.value) || 0;
       const hubDisc   = Number(READING_RULES.role_hub_discount.value);
       const HUB_DISCOUNT = isFinite(hubDisc) ? hubDisc : 1;
-      const COOC_FLOOR = 3;   // a small absolute floor on effective co-occurrence
+      const COOC_FLOOR = Number(READING_RULES.role_cooccur_floor.value) || 3;   // a small absolute floor on effective co-occurrence
 
       // ── Mine role surfaces from narration ──
       // Quote-stripping mirrors the possessive-kin reader (engine.js ~5532):
@@ -8346,6 +8378,8 @@ function projectGraph(events, frame = {}) {
       const FLOOR   = isFinite(floor)  ? floor  : 0.55;
       const MARGIN  = isFinite(margin) ? margin : 0.15;
       const EXCL_W  = isFinite(exclW)  ? Math.max(0, Math.min(1, exclW)) : 0.5;
+      const gw      = Number(READING_RULES.coref_gender_unknown_weight.value);
+      const GENDER_UNKNOWN_W = isFinite(gw) ? Math.max(0, Math.min(1, gw)) : 0.75;
 
       // Role nodes: the INS events PR1 appended (eo_role). Nothing to do without them.
       const roleNodes = doc._events.filter(ev => ev.op === 'INS' && ev.eo_role && ev.role && ev.referent_id);
@@ -8406,7 +8440,7 @@ function projectGraph(events, frame = {}) {
             // gender agreement — mirror the SYN gravity veto (both known & differ ⇒ apart)
             let genderAgreement;
             if (roleGender && ng) genderAgreement = (roleGender === ng) ? 1 : 0;
-            else if (roleGender && !ng) genderAgreement = 0.75;   // mild, not a veto
+            else if (roleGender && !ng) genderAgreement = GENDER_UNKNOWN_W;   // mild, not a veto
             else genderAgreement = 1;
             if (genderAgreement === 0) continue;                  // hard gender veto
             // must share a scene to be a coref candidate (no cooccur ⇒ no evidence)
