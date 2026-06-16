@@ -48,7 +48,7 @@ const STEP_PAGES = 4;       // pages added per animation frame thereafter
    props change — crucially, `flash` is the flashed sentence index ONLY when it
    falls inside this page (else -1), so following a citation re-renders just the
    one page that owns it, not the whole document. */
-const ProsePage = React.memo(function ProsePage({ rows, startRow, docId, explore, matcher, flash, onEntity, onCite }) {
+const ProsePage = React.memo(function ProsePage({ rows, startRow, docId, explore, matcher, flash, onEntity, onCite, foldOn, foldCursor, onPick }) {
   return rows.map((r, j) => {
     const key = startRow + j;
     if (r.type === 'h1') return <h1 key={key} className="doc-h1">{r.text}</h1>;
@@ -56,8 +56,10 @@ const ProsePage = React.memo(function ProsePage({ rows, startRow, docId, explore
     return (
       <p key={key} className="doc-p">
         {r.sentences.map(s => (
-          <span key={s.i} id={'sent-' + docId + '-' + s.i} className={'sent' + (flash === s.i ? ' flash' : '')}>
-            {explore && <span className="sidx" title="cite this sentence" onClick={() => onCite(docId, s.i)}>s{s.i}</span>}
+          <span key={s.i} id={'sent-' + docId + '-' + s.i}
+                className={'sent' + (flash === s.i ? ' flash' : '') + (foldOn ? ' fold-pick' : '') + (foldCursor === s.i ? ' fold-cursor' : '')}
+                onClick={foldOn ? (e) => { e.stopPropagation(); onPick(s.i); } : undefined}>
+            {explore && <span className="sidx" title="cite this sentence" onClick={(e) => { e.stopPropagation(); onCite(docId, s.i); }}>s{s.i}</span>}
             {explore ? renderWithEntities(s.t, matcher, onEntity) : s.t}{' '}
           </span>
         ))}
@@ -66,7 +68,7 @@ const ProsePage = React.memo(function ProsePage({ rows, startRow, docId, explore
   });
 });
 
-function ProseDoc({ doc, explore, onEntity, activeEntity, flashSent, onCite }) {
+function ProseDoc({ doc, explore, foldLens, onEntity, activeEntity, flashSent, onCite }) {
   const proj = window.EOEngine.projectEntities(doc);
   // Keep the per-page callbacks stable so React.memo can actually skip pages:
   // onEntity from the app isn't memoized, so route both through refs.
@@ -74,6 +76,22 @@ function ProseDoc({ doc, explore, onEntity, activeEntity, flashSent, onCite }) {
   const onCiteRef = React.useRef(onCite); onCiteRef.current = onCite;
   const stableEntity = React.useCallback((n) => onEntityRef.current && onEntityRef.current(n), []);
   const stableCite = React.useCallback((d, i) => onCiteRef.current && onCiteRef.current(d, i), []);
+
+  // The integral-fold lens: clicking a sentence sets a cursor; the lens reads
+  // the holonic fold up to it. Cursor is per-document (reset when the open doc
+  // changes, or when the lens is switched off); depth is a sticky preference.
+  // Click the same sentence again to clear the cursor.
+  const [cursor, setCursor] = React.useState(null);
+  const [foldDepth, setFoldDepth] = React.useState(99);
+  React.useEffect(() => { setCursor(null); }, [doc.id]);
+  React.useEffect(() => { if (!foldLens) setCursor(null); }, [foldLens]);
+  const pickRef = React.useRef(null);
+  pickRef.current = (i) => setCursor(c => (c === i ? null : i));
+  const stablePick = React.useCallback((i) => pickRef.current && pickRef.current(i), []);
+  const jumpTo = React.useCallback((i) => {
+    const el = document.getElementById('sent-' + doc.id + '-' + i);
+    if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [doc.id]);
 
   const matcher = React.useMemo(() => (explore ? buildEntityMatcher(proj.byType) : null), [proj, explore]);
 
@@ -115,34 +133,108 @@ function ProseDoc({ doc, explore, onEntity, activeEntity, flashSent, onCite }) {
   }, [flashSent, pages]);
 
   return (
-    <div className={'doc-scroll' + (explore ? ' explore-on' : '')}>
-      {explore && (
-        <div className="explore-bar">
-          <span className="xl">In this document</span>
-          {proj.entities.slice(0, 18).map(e => (
-            <button key={e.key} className={'ent-pill' + (activeEntity === e.name ? ' active' : '')} onClick={() => onEntity(e.name)}>
-              <span className="swatch" style={{ background: ENT_COLOR[e.type] || ENT_COLOR.person }} />
-              {e.name}<span className="n">{e.raw}</span>
-            </button>
-          ))}
-          {!proj.entities.length && <span className="xl" style={{ opacity: .7 }}>no entities found</span>}
-        </div>
-      )}
-      {explore && window.ReferenceDeskBar && <window.ReferenceDeskBar entities={proj.entities} />}
-      <div className="prose">
-        {pages.slice(0, visible).map(pg => (
-          <ProsePage key={pg.start} startRow={pg.start} rows={pg.rows} docId={doc.id}
-            explore={explore} matcher={matcher}
-            flash={(flashSent != null && pg.lo != null && flashSent >= pg.lo && flashSent <= pg.hi) ? flashSent : -1}
-            onEntity={stableEntity} onCite={stableCite} />
-        ))}
-        {visible < pages.length && (
-          <div className="prose-more" role="status" aria-live="polite">
-            <span className="pm-orb" aria-hidden="true" /> Reading the rest of the document… {Math.round(visible / pages.length * 100)}%
+    <div className={'prose-wrap' + (foldLens ? ' with-lens' : '')}>
+      <div className={'doc-scroll' + (explore ? ' explore-on' : '')}>
+        {explore && (
+          <div className="explore-bar">
+            <span className="xl">In this document</span>
+            {proj.entities.slice(0, 18).map(e => (
+              <button key={e.key} className={'ent-pill' + (activeEntity === e.name ? ' active' : '')} onClick={() => onEntity(e.name)}>
+                <span className="swatch" style={{ background: ENT_COLOR[e.type] || ENT_COLOR.person }} />
+                {e.name}<span className="n">{e.raw}</span>
+              </button>
+            ))}
+            {!proj.entities.length && <span className="xl" style={{ opacity: .7 }}>no entities found</span>}
           </div>
         )}
+        {explore && window.ReferenceDeskBar && <window.ReferenceDeskBar entities={proj.entities} />}
+        <div className="prose">
+          {pages.slice(0, visible).map(pg => (
+            <ProsePage key={pg.start} startRow={pg.start} rows={pg.rows} docId={doc.id}
+              explore={explore} matcher={matcher}
+              flash={(flashSent != null && pg.lo != null && flashSent >= pg.lo && flashSent <= pg.hi) ? flashSent : -1}
+              foldOn={!!foldLens} foldCursor={(cursor != null && pg.lo != null && cursor >= pg.lo && cursor <= pg.hi) ? cursor : -1}
+              onEntity={stableEntity} onCite={stableCite} onPick={stablePick} />
+          ))}
+          {visible < pages.length && (
+            <div className="prose-more" role="status" aria-live="polite">
+              <span className="pm-orb" aria-hidden="true" /> Reading the rest of the document… {Math.round(visible / pages.length * 100)}%
+            </div>
+          )}
+        </div>
       </div>
+      {foldLens && <FoldLens doc={doc} cursor={cursor} depth={foldDepth} onDepth={setFoldDepth} onJump={jumpTo} />}
     </div>
+  );
+}
+
+// The named holonic levels — the nest of wholes-that-are-also-parts a document
+// folds along. The fold "at a given cursor, to a given degree of holonic depth"
+// walks this ladder outward from the line to the whole document.
+const HOLON_LEVEL = {
+  document:  { name: 'Document',  hint: 'the whole document, read from its first line up to here' },
+  section:   { name: 'Section',   hint: 'this chapter / section, read from its start up to here' },
+  paragraph: { name: 'Paragraph', hint: 'this paragraph, read up to here' },
+  sentence:  { name: 'Sentence',  hint: 'the line itself — the irreducible holon' },
+};
+
+/* The integral-fold lens. At the clicked sentence (the cursor) it shows the
+   nest of containing holons — document ⊃ chapter ⊃ paragraph ⊃ sentence — each
+   folded CUMULATIVELY up to the cursor, the way an integral accumulates along
+   its path. The depth dial sets how far the nest unfolds: 0 is just the whole-
+   document integral (the standing overview), and each step zooms in toward the
+   line. The fold is mechanical — window.EOEngine.holonicFold — no model phrases
+   it; rung 0 is exactly the integral fold documentFold computes. */
+function FoldLens({ doc, cursor, depth, onDepth, onJump }) {
+  const ladder = React.useMemo(
+    () => (cursor == null || !window.EOEngine.holonicFold ? null : window.EOEngine.holonicFold(doc, cursor)),
+    [doc.id, cursor]
+  );
+  if (!ladder) {
+    return (
+      <aside className="fold-lens" aria-label="Integral fold">
+        <div className="fl-head"><Icon name="layers" size={15} /> <span>Integral fold</span></div>
+        <div className="fl-empty">
+          Click any sentence to read the document’s <b>integral fold</b> — its cumulative,
+          mechanical reading from the start up to that point — then turn the <b>holonic depth</b>
+          dial to zoom from the whole document down to the chapter, the paragraph, and the line.
+        </div>
+      </aside>
+    );
+  }
+  const maxD = ladder.maxDepth;
+  const shown = Math.max(0, Math.min(depth, maxD));
+  const rungs = ladder.rungs.slice(0, shown + 1);
+  const crumb = rungs.map(r => HOLON_LEVEL[r.level].name).join(' › ');
+  return (
+    <aside className="fold-lens" aria-label="Integral fold">
+      <div className="fl-head">
+        <Icon name="layers" size={15} /> <span>Integral fold</span>
+        <button className="fl-cursor" title="scroll to this sentence" onClick={() => onJump(ladder.cursor)}>at s{ladder.cursor}</button>
+      </div>
+      <div className="fl-quote" title="scroll to this sentence" onClick={() => onJump(ladder.cursor)}>“{ladder.cursorText}”</div>
+      <div className="fl-depth">
+        <label htmlFor="fl-depth-range">Holonic depth</label>
+        <input id="fl-depth-range" type="range" min="0" max={maxD} value={shown} step="1"
+               onChange={e => onDepth(parseInt(e.target.value, 10))}
+               disabled={maxD === 0} aria-label="Holonic depth" />
+        <span className="fl-num">{shown}<span className="fl-den"> / {maxD}</span></span>
+      </div>
+      <div className="fl-crumb">{crumb}</div>
+      <div className="fl-rungs">
+        {rungs.map(r => (
+          <div key={r.depth} className={'fl-rung lvl-' + r.level} style={{ marginLeft: r.depth * 12 }}>
+            <div className="fl-rung-head" title={HOLON_LEVEL[r.level].hint}>
+              <span className="fl-level">{HOLON_LEVEL[r.level].name}{r.level === 'section' && r.label ? ' · ' + r.label : ''}</span>
+              <button className="fl-scope" title="scroll to where this reading begins" onClick={() => onJump(r.start)}>
+                {r.count > 1 ? 's' + r.start + '–s' + (r.end - 1) + ' · ' + r.count + ' sentences' : 's' + r.start}
+              </button>
+            </div>
+            <div className="fl-rung-body">{r.fold ? r.fold : <span className="fl-thin">— nothing folded yet at this scope —</span>}</div>
+          </div>
+        ))}
+      </div>
+    </aside>
   );
 }
 
@@ -400,6 +492,10 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
                   explore, onToggleExplore, onEntity, activeEntity, flashSent, onCite, tableSpec,
                   savedViews, onApplyView, onSaveView, onDeleteView,
                   allDocs, model, modelReady, onEnsureModel, onCompositionEvent }) {
+  // The integral-fold lens toggle (prose only). Local + session-scoped: it
+  // persists across tab switches (DocPane stays mounted) but, unlike Explore,
+  // isn't written to prefs — the cursor it reads is per-document anyway.
+  const [foldOn, setFoldOn] = React.useState(false);
   const resolve = (id) => {
     if (id.startsWith('@ent/')) {
       const [, docId, ...rest] = id.split('/'); return { kind: 'entity', doc: docsById[docId], name: decodeURIComponent(rest.join('/')) };
@@ -433,6 +529,12 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
               <Icon name="sparkle" size={15} /> Explore
             </button>
           )}
+          {cur && cur.kind === 'prose' && (
+            <button className={'doc-tool' + (foldOn ? ' on' : '')} onClick={() => setFoldOn(v => !v)}
+                    title="Click a sentence to read the integral fold up to it, at any holonic depth">
+              <Icon name="layers" size={15} /> Fold
+            </button>
+          )}
         </div>
       </div>
       {!cur ? <div className="empty-doc">No document open</div>
@@ -442,9 +544,9 @@ function DocPane({ openTabs, activeTab, docsById, onActivate, onClose, layout, o
         : cur.kind === 'composition' ? (window.CompositionView
             ? <window.CompositionView key={cur.doc.id} doc={cur.doc} onAppend={onCompositionEvent} model={model} modelReady={modelReady} onEnsureModel={onEnsureModel} allDocs={allDocs || []} onCite={onCite} />
             : <div className="empty-doc">Composition layer not loaded.</div>)
-        : <ProseDoc key={cur.doc.id} doc={cur.doc} explore={explore} onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={onCite} />}
+        : <ProseDoc key={cur.doc.id} doc={cur.doc} explore={explore} foldLens={foldOn} onEntity={onEntity} activeEntity={activeEntity} flashSent={flashSent} onCite={onCite} />}
     </aside>
   );
 }
 
-Object.assign(window, { DocPane, ProseDoc, TableDoc, EntityView, EntityModal, RecordPanel });
+Object.assign(window, { DocPane, ProseDoc, TableDoc, EntityView, EntityModal, RecordPanel, FoldLens });

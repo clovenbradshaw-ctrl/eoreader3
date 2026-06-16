@@ -213,6 +213,20 @@ to. A turn with no chapter reference gets the integral fold of the whole.
 Chapter boundaries are the same standalone-heading structure the rest of the
 reader leverages — "structure is what folds leverage."
 
+And the fold is **clickable**. Turn the **Fold** tool on (the document toolbar,
+beside Explore) and clicking any sentence sets a *cursor*: the integral-fold lens
+opens beside the prose with the document's cumulative reading up to that line,
+**unfolded along the nest of holons that contain it** — the whole document, then
+the chapter, then the paragraph, then the line itself. A document is a nest of
+wholes-that-are-also-parts, and each level has its own integral fold; the
+**holonic-depth** dial sets how far the nest opens. Depth 0 is the standing
+whole-document overview, and each step zooms in — the *same* fold operator
+(`holonicFold` → `documentFold` / `foldOver` / `_foldScope`) run over a
+progressively tighter containing scope, so rung 0 is *exactly* the integral fold
+and the sentence floor is the verbatim line. Mechanical and deterministic — no
+model phrases it (`tests/fold.test.js` pins the ladder and its tie back to the
+fold primitives; `tests/foldlens-render.smoke.js` pins the lens).
+
 ### The impression query (embedding as a fuzzy query into the graph)
 
 The embedder isn't a tangent generator — it's **another way to query the graph**:

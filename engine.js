@@ -10391,6 +10391,71 @@ function projectGraph(events, frame = {}) {
     return value;
   }
 
+  // The paragraph (render block) a sentence sits in: the contiguous [start, end)
+  // sentence range of the block whose own sentences include the cursor. Headings
+  // carry no sentences, so they are skipped; a cursor always lands in a 'p' block
+  // (rebuildBlocks never drops a sentence). Returns null only off-prose.
+  function paragraphOf(doc, c) {
+    for (const b of (doc.blocks || [])) {
+      if (b.type !== 'p' || !b.sentences || !b.sentences.length) continue;
+      const lo = b.sentences[0].i, hi = b.sentences[b.sentences.length - 1].i;
+      if (c >= lo && c <= hi) return { start: lo, end: hi + 1 };
+    }
+    return null;
+  }
+
+  // ── The holonic fold ────────────────────────────────────────────────────
+  // A document is a nest of wholes-that-are-also-parts (holons): the document
+  // contains chapters, a chapter contains paragraphs, a paragraph contains
+  // sentences. At ANY cursor (a sentence) the reader sits inside one holon at
+  // each level, and each of those holons has its OWN integral fold — the
+  // cumulative reading from that holon's first sentence up to the cursor.
+  //
+  // holonicFold returns that nest as a ladder, outermost → innermost:
+  //   depth 0  the document   — its reading from the very first line up to here
+  //   depth 1  the chapter    — this section's reading up to here   (if any)
+  //   depth 2  the paragraph  — this paragraph's reading up to here  (if it adds one)
+  //   depth …  the sentence   — the verbatim line (the irreducible holon)
+  // Increasing the depth "zooms in": the SAME integral-fold operator (_foldScope,
+  // the one documentFold/foldOver run) over a progressively tighter containing
+  // holon, so rung 0's prose is exactly documentFold(doc, cursor+1). Pure read,
+  // deterministic, no model — the whole fold family's contract.
+  //
+  // `maxDepth` caps how far the ladder unfolds (null ⇒ the full nest). A holon
+  // whose scope would not strictly tighten its parent's (a chapter that starts
+  // the document, a paragraph that starts the chapter) is dropped, so no two
+  // rungs repeat the same fold and the depths index real structural levels; the
+  // verbatim sentence floor is always the last rung.
+  function holonicFold(doc, cursor, maxDepth) {
+    if (!doc || doc.kind !== 'prose') return null;
+    const texts = doc.sentenceTexts || [];
+    const n = texts.length;
+    if (!n) return null;
+    const c = cursor == null ? n - 1 : Math.max(0, Math.min(n - 1, cursor | 0));
+
+    // the containing holons, outermost (the whole) → innermost (the line), each
+    // kept only when it strictly tightens the scope started by the one before it
+    const kept = [{ level: 'document', label: doc.name || 'the document', start: 0 }];
+    const tighten = (h) => { if (h.start > kept[kept.length - 1].start) kept.push(h); };
+    const sec = foldSections(doc).find(s => c >= s.start && c < s.end);
+    if (sec && sec.start < c) tighten({ level: 'section', label: String(sec.label), start: sec.start });
+    const para = paragraphOf(doc, c);
+    if (para && para.start < c) tighten({ level: 'paragraph', label: 'this paragraph', start: para.start });
+    kept.push({ level: 'sentence', label: 'this sentence', start: c });   // the verbatim floor
+
+    const maxD = kept.length - 1;
+    const cap = maxDepth == null ? maxD : Math.max(0, Math.min(maxD, maxDepth | 0));
+    const rungs = [];
+    for (let d = 0; d <= cap; d++) {
+      const h = kept[d];
+      const fold = h.level === 'sentence'
+        ? String(texts[c] || '').trim()
+        : _foldScope(doc, (i) => i != null && i >= h.start && i <= c);
+      rungs.push({ depth: d, level: h.level, label: h.label, start: h.start, end: c + 1, count: c - h.start + 1, fold });
+    }
+    return { cursor: c, cursorText: String(texts[c] || '').trim(), depth: cap, maxDepth: maxD, rungs };
+  }
+
   // The nine-cell terrain histogram for a scope. Walk the events the predicate
   // admits, address each to its Site (Domain × Time) via eoSiteOfEvent, bucket
   // into the grid. Each cell carries the events it received (sorted heaviest
@@ -14411,6 +14476,12 @@ function projectGraph(events, frame = {}) {
     // about" and rides every grounded turn; a chapter question gets the fold up
     // to where the next chapter begins.
     documentFold, documentFolds, foldForQuery, foldNote, foldOver,
+    // the holonic fold: at a cursor, the nest of containing holons (document ⊃
+    // chapter ⊃ paragraph ⊃ sentence) each folded cumulatively up to the cursor
+    // — the integral fold "at a given cursor, to a given degree of holonic
+    // depth". Rung 0 is exactly documentFold(doc, cursor+1); deeper rungs run
+    // the same operator over a tighter scope. paragraphOf maps a cursor → block.
+    holonicFold, paragraphOf,
     // the column-balanced fold (READING_RULES.fold_column_balanced, default
     // OFF): the cursor-scoped digest as a pure structured object, its prose
     // renderer, the sentence-level apparatus gate, and the operator→cell map.

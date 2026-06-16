@@ -139,6 +139,42 @@ const gistsOf = (obj) => [...obj.events, ...obj.ground].map(e => e.gist).join(' 
   const jp = await E.parseDocument('jp.txt', fs.readFileSync(corpus('akutagawa_rashomon.txt'), 'utf8'), 'jp');
   ok(typeof E.renderFoldDigest(E.foldObject(jp, null)) === 'string', 'non-English: fold renders a string (no crash)');
 
+  // ── THE HOLONIC FOLD: the integral fold "at a given cursor, to a given degree
+  //    of holonic depth" — the nest of containing holons (document ⊃ chapter ⊃
+  //    paragraph ⊃ sentence), each folded CUMULATIVELY up to the cursor. Pins
+  //    the ladder shape, the nesting, and the exact tie back to the existing
+  //    documentFold / foldOver primitives. The invariants hold under either
+  //    flag; run on the shipped default (OFF). ──
+  flag(false);
+  {
+    const hodC = Math.floor(hodN * 0.6);
+    const hf = E.holonicFold(hod, hodC);
+    ok(hf && Array.isArray(hf.rungs) && hf.rungs.length >= 2, 'holonic: returns a ladder of ≥2 rungs');
+    ok(hf.rungs[0].level === 'document' && hf.rungs[hf.rungs.length - 1].level === 'sentence',
+       'holonic: outermost rung is the document, innermost is the sentence');
+    // rung 0 IS the integral fold up to the cursor — the existing primitive, exactly
+    ok(hf.rungs[0].fold === E.documentFold(hod, hodC + 1),
+       'holonic: rung 0 === documentFold(doc, cursor+1) (the integral fold itself)');
+    // every rung folds up to the cursor; the scopes nest (starts non-decreasing)
+    ok(hf.rungs.every(r => r.end === hodC + 1), 'holonic: every rung folds up to the cursor');
+    let nested = true;
+    for (let i = 1; i < hf.rungs.length; i++) if (hf.rungs[i].start < hf.rungs[i - 1].start) nested = false;
+    ok(nested, 'holonic: each deeper rung is contained by the one above it (start non-decreasing)');
+    // a chapter rung, when present, is the SAME fold operator over its own range
+    const sec = hf.rungs.find(r => r.level === 'section');
+    if (sec) {
+      const range = []; for (let i = sec.start; i <= hodC; i++) range.push(i);
+      ok(sec.fold === E.foldOver(hod, range), 'holonic: the chapter rung === foldOver(its range) (same operator, tighter scope)');
+    }
+    // the sentence floor is the verbatim line, not a synthesized fold
+    ok(hf.rungs[hf.rungs.length - 1].fold === hf.cursorText && hf.cursorText === String(hod.sentenceTexts[hodC]).trim(),
+       'holonic: the sentence rung is the verbatim line');
+    // depth cap, cursor clamp, and the off-prose / empty guards
+    ok(E.holonicFold(hod, hodC, 0).rungs.length === 1, 'holonic: maxDepth=0 yields just the document rung');
+    ok(E.holonicFold(hod, 1e9).cursor === hodN - 1, 'holonic: an out-of-range cursor clamps to the last sentence');
+    ok(E.holonicFold({ kind: 'table' }, 0) === null && E.holonicFold(null, 0) === null, 'holonic: null off-prose / on a non-doc');
+  }
+
   flag(false);   // leave the engine on the parity floor for any later loader
   console.log(`fold.test: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
