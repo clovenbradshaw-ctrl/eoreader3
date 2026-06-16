@@ -3074,6 +3074,30 @@ function App() {
     let ctx = '', parts = null;
     if (wantsBlob) {
       ctx = window.EOEngine.contextScope(scope, q, 6);
+      // FOLD-AS-ANSWER (fold_column_balanced; default OFF ⇒ parity): a summary
+      // turn is answered from the PRE-COMPUTED digest, not re-derived by the model
+      // over the fold PLUS ~16 raw spans. Hand it the rendered digest (~150–300
+      // tokens) + ≤3 de-chromed anchor spans for citation binding, so the prefill
+      // is small and the model only phrases. The digest's token count rides the
+      // trace so the prompt size is visible per turn.
+      try {
+        if (task === 'summary' && window.EOEngine.foldColumnBalancedEnabled && window.EOEngine.foldColumnBalancedEnabled()) {
+          const pdoc = (scope || []).find(d => d && d.kind === 'prose');
+          const digest = pdoc ? window.EOEngine.renderFoldDigest(window.EOEngine.foldObject(pdoc)) : '';
+          if (digest) {
+            const obj = window.EOEngine.foldObject(pdoc), texts = pdoc.sentenceTexts || [];
+            const anchorIdx = [], seenIdx = new Set();
+            for (const e of (obj.events || [])) {
+              const i = e.sentence_idx;
+              if (anchorIdx.length >= 3) break;
+              if (i != null && i >= 0 && i < texts.length && !seenIdx.has(i) && !window.EOEngine.isApparatusSentence(pdoc, i)) { seenIdx.add(i); anchorIdx.push(i); }
+            }
+            const anchors = anchorIdx.map(i => `[s${i}] ${texts[i]}`).join('\n');
+            ctx = `What the whole document is about: ${digest}` + (anchors ? '\n\n' + anchors : '');
+            AUD('step', 'digest', { tokens: (digest.match(/\S+/g) || []).length, anchors: anchorIdx, degenerate: obj.fold_degenerate || null, engine: 'fold-column-balanced' });
+          }
+        }
+      } catch (e) { eoWarn('summary-digest', e); }
     } else if (hasSemantic) {
       parts = window.EOEngine.partsFromHits(scope, semanticHits);
     } else if (useSeek) {
