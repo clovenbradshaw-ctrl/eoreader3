@@ -9396,29 +9396,50 @@ function projectGraph(events, frame = {}) {
     }
     return out.join('').trim();
   }
-  // The structural sample a summary reads from, as sentence indices: the first
-  // sentence of every paragraph, the opening three, the closing two — title
-  // chrome ("Heart of Darkness", "Contents", "I  II  III": short, no terminal
-  // punctuation) dropped because it costs slots the model should spend on prose
-  // (falls back to unfiltered picks if the filter would empty them) — sorted and
-  // capped at 16. Factored out of salientContext so the audit can report the
-  // passages that ACTUALLY fed a summary, not a lexical match on a query
-  // ("summarize this") that has no lexical home in the prose.
-  function salientPicks(doc) {
+  // The structural sample a summary reads from, as sentence indices, spread
+  // EVENLY across the document body so the picks span the whole reading rather
+  // than just its opening. Candidates are the first sentence of every paragraph
+  // (the lines a reader's eye lands on); two filters drop what a summary should
+  // never be anchored on:
+  //   • chrome — short, unpunctuated headings ("Heart of Darkness", "Contents",
+  //     "I  II  III") — costs slots the model should spend on prose;
+  //   • apparatus — the Gutenberg license / front-matter and the metadata header
+  //     lines ("Title:", "Author:", "Language:") — a summary anchored on the
+  //     license boilerplate is neither succinct nor about the document.
+  // A small cap keeps the grounded prompt small: the integral fold already
+  // carries the overview, so these are just a handful of concrete, citable
+  // anchors, not the summary itself. The picks USED to be the first sixteen
+  // leads — sorted then sliced — which on a long book are all drawn from the
+  // first page (the closing two never survived the slice), and on a Gutenberg
+  // text the opening three were the license header. Falls back to any usable
+  // sentence when a document has no paragraph structure, and to the raw leads
+  // only if every lead filtered out. Factored out of salientContext so the audit
+  // reports the passages that ACTUALLY fed a summary, not a lexical match on a
+  // query ("summarize this") that has no lexical home in the prose.
+  const SUMMARY_SAMPLE_CAP = 8;
+  function salientPicks(doc, k = SUMMARY_SAMPLE_CAP) {
+    const texts = doc.sentenceTexts || [];
     const isChrome = (i) => {
-      const s = String(doc.sentenceTexts[i] == null ? '' : doc.sentenceTexts[i]).trim();
+      const s = String(texts[i] == null ? '' : texts[i]).trim();
       return s.length < 60 && !/[.!?…"”'’)]$/.test(s);
     };
-    const picks = new Set();
-    const add = (i) => { if (!isChrome(i)) picks.add(i); };
-    for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) add(b.sentences[0].i);
-    [0, 1, 2].forEach(i => doc.sentences[i] && add(doc.sentences[i].i));
-    const n = doc.sentences.length; [n - 1, n - 2].forEach(i => i >= 0 && doc.sentences[i] && add(doc.sentences[i].i));
-    if (!picks.size) {
-      for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) picks.add(b.sentences[0].i);
-      [0, 1, 2].forEach(i => doc.sentences[i] && picks.add(doc.sentences[i].i));
-    }
-    return [...picks].sort((a, b) => a - b).slice(0, 16);
+    const usable = (i) => i != null && !isChrome(i) && !isApparatusSentence(doc, i);
+    const leads = [];
+    for (const b of doc.blocks) if (b.type === 'p' && b.sentences.length) leads.push(b.sentences[0].i);
+    let pool = leads.filter(usable);
+    if (!pool.length) pool = texts.map((_, i) => i).filter(usable);   // no paragraph structure
+    if (!pool.length) pool = leads.slice();                           // every lead was chrome/apparatus
+    pool = [...new Set(pool)].sort((a, b) => a - b);
+    // prefer lines that carry a real clause over a bare "How true!" / "I've read
+    // it." — but only when enough remain to still span the document
+    const substantive = pool.filter(i => String(texts[i] == null ? '' : texts[i]).trim().length >= 40);
+    if (substantive.length >= k) pool = substantive;
+    if (pool.length <= k) return pool;
+    // even stride from the first usable line to the last, so the sample spans the
+    // whole document instead of clustering at its start
+    const out = [];
+    for (let j = 0; j < k; j++) out.push(pool[Math.round(j * (pool.length - 1) / (k - 1))]);
+    return [...new Set(out)].sort((a, b) => a - b);
   }
   function salientContext(doc, query) {
     // Lead with the FOLD in the reader's voice — the integral fold of the whole
@@ -9814,6 +9835,37 @@ function projectGraph(events, frame = {}) {
     return out;
   }
 
+  // The section labels a fold's scope touches, with apparatus dropped — a
+  // metadata header line ("Author: …", "Language: English") or a license-tail
+  // section is never a chapter. The opener is the earliest in-scope CONCRETE,
+  // NON-apparatus line — a genuine anchor for the gist (and for citation
+  // binding), never the Gutenberg license boilerplate. Both fold builders
+  // (the legacy prose fold _foldScope and the column-balanced digest
+  // _foldObjectScope) read through these, so they filter chrome identically:
+  // they had drifted — the legacy spine leaked the Gutenberg header as the
+  // document's "chapters" and the legacy opener led with the license text —
+  // and a fold meant to be a succinct reading was neither succinct nor
+  // accurate. Inert on a non-Gutenberg document (isApparatusSentence and the
+  // field regex match only real apparatus), so the legacy output is unchanged
+  // there (the parity floor).
+  function _foldSpine(doc, inScope) {
+    return foldSections(doc).filter(s => {
+      if (_APPARATUS_FIELD_RE.test(String(s.label)) || /gutenberg|full license|public domain/i.test(String(s.label))) return false;
+      if (isApparatusSentence(doc, s.start)) return false;     // a section that opens in the license tail
+      for (let i = s.start; i < s.end; i++) if (inScope(i)) return true;
+      return false;
+    }).map(s => s.label).slice(0, 8);
+  }
+  function _foldOpener(doc, inScope) {
+    const texts = doc.sentenceTexts || [];
+    for (let i = 0; i < texts.length; i++) {
+      if (!inScope(i) || isApparatusSentence(doc, i)) continue;
+      const t = String(texts[i] || '').trim();
+      if (t.length >= 40 && /[.!?…"”'’)]$/.test(t)) return t;
+    }
+    return '';
+  }
+
   // ════════════════════════════════════════════════════════════════════════
   // COLUMN-BALANCED FOLD (READING_RULES.fold_column_balanced; default OFF).
   // The fold as a cursor-scoped reading primitive: at ANY scope predicate, a
@@ -10135,8 +10187,6 @@ function projectGraph(events, frame = {}) {
   // The pure, no-model structured digest — the cursor-scoped reading, balanced
   // across the grid by construction. Same graph + same RULES_REV ⇒ deep-equal.
   function _foldObjectScope(doc, inScope) {
-    const texts = doc.sentenceTexts || [];
-    const n = texts.length;
     const figures = _foldFigures(doc, inScope, 5);
     const figKeys = new Set(figures.map(f => f.key));
     const protagKey = figures.length ? figures[0].key : null;   // heaviest in-window figure
@@ -10155,19 +10205,10 @@ function projectGraph(events, frame = {}) {
       assertions.push({ name: (figures.find(f => f.key === k) || {}).name, is: String(ev.value) });
       if (assertions.length >= 4) break;
     }
-    const spine = foldSections(doc).filter(s => {
-      if (_APPARATUS_FIELD_RE.test(String(s.label)) || /gutenberg|full license|public domain/i.test(String(s.label))) return false;
-      if (isApparatusSentence(doc, s.start)) return false;     // a section that opens in the license tail
-      for (let i = s.start; i < s.end; i++) if (inScope(i)) return true; return false;
-    }).map(s => s.label).slice(0, 8);
+    const spine = _foldSpine(doc, inScope);
     // opener: the earliest in-scope concrete NON-apparatus line — a genuine
     // anchor for citation binding, never the lead (the prose leads event-first).
-    let opener = '';
-    for (let i = 0; i < n; i++) {
-      if (!inScope(i) || isApparatusSentence(doc, i)) continue;
-      const t = String(texts[i] || '').trim();
-      if (t.length >= 40 && /[.!?…"”'’)]$/.test(t)) { opener = t; break; }
-    }
+    const opener = _foldOpener(doc, inScope);
     // The "something happens" invariant: a Structure-row or Existence·Ground
     // event in scope but an all-figure digest is MALFORMED — flag it so the
     // regression is catchable, not silent.
@@ -10240,8 +10281,7 @@ function projectGraph(events, frame = {}) {
   // set instead of a range.
   function _foldScope(doc, inScope) {
     if (!doc || doc.kind !== 'prose') return '';
-    const texts = doc.sentenceTexts || [];
-    const n = texts.length;
+    const n = (doc.sentenceTexts || []).length;
     if (!n) return '';
     // Column-balanced digest (behind the parity-floor flag). OFF ⇒ never
     // consulted; the legacy Figure-only fold below is byte-identical.
@@ -10267,19 +10307,13 @@ function projectGraph(events, frame = {}) {
       if (asserts.length >= 4) break;
     }
 
-    // section labels whose span the scope touches
-    const spine = foldSections(doc).filter(s => {
-      for (let i = s.start; i < s.end; i++) if (inScope(i)) return true;
-      return false;
-    }).map(s => s.label).slice(0, 8);
+    // section labels whose span the scope touches — apparatus dropped, so a
+    // Gutenberg metadata header line is never read back as a "chapter"
+    const spine = _foldSpine(doc, inScope);
 
-    // the earliest in-scope line, so the gist has something concrete to hold
-    let opener = '';
-    for (let i = 0; i < n; i++) {
-      if (!inScope(i)) continue;
-      const t = String(texts[i] || '').trim();
-      if (t.length >= 40 && /[.!?…"”'’)]$/.test(t)) { opener = t; break; }
-    }
+    // the earliest in-scope CONCRETE, non-apparatus line, so the gist has
+    // something to hold — never the license boilerplate the front matter opens on
+    const opener = _foldOpener(doc, inScope);
 
     return prosifyFold({ figures: heavy.map(e => e.name), asserts, spine, opener });
   }

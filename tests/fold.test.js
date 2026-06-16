@@ -40,6 +40,27 @@ const gistsOf = (obj) => [...obj.events, ...obj.ground].map(e => e.gist).join(' 
   flag(false);
   ok(E.documentFold(voss, vn) === offFold, 'parity: OFF after a toggle is byte-identical to OFF before');
 
+  // ── APPARATUS LEAK (legacy fold, flag OFF — the default the user sees): the
+  //    integral fold a summary leans on must NOT open with the Gutenberg license
+  //    or read the metadata header back as the document's "chapters", and the
+  //    summary sample must not anchor on the front matter. The column-balanced
+  //    builder already filtered these; the legacy builder had drifted, so a fold
+  //    meant to be a succinct summary was neither succinct nor about the book. ──
+  const hod = await E.parseDocument('pg219.txt', fs.readFileSync(corpus('pg219.txt'), 'utf8'), 'pg219');
+  const hodN = hod.sentenceTexts.length;
+  const hodFold = E.documentFold(hod, hodN);
+  ok(!/Project Gutenberg|This eBook is for the use|www\.gutenberg/i.test(hodFold), 'legacy fold: the opener is the story, not the Gutenberg license');
+  ok(!/\b(?:Title|Author|Language|Credits|Release date):/i.test(hodFold), 'legacy fold: no metadata-header line is read back as a chapter');
+  ok(/It opens: “The Nellie/.test(hodFold), 'legacy fold: opens on the real first line of Heart of Darkness');
+  ok(/Kurtz|Marlow/.test(hodFold), 'legacy fold: still names the book\'s figures');
+  // The summary sample (salientPicks via blobHits): capped small, apparatus-free,
+  // and spread across the WHOLE document — it used to be the first 16 leads (all
+  // from the opening, the first three of them the license header on a Gutenberg).
+  const hodPicks = E.blobHits([hod], 'summarize this');
+  ok(hodPicks.length > 0 && hodPicks.length <= 8, 'summary sample: capped small (≤ 8), not 16');
+  ok(hodPicks.every(h => !E.isApparatusSentence(hod, h.i)), 'summary sample: no apparatus among the picks');
+  ok(Math.max(...hodPicks.map(h => h.i)) > hodN * 0.4, 'summary sample: spans the whole document, not just the opening');
+
   // everything below runs with the flag ON
   flag(true);
 

@@ -670,6 +670,13 @@ group('gutenberg — header metadata + a cleaned cast', () => {
   const about = E.answer(gbook, "what's the book about?");
   ok(/Raskolnikov/.test(about.text) && /Sonia/.test(about.text), 'the summary names the real figures');
   ok(!/Gutenberg|Dostoyevsky|Garnett|English/i.test(about.text), '…and not the apparatus (boilerplate, author, translator, language)');
+  // The integral fold a summary leans on is apparatus-free too: it opens on the
+  // first body line, never the license, and reads no header field as a chapter.
+  // (The legacy prose fold once led with the license and listed "Author:" /
+  // "Language:" as the document's sections; this pins that closed.)
+  const gfold = E.documentFold(gbook, (gbook.sentenceTexts || []).length);
+  ok(!/Project Gutenberg|This eBook|Author:|Language:|registered trademark/i.test(gfold), 'the integral fold carries no apparatus (license, header fields)');
+  ok(/On an exceptionally hot evening/.test(gfold), '…and opens on the first body sentence');
   // supportProbeTerms: an evidence re-read's probe is the reply's substance, with
   // markup, the document's title/author tokens, and generic book-words stripped —
   // so it pins the passages instead of the title-page chrome.
