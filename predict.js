@@ -247,6 +247,33 @@
     };
   }
 
+  // The CHECKPOINTS the live reading pauses at. Playing every span flies by too
+  // fast to follow, so the modal stops only at the moments worth narrating: the
+  // opening (where the reading takes its bearings), the strongest SURPRISES (where
+  // the document broke from what was expected), the close, and a few evenly-spread
+  // spans so the walk still reads as moving through the whole text. Deterministic
+  // and capped — `max` beats, sorted back into reading order. A short doc returns
+  // all its spans; a long one, a curated few.
+  function pickCheckpoints(spans, opts) {
+    opts = opts || {};
+    const max = Math.max(2, opts.max || 6);
+    const usable = (spans || []).filter(s => s && typeof s.t === 'string' && s.t.trim());
+    if (usable.length <= max) return usable.slice();
+    const chosen = new Map();                           // i → span, deduped by index
+    const add = s => { if (s && !chosen.has(s.i) && chosen.size < max) chosen.set(s.i, s); };
+    add(usable[0]);                                     // the opening — first bearings
+    // the strongest surprises, capped so coherence beats and the close still fit
+    const ruptures = usable.filter(s => s.sign === 'rupture').sort((a, b) => (b.surprise || 0) - (a.surprise || 0));
+    const rCap = Math.min(ruptures.length, Math.max(1, max - 3));
+    for (let k = 0; k < rCap; k++) add(ruptures[k]);
+    add(usable[usable.length - 1]);                     // the close
+    // fill any remaining budget with evenly-spaced spans (the walk-through)
+    for (let f = 1; f < max - 1 && chosen.size < max; f++) {
+      add(usable[Math.round(f * (usable.length - 1) / (max - 1))]);
+    }
+    return [...chosen.values()].sort((a, b) => a.i - b.i);
+  }
+
   // Orchestration for the live unfold. Tier 0 (mechanical) always runs — no
   // model, no download — so the reading plays even with no embedder. If the
   // embedder is present, the semantic channel is fused in (a bounded prefix so a
@@ -266,6 +293,7 @@
     const spans = timeline.map(r => Object.assign({ t: texts[r.i] || '' }, r));
     return {
       spans,
+      checkpoints: pickCheckpoints(spans, { max: opts.checkpoints || 6 }),
       summary: summarize(timeline),
       total: texts.length,
       capped: n < texts.length ? n : null,
@@ -280,7 +308,7 @@
 
   const EOPredict = {
     SiteKind, CONFIRM_FLOOR, GATE_FLOOR, EXPECT_HALFLIFE, BASELINE_WINDOW, BASELINE_MIN, Z_SPIKE, MECH_WEIGHTS,
-    expectation, siteKinds, mechanicalRaw, rollingZ, buildTimeline, summarize, buildPlayback,
+    expectation, siteKinds, mechanicalRaw, rollingZ, buildTimeline, summarize, pickCheckpoints, buildPlayback,
     _dot: dot, _unit: unit,
   };
   if (typeof window !== 'undefined') window.EOPredict = EOPredict;

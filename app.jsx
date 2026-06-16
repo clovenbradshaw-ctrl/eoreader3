@@ -1013,14 +1013,15 @@ function App() {
     // its (heuristic) confidence, device/precision — for the audit and so the
     // doc remembers it was machine-read, not typed.
     if (opts.provenance) doc._provenance = opts.provenance;
-    // Always commit a new document and make it an available source — the user
-    // explicitly added it and nothing else will reproduce it. It is added as a
-    // tab too, but it NO LONGER seizes the stage: the reading modal presents the
-    // finished read and the reader chooses where it goes (bring into chat · open
-    // document). Only the busy flag / live session belong to the newest parse.
+    // Always commit a new document to the library — the user explicitly added it
+    // and nothing else will reproduce it — and open it as a tab. But it is NOT
+    // used yet: the content joins the chat's source set only once the reading has
+    // SETTLED (readingSettled, fired from the modal), never the instant it parses.
+    // A reader who closes the modal mid-read leaves the doc in the library, unbrought
+    // into chat — which is the whole point of the modal: the reader chooses where
+    // it goes (bring into chat · open document), it no longer slips in silently.
     setDocs(ds => [...ds, doc]);
     setOpenTabs(t => t.includes(id) ? t : [...t, id]);
-    addSource(id);
     if (doc.kind === 'prose') setExplore(true);
     setTableSpec(null);
     if (tok === ingestTok.current) { setBusy(false); }
@@ -1033,7 +1034,7 @@ function App() {
     if (tok === ingestTok.current) {
       if (readingDismiss.current) {
         setReadingSession(null);
-        showToast('Added “' + name + '” · ' + doc.meta + (opts.sourceLabel ? ' · ' + opts.sourceLabel : ''));
+        showToast('“' + name + '” is in your library · ' + doc.meta + (opts.sourceLabel ? ' · ' + opts.sourceLabel : ''));
       } else {
         readingDocRef.current = doc;
         const base = window.makeReadingResult(doc);
@@ -1072,6 +1073,14 @@ function App() {
     setLayout('chat');
     closeReading();
   }, [closeReading]);
+  // The reading has SETTLED (it played through, or the reader skipped to the
+  // read): only now is the content "used" — quietly added to the chat's source
+  // set. This is the deferred half of the eager addSource we dropped at parse:
+  // the doc becomes usable the moment the reading is done, and not a beat before.
+  const readingSettled = useCallback(() => {
+    const doc = readingDocRef.current;
+    if (doc) addSource(doc.id);
+  }, []);
   const readingIntoDoc = useCallback(() => {
     const doc = readingDocRef.current;
     if (doc) {
@@ -4958,7 +4967,7 @@ function App() {
       {dragOver && <div className="drop-veil"><div className="drop-card"><Icon name="upload" size={26} /> Drop to read</div></div>}
       {(readingSession || readingResult) && window.ReadingModal && (
         <window.ReadingModal session={readingSession} result={readingResult}
-          onOpenChat={readingIntoChat} onOpenDoc={readingIntoDoc} onClose={closeReading} />
+          onOpenChat={readingIntoChat} onOpenDoc={readingIntoDoc} onClose={closeReading} onSettled={readingSettled} />
       )}
       {ingestStatus && (() => {
         const easing = !!ingestStatus.easing;

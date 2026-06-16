@@ -121,6 +121,25 @@ ok(P.expectation([v(1, 0)], 0) === null, 'no expectation at the opening span');
   ok(!sk.has(1), 'the first speaker, with nothing before it, is not a boundary');
 }
 
+// ── pickCheckpoints: curate the moments the live reading pauses at ───────────
+{
+  const mk = (i, sign, surprise) => ({ i, t: 'sentence ' + i, sign, surprise });
+  // a short doc keeps every span — nothing to curate
+  const few = [mk(0, 'coherence', 0), mk(1, 'coherence', 0.3), mk(2, 'rupture', 2.4)];
+  ok(P.pickCheckpoints(few, { max: 6 }).length === 3, 'a short doc returns all its spans as checkpoints');
+
+  // a long doc curates down to the cap, in reading order, including the surprises
+  const many = [];
+  for (let i = 0; i < 40; i++) many.push(mk(i, i === 7 || i === 31 ? 'rupture' : 'coherence', i === 7 ? 3.1 : i === 31 ? 2.2 : 0.2));
+  const cps = P.pickCheckpoints(many, { max: 6 });
+  ok(cps.length === 6, 'a long doc is curated to the cap');
+  ok(cps.every((c, k) => k === 0 || c.i > cps[k - 1].i), 'checkpoints are sorted back into reading order');
+  ok(cps[0].i === 0 && cps[cps.length - 1].i === 39, 'the opening and the close are always kept');
+  const idxs = cps.map(c => c.i);
+  ok(idxs.includes(7) && idxs.includes(31), 'the strongest surprises are always among the checkpoints');
+  ok(JSON.stringify(P.pickCheckpoints(many, { max: 6 }).map(c => c.i)) === JSON.stringify(idxs), 'selection is deterministic');
+}
+
 console.log(`\npredict: ${pass} passed, ${fail} failed`);
 if (fail) { console.error('\nFAILURES:\n - ' + fails.join('\n - ')); process.exit(1); }
 process.exit(0);
