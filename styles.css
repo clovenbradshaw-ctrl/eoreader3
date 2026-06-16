@@ -1453,6 +1453,59 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--accent); 
   .reading-modal .rm-actions .rm-btn { flex: 1; justify-content: center; }
 }
 
+/* ── Predictive playback — the reading played forward span by span ─────────
+   The reading carries a forward expectation; each span lands as coherence (it
+   confirmed) or rupture (it broke from what was expected). The gauge is the
+   coefficient; the strip is the miss size over time. */
+.reading-modal .rm-playback { margin-top: 14px; }
+.reading-modal .rm-now {
+  padding: 14px 16px; background: var(--bg-sunken);
+  border: 1px solid var(--border); border-radius: var(--r); min-height: 96px;
+}
+.reading-modal .rm-delta { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.reading-modal .rm-sign {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: var(--r-pill); flex-shrink: 0;
+}
+.reading-modal .rm-sign.coherence { color: var(--accent); background: var(--accent-tint); }
+.reading-modal .rm-sign.rupture { color: #b35a16; background: #f6e7d6; }
+html[data-theme="dark"] .reading-modal .rm-sign.rupture { color: #e0823c; background: #3a2a18; }
+.reading-modal .rm-gauge { flex: 1; height: 5px; background: var(--bg-subtle); border-radius: 999px; overflow: hidden; }
+.reading-modal .rm-gauge-fill { height: 100%; border-radius: 999px; transition: width .25s cubic-bezier(.2,.8,.2,1); }
+.reading-modal .rm-coeff { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+/* which channel of the fusion fired — structure (Tier 0) vs semantic. */
+.reading-modal .rm-chan {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: var(--r-pill); flex-shrink: 0; border: 1px solid transparent;
+}
+.reading-modal .rm-chan.struct { color: var(--accent); border-color: var(--accent-tint-2); }
+.reading-modal .rm-chan.semantic { color: #8a6a16; border-color: #e7d8b0; }
+html[data-theme="dark"] .reading-modal .rm-chan.semantic { color: #d6b25a; border-color: #4a3d1c; }
+.reading-modal .rm-span {
+  margin: 0; font-size: 14px; line-height: 1.5; color: var(--text);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  animation: rm-span-in .22s ease;
+}
+.reading-modal .rm-span.rupture { color: var(--text); border-left: 2px solid #e0823c; padding-left: 11px; margin-left: -13px; }
+@keyframes rm-span-in { from { opacity: .25; transform: translateY(2px); } }
+.reading-modal .rm-strip {
+  display: flex; align-items: flex-end; gap: 2px; height: 34px; margin-top: 10px;
+  padding: 0 1px; overflow: hidden;
+}
+.reading-modal .rm-bar { flex: 1; min-width: 1px; background: var(--accent-tint-2); border-radius: 1px 1px 0 0; transition: height .2s ease; }
+.reading-modal .rm-bar.rupture { background: #e0823c; }
+.reading-modal .rm-bar.void { background: var(--border); }
+.reading-modal .rm-skip {
+  margin-top: 9px; border: 0; background: transparent; cursor: pointer;
+  font-size: 12px; color: var(--text-3); padding: 2px 0;
+}
+.reading-modal .rm-skip:hover { color: var(--accent); text-decoration: underline; }
+.reading-modal .rm-summary-note { color: var(--text-3); }
+
+@media (prefers-reduced-motion: reduce) {
+  .reading-modal .rm-span, .reading-modal .rm-gauge-fill, .reading-modal .rm-bar { animation: none; transition: none; }
+}
+
 /* The model popover slides up from the bottom edge as a sheet on phones. */
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
 
