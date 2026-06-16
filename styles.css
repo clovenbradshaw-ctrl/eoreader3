@@ -1473,6 +1473,14 @@ html[data-theme="dark"] .reading-modal .rm-sign.rupture { color: #e0823c; backgr
 .reading-modal .rm-gauge { flex: 1; height: 5px; background: var(--bg-subtle); border-radius: 999px; overflow: hidden; }
 .reading-modal .rm-gauge-fill { height: 100%; border-radius: 999px; transition: width .25s cubic-bezier(.2,.8,.2,1); }
 .reading-modal .rm-coeff { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+/* which channel of the fusion fired — structure (Tier 0) vs semantic. */
+.reading-modal .rm-chan {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: var(--r-pill); flex-shrink: 0; border: 1px solid transparent;
+}
+.reading-modal .rm-chan.struct { color: var(--accent); border-color: var(--accent-tint-2); }
+.reading-modal .rm-chan.semantic { color: #8a6a16; border-color: #e7d8b0; }
+html[data-theme="dark"] .reading-modal .rm-chan.semantic { color: #d6b25a; border-color: #4a3d1c; }
 .reading-modal .rm-span {
   margin: 0; font-size: 14px; line-height: 1.5; color: var(--text);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;

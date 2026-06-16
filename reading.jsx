@@ -67,19 +67,28 @@ function sampleSpans(spans, max) {
   return out;
 }
 
-/* The surprise strip — one bar per span, its height the miss size (delta
-   magnitude), amber where the reading ruptured. Watching it fill is watching
-   where the document defied what the reading expected. */
+/* Per-span surprise intensity for the strip + gauge, in [0,1]. Prefers the
+   fused z-scored surprise; falls back to the raw embedding miss when a span
+   carries only the older delta fields. */
+function spanLevel(s) {
+  if (s.surprise != null) return Math.max(0, Math.min(1, s.surprise / 3));   // z≈3 ⇒ full
+  if (s.coefficient != null) return Math.max(0, Math.min(1, (s.magnitude || 0) / 1.6));
+  return 0;
+}
+
+/* The surprise strip — one bar per span, its height the fused surprise, amber
+   where the reading ruptured. Watching it fill is watching where the document
+   defied what the reading-so-far predicted. */
 function SurpriseStrip({ spans }) {
   if (!spans || !spans.length) return null;
   return (
     <div className="rm-strip" aria-hidden="true">
       {spans.map((s, k) => {
-        const mag = s.coefficient == null ? 0 : (s.magnitude || 0);
-        const h = Math.max(6, Math.min(100, Math.round((mag / 1.6) * 100)));
-        const rupture = s.coefficient != null && s.sign === 'rupture';
-        return <span key={k} className={'rm-bar' + (rupture ? ' rupture' : '') + (s.coefficient == null ? ' void' : '')}
-          style={{ height: h + '%' }} />;
+        const lvl = spanLevel(s);
+        const rupture = s.sign === 'rupture';
+        const flat = s.surprise == null && s.coefficient == null;
+        return <span key={k} className={'rm-bar' + (rupture ? ' rupture' : '') + (flat ? ' void' : '')}
+          style={{ height: Math.max(6, Math.round(lvl * 100)) + '%' }} />;
       })}
     </div>
   );
@@ -275,13 +284,15 @@ function ReadingModal({ session, result, onOpenChat, onOpenDoc, onClose }) {
         {inPlayback ? (
           <div className="rm-playback">
             <div className="rm-now">
-              {cur && cur.coefficient != null && (
+              {cur && (cur.surprise != null || cur.coefficient != null) && (
                 <div className="rm-delta">
-                  <span className={'rm-sign ' + cur.sign}>{cur.sign === 'rupture' ? 'rupture' : 'coherence'}</span>
-                  <div className="rm-gauge" title="how true the expectation seemed (cosine)">
-                    <div className="rm-gauge-fill" style={{ width: Math.round(Math.max(0, Math.min(1, cur.coefficient)) * 100) + '%', background: DELTA_COLOR[cur.sign] }} />
+                  <span className={'rm-sign ' + cur.sign}>{cur.sign === 'rupture' ? 'surprise' : 'expected'}</span>
+                  <div className="rm-gauge" title="surprise above the local baseline">
+                    <div className="rm-gauge-fill" style={{ width: Math.round(spanLevel(cur) * 100) + '%', background: DELTA_COLOR[cur.sign] }} />
                   </div>
-                  <span className="rm-coeff" style={{ color: DELTA_COLOR[cur.sign] }}>{cur.coefficient.toFixed(2)}</span>
+                  {/* which channel flinched — the fusion, made legible */}
+                  {cur.struct && <span className="rm-chan struct" title="the graph moved unexpectedly">structure</span>}
+                  {cur.semantic && <span className="rm-chan semantic" title="the meaning turned with no structural change">semantic</span>}
                 </div>
               )}
               <p className={'rm-span' + (cur && cur.sign === 'rupture' ? ' rupture' : '')}>{cur ? cur.t : ''}</p>

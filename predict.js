@@ -42,6 +42,22 @@
   // makes the reading expect the local trajectory; a long one, the whole run.
   const EXPECT_HALFLIFE = 4;
 
+  // Local-baseline normalization (spec §Tier-1(b), applied to BOTH channels):
+  // surprise is deviation ABOVE a rolling local baseline, never an absolute. A
+  // genuine event spikes above its own neighborhood; a uniformly busy (or ornate)
+  // stretch has a high-but-flat baseline and produces no spike.
+  const BASELINE_WINDOW = 30;   // sentences in the trailing local baseline
+  const BASELINE_MIN = 8;       // need this many before a z-score means anything
+  const Z_SPIKE = 2;            // z at/above which a channel has "spiked"
+
+  // Tier 0 — mechanical surprise weights. The structural prediction errors the
+  // engine already computes: a fresh INS (a name arrived where none was
+  // extrapolated), a contested NUL stall (a referent that won't resolve — the
+  // shell-company case), a strained/contested SYN bind (it barely held), a fresh
+  // CON relation. The NUL stall is weighted highest: a reference that fails to
+  // resolve is the strongest structural surprise an investigation cares about.
+  const MECH_WEIGHTS = { ins: 1.0, nul: 1.6, bind: 1.1, con: 0.7 };
+
   // The three site kinds the brief triages on. Elsewhere a span is read but not
   // flagged; at a site the miss is high-value (a contested reference, a cut).
   const SiteKind = { ReferenceBoundary: 'ReferenceBoundary', EventBoundary: 'EventBoundary', SurprisalSpike: 'SurprisalSpike' };
@@ -107,86 +123,164 @@
     return out;
   }
 
-  // The timeline: one record per embedded span. `embeddings` is aligned to
-  // sentence index 0..M-1 (a prefix is fine — records only run while embeddings
-  // exist). Each record keeps the delta whole enough to sort later: the
-  // coefficient ("how true it seemed"), the magnitude (the miss size), the sign,
-  // and whether the miss-direction cleared the noise gate.
+  // Tier 0 — mechanical surprise, free, off the event log the walk already
+  // produced. Per sentence: a fresh INS, a contested NUL stall, a strained or
+  // contested SYN bind (low `observed.force`, or competitors), a fresh CON
+  // relation. Returns the raw per-sentence score and its component breakdown
+  // (kept for the glass box — the curve is showable and disputable). Style-blind
+  // by construction: it never sees a token, only structure.
+  function mechanicalRaw(doc, n, weights) {
+    const W = Object.assign({}, MECH_WEIGHTS, weights || {});
+    const comp = [];
+    for (let i = 0; i < n; i++) comp.push({ ins: 0, nul: 0, bind: 0, con: 0 });
+    for (const ev of (doc && doc._events) || []) {
+      const i = ev.sentence_idx;
+      if (i == null || i < 0 || i >= n) continue;
+      if (ev.op === 'INS') comp[i].ins += 1;
+      else if (ev.op === 'NUL') { const r = String(ev.reason || ''); if (r.indexOf('pronoun-stall') === 0 || r === 'signal-birth') comp[i].nul += 1; }
+      else if (ev.op === 'SYN') {
+        const f = ev.observed && ev.observed.force;
+        const strain = Math.max(0, 1 - (f == null ? 1 : f));               // a weak bind is a surprised bind
+        const contested = (ev.observed && ev.observed.competing && ev.observed.competing.length) ? 0.5 : 0;
+        comp[i].bind += strain + contested;
+      } else if (ev.op === 'CON') comp[i].con += 1;
+    }
+    const raw = comp.map(c => W.ins * c.ins + W.nul * c.nul + W.bind * c.bind + W.con * c.con);
+    return { raw, comp };
+  }
+
+  // Deviation above the rolling LOCAL baseline (causal: only the reading-so-far).
+  // null inputs are gaps (skipped from the baseline, null in the output); a
+  // value with too little baseline behind it, or a flat neighborhood, reads 0.
+  function rollingZ(values, window, minN) {
+    window = window || BASELINE_WINDOW; minN = minN || BASELINE_MIN;
+    const n = values.length, out = new Array(n).fill(null);
+    for (let i = 0; i < n; i++) {
+      if (values[i] == null) continue;
+      const lo = Math.max(0, i - window + 1), buf = [];
+      for (let j = lo; j <= i; j++) { const v = values[j]; if (v != null) buf.push(v); }
+      if (buf.length < minN) { out[i] = 0; continue; }
+      let m = 0; for (const v of buf) m += v; m /= buf.length;
+      let s = 0; for (const v of buf) s += (v - m) * (v - m); s = Math.sqrt(s / buf.length);
+      out[i] = s < 1e-6 ? 0 : Math.round(((values[i] - m) / s) * 1000) / 1000;
+    }
+    return out;
+  }
+
+  // The timeline: one record per span (0..n-1). FUSION of two channels, each
+  // z-scored against its own rolling baseline, combined OR-above-threshold:
+  //   · mech — Tier 0 structural surprise (always on, free).
+  //   · emb  — embedding-expectation surprise (a cheap semantic channel; the
+  //            faithful Tier-1 LM probe is deferred behind this seam).
+  // Embeddings are optional: with none, the mechanical floor still plays. Each
+  // record also keeps the raw embedding delta (coefficient/magnitude/embSign)
+  // for the direction work, and which channel(s) spiked.
   function buildTimeline(doc, embeddings, opts) {
     opts = opts || {};
     const hl = opts.halfLife || EXPECT_HALFLIFE;
     const confirm = opts.confirmFloor != null ? opts.confirmFloor : CONFIRM_FLOOR;
     const gate = opts.gateFloor != null ? opts.gateFloor : GATE_FLOOR;
+    const win = opts.baselineWindow || BASELINE_WINDOW;
+    const zSpike = opts.zSpike != null ? opts.zSpike : Z_SPIKE;
     const sites = siteKinds(doc);
-    if (!embeddings || !embeddings.length) return [];
+    const hasEmb = !!(embeddings && embeddings.length);
+    const n = opts.n || (hasEmb ? embeddings.length : ((doc && (doc.sentenceTexts || doc.sentences)) || []).length || 0);
+    if (!n) return [];
+
+    const { raw: mraw, comp } = mechanicalRaw(doc, n, opts.weights);
+    const mechZ = rollingZ(mraw, win, BASELINE_MIN);
+
+    const embRaw = new Array(n).fill(null);
+    const coeffArr = new Array(n).fill(null);
+    const magArr = new Array(n).fill(null);
+    if (hasEmb) {
+      for (let i = 0; i < n; i++) {
+        const act = embeddings[i]; if (!act) continue;
+        const exp = expectation(embeddings, i, hl); if (!exp) continue;
+        const c = Math.max(-1, Math.min(1, dot(exp, act)));
+        coeffArr[i] = Math.round(c * 1000) / 1000;
+        magArr[i] = Math.round(Math.sqrt(Math.max(0, 2 - 2 * c)) * 1000) / 1000;
+        embRaw[i] = 1 - c;                            // higher ⇒ more surprising
+      }
+    }
+    const embZ = rollingZ(embRaw, win, BASELINE_MIN);
+
     const rows = [];
-    for (let i = 0; i < embeddings.length; i++) {
-      const act = embeddings[i];
-      const site = sites.get(i) || null;
-      if (!act) { rows.push({ i, coefficient: null, magnitude: null, sign: 'coherence', site, directionGated: false }); continue; }
-      const exp = expectation(embeddings, i, hl);
-      if (!exp) { rows.push({ i, coefficient: null, magnitude: null, sign: 'coherence', site, directionGated: false }); continue; }
-      const coeff = Math.max(-1, Math.min(1, dot(exp, act)));
-      const mag = Math.sqrt(Math.max(0, 2 - 2 * coeff));   // unit vectors ⇒ ‖a−b‖
+    for (let i = 0; i < n; i++) {
+      const mz = mechZ[i] == null ? 0 : mechZ[i];
+      const ez = embZ[i];
+      const fused = ez == null ? mz : Math.max(mz, ez);
       rows.push({
         i,
-        coefficient: Math.round(coeff * 1000) / 1000,
-        magnitude: Math.round(mag * 1000) / 1000,
-        sign: coeff >= confirm ? 'coherence' : 'rupture',
-        directionGated: mag >= gate,
-        site,
+        surprise: Math.round(fused * 1000) / 1000,
+        mech: Math.round(mz * 1000) / 1000,
+        emb: ez == null ? null : Math.round(ez * 1000) / 1000,
+        sign: fused >= zSpike ? 'rupture' : 'coherence',
+        struct: mz >= zSpike,                          // Tier 0 spiked here
+        semantic: ez != null && ez >= zSpike,          // the semantic channel spiked
+        components: comp[i],
+        coefficient: coeffArr[i],
+        magnitude: magArr[i],
+        embSign: coeffArr[i] == null ? null : (coeffArr[i] < confirm ? 'rupture' : 'coherence'),
+        directionGated: magArr[i] != null && magArr[i] >= gate,
+        site: sites.get(i) || null,
       });
     }
     return rows;
   }
 
-  // A one-glance read of a whole timeline: how many spans carried a real
-  // expectation, how many ruptured, the mean coefficient (aboutness pull), and
-  // the single most surprising span.
+  // A one-glance read of a whole timeline: spans, how many ruptured (and via
+  // which channel), the mean embedding coefficient, and the most surprising span.
   function summarize(timeline) {
-    let measured = 0, ruptures = 0, sum = 0, peak = null;
+    let measured = 0, ruptures = 0, structural = 0, semantic = 0, sum = 0, cnt = 0, peak = null;
     for (const r of (timeline || [])) {
-      if (r.coefficient == null) continue;
-      measured++; sum += r.coefficient;
+      measured++;
       if (r.sign === 'rupture') ruptures++;
-      if (!peak || r.magnitude > peak.magnitude) peak = r;
+      if (r.struct) structural++;
+      if (r.semantic) semantic++;
+      if (r.coefficient != null) { sum += r.coefficient; cnt++; }
+      if (!peak || r.surprise > peak.surprise) peak = r;
     }
-    return { measured, ruptures, meanCoefficient: measured ? Math.round(sum / measured * 1000) / 1000 : null, peak };
+    return {
+      measured, ruptures, structuralRuptures: structural, semanticRuptures: semantic,
+      meanCoefficient: cnt ? Math.round(sum / cnt * 1000) / 1000 : null, peak,
+    };
   }
 
-  // Orchestration for the live unfold: embed the prose (a bounded prefix so a
-  // long book can't stall the moment), build the timeline, and hand back a
-  // playback the reading modal can play forward. Returns null when there's no
-  // embedder, nothing to read, or too little to predict from — the modal then
-  // falls back to its plain reveal. Async (embedding is async); pure side-effect.
+  // Orchestration for the live unfold. Tier 0 (mechanical) always runs — no
+  // model, no download — so the reading plays even with no embedder. If the
+  // embedder is present, the semantic channel is fused in (a bounded prefix so a
+  // long book can't stall the moment). Returns null only when there's nothing to
+  // read. Async (embedding is async); a pure side-effect over the settled walk.
   async function buildPlayback(doc, base, opts) {
     opts = opts || {};
     const cap = opts.cap || 600;
-    const Embed = (typeof window !== 'undefined') && window.EOEmbed;
-    if (!Embed || !doc || doc.kind !== 'prose') return null;
+    if (!doc || doc.kind !== 'prose') return null;
     const texts = (doc.sentenceTexts || (doc.sentences || []).map(s => s && s.t) || []).map(t => String(t || ''));
     const n = Math.min(texts.length, cap);
-    if (n < 3) return null;                       // too short to carry an expectation
-    let embeddings;
-    try { embeddings = await Embed.embedSentences(texts.slice(0, n)); }
-    catch (e) { embeddings = null; }
-    if (!embeddings || !embeddings.length) return null;
-    const timeline = buildTimeline(doc, embeddings, opts);
+    if (n < 3) return null;                          // too short to read forward
+    let embeddings = null;
+    const Embed = (typeof window !== 'undefined') && window.EOEmbed;
+    if (Embed) { try { embeddings = await Embed.embedSentences(texts.slice(0, n)); } catch (e) { embeddings = null; } }
+    const timeline = buildTimeline(doc, embeddings, Object.assign({ n }, opts));
     const spans = timeline.map(r => Object.assign({ t: texts[r.i] || '' }, r));
     return {
       spans,
       summary: summarize(timeline),
       total: texts.length,
       capped: n < texts.length ? n : null,
-      // SEAMS (built nothing): the faithful layers attach here when ready —
-      //   generated_text: local_predict at sites (auditor-only, never talker)
-      //   surprisal:      per-token logprobs once the model binding exposes them
+      hasEmbeddings: !!(embeddings && embeddings.length),
+      // SEAMS (built nothing): the faithful Tier-1 LM probe attaches here when
+      // ready — a SEPARATE tiny causal LM (transformers.js, ~80–135M) emitting
+      // next-token surprisal, z-scored like the channels above, fused as a third
+      // OR term. Its logits are reachable (unlike the MLC answer model), so it is
+      // a real build, gated on test 1 (a non-structural surprise the floor misses).
     };
   }
 
   const EOPredict = {
-    SiteKind, CONFIRM_FLOOR, GATE_FLOOR, EXPECT_HALFLIFE,
-    expectation, siteKinds, buildTimeline, summarize, buildPlayback,
+    SiteKind, CONFIRM_FLOOR, GATE_FLOOR, EXPECT_HALFLIFE, BASELINE_WINDOW, BASELINE_MIN, Z_SPIKE, MECH_WEIGHTS,
+    expectation, siteKinds, mechanicalRaw, rollingZ, buildTimeline, summarize, buildPlayback,
     _dot: dot, _unit: unit,
   };
   if (typeof window !== 'undefined') window.EOPredict = EOPredict;
