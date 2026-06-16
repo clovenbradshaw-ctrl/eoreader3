@@ -3523,7 +3523,15 @@ function App() {
         if (fm) {
           formStamp = { degree: fm.degree, floor: fm.floor, move: fm.move, revised: false };
           formVec = fm.vec;
-          if (fm.floor != null && fm.degree < fm.floor && shapeLibRef.current && shapeLibRef.current.formDrift) {
+          const belowFloor = fm.floor != null && fm.degree < fm.floor;
+          // The form re-PHRASE is a second full local generation spent only to
+          // nudge a draft toward its genre shape. That's deep-mode work, not the
+          // default: at the reflex/standard depths a grounded turn stays a SINGLE
+          // model pass. The measurement and stamp above still ride either way, so
+          // the witness record is unchanged — only the extra generation is
+          // deferred to the deepest stop (budget.replan), where the user has
+          // dialed up thinking and the added latency is the point.
+          if (belowFloor && (budget && budget.replan) && shapeLibRef.current && shapeLibRef.current.formDrift) {
             let drift = null;
             try { drift = shapeLibRef.current.formDrift(intent, full.replace(/\{\{[^}]*\}\}/g, ' ')); } catch (e) {}
             const instr = drift && drift.instruction;
@@ -3557,6 +3565,8 @@ function App() {
                 AUD('step', 'form', { move: intent, degree: rm ? r4(rm.degree) : null, kept: false, reason: 'revision was not more in-shape — original kept' });
               }
             }
+          } else if (belowFloor) {
+            AUD('step', 'form', { move: intent, degree: r4(fm.degree), floor: r4(fm.floor), tooFar: true, deferred: 'single-pass — form re-phrase runs only at the deepest depth' });
           } else {
             AUD('step', 'form', { move: intent, degree: r4(fm.degree), floor: r4(fm.floor), tooFar: false });
           }
