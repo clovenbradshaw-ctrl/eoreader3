@@ -5738,6 +5738,60 @@ async function extractEoGraph(text, onProgress) {
           basis: `possessive "${poss} ${kin}"`,
           ...sentMeta, src: 'possessive-kin',
         });
+        // ── CON (Connecting): the SAME possessive kin, as a graph EDGE ──
+        // The DEF above answers "whose X" for the answer layer (kinRecords reads
+        // it back); this CON gives the GRAPH the relation, so traversal / fold /
+        // surprise have an edge to walk. Dual-write from one resolved possessor —
+        // DEF and CON are emitted in the same iteration and cannot disagree. The
+        // relatum is LINKED to a present, gender-agreeing person when the local
+        // field names exactly one; otherwise a typed placeholder is MINTED. A
+        // contested or unnamed relatum mints rather than guess a wrong link — the
+        // same "a contested field stalls honestly" discipline the possessor
+        // resolution above obeys. Edge endpoints are SURFACES that cluster (Pass 4
+        // keys on findClusterKey by surface): the possessor's resolved name, and
+        // either the linked person's name or the minted placeholder's name (whose
+        // INS makes it a Pass-0 entity key → a cluster → findClusterKey resolves).
+        // The relatum is a typed placeholder MINTED under a possessor-keyed
+        // stable key, so repeated "his X" unify and enrich.js's deep-read kin
+        // pass converges on the same `kin:<role>:<possessor>` shape. We do NOT
+        // bind the relatum to an arbitrary present person — "Corman's son" must
+        // never resolve to a gender-compatible bystander (Turner). Identifying
+        // the relatum WITH a named person (the sister IS Grete) is later evidence
+        // — coreference / the deep-read pass — not a guess here. The placeholder's
+        // INS makes it a Pass-0 entity key → a cluster → findClusterKey resolves →
+        // the CON projects a graph edge.
+        const relKey = 'kin:' + kin + ':' + normSurface(hint.name);
+        const relSurface = hint.name + ' (' + kin + ')';
+        let relSite = sites.get(relKey);
+        if (!relSite) {
+          const rid = mintReferent();
+          relSite = {
+            name: relSurface, type: 'person', gender: ROLE_GENDER.get(kin) || null,
+            mass: 0, surfaceMass: 0, momentum: 0, tokens: tokenSetOf(relSurface),
+            referent_id: rid, forms: new Map([[relSurface, 1]]), surfacePositions: [],
+            minted_kin: { relation: kin, of: hint.key },
+          };
+          sites.set(relKey, relSite);
+          events.push({
+            id: 'ev-' + seq, seq: seq++, op: 'INS', stance: 'Instantiating',
+            target: relSurface, targetRaw: relSurface, entityType: 'person', referent_id: rid,
+            in_quote: false, minted_kin: { relation: kin, of: hint.referent_id },
+            sentence: sentText, ...sentMeta, src: 'possessive-kin-mint',
+          });
+        }
+        if (relSite.referent_id !== hint.referent_id) {
+          events.push({
+            id: 'ev-' + seq, seq: seq++, op: 'CON', stance: 'Connecting',
+            s: hint.name, v: 'kin:' + kin, o: relSurface,
+            sHint: { key: hint.key, name: hint.name, referent_id: hint.referent_id },
+            oHint: { key: relKey, name: relSurface, referent_id: relSite.referent_id },
+            relation: kin,
+            source_ref: hint.referent_id, target_ref: relSite.referent_id,
+            sourceName: hint.name, targetName: relSurface,
+            basis: `possessive "${poss} ${kin}"`,
+            ...sentMeta, src: 'possessive-kin',
+          });
+        }
       }
     }
 

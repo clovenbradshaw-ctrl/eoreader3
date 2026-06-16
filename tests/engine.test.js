@@ -484,6 +484,21 @@ group('kin — the possessive resolved into the graph', () => {
   ok(E.entityEvidence(kinDoc, 'corman').some(s => /his son served/.test(s.t)), 'entityEvidence for "corman" includes the kin sentence');
   // VOSS carries no kin phrases: the reader deposits nothing there (parity).
   eq(voss._events.filter(ev => ev.op === 'DEF' && ev.path === 'kin').length, 0, 'no kin DEFs on a page without kin possessives');
+  // Fix 1 — dual-write: the same possessive kin also deposits a CON EDGE, so the
+  // relation enters the graph (traversal / fold / surprise) while the DEF above
+  // keeps answering "whose son". The relatum is a minted placeholder; we never
+  // bind "Corman's son" to a present bystander (Turner).
+  const kinCons = kinDoc._events.filter(ev => ev.op === 'CON' && ev.src === 'possessive-kin');
+  eq(kinCons.length, 1, 'the "his son" possessive emits exactly one kin CON (dual-write with the DEF)');
+  eq(kinCons[0].relation, 'son', 'the CON relation label is the kin role');
+  eq(kinCons[0].v, 'kin:son', 'the edge verb is namespaced (kin:son) so it cannot collide with a predicate verb');
+  ok(/corman/i.test(kinCons[0].sourceName), 'the CON source is the resolved possessor (Corman)');
+  ok(kinCons[0].source_ref && kinCons[0].target_ref && kinCons[0].source_ref !== kinCons[0].target_ref,
+    'the CON has two distinct referent endpoints');
+  ok(E.graphSnapshot(kinDoc).edges.some(e => /corman/i.test(e.aName) && e.verb === 'kin:son'),
+    'the kin CON projects as a graph edge off Corman');
+  eq(voss._events.filter(ev => ev.op === 'CON' && ev.src === 'possessive-kin').length, 0,
+    'no kin CONs on a page without kin possessives (parity)');
 });
 
 // The kin-subject veto: binding is not correctness. A draft that hangs the
