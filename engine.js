@@ -2899,7 +2899,18 @@ function contentSeqOf(name) {
   const words = String(name).toLowerCase().match(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu) || [];
   const seq = [];
   for (const w of words) {
-    if (w.length < 3 || STOP.has(w)) continue;
+    // Gendered person titles ("mr", "ms", "mrs") are identity-bearing for
+    // people: "Mr. Samsa" (the father) and "Gregor Samsa" (the son) share only
+    // the surname, and the title is the specifier that tells them apart. Keep
+    // such a title even when it falls below the content-token length floor, so
+    // the equal-arity specifier-disagreement veto in namesCoRefer fires (two
+    // people) instead of reading "Mr. Samsa" → [samsa] as a short form of
+    // [gregor, samsa]. "mrs" already cleared the floor — this extends the same
+    // treatment to "mr"/"ms". Titles are ≤4 chars, so singularStem leaves them
+    // literal (no "mrs"→"mr" mangling), and they carry no substantive recall
+    // weight (the gate's substShared filter still requires ≥3-char tokens).
+    const isTitle = (FEMALE_TITLES && FEMALE_TITLES.has(w)) || (MALE_TITLES && MALE_TITLES.has(w));
+    if (!isTitle && (w.length < 3 || STOP.has(w))) continue;
     const folded = foldDiacritics(w);
     seq.push(singularStem(folded) || folded);
   }
