@@ -578,9 +578,9 @@ const READING_RULES = {
   // Assertions, contextual and revisable: each is what THIS reader currently
   // takes a class of surfaces to mean, not a fact about language.
   discourse_junk: {
-    value: ['today','yesterday','tomorrow','now','then','here','there','meanwhile','however','moreover','furthermore','therefore','also','still','yet','according','reportedly','apparently','allegedly','monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','not','almost','because','while','since','although','though'],
+    value: ['today','yesterday','tomorrow','now','then','here','there','meanwhile','however','moreover','furthermore','therefore','also','still','yet','according','reportedly','apparently','allegedly','monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','not','almost','because','while','since','although','though','god','heaven','heavens','goodness','christmas'],
     mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
-    desc: 'Discourse and calendar words that capitalize at sentence start and read as proper nouns to NER. Never referents.',
+    desc: 'Discourse and calendar words — and bare exclamatory interjections (God!, Heavens!, Goodness!, Christmas) — that capitalize like proper nouns to NER but name no referent in narrative. Only the bare single token is filtered; a multiword name ("Joe Christmas", "God of War") is unaffected.',
   },
   answer_discourse: {
     value: ['yes','yeah','indeed','certainly','sure','absolutely','exactly','correct','agreed','unfortunately','additionally','finally','similarly','specifically','notably','importantly','overall','instead','otherwise','nevertheless','nonetheless','accordingly','consequently','thus','hence','besides','actually','generally','typically','usually','ultimately','alternatively','likewise','regardless'],
@@ -6585,10 +6585,17 @@ async function extractEoGraph(text, onProgress) {
     for (const e of entities) {
       if (!e.referent_id) continue;
       const frameEdges = [...new Set(neigh.get(chase(e.referent_id)) || [])].sort();
+      // A frame hashes an entity's edge-neighbourhood, so structurally identical
+      // entities share one. A ZERO-edge entity has no structure, though, and
+      // JSON.stringify([]) === "[]" hashed every isolated referent into ONE frame
+      // — a false structural identity collapsing all disconnected entities
+      // together. Seed the hash with the referent_id when there are no edges, so
+      // each isolated entity is its own frame.
+      const frameKey = frameEdges.length ? JSON.stringify(frameEdges) : 'isolated:' + e.referent_id;
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
         target: e.name, path: 'frame',
-        value: 'frame:' + sha256Hex(JSON.stringify(frameEdges)).slice(0, 16),
+        value: 'frame:' + sha256Hex(frameKey).slice(0, 16),
         targetHint: { referent_id: e.referent_id },
         basis: { edges: frameEdges.length },
         sentence_idx: null, sentence: null, src: 'frame-mint',
