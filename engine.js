@@ -6809,15 +6809,30 @@ function resolveByActivation(pronoun, sites, cursor) {
   // the sign exclusion, the winner must out-pull the runner-up by the δ ratio,
   // else the field stalls to the void. Proportion decides among what sign left
   // standing — it is built on the poles, never the other way round.
-  // Fix 2 — absolute floor: nothing is warm enough to claim the pronoun.
-  if (best.score <= 0 || best.score < PRONOUN_FLOOR()) {
+  // Margin-rescue (D2). STEP 2's δ gate decides among survivors, but the coarse
+  // absolute floor (PRONOUN_FLOOR) used to fire FIRST and kill a lone dominant
+  // antecedent whose only fault is low absolute mass on a quiet chapter interior
+  // — "he" with no warm competitor stalled to the void. Reorder so the warmth
+  // floor binds only a genuinely contested, merely-tepid field, never a clear
+  // winner.
+  const second = elig[1];
+  // A non-positive pull is the void: nothing is activated, so nothing binds.
+  if (best.score <= 0) {
     return { nul: true, reason: 'below-floor', competing: competing() };
   }
-  // Fix 2 — δ dominance: the winner must out-pull the runner-up by the same
-  // ratio the gravity reader uses for name collisions. A contested pull stalls
-  // to the void rather than forcing the heaviest non-antecedent to win.
-  const second = elig[1];
-  if (second && second.score > 0 && best.score < DELTA * second.score) {
+  // The winner is unopposed when it is the SOLE SURVIVOR of the sign exclusion
+  // (no runner-up, or the runner-up is itself void) or when it DOMINATES the
+  // runner-up by the δ ratio. In either case there is no real competitor to
+  // stall against, so it binds even below the absolute warmth floor.
+  const isSoleSurvivor = !second || second.score <= 0;
+  const dominatesByDelta = !!second && second.score > 0 && best.score >= DELTA * second.score;
+  if (!isSoleSurvivor && !dominatesByDelta) {
+    // Contested field — two comparably-warm candidates. Apply the warmth floor
+    // first, then the δ gate: a contested pull stalls to the void rather than
+    // forcing the heaviest non-antecedent to win.
+    if (best.score < PRONOUN_FLOOR()) {
+      return { nul: true, reason: 'below-floor', competing: competing() };
+    }
     return { nul: true, reason: 'contested', competing: competing() };
   }
   // The site a pronoun resolved to has been referred to as an agent — agency
