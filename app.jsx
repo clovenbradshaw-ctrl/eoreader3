@@ -4899,6 +4899,19 @@ function App() {
               <Icon name="send" size={15} /> <span className="tb-pill-lbl">Prompt flow</span>
             </button>
           )}
+          {/* Account status — the rightmost topbar pill. "Logged in" here means an
+              Anthropic (Claude) API key is set on this device, the app's only
+              credential; local models and grounded answers need no sign-in. Clicking
+              opens the model popover, where the key is added, updated, or cleared. */}
+          <button className={'tb-pill tb-auth' + (anthropicKeySet ? ' on' : '')} data-model-trigger
+            onClick={() => setModelOpen(o => !o)}
+            title={anthropicKeySet
+              ? 'Signed in — your Anthropic (Claude) API key is set on this device. Click to update or sign out.'
+              : 'Signed out — no Anthropic (Claude) API key on this device. Click to sign in and use Claude. Local models and grounded answers work without signing in.'}>
+            <span className={'dot' + (anthropicKeySet ? ' ok' : ' off')} aria-hidden="true" />
+            <Icon name="user" size={15} />
+            <span className="tb-pill-lbl">{anthropicKeySet ? 'Signed in' : 'Signed out'}</span>
+          </button>
         </header>
 
         <ModelLoadBanner status={modelStatus} progress={modelProgress} loadText={modelLoadText}

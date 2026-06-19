@@ -41,6 +41,8 @@ const ICON_PATHS = {
   fork:      '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   // The EO cube — three faces meeting at a vertex (Act · Site · Resolution).
   cube:      '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
+  // A person silhouette — the account / sign-in status chip in the topbar.
+  user:      '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
 };
 function Icon({ name, size = 18, style, className, strokeWidth = 1.7 }) {
   const p = ICON_PATHS[name];

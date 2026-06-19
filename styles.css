@@ -242,6 +242,13 @@ button { font-family: inherit; cursor: pointer; }
 .tb-pill:hover { border-color: var(--border-strong); color: var(--text); }
 .tb-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good-fg); }
 
+/* account / sign-in status — the rightmost topbar pill. The leading dot is the
+   logged-in/out light: green (key set) vs muted grey (no key). */
+.tb-auth { margin-left: 2px; }
+.tb-auth.on { border-color: var(--good-bd); color: var(--text); }
+.tb-auth .dot.ok  { background: var(--good-fg); box-shadow: 0 0 0 3px rgba(42,122,59,.14); }
+.tb-auth .dot.off { background: var(--text-3); opacity: .55; box-shadow: none; }
+
 /* ============================================================ SPLIT BODY */
 .body { flex: 1; min-height: 0; display: flex; position: relative; }
 .pane-chat { display: flex; flex-direction: column; min-width: 0; }
