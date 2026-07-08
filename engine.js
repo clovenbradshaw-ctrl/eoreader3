@@ -11256,6 +11256,49 @@ function projectGraph(events, frame = {}) {
       spine = p.spine.filter(s => !/^\s*(?:Title|Author|Editor|Translator|Illustrator|Release date|Posting date|Language|Credits|Other information|Updated|Most recently updated|Original publication)\b\s*:?/i.test(String(s)));
       if (!spine.length) spine = p.spine;
     }
+    // ── Structured documents lead with what they ARE ──────────────────────
+    // A résumé, report, or dossier names its subject once (a heading line)
+    // while the entities it discusses recur — so a mass-ranked "centers on
+    // [heaviest]" lead inverts the subject (a CV "centers on" the employers it
+    // lists, never the person whose CV it is). When the page carries a real
+    // spine of NAMED sections — descriptive headings, not bare chapter
+    // numerals — and is not a Gutenberg narrative, read what the document IS:
+    // its heading line and the sections it is laid out in, with the heaviest
+    // figures kept as what it dwells on. Narratives (no spine, or numeral-only
+    // sections) and Gutenberg books fall through to the figure-led lead below,
+    // byte-identical — the parity floor.
+    const isNumeralLabel = (s) => { const t = String(s).trim(); return /^[ivxlcdm]+\.?$/i.test(t) || /^\d+\.?$/.test(t); };
+    const namedSpine = spine.filter(s => /\p{L}{3,}/u.test(String(s)) && !isNumeralLabel(s));
+    if (!meta.isGutenberg && namedSpine.length >= 3) {
+      const sCites = [];
+      const head = String((doc.sentenceTexts || [])[0] || '').replace(/\s+/g, ' ').trim();
+      const headingLike = !!head && /\p{L}{2,}/u.test(head) && head.length <= 80
+        && head.split(/\s+/).length <= 12 && !/[.!?;:]$/.test(head)
+        && head.toLowerCase() !== String(spine[0] || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const kindWord = doc._genre === 'transcript' ? 'transcript' : 'document';
+      const parts = [];
+      if (headingLike) {
+        sCites.push({ docId: doc.id, idx: 0 });
+        parts.push(`This ${kindWord} is headed ${head} {{cite:${doc.id}:0:s0}} and laid out in sections: ${spine.join(' · ')}.`);
+      } else {
+        parts.push(`This ${kindWord} is laid out in sections: ${spine.join(' · ')}.`);
+      }
+      // Anchor the structure claim on the first surviving section's heading line.
+      const firstSec = (doc._sections || []).find(s => spine.includes(s.label));
+      if (firstSec && firstSec.start_sentence != null) sCites.push({ docId: doc.id, idx: firstSec.start_sentence });
+      const figs = heavy.map(e => { sCites.push({ docId: doc.id, idx: e.sents[0] }); return `${e.name} {{cite:${doc.id}:${e.sents[0]}:s${e.sents[0]}}}`; });
+      if (figs.length) parts.push(`It dwells on ${figs.length > 1 ? figs.slice(0, -1).join(', ') + ' and ' + figs[figs.length - 1] : figs[0]}.`);
+      const sAssertions = keep ? p.assertions.filter(a => keep.has(String(a.name))) : p.assertions;
+      const sEdges = keep ? p.heavyEdges.filter(ed => keep.has(String(ed.aName)) && keep.has(String(ed.bName))) : p.heavyEdges;
+      if (sAssertions.length) parts.push('It says ' + sAssertions.map(a => `${a.name} is ${a.is}`).join('; ') + '.');
+      if (sEdges.length) parts.push('The relations it draws: ' + sEdges.map(ed => `${ed.aName} ${ed.verb} ${ed.bName}`).join('; ') + '.');
+      return {
+        text: parts.join(' '),
+        cites: sCites,
+        audit: { status: 'clean', grounded: true, covers: '1/1', stable: true,
+          note: 'Read mechanically from the document’s structure — its heading and section spine, with the heaviest figures it dwells on. No model involved.' },
+      };
+    }
     const cites = [];
     const figs = heavy.map(e => {
       cites.push({ docId: doc.id, idx: e.sents[0] });
