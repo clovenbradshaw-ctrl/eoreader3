@@ -19,6 +19,8 @@
    Run with `node tests/binding.test.js`.
    ============================================================ */
 'use strict';
+const fs = require('fs');
+const path = require('path');
 const { loadEngine } = require('./harness');
 
 let pass = 0, fail = 0; const fails = [];
@@ -206,6 +208,36 @@ async function main() {
     eq(r.reason, 'names-entity', 'routes mechanically for the right reason (the carried referent)');
     const ans = E.answerResolved([doc], 'what about his role', { hotBinding: role });
     ok((ans.cites || []).length > 0, 'and the reply binds to the page (witnessed), not held as absence');
+  }
+
+  group('margin-rescue (D2) — the warmth floor no longer over-stalls a clear antecedent');
+  {
+    // resolveByActivation tested the absolute warmth floor (pronoun_resolution_floor)
+    // BEFORE the δ-margin, so a lone or clearly-dominant antecedent that happened to
+    // sit below the floor — a cold kin-placeholder referent ("his mother"/"his sister",
+    // surfaceMass 0) on a quiet chapter interior — stalled to the void instead of
+    // binding. The rescue reorders the gates: a SOLE SURVIVOR or a δ-DOMINANT winner
+    // binds even below the floor; only a genuinely contested (within-δ) field stalls.
+    // On a slice of Metamorphosis this collapses 35 below-floor stalls to 0 while the
+    // 9 genuine contests remain, and the recovered agents double the graph's edges.
+    const raw = fs.readFileSync(path.join(__dirname, '..', 'evo', 'corpus', 'pg5200.txt'), 'utf8');
+    const body = (() => {
+      const s = raw.indexOf('*** START'), e = raw.indexOf('*** END');
+      let t = raw; if (s >= 0) t = t.slice(raw.indexOf('\n', s) + 1); if (e >= 0) t = t.slice(0, t.indexOf('*** END'));
+      return t;
+    })();
+    const meta = await E.parseDocument('pg5200.txt', body.slice(0, 60000), 'narrative');
+    const stalls = (meta._events || []).filter(ev => ev.op === 'NUL' && /pronoun-stall/.test(ev.reason || ''));
+    const belowFloor = stalls.filter(ev => /below-floor/.test(ev.reason || '')).length;
+    const contested = stalls.filter(ev => /contested/.test(ev.reason || '')).length;
+    // Before the rescue the floor fired first and DOMINATED: 35 below-floor vs 9
+    // genuine contests. After, the floor only bites a real contest, so below-floor
+    // all but vanishes and never out-numbers genuine ambiguity.
+    ok(belowFloor <= 5, 'below-floor pronoun stalls collapse (got ' + belowFloor + ', was 35 before the rescue)');
+    ok(belowFloor < contested, 'the warmth floor no longer dominates real ambiguity (' + belowFloor + ' below-floor < ' + contested + ' contested)');
+    // The rescue is SELECTIVE, not a blanket bind: genuinely contested pronouns (two
+    // comparably-warm same-gender antecedents) still stall to the void.
+    ok(contested >= 1, 'genuine within-δ contests still stall, not force-bound (got ' + contested + ')');
   }
 
   console.log(`\n${fail === 0 ? '✓ PASS' : '✗ FAIL'} — ${pass} passed, ${fail} failed`);

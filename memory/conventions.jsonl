@@ -1658,3 +1658,8 @@
 {"seq":1657,"op":"SYN","s":"core:speaker_label_patterns","v":"feeds","o":"mechanics:attribution","kind":"link"}
 {"seq":1658,"op":"SYN","s":"core:speaker_label_patterns","v":"feeds","o":"mechanics:person-promotion","kind":"link"}
 {"seq":1659,"op":"SYN","s":"core:separator_lines","v":"excepts","o":"mechanics:sentence-boundary","kind":"link"}
+{"seq":1660,"op":"SYN","s":"god","v":"member-of","o":"core:discourse_junk"}
+{"seq":1661,"op":"SYN","s":"heaven","v":"member-of","o":"core:discourse_junk"}
+{"seq":1662,"op":"SYN","s":"heavens","v":"member-of","o":"core:discourse_junk"}
+{"seq":1663,"op":"SYN","s":"goodness","v":"member-of","o":"core:discourse_junk"}
+{"seq":1664,"op":"SYN","s":"christmas","v":"member-of","o":"core:discourse_junk"}

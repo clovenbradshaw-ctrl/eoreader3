@@ -578,9 +578,9 @@ const READING_RULES = {
   // Assertions, contextual and revisable: each is what THIS reader currently
   // takes a class of surfaces to mean, not a fact about language.
   discourse_junk: {
-    value: ['today','yesterday','tomorrow','now','then','here','there','meanwhile','however','moreover','furthermore','therefore','also','still','yet','according','reportedly','apparently','allegedly','monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','not','almost','because','while','since','although','though'],
+    value: ['today','yesterday','tomorrow','now','then','here','there','meanwhile','however','moreover','furthermore','therefore','also','still','yet','according','reportedly','apparently','allegedly','monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','not','almost','because','while','since','although','though','god','heaven','heavens','goodness','christmas'],
     mass: 1, layer: 'existence', src: 'hardcoded-seed', module: 'core',
-    desc: 'Discourse and calendar words that capitalize at sentence start and read as proper nouns to NER. Never referents.',
+    desc: 'Discourse and calendar words — and bare exclamatory interjections (God!, Heavens!, Goodness!, Christmas) — that capitalize like proper nouns to NER but name no referent in narrative. Only the bare single token is filtered; a multiword name ("Joe Christmas", "God of War") is unaffected.',
   },
   answer_discourse: {
     value: ['yes','yeah','indeed','certainly','sure','absolutely','exactly','correct','agreed','unfortunately','additionally','finally','similarly','specifically','notably','importantly','overall','instead','otherwise','nevertheless','nonetheless','accordingly','consequently','thus','hence','besides','actually','generally','typically','usually','ultimately','alternatively','likewise','regardless'],
@@ -2899,7 +2899,18 @@ function contentSeqOf(name) {
   const words = String(name).toLowerCase().match(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu) || [];
   const seq = [];
   for (const w of words) {
-    if (w.length < 3 || STOP.has(w)) continue;
+    // Gendered person titles ("mr", "ms", "mrs") are identity-bearing for
+    // people: "Mr. Samsa" (the father) and "Gregor Samsa" (the son) share only
+    // the surname, and the title is the specifier that tells them apart. Keep
+    // such a title even when it falls below the content-token length floor, so
+    // the equal-arity specifier-disagreement veto in namesCoRefer fires (two
+    // people) instead of reading "Mr. Samsa" → [samsa] as a short form of
+    // [gregor, samsa]. "mrs" already cleared the floor — this extends the same
+    // treatment to "mr"/"ms". Titles are ≤4 chars, so singularStem leaves them
+    // literal (no "mrs"→"mr" mangling), and they carry no substantive recall
+    // weight (the gate's substShared filter still requires ≥3-char tokens).
+    const isTitle = (FEMALE_TITLES && FEMALE_TITLES.has(w)) || (MALE_TITLES && MALE_TITLES.has(w));
+    if (!isTitle && (w.length < 3 || STOP.has(w))) continue;
     const folded = foldDiacritics(w);
     seq.push(singularStem(folded) || folded);
   }
@@ -5675,6 +5686,11 @@ async function extractEoGraph(text, onProgress) {
     // mass × weight + momentum, δ dominance, absolute floor, stall-to-NUL),
     // and the relation lands as a DEF the answer layer reads back.
     // Narration only — a character saying "my son…" is speech, not record.
+    // Kin relata resolved THIS sentence, keyed by kin head ("sister" → the
+    // minted/linked relatum). Speech attribution reads this back so a kin-form
+    // tag ("said his sister") binds to the SAME referent the possessive-kin
+    // reader resolved here, not an independently re-resolved possessor.
+    const sentenceKin = new Map();
     if (KIN_TERMS && KIN_TERMS.size) {
       const narration = sentText
         .replace(/“[^”]*[”]?/g, ' ')
@@ -5779,6 +5795,9 @@ async function extractEoGraph(text, onProgress) {
             sentence: sentText, ...sentMeta, src: 'possessive-kin-mint',
           });
         }
+        // Record the relatum for kin-form speech attribution (read in the
+        // quotation loop below): the speaker of "said his sister" is this body.
+        sentenceKin.set(kin, { key: relKey, name: relSite.name, referent_id: relSite.referent_id });
         if (relSite.referent_id !== hint.referent_id) {
           events.push({
             id: 'ev-' + seq, seq: seq++, op: 'CON', stance: 'Connecting',
@@ -6001,6 +6020,18 @@ async function extractEoGraph(text, onProgress) {
       const cleanQuote = rawQuote ? rawQuote.replace(/\s+/g, ' ') : '';
       const verbs = ATTRIB_VERB_LIST;
       const properNoun = `[A-Z\\u00C0-\\u024F][\\p{L}\\p{M}'’.\\-]+(?:\\s+[A-Z\\u00C0-\\u024F][\\p{L}\\p{M}'’.\\-]+){0,2}`;
+      const kinAlt = (KIN_TERMS && KIN_TERMS.size) ? [...KIN_TERMS].join('|') : null;
+      // Possessive-kin speaker tag — "his sister", "her mother" (with an optional
+      // modifier: "his late sister"). Mirrors KIN_POSS_RE so the kin head captured
+      // here is the same one the possessive-kin reader minted as kin:<head>:<poss>.
+      const kinPoss = kinAlt ? `(his|her)\\s+(?:[\\p{L}’'\\-]+\\s+){0,2}?(${kinAlt})` : null;
+      // A word in the attribution slot is a plausible speech verb if it is already
+      // in the induced attribution class OR it is simply not stop/pronoun noise (an
+      // un-inducted verb the typography still vouches for). The class check must come
+      // FIRST: "said" is stopworded for token gravity yet is the prime attribution
+      // verb, so a bare !STOP test would reject the most common verb in the language.
+      const knownVerb = verbs ? new RegExp(`^(?:${verbs})$`, 'i') : { test: () => false };
+      const slotVerbOk = (w) => { const lw = String(w).toLowerCase(); return knownVerb.test(lw) || (!STOP.has(lw) && !PRONOUNS.has(lw)); };
       const idx = cleanQuote ? text.indexOf(cleanQuote) : -1;
 
       if (idx >= 0) {
@@ -6017,6 +6048,23 @@ async function extractEoGraph(text, onProgress) {
         // After-quote: closing punct + NAME + verb ("Dron said")
         m = after.match(new RegExp(`^[”"'’]?[\\s,;:\\-—]*(${properNoun})\\s+(?:${verbs})\\b`, 'u'));
         if (m) return { type: 'name', value: m[1].replace(/[,.;:!?]+$/, '').trim() };
+        // After-quote kin-form tag — "said his mother" / "his father called".
+        // Kafka attributes almost entirely through kin ("said his sister"), so the
+        // speech verb seldom sits beside a capitalized name and rarely earns
+        // induction. Trust the attribution SLOT the way the lowercase-slot name
+        // rule below does (typography over lexicon): a lowercase word bracketing a
+        // "his/her <kin>" phrase right after the closing quote IS an attribution.
+        // The kin head resolves to the relatum the possessive-kin reader minted.
+        if (kinPoss) {
+          // closer + slot-word + "his mother" ("said his mother")
+          m = after.match(new RegExp(`^[”"'’]?[\\s,;:\\-—]*([\\p{Ll}][\\p{L}'’-]{2,})\\s+${kinPoss}\\b`, 'iu'));
+          if (m && slotVerbOk(m[1]))
+            return { type: 'kin', poss: m[2].toLowerCase(), kin: m[3].toLowerCase(), slot_verb: m[1].toLowerCase() };
+          // closer + "his father" + slot-word ("his father called")
+          m = after.match(new RegExp(`^[”"'’]?[\\s,;:\\-—]*${kinPoss}\\s+([\\p{Ll}][\\p{L}'’-]{2,})\\b`, 'iu'));
+          if (m && slotVerbOk(m[3]))
+            return { type: 'kin', poss: m[1].toLowerCase(), kin: m[2].toLowerCase(), slot_verb: m[3].toLowerCase() };
+        }
         // After-quote: closer + ONE lowercase word + NAME ("wheezed
         // Aldermane"-shaped). The word sits in the attribution slot by
         // construction; trust the slot even when the verb hasn't earned
@@ -6047,6 +6095,14 @@ async function extractEoGraph(text, onProgress) {
       const before = idx >= 0 ? text.slice(0, idx) : text;
       const hadPriorQuote = /[“"][^“”"]*?[”"]/.test(before);
       if (!hadPriorQuote) {
+        // Before-quote kin-form ("his sister whispered: …"): the kin subject and
+        // its (often un-inducted) speech verb sit just before the opening quote.
+        // Same slot-trust as the after-quote kin rule — typography over lexicon.
+        if (kinPoss) {
+          const kinM = before.match(new RegExp(`${kinPoss}\\s+([\\p{Ll}][\\p{L}'’-]{2,})\\b[^\\p{L}]*$`, 'iu'));
+          if (kinM && slotVerbOk(kinM[3]))
+            return { type: 'kin', poss: kinM[1].toLowerCase(), kin: kinM[2].toLowerCase(), slot_verb: kinM[3].toLowerCase() };
+        }
         const verbMatch = before.match(new RegExp(`\\b(${verbs})\\b`, 'iu'));
         if (verbMatch) {
           const preVerb = before.slice(0, verbMatch.index);
@@ -6168,6 +6224,19 @@ async function extractEoGraph(text, onProgress) {
             }
             attributionConfident = true;
           }
+        } else if (attribution.type === 'kin') {
+          // Kin-form tag ("said his sister"): bind to the relatum the possessive-
+          // kin reader already resolved THIS sentence (same narrowed possessor
+          // field), recorded in sentenceKin — not an independently re-resolved
+          // possessor. The relatum is typed person, so the line lands on the kin
+          // referent (e.g. Grete) and promotes her, instead of falling to the
+          // mass/momentum leader. enrich.js later unifies this
+          // kin:<role>:<possessor> placeholder with her name.
+          const rel = sentenceKin.get(attribution.kin);
+          if (rel) {
+            speaker = { surface: rel.name, type: 'person', key: rel.key, referent_id: rel.referent_id, kinRelatum: true };
+            attributionConfident = true;
+          }
         }
       }
 
@@ -6261,7 +6330,12 @@ async function extractEoGraph(text, onProgress) {
       // Provisional speakers (signal-bound) keep their `*unnamed:f*` form
       // since the cleaner would strip the asterisks; mark them differently.
       const isProvisional = !!(speaker && speaker.provisional);
-      const cleanSpeaker = (speaker && !isProvisional) ? cleanEntitySurface(speaker.surface) : (speaker ? speaker.surface : null);
+      // A kin relatum's canonical name carries a parenthetical role ("Gregor
+      // (sister)"); like a provisional signal speaker it is a constructed surface
+      // that must bypass cleanEntitySurface (which rejects the parenthetical and
+      // would null the speaker).
+      const skipSurfaceClean = isProvisional || !!(speaker && speaker.kinRelatum);
+      const cleanSpeaker = (speaker && !skipSurfaceClean) ? cleanEntitySurface(speaker.surface) : (speaker ? speaker.surface : null);
       if (speaker && !cleanSpeaker) speaker = null;
       // Look up the speaker's referent_id from the sites map. The admitted-
       // path speaker (taken straight from `admitted`) doesn't carry one
@@ -6289,7 +6363,8 @@ async function extractEoGraph(text, onProgress) {
         attributed: !speaker ? (gatedCandidate ? 'unattributed' : 'none')
           : isProvisional ? 'provisional'
           : attributionConfident
-            ? ((attribution && attribution.type === 'pronoun') ? 'pronoun' : 'named')
+            ? ((attribution && attribution.type === 'pronoun') ? 'pronoun'
+               : (attribution && attribution.type === 'kin') ? 'kin' : 'named')
           : speakerFromContinuation ? 'continuation'
           : 'fallback',
         ...sentMeta, src: 'quote',
@@ -6510,10 +6585,17 @@ async function extractEoGraph(text, onProgress) {
     for (const e of entities) {
       if (!e.referent_id) continue;
       const frameEdges = [...new Set(neigh.get(chase(e.referent_id)) || [])].sort();
+      // A frame hashes an entity's edge-neighbourhood, so structurally identical
+      // entities share one. A ZERO-edge entity has no structure, though, and
+      // JSON.stringify([]) === "[]" hashed every isolated referent into ONE frame
+      // — a false structural identity collapsing all disconnected entities
+      // together. Seed the hash with the referent_id when there are no edges, so
+      // each isolated entity is its own frame.
+      const frameKey = frameEdges.length ? JSON.stringify(frameEdges) : 'isolated:' + e.referent_id;
       events.push({
         id: 'ev-' + seq, seq: seq++, op: 'DEF', stance: 'Dissecting',
         target: e.name, path: 'frame',
-        value: 'frame:' + sha256Hex(JSON.stringify(frameEdges)).slice(0, 16),
+        value: 'frame:' + sha256Hex(frameKey).slice(0, 16),
         targetHint: { referent_id: e.referent_id },
         basis: { edges: frameEdges.length },
         sentence_idx: null, sentence: null, src: 'frame-mint',
@@ -6798,15 +6880,30 @@ function resolveByActivation(pronoun, sites, cursor) {
   // the sign exclusion, the winner must out-pull the runner-up by the δ ratio,
   // else the field stalls to the void. Proportion decides among what sign left
   // standing — it is built on the poles, never the other way round.
-  // Fix 2 — absolute floor: nothing is warm enough to claim the pronoun.
-  if (best.score <= 0 || best.score < PRONOUN_FLOOR()) {
+  // Margin-rescue (D2). STEP 2's δ gate decides among survivors, but the coarse
+  // absolute floor (PRONOUN_FLOOR) used to fire FIRST and kill a lone dominant
+  // antecedent whose only fault is low absolute mass on a quiet chapter interior
+  // — "he" with no warm competitor stalled to the void. Reorder so the warmth
+  // floor binds only a genuinely contested, merely-tepid field, never a clear
+  // winner.
+  const second = elig[1];
+  // A non-positive pull is the void: nothing is activated, so nothing binds.
+  if (best.score <= 0) {
     return { nul: true, reason: 'below-floor', competing: competing() };
   }
-  // Fix 2 — δ dominance: the winner must out-pull the runner-up by the same
-  // ratio the gravity reader uses for name collisions. A contested pull stalls
-  // to the void rather than forcing the heaviest non-antecedent to win.
-  const second = elig[1];
-  if (second && second.score > 0 && best.score < DELTA * second.score) {
+  // The winner is unopposed when it is the SOLE SURVIVOR of the sign exclusion
+  // (no runner-up, or the runner-up is itself void) or when it DOMINATES the
+  // runner-up by the δ ratio. In either case there is no real competitor to
+  // stall against, so it binds even below the absolute warmth floor.
+  const isSoleSurvivor = !second || second.score <= 0;
+  const dominatesByDelta = !!second && second.score > 0 && best.score >= DELTA * second.score;
+  if (!isSoleSurvivor && !dominatesByDelta) {
+    // Contested field — two comparably-warm candidates. Apply the warmth floor
+    // first, then the δ gate: a contested pull stalls to the void rather than
+    // forcing the heaviest non-antecedent to win.
+    if (best.score < PRONOUN_FLOOR()) {
+      return { nul: true, reason: 'below-floor', competing: competing() };
+    }
     return { nul: true, reason: 'contested', competing: competing() };
   }
   // The site a pronoun resolved to has been referred to as an agent — agency
