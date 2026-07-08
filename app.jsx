@@ -889,14 +889,20 @@ function App() {
   // they switched to (working memory is per-chat). Deposits compare the two.
   const activeChatRef = useRef(activeChat); activeChatRef.current = activeChat;
   const turnChatIdRef = useRef(null);
-  // ---- idle reclaim: free the resident LOCAL model after a stretch with no
-  // turns, so an open-but-unused tab stops pinning the GPU/WASM weights. An
-  // on-device model sits resident — often 1–2 GB — for the whole session
-  // otherwise, even when nothing is running. The next turn rebuilds it from the
-  // on-disk cache automatically (runTurn re-loads below; streamChat → load()
-  // would too), so this trades a one-time reload — seconds, no re-download — for
-  // the idle memory. Cloud (Claude) keeps nothing resident, so it's skipped.
-  // Tunable via window.EO_IDLE_UNLOAD_MS (ms; 0 disables). ----
+  // ---- idle reclaim: free the resident CPU/WASM model after a stretch with no
+  // turns, so an open-but-unused tab stops pinning the multi-GB renderer heap.
+  // SCOPE: only the wllama (CPU/WASM) runtime, never WebGPU. The feature was
+  // built for the heavy case — a wllama model sits resident as ~1–2 GB of
+  // renderer memory for the whole session (the diagnosing session measured a
+  // 1.5 GB renderer footprint with GPU memory at just 69.7 MB). A WebGPU engine
+  // is the opposite: its weights live in VRAM with a negligible JS footprint, so
+  // freeing it reclaims almost nothing yet forces a seconds-long reload before
+  // the user's NEXT reply — making chat feel slower, not lighter. So WebGPU
+  // stays warm (chat stays instant); only the CPU path is reclaimed. When the
+  // CPU model IS freed the next turn rebuilds it from the on-disk cache (no
+  // re-download), surfacing normal load progress. Cloud (Claude) keeps nothing
+  // resident, so it's skipped. Tunable via window.EO_IDLE_UNLOAD_MS (ms; 0
+  // disables). ----
   const IDLE_UNLOAD_MS = (typeof window !== 'undefined' && 'EO_IDLE_UNLOAD_MS' in window)
     ? (+window.EO_IDLE_UNLOAD_MS || 0)
     : 5 * 60 * 1000;
@@ -913,7 +919,12 @@ function App() {
       const m = modelRef.current, L = window.EOLLM;
       if (!m || m.provider === 'anthropic' || !L || !L.release) return;   // nothing resident to free
       if (!(L.isLoaded && L.isLoaded(m.mlc))) return;                 // already freed / never loaded
-      try { if (await L.release()) { setModelStatus('idle'); eoWarn('idle-unload: freed resident model', m.id); } }
+      // Only the heavy CPU/WASM (wllama) runtime is worth reclaiming; a WebGPU
+      // engine keeps its weights in VRAM and a tiny JS heap, so freeing it just
+      // buys a costly reload before the next reply. Keep WebGPU warm.
+      const heavy = (L.isWllama && L.isWllama(m.mlc)) || m.provider === 'wllama';
+      if (!heavy) return;
+      try { if (await L.release()) { setModelStatus('idle'); eoWarn('idle-unload: freed resident CPU model', m.id); } }
       catch (e) { eoWarn('idle-unload', e); }
     }, IDLE_UNLOAD_MS);
   }, [IDLE_UNLOAD_MS, clearIdleUnload]);
@@ -3537,7 +3548,15 @@ function App() {
         if (fm) {
           formStamp = { degree: fm.degree, floor: fm.floor, move: fm.move, revised: false };
           formVec = fm.vec;
-          if (fm.floor != null && fm.degree < fm.floor && shapeLibRef.current && shapeLibRef.current.formDrift) {
+          const belowFloor = fm.floor != null && fm.degree < fm.floor;
+          // The form re-PHRASE is a second full local generation spent only to
+          // nudge a draft toward its genre shape. That's deep-mode work, not the
+          // default: at the reflex/standard depths a grounded turn stays a SINGLE
+          // model pass. The measurement and stamp above still ride either way, so
+          // the witness record is unchanged — only the extra generation is
+          // deferred to the deepest stop (budget.replan), where the user has
+          // dialed up thinking and the added latency is the point.
+          if (belowFloor && (budget && budget.replan) && shapeLibRef.current && shapeLibRef.current.formDrift) {
             let drift = null;
             try { drift = shapeLibRef.current.formDrift(intent, full.replace(/\{\{[^}]*\}\}/g, ' ')); } catch (e) {}
             const instr = drift && drift.instruction;
@@ -3571,6 +3590,8 @@ function App() {
                 AUD('step', 'form', { move: intent, degree: rm ? r4(rm.degree) : null, kept: false, reason: 'revision was not more in-shape — original kept' });
               }
             }
+          } else if (belowFloor) {
+            AUD('step', 'form', { move: intent, degree: r4(fm.degree), floor: r4(fm.floor), tooFar: true, deferred: 'single-pass — form re-phrase runs only at the deepest depth' });
           } else {
             AUD('step', 'form', { move: intent, degree: r4(fm.degree), floor: r4(fm.floor), tooFar: false });
           }
