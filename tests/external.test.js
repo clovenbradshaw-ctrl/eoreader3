@@ -382,6 +382,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     eq(X.pickQuery('look up Howard Shore'), 'Howard Shore', 'strips "look up" before the name');
     eq(X.pickQuery('find the article on socialism'), 'socialism', 'strips "find the article on"');
     eq(X.pickQuery('google quantum computing'), 'quantum computing', 'strips "google"');
+    // "research <X>" — research is a lookup verb, stripped to the subject; a BARE
+    // "research" (no subject) stays the common noun (seedQuery anchors it).
+    eq(X.pickQuery('research Vincent Cassel'), 'Vincent Cassel', 'strips "research" before a name');
+    eq(X.pickQuery('research on socialism'), 'socialism', 'strips "research on" → the subject');
+    eq(X.pickQuery('research'), 'research', 'bare "research" (no subject) stays the common noun');
     // a bare "wikipedia for/on/about X" frame reduces to the subject (the search
     // term used to keep the word "wikipedia" and search "wikipedia for dolphins")
     eq(X.pickQuery('search wikipedia for dolphins'), 'dolphins', 'strips "search wikipedia for" → the subject');
@@ -397,6 +402,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     ok(X.acquireIntent('find the article on socialism'), 'an acquisition frame is acquisition');
     ok(X.acquireIntent('search for David Cronenberg'), 'search is acquisition');
     ok(X.acquireIntent('pull up the Wikipedia page for Toronto'), 'pull up / wikipedia is acquisition');
+    // "research <X>" is a lookup verb (the reported "research Vincent Cassel")
+    ok(X.acquireIntent('research Vincent Cassel'), '"research <ProperName>" is acquisition');
+    ok(X.acquireIntent('research on socialism'), '"research on <topic>" is acquisition');
+    ok(X.acquireIntent('do some research about the French Revolution'), '"do some research about <X>" is acquisition');
+    // but the NOUN sense of "research" must NOT trip the desk
+    ok(!X.acquireIntent('research'), 'a bare "research" with no subject is not acquisition');
+    ok(!X.acquireIntent('the research shows that vaccines work'), '"research" as a noun is not acquisition');
     // who/what/tell-me frames acquire only with a proper-name target
     ok(X.acquireIntent('who is Howard Shore'), '"who is <ProperName>" is acquisition');
     ok(X.acquireIntent('tell me about Noah Kahan'), '"tell me about <ProperName>" is acquisition');
@@ -426,6 +438,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     // an EXPLICIT acquisition names its own target — pass it through untouched
     eq(X.seedQuery('search wikipedia for dolphins', ctx), 'dolphins', 'an explicit lookup is not seeded');
     eq(X.seedQuery('look up Howard Shore', ctx), 'Howard Shore', 'an explicit name lookup is not seeded');
+    eq(X.seedQuery('research Vincent Cassel', ctx), 'Vincent Cassel', 'an explicit "research <name>" is not seeded');
     // an already-specific extraction (a proper noun in the message) needs no anchor
     eq(X.seedQuery('Skydio drones are everywhere', ctx), 'Skydio', 'a proper noun in the message wins, no seed');
     // the anchor skips an entity the bare term already names (no "surveillance surveillance")

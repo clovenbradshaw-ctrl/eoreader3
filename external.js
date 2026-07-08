@@ -723,6 +723,11 @@
          // verb ("search for dogs" → "dogs", "look up Howard Shore" → "Howard
          // Shore", "find the article on socialism" → "socialism")
          .replace(/^(?:please\s+)?(?:look\s+up|look\s+for|pull\s+up|search\s+for|search|google|find|get|read\s+up\s+on|read\s+about|read\s+on)\b[\s,:'-]*/i, '')
+         // "research <subject>" — research used as a lookup verb ("research
+         // Vincent Cassel" → "Vincent Cassel", "research on socialism" → handed
+         // to the on/about strip below). Requires a subject after it; a BARE
+         // "research" is left as the common noun for seedQuery to anchor.
+         .replace(/^(?:please\s+)?research\s+(?=\S)/i, '')
          // strip a "wikipedia/article/page … on/about/for" lead-in down to the
          // subject — including a BARE "wikipedia for X" ("search wikipedia for
          // dolphins" → "dolphins", "the article on socialism" → "socialism")
@@ -760,6 +765,14 @@
     if (/\b(who\s+(?:is|was|are|were)|what\s+(?:is|are|was|were)|what's|tell me about)\b/.test(t)
         && /\b(?:who\s+(?:is|was|are|were)|what\s+(?:is|are|was|were)|what's|tell\s+me\s+about)\b[^.?!,;:]*?\b\p{Lu}[\p{Ll}'’-]+/u.test(q))
       return true;
+    // "research <X>" — research used as an imperative LOOKUP verb, the way
+    // "look up" / "read up on" already are (the reported "research Vincent
+    // Cassel"). Kept tight so the NOUN sense ("research shows …", "the research",
+    // "more research is needed") never trips the desk: a leading
+    // "research <ProperName>", or an explicit "research on|about|into <X>" frame
+    // (which also carries a lowercase topic — "do some research on socialism").
+    if (/^\s*(?:[Pp]lease\s+)?[Rr]esearch\s+\p{Lu}[\p{Ll}'’-]/u.test(q)) return true;
+    if (/\bresearch(?:ing)?\s+(?:on|about|into)\s+\S/i.test(q)) return true;
     return false;
   }
 
